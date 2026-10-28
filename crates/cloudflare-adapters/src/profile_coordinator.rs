@@ -5,12 +5,159 @@ use profile_platform_primitives::{
 use serde::{Deserialize, Serialize};
 use session_domain::coordinator::{
     CoordinatorCommand, CoordinatorCommandEnvelope, CoordinatorConfig, CoordinatorDecision,
-    CoordinatorError, CoordinatorOutcome, CoordinatorStatus, ProfileCoordinatorState,
-    ReleaseDisposition,
+    CoordinatorCheckpoint, CoordinatorError, CoordinatorLease, CoordinatorOutcome,
+    CoordinatorStatus, PendingLaunchIntent, ProfileCoordinatorState, ReleaseDisposition,
 };
 use std::fmt;
 
-const MAX_JOURNAL_ENTRIES: usize = 4_096;
+// Keep the same recent-command idempotency window as the domain (32).
+// Compact at 64 instead of letting healthy sessions exhaust a 4096-entry
+// journal after hours of regular renewals. No separate owner or storage key.
+const COMPACT_JOURNAL_AT: usize = 64;
+const RETAIN_RECENT_COMMANDS: usize = 32;
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+enum StoredCoordinatorStatus {
+    Idle,
+    Active,
+    Draining,
+    Dirty,
+    Uncertain,
+}
+
+impl From<CoordinatorStatus> for StoredCoordinatorStatus {
+    fn from(value: CoordinatorStatus) -> Self {
+        match value {
+            CoordinatorStatus::Idle => Self::Idle,
+            CoordinatorStatus::Active => Self::Active,
+            CoordinatorStatus::Draining => Self::Draining,
+            CoordinatorStatus::Dirty => Self::Dirty,
+            CoordinatorStatus::Uncertain => Self::Uncertain,
+        }
+    }
+}
+
+impl From<StoredCoordinatorStatus> for CoordinatorStatus {
+    fn from(value: StoredCoordinatorStatus) -> Self {
+        match value {
+            StoredCoordinatorStatus::Idle => Self::Idle,
+            StoredCoordinatorStatus::Active => Self::Active,
+            StoredCoordinatorStatus::Draining => Self::Draining,
+            StoredCoordinatorStatus::Dirty => Self::Dirty,
+            StoredCoordinatorStatus::Uncertain => Self::Uncertain,
+        }
+    }
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+struct StoredPendingIntent {
+    launch_intent_id: String,
+    actor_id: String,
+    device_id: String,
+    expires_at_ms: u64,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+struct StoredActiveLease {
+    session_id: String,
+    device_id: String,
+    epoch: u64,
+    fencing_token: String,
+    claimed_at_ms: u64,
+    last_heartbeat_at_ms: u64,
+    idle_expires_at_ms: u64,
+    hard_expires_at_ms: u64,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+struct StoredClaimIdentity {
+    actor_id: String,
+    device_id: String,
+    session_id: String,
+}
+
+/// Same Durable Object document, bounded replay anchor. Existing documents
+/// without a checkpoint are read unchanged; the first compaction is atomic
+/// with the already-existing DO put of the command result.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+struct StoredCoordinatorCheckpoint {
+    version: u64,
+    sequence: u64,
+    observed_at_ms: u64,
+    next_epoch: u64,
+    status: StoredCoordinatorStatus,
+    pending_intent: Option<StoredPendingIntent>,
+    active_lease: Option<StoredActiveLease>,
+    drain_deadline_ms: Option<u64>,
+    last_claim: Option<StoredClaimIdentity>,
+}
+
+impl StoredCoordinatorCheckpoint {
+    fn from_state(state: &ProfileCoordinatorState, last_claim: Option<StoredClaimIdentity>) -> Self {
+        let value = state.checkpoint();
+        let pending_intent = value.pending_intent.map(|p| StoredPendingIntent {
+            launch_intent_id: p.launch_intent_id().as_str().to_owned(),
+            actor_id: p.actor_id().as_str().to_owned(),
+            device_id: p.device_id().as_str().to_owned(),
+            expires_at_ms: p.expires_at().value(),
+        });
+        let active_lease = value.active_lease.map(|l| StoredActiveLease {
+            session_id: l.session_id().as_str().to_owned(),
+            device_id: l.device_id().as_str().to_owned(),
+            epoch: l.epoch(),
+            fencing_token: l.fencing_token().as_str().to_owned(),
+            claimed_at_ms: l.claimed_at().value(),
+            last_heartbeat_at_ms: l.last_heartbeat_at().value(),
+            idle_expires_at_ms: l.idle_expires_at().value(),
+            hard_expires_at_ms: l.hard_expires_at().value(),
+        });
+        Self {
+            version: value.version.value(),
+            sequence: value.sequence,
+            observed_at_ms: value.observed_at.value(),
+            next_epoch: value.next_epoch,
+            status: value.status.into(),
+            pending_intent,
+            active_lease,
+            drain_deadline_ms: value.drain_deadline.map(UnixMillis::value),
+            last_claim: state.active_lease().and(last_claim),
+        }
+    }
+
+    fn into_domain(self) -> Result<CoordinatorCheckpoint, CoordinatorAdapterError> {
+        let pending_intent = self.pending_intent.map(|p| {
+            Ok::<_, CoordinatorAdapterError>(PendingLaunchIntent::restored(
+                LaunchIntentId::parse(p.launch_intent_id)?,
+                ActorId::parse(p.actor_id)?,
+                DeviceId::parse(p.device_id)?,
+                UnixMillis::new(p.expires_at_ms),
+            ))
+        }).transpose()?;
+        let active_lease = self.active_lease.map(|l| {
+            CoordinatorLease::restored(
+                SessionId::parse(l.session_id)?,
+                DeviceId::parse(l.device_id)?,
+                l.epoch,
+                FencingToken::parse(l.fencing_token)?,
+                UnixMillis::new(l.claimed_at_ms),
+                UnixMillis::new(l.last_heartbeat_at_ms),
+                UnixMillis::new(l.idle_expires_at_ms),
+                UnixMillis::new(l.hard_expires_at_ms),
+            ).map_err(CoordinatorAdapterError::from)
+        }).transpose()?;
+        Ok(CoordinatorCheckpoint {
+            version: AggregateVersion::new(self.version)?,
+            sequence: self.sequence,
+            observed_at: UnixMillis::new(self.observed_at_ms),
+            next_epoch: self.next_epoch,
+            status: self.status.into(),
+            pending_intent,
+            active_lease,
+            drain_deadline: self.drain_deadline_ms.map(UnixMillis::new),
+        })
+    }
+}
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct StoredCoordinatorDocument {
@@ -19,6 +166,8 @@ pub struct StoredCoordinatorDocument {
     idle_timeout_ms: u64,
     hard_timeout_ms: u64,
     drain_timeout_ms: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    checkpoint: Option<StoredCoordinatorCheckpoint>,
     journal: Vec<StoredCoordinatorEnvelope>,
 }
 
@@ -30,6 +179,7 @@ impl StoredCoordinatorDocument {
             idle_timeout_ms: config.idle_timeout_ms(),
             hard_timeout_ms: config.hard_timeout_ms(),
             drain_timeout_ms: config.drain_timeout_ms(),
+            checkpoint: None,
             journal: Vec::new(),
         }
     }
@@ -57,10 +207,10 @@ impl StoredCoordinatorDocument {
         let decision = state.apply(envelope.to_domain()?)?;
         let appended = decision.sequence() > previous_sequence;
         if appended {
-            if self.journal.len() >= MAX_JOURNAL_ENTRIES {
-                return Err(CoordinatorAdapterError::JournalCapacityExceeded);
-            }
             self.journal.push(envelope);
+            if self.journal.len() >= COMPACT_JOURNAL_AT {
+                self.compact_journal()?;
+            }
         }
         Ok(CoordinatorApplied {
             projection: CoordinatorProjection::from_state(&state),
@@ -78,11 +228,80 @@ impl StoredCoordinatorDocument {
             self.hard_timeout_ms,
             self.drain_timeout_ms,
         )?;
-        let mut state = ProfileCoordinatorState::new(tenant_id, profile_id, config);
+        let mut state = self.checkpoint.clone().map_or_else(
+            || Ok(ProfileCoordinatorState::new(tenant_id.clone(), profile_id.clone(), config)),
+            |stored| ProfileCoordinatorState::restore_checkpoint(
+                tenant_id.clone(),
+                profile_id.clone(),
+                config,
+                stored.into_domain()?,
+            ).map_err(CoordinatorAdapterError::from),
+        )?;
         for envelope in &self.journal {
             state.apply(envelope.to_domain()?)?;
         }
         Ok(state)
+    }
+
+    fn compact_journal(&mut self) -> Result<(), CoordinatorAdapterError> {
+        let count = self.journal.len().saturating_sub(RETAIN_RECENT_COMMANDS);
+        if count == 0 {
+            return Ok(());
+        }
+        let mut anchor = self.checkpoint.clone().map_or_else(
+            || {
+                let config = CoordinatorConfig::new(
+                    self.idle_timeout_ms, self.hard_timeout_ms, self.drain_timeout_ms,
+                )?;
+                Ok(ProfileCoordinatorState::new(
+                    TenantId::parse(self.tenant_id.clone())?,
+                    ProfileId::parse(self.profile_id.clone())?,
+                    config,
+                ))
+            },
+            |stored| {
+                let config = CoordinatorConfig::new(
+                    self.idle_timeout_ms, self.hard_timeout_ms, self.drain_timeout_ms,
+                )?;
+                ProfileCoordinatorState::restore_checkpoint(
+                    TenantId::parse(self.tenant_id.clone())?,
+                    ProfileId::parse(self.profile_id.clone())?,
+                    config,
+                    stored.into_domain()?,
+                ).map_err(CoordinatorAdapterError::from)
+            },
+        )?;
+        let mut last_claim = self.checkpoint.as_ref().and_then(|p| p.last_claim.clone());
+        for envelope in self.journal.iter().take(count) {
+            anchor.apply(envelope.to_domain()?)?;
+            if let StoredCoordinatorCommand::Claim {
+                actor_id, device_id, session_id, ..
+            } = &envelope.command {
+                last_claim = Some(StoredClaimIdentity {
+                    actor_id: actor_id.clone(),
+                    device_id: device_id.clone(),
+                    session_id: session_id.clone(),
+                });
+            }
+        }
+        let next = StoredCoordinatorCheckpoint::from_state(&anchor, last_claim);
+        // Verify full replay equality BEFORE changing the stored journal.
+        let expected = self.replay()?.checkpoint();
+        let mut verified = ProfileCoordinatorState::restore_checkpoint(
+            anchor.tenant_id().clone(),
+            anchor.profile_id().clone(),
+            anchor.config(),
+            next.clone().into_domain()?,
+        )?;
+        for envelope in self.journal.iter().skip(count) {
+            verified.apply(envelope.to_domain()?)?;
+        }
+        if verified.checkpoint() != expected {
+            return Err(CoordinatorAdapterError::Domain(CoordinatorError::InvalidCheckpoint));
+        }
+        self.checkpoint = Some(next);
+        self.journal.drain(..count);
+        Ok(())
     }
 
     pub fn projection(&self) -> Result<CoordinatorProjection, CoordinatorAdapterError> {
@@ -118,7 +337,13 @@ impl StoredCoordinatorDocument {
                 return Ok(stored_actor == actor_id.as_str() && stored_device == device_id.as_str());
             }
         }
-        Ok(false)
+        Ok(self.checkpoint.as_ref().and_then(|cp| cp.last_claim.as_ref()).is_some_and(
+            |last| {
+                last.actor_id == actor_id.as_str()
+                    && last.device_id == device_id.as_str()
+                    && last.session_id == session_id.as_str()
+            },
+        ))
     }
 
     #[must_use]
