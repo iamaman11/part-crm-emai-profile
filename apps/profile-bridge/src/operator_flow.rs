@@ -3110,6 +3110,77 @@ mod tests {
     }
 
     #[test]
+    fn eight_hours_of_simulated_confirmed_heartbeats_retain_one_native_writer_and_original_wal()
+    -> Result<(), Box<dyn std::error::Error>> {
+        // This is an eight-hour *logical clock* integration regression, NOT
+        // evidence of an eight-hour elapsed Windows/browser/provider soak.
+        // The shipping Coordinator independently owns real lease deadlines.
+        const EIGHT_HOURS_MS: u64 = 8 * 60 * 60 * 1_000;
+        const HEARTBEAT_INTERVAL_MS: u64 = 30_000;
+        let fixture = Fixture::new()?;
+        let mut owner = operator(&fixture, FakeCamouhost::default())?;
+        let start = 10_000_u64;
+        owner.open(&fixture.claim_uri, &fixture.root, UnixMillis::new(start))?;
+        let workspace = fixture.root.open_generation(
+            fixture.actor.tenant_scope().tenant_id(),
+            &fixture.profile_id,
+            &fixture.generation_id,
+        )?;
+        let wal = workspace.path().join("user_data").join("cookies.sqlite-wal");
+        fs::create_dir_all(wal.parent().ok_or("missing WAL parent")?)?;
+        let original_wal = b"native-firefox-eight-hour-logical-WAL-unchanged";
+        fs::write(&wal, original_wal)?;
+
+        let intervals = EIGHT_HOURS_MS / HEARTBEAT_INTERVAL_MS;
+        for interval in 1..=intervals {
+            let simulated_now =
+                UnixMillis::new(start + interval * HEARTBEAT_INTERVAL_MS);
+            if interval == 72 || interval == 600 {
+                // A failed transport heartbeat is not a revoked lease or
+                // a signal to destroy native SQLite/WAL. Reconfirm the
+                // original coordinator session, never mint another claim.
+                owner.coordinator.heartbeat_fail = true;
+                owner.coordinator.heartbeat_transport_uncertain = true;
+                assert_eq!(
+                    owner.heartbeat(simulated_now),
+                    Err(OperatorFlowError::HeartbeatTransportUncertain)
+                );
+                assert_eq!(
+                    owner.active_session_id(),
+                    Some(fixture.lease.session_id())
+                );
+                owner.coordinator.heartbeat_fail = false;
+                owner.coordinator.heartbeat_transport_uncertain = false;
+            }
+            owner.heartbeat(simulated_now)?;
+            if interval % 120 == 0 {
+                assert_eq!(fs::read(&wal)?, original_wal);
+                assert_eq!(owner.coordinator().claimed, 1);
+                assert_eq!(owner.coordinator().closed, 0);
+                assert_eq!(
+                    owner.process().actions(),
+                    [ProcessAction::Spawn(fixture.lease.session_id().clone())]
+                );
+            }
+        }
+
+        assert_eq!(owner.coordinator().heartbeats, intervals + 2);
+        assert_eq!(owner.coordinator().claimed, 1);
+        assert_eq!(owner.coordinator().clean_closed, 0);
+        assert!(owner.last_terminal().is_none());
+        owner.close_with_durable_local_intent(
+            &fixture.root,
+            UnixMillis::new(start + EIGHT_HOURS_MS + 1),
+        )?;
+        assert!(owner.has_pending_dirty_close());
+        assert_eq!(owner.coordinator().closed, 0);
+        assert_eq!(fs::read(&wal)?, original_wal);
+        // Closing an active browser does not authorize a cloud Saved verdict.
+        // The original local intent still requires the existing Save owner.
+        Ok(())
+    }
+
+    #[test]
     fn lost_heartbeat_stops_runtime_and_enters_recovery() -> Result<(), Box<dyn std::error::Error>>
     {
         let fixture = Fixture::new()?;
@@ -3133,6 +3204,14 @@ mod tests {
             FakeCamouhost::default(),
         );
         operator.open(&fixture.claim_uri, &fixture.root, UnixMillis::new(10))?;
+        let original = fixture.root.open_generation(
+            fixture.actor.tenant_scope().tenant_id(),
+            &fixture.profile_id,
+            &fixture.generation_id,
+        )?;
+        let wal = original.path().join("user_data").join("cookies.sqlite-wal");
+        fs::create_dir_all(wal.parent().ok_or("missing WAL parent")?)?;
+        fs::write(&wal, b"native-WAL-must-survive-explicit-heartbeat-refusal")?;
         assert_eq!(
             operator.heartbeat(UnixMillis::new(11)),
             Err(OperatorFlowError::Terminal {
@@ -3143,6 +3222,12 @@ mod tests {
         );
         assert_eq!(operator.coordinator().heartbeats, 1);
         assert_eq!(operator.coordinator().closed, 1);
+        assert_eq!(operator.coordinator().clean_closed, 0);
+        assert_eq!(operator.coordinator().claimed, 1);
+        assert_eq!(
+            fs::read(&wal)?,
+            b"native-WAL-must-survive-explicit-heartbeat-refusal"
+        );
         assert_eq!(operator.active_session_id(), None);
         assert_eq!(
             operator.last_terminal().map(|value| value.local_state()),
