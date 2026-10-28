@@ -1191,7 +1191,7 @@ mod tests {
                 }
             );
             assert_eq!(
-                state.active_lease().map(CoordinatorLease::hard_expires_at),
+                state.active_lease().map(|lease| lease.hard_expires_at()),
                 Some(UnixMillis::new(at + 100))
             );
         }
