@@ -120,6 +120,16 @@ BEGIN
                 AND previous.profile_id = candidate.profile_id
                 AND previous.generation_id = candidate.generation_id
           )
+          -- A historical ACTIVE grant allows another (possibly offline)
+          -- device to rely on this generation. A clean Coordinator session
+          -- on the retiring device cannot speak for that other device.
+          AND NOT EXISTS (
+              SELECT 1 FROM device_authorizations AS historical_grant
+              WHERE historical_grant.tenant_id = candidate.tenant_id
+                AND historical_grant.profile_id = candidate.profile_id
+                AND historical_grant.generation_id = candidate.generation_id
+                AND historical_grant.status = 'ACTIVE'
+          )
           -- A pending or uncertain device job may still need its original
           -- generation to reconcile after an offline Windows restart.
           -- A D1 retirement receipt does not prove all other devices clean.

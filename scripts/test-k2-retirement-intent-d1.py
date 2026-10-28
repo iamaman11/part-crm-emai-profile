@@ -129,6 +129,8 @@ def main() -> None:
             (FX["TENANT"], FX["DEVICE"], FX["PROFILE"], FX["CANDIDATE"],
              FX["OWNER"], FX["OWNER"]),
         )
+        conn.commit()
+        refused(conn)  # ACTIVE historical grant may belong to offline device
         # The existing D1 owner's retirement admission must reject any
         # unresolved device job on the historical candidate. It is not proof
         # of clean local Firefox bytes, even if CURRENT/WORKING are valid.
@@ -147,17 +149,20 @@ def main() -> None:
             (FX["TENANT"], FX["DEVICE"], FX["PROFILE"], FX["CANDIDATE"]),
         )
         conn.commit()
-        refused(conn)
+        refused(conn)  # active historical grant AND pending job
+        conn.execute(
+            "UPDATE device_authorizations SET status='REVOKED', "
+            "revoked_at_ms=126, updated_at_ms=126 "
+            "WHERE tenant_id=? AND profile_id=? AND generation_id=? AND device_id=?",
+            (FX["TENANT"], FX["PROFILE"], FX["CANDIDATE"], FX["DEVICE"]),
+        )
+        conn.commit()
+        refused(conn)  # revoked grant alone is NOT enough: job still pending
         assert conn.execute(
             "SELECT status FROM device_jobs WHERE job_id='job_retirement_pending_01'"
         ).fetchone()[0] == "PENDING_DEVICE"
         conn.execute(
             "DELETE FROM device_jobs WHERE job_id='job_retirement_pending_01'"
-        )
-        conn.execute(
-            "DELETE FROM device_authorizations "
-            "WHERE tenant_id=? AND profile_id=? AND generation_id=? AND device_id=?",
-            (FX["TENANT"], FX["PROFILE"], FX["CANDIDATE"], FX["DEVICE"]),
         )
         conn.commit()
         refused(conn, admitted_by_actor_id="other_actor")
