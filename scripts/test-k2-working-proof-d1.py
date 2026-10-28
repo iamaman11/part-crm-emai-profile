@@ -133,15 +133,22 @@ def main() -> int:
             return conn.execute(
                 review_query, (fx["TENANT"], fx["PROFILE"], current, approved_runtime)
             ).fetchone()
+        before_review = (
+            conn.execute("SELECT COUNT(*) FROM profile_generations").fetchone()[0],
+            conn.execute("SELECT COUNT(*) FROM profile_generation_working_proofs").fetchone()[0],
+            conn.execute("SELECT COUNT(*) FROM profile_generation_successor_commands").fetchone()[0],
+        )
         candidate = review(fx["WINNER"])
         assert candidate is not None and candidate["generation_id"] == fx["CANDIDATE"]
         assert candidate["generation_id"] not in (fx["WINNER"], fx["BASE"])
         assert review(fx["CANDIDATE"]) is None, "stale CURRENT cannot authorize review"
         assert review(fx["WINNER"], "f" * 64) is None, "unapproved runtime blocks review"
         assert review(fx["WINNER"], "E" * 64) is None
-        assert fx["catalog_snapshot"](conn) == baseline or conn.execute(
-            "SELECT COUNT(*) FROM profile_generation_working_proofs"
-        ).fetchone()[0] == 1
+        assert (
+            conn.execute("SELECT COUNT(*) FROM profile_generations").fetchone()[0],
+            conn.execute("SELECT COUNT(*) FROM profile_generation_working_proofs").fetchone()[0],
+            conn.execute("SELECT COUNT(*) FROM profile_generation_successor_commands").fetchone()[0],
+        ) == before_review, "prune review must never mutate D1"
         assert conn.execute("PRAGMA foreign_key_check").fetchall() == []
         print("K2 governed, append-only historical proof persists across CURRENT changes; no prune PASS")
     finally:
