@@ -1487,8 +1487,8 @@ mod tests {
         ControlPlaneCoordinator, ControlPlaneEnrollment, ControlPlaneLeaseTiming,
         CoordinatorCursor, MAX_SEALING_MATERIAL_RESPONSE_BYTES, MachineHttpMethod, MachineHttpPort,
         MachineHttpResponse, SharedControlPlaneCoordinator, ShippingControlPlaneError,
-        lease_timing, safe_machine_problem_code,
-        valid_signed_r2_get_url, validate_active_projection, validate_snapshot,
+        lease_timing, safe_machine_problem_code, valid_signed_r2_get_url,
+        validate_active_projection, validate_snapshot,
     };
     use crate::dirty_generation::GenerationSealingMaterialPort;
     use crate::generation_reopen::GenerationReopenControlPort;
@@ -1609,8 +1609,8 @@ mod tests {
     }
 
     #[test]
-    fn concurrent_scoped_renewals_serialize_on_one_cursor()
-    -> Result<(), Box<dyn std::error::Error>> {
+    fn concurrent_scoped_renewals_serialize_on_one_cursor() -> Result<(), Box<dyn std::error::Error>>
+    {
         let tenant = TenantId::parse("tenant_shared_heartbeat_01")?;
         let profile = ProfileId::parse("profile_shared_heartbeat_01")?;
         let device = DeviceId::parse("device_shared_heartbeat_01")?;
@@ -1649,7 +1649,10 @@ mod tests {
                     pending_intent_expires_at_ms: None,
                 },
             };
-            Ok(MachineHttpResponse::new(200, serde_json::to_vec(&response)?))
+            Ok(MachineHttpResponse::new(
+                200,
+                serde_json::to_vec(&response)?,
+            ))
         };
         let shared = SharedControlPlaneCoordinator::new(ControlPlaneCoordinator {
             transport: SealingMachineHttp {
