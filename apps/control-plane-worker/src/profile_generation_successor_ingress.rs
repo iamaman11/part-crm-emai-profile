@@ -65,6 +65,20 @@ const UPLOAD_CAPABILITY_EXPIRES_SECONDS: u32 = 300;
 const PROFILE_GENERATION_APPROVED_RUNTIME_INVENTORIES_VAR: &str =
     "PROFILE_GENERATION_APPROVED_RUNTIME_INVENTORIES";
 
+/// Temporary K2 staging fence: automatic R2 retirement may run only for one
+/// explicitly selected disposable canary profile. Omitted in normal release
+/// configuration; never grants a Production DELETE.
+const PROFILE_GENERATION_R2_PRUNE_CANARY_PROFILE_VAR: &str =
+    "PROFILE_GENERATION_R2_PRUNE_CANARY_PROFILE";
+
+fn staging_r2_prune_canary_scope(
+    environment: Option<&str>,
+    canary_profile: Option<&str>,
+    profile_id: &ProfileId,
+) -> bool {
+    environment == Some("staging") && canary_profile == Some(profile_id.as_str())
+}
+
 /// No best-effort prefix matching, unknown versions, arbitrary lists or
 /// whitespace: the deployment's exact approved runtime artifacts are the
 /// source of truth, not the untrusted client-supplied certificate digest.
@@ -920,9 +934,21 @@ async fn dispatch_working_proof(
     {
         return object_verify_failure(actor.correlation_id().as_str(), error.class());
     }
-    // A successful browser-proven LKG is the natural maintenance boundary.
-    // Prune is optional: never fail Open/Save because R2 housekeeping failed.
+    // An existing signed R2 GET may still be in flight after its D1 grant
+    // is revoked. Until concurrent GET/DELETE is accepted, leave every real
+    // staging recovery copy untouched. Only an explicit disposable profile
+    // can exercise the existing D1 -> R2 canary path; Production is excluded.
+    let environment = env.var("CANONICAL_ENVIRONMENT").ok().map(|v| v.to_string());
+    let canary_profile = env
+        .var(PROFILE_GENERATION_R2_PRUNE_CANARY_PROFILE_VAR)
+        .ok()
+        .map(|v| v.to_string());
     if role == identity_access_domain::MembershipRole::TenantOwner
+        && staging_r2_prune_canary_scope(
+            environment.as_deref(),
+            canary_profile.as_deref(),
+            profile_id,
+        )
         && retire_one_old_generation(
             env,
             actor,
@@ -1806,7 +1832,7 @@ mod tests {
     use super::{
         BridgeGenerationMachineOperation, decode_bounded_lower_hex, decode_lower_sha256,
         descriptor_shape_is_canonical, is_approved_working_runtime, operation,
-        valid_stream_container_bytes,
+        staging_r2_prune_canary_scope, valid_stream_container_bytes,
     };
     use encrypted_generation_domain::canonical_generation_object_key;
     use profile_platform_primitives::{
@@ -1926,6 +1952,33 @@ mod tests {
         ] {
             assert_eq!(operation(path, method), None);
         }
+    }
+
+    #[test]
+    fn automatic_r2_prune_is_limited_to_explicit_disposable_staging_profile() {
+        let selected = ProfileId::parse("profile_canary_01".to_owned()).unwrap();
+        assert!(!staging_r2_prune_canary_scope(None, None, &selected));
+        assert!(!staging_r2_prune_canary_scope(Some("staging"), None, &selected));
+        assert!(!staging_r2_prune_canary_scope(
+            Some("production"),
+            Some("profile_canary_01"),
+            &selected
+        ));
+        assert!(!staging_r2_prune_canary_scope(
+            Some("staging"),
+            Some("profile_other"),
+            &selected
+        ));
+        assert!(!staging_r2_prune_canary_scope(
+            Some("staging"),
+            Some("profile_canary_01 "),
+            &selected
+        ));
+        assert!(staging_r2_prune_canary_scope(
+            Some("staging"),
+            Some("profile_canary_01"),
+            &selected
+        ));
     }
 
     #[test]
