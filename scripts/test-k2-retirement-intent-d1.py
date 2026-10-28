@@ -88,6 +88,40 @@ def main() -> None:
         refused(conn, coordinator_epoch=0)
         record(conn)
         conn.commit()
+        # Execute the actual D1 owner's insert and replay SQL, not a handwritten
+        # approximation. A lost response is accepted ONLY with the exact
+        # immutable original witness and timestamp.
+        source = (ROOT / "crates/cloudflare-adapters/src/d1_profile_generation_successor.rs").read_text(encoding="utf-8")
+        insert_sql = re.search(
+            r'const INSERT_GENERATION_RETIREMENT_INTENT: &str = r#"(.*?)"#;',
+            source, re.DOTALL,
+        )
+        replay_sql = re.search(
+            r'const LOAD_EXACT_GENERATION_RETIREMENT_INTENT: &str = r#"(.*?)"#;',
+            source, re.DOTALL,
+        )
+        assert insert_sql is not None and replay_sql is not None
+        row = conn.execute(
+            "SELECT * FROM profile_generation_retirement_intents"
+        ).fetchone()
+        values = tuple(row[name] for name in (
+            "tenant_id", "profile_id", "generation_id",
+            "observed_current_generation_id", "retained_working_generation_id",
+            "expected_profile_version", "object_key", "metadata_digest",
+            "container_digest", "approved_runtime_inventory_sha256",
+            "admitted_by_actor_id", "admitted_by_device_id",
+            "coordinator_session_id", "coordinator_epoch", "admitted_at_ms",
+        ))
+        assert conn.execute(insert_sql.group(1), values).fetchone() is None
+        assert conn.execute(replay_sql.group(1), values).fetchone()[0] == FX["CANDIDATE"]
+        for index in (3, 4, 5, 8, 9, 11, 12, 13, 14):
+            wrong = list(values)
+            wrong[index] = ("f" * 64) if index in (8, 9) else (
+                int(wrong[index]) + 1 if isinstance(wrong[index], int)
+                else "mismatched_witness"
+            )
+            assert conn.execute(replay_sql.group(1), wrong).fetchone() is None
+        conn.commit()
         saved = conn.execute(
             "SELECT generation_id FROM profile_generation_retirement_intents"
         ).fetchone()

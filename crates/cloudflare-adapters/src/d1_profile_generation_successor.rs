@@ -153,6 +153,35 @@ ORDER BY old.created_at_ms ASC, old.generation_id ASC
 LIMIT 1
 "#;
 
+/// One D1-owner guarded tombstone stage, not a physical object DELETE.
+/// The candidate must survive exact recovery until the future effect owner
+/// proves current offline/lease/root/runtime/R2 preconditions again.
+const INSERT_GENERATION_RETIREMENT_INTENT: &str = r#"
+INSERT INTO profile_generation_retirement_intents (
+    tenant_id, profile_id, generation_id, observed_current_generation_id,
+    retained_working_generation_id, expected_profile_version, object_key,
+    metadata_digest, container_digest, approved_runtime_inventory_sha256,
+    admitted_by_actor_id, admitted_by_device_id, coordinator_session_id,
+    coordinator_epoch, admitted_at_ms
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+ON CONFLICT (tenant_id, profile_id, generation_id) DO NOTHING
+RETURNING generation_id
+"#;
+
+/// Exact replay only. A previous tombstone with a different CURRENT, retained
+/// WORKING, runtime, lease, digest or timestamp is NEVER the same operation.
+const LOAD_EXACT_GENERATION_RETIREMENT_INTENT: &str = r#"
+SELECT generation_id FROM profile_generation_retirement_intents
+WHERE tenant_id = ? AND profile_id = ? AND generation_id = ?
+  AND observed_current_generation_id = ? AND retained_working_generation_id = ?
+  AND expected_profile_version = ? AND object_key = ?
+  AND metadata_digest = ? AND container_digest = ?
+  AND approved_runtime_inventory_sha256 = ?
+  AND admitted_by_actor_id = ? AND admitted_by_device_id = ?
+  AND coordinator_session_id = ? AND coordinator_epoch = ?
+  AND admitted_at_ms = ?
+"#;
+
 const LOAD_VERIFIED_PREDECESSOR_OF_ACTIVE: &str = r#"
 SELECT
     base.generation_id,
@@ -556,6 +585,125 @@ impl D1ProfileGenerationSuccessorCommitJournal {
         .await
         .map_err(|_| historical_dependency_failure())?;
         historical_reference_from_row(row, scope, profile_id, current_generation_id)
+    }
+
+    /// Admit an immutable, non-destructive retirement intent after the
+    /// caller independently checks the same live Coordinator writer fence,
+    /// native local Saved/clean state, old root key, exact release runtime
+    /// and R2 HEAD. This method NEVER deletes R2 or grants deletion.
+    ///
+    /// For a lost response the caller MUST replay the exact same parameters,
+    /// including stable operation timestamp. A different witness is rejected.
+    #[allow(clippy::too_many_arguments)]
+    pub async fn record_guarded_retirement_intent(
+        &self,
+        actor: &ActorContext,
+        current: &GenerationId,
+        retained_working: &GenerationId,
+        candidate: &GenerationObjectCatalogReference,
+        expected_profile_version: u64,
+        approved_runtime_inventory_sha256: &str,
+        device_id: &DeviceId,
+        session_id: &profile_platform_primitives::SessionId,
+        coordinator_epoch: u64,
+        admitted_at: profile_platform_primitives::UnixMillis,
+    ) -> Result<(), GenerationPortError> {
+        let profile_id = candidate.profile_id();
+        let generation_id = candidate.generation_id();
+        if generation_id == current
+            || generation_id == retained_working
+            || current == retained_working
+            || expected_profile_version == 0
+            || coordinator_epoch == 0
+            || candidate.object_key()
+                != canonical_generation_object_key(
+                    actor.tenant_scope().tenant_id(),
+                    profile_id,
+                    generation_id,
+                )
+            || !is_sha256_hex(candidate.metadata_digest())
+            || !is_sha256_hex(candidate.container_digest())
+            || !is_sha256_hex(approved_runtime_inventory_sha256)
+        {
+            return Err(historical_integrity_failure());
+        }
+        let version = i64::try_from(expected_profile_version)
+            .map_err(|_| historical_integrity_failure())?;
+        let epoch = i64::try_from(coordinator_epoch)
+            .map_err(|_| historical_integrity_failure())?;
+        let at = i64::try_from(admitted_at.value())
+            .map_err(|_| historical_integrity_failure())?;
+        let fields = (
+            actor.tenant_scope().tenant_id().as_str(),
+            profile_id.as_str(),
+            generation_id.as_str(),
+            current.as_str(),
+            retained_working.as_str(),
+            version,
+            candidate.object_key(),
+            candidate.metadata_digest(),
+            candidate.container_digest(),
+            approved_runtime_inventory_sha256,
+            actor.actor_id().as_str(),
+            device_id.as_str(),
+            session_id.as_str(),
+            epoch,
+        );
+        let inserted = query!(
+            &self.database,
+            INSERT_GENERATION_RETIREMENT_INTENT,
+            fields.0,
+            fields.1,
+            fields.2,
+            fields.3,
+            fields.4,
+            fields.5,
+            fields.6,
+            fields.7,
+            fields.8,
+            fields.9,
+            fields.10,
+            fields.11,
+            fields.12,
+            fields.13,
+            at,
+        )
+        .map_err(|_| historical_dependency_failure())?
+        .first::<String>(Some("generation_id"))
+        .await;
+        match inserted {
+            Ok(Some(id)) if id == generation_id.as_str() => Ok(()),
+            Ok(None) | Err(_) => {
+                let existing = query!(
+                    &self.database,
+                    LOAD_EXACT_GENERATION_RETIREMENT_INTENT,
+                    fields.0,
+                    fields.1,
+                    fields.2,
+                    fields.3,
+                    fields.4,
+                    fields.5,
+                    fields.6,
+                    fields.7,
+                    fields.8,
+                    fields.9,
+                    fields.10,
+                    fields.11,
+                    fields.12,
+                    fields.13,
+                    at,
+                )
+                .map_err(|_| historical_dependency_failure())?
+                .first::<String>(Some("generation_id"))
+                .await
+                .map_err(|_| historical_dependency_failure())?;
+                match existing {
+                    Some(id) if id == generation_id.as_str() => Ok(()),
+                    _ => Err(historical_integrity_failure()),
+                }
+            }
+            _ => Err(historical_integrity_failure()),
+        }
     }
 
     /// The D1 owner alone loads the last actually browser-proven N-k, as
@@ -1040,6 +1188,32 @@ mod tests {
         ActorContext, ActorId, AggregateVersion, CorrelationId, DeviceId, FencingToken,
         GenerationId, ProfileId, SessionId, TenantId, TenantScope, UnixMillis,
     };
+
+    #[test]
+    fn durable_retirement_replay_requires_all_exact_original_fence_fields() {
+        let insert = super::INSERT_GENERATION_RETIREMENT_INTENT;
+        let replay = super::LOAD_EXACT_GENERATION_RETIREMENT_INTENT;
+        assert!(insert.contains("ON CONFLICT (tenant_id, profile_id, generation_id) DO NOTHING"));
+        assert!(insert.contains("RETURNING generation_id"));
+        for field in [
+            "observed_current_generation_id = ?",
+            "retained_working_generation_id = ?",
+            "expected_profile_version = ?",
+            "object_key = ?",
+            "metadata_digest = ?",
+            "container_digest = ?",
+            "approved_runtime_inventory_sha256 = ?",
+            "admitted_by_actor_id = ?",
+            "admitted_by_device_id = ?",
+            "coordinator_session_id = ?",
+            "coordinator_epoch = ?",
+            "admitted_at_ms = ?",
+        ] {
+            assert!(replay.contains(field), "lost retirement replay witness: {field}");
+        }
+        assert!(!insert.contains("DELETE "));
+        assert!(!replay.contains("DELETE "));
+    }
 
     #[test]
     fn prune_review_must_never_be_an_unconditional_delete_capability() {
