@@ -109,7 +109,12 @@ impl PendingLaunchIntent {
         device_id: DeviceId,
         expires_at: UnixMillis,
     ) -> Self {
-        Self { launch_intent_id, actor_id, device_id, expires_at }
+        Self {
+            launch_intent_id,
+            actor_id,
+            device_id,
+            expires_at,
+        }
     }
 }
 
@@ -186,8 +191,14 @@ impl CoordinatorLease {
             return Err(CoordinatorError::InvalidCheckpoint);
         }
         Ok(Self {
-            session_id, device_id, epoch, fencing_token, claimed_at,
-            last_heartbeat_at, idle_expires_at, hard_expires_at,
+            session_id,
+            device_id,
+            epoch,
+            fencing_token,
+            claimed_at,
+            last_heartbeat_at,
+            idle_expires_at,
+            hard_expires_at,
         })
     }
 
@@ -448,9 +459,10 @@ impl ProfileCoordinatorState {
         );
         if snapshot.version.value() != expected_version
             || has_writer != active_status
-            || snapshot.active_lease.as_ref().is_some_and(|lease| {
-                lease.epoch() > snapshot.next_epoch
-            })
+            || snapshot
+                .active_lease
+                .as_ref()
+                .is_some_and(|lease| lease.epoch() > snapshot.next_epoch)
             || (snapshot.pending_intent.is_some()
                 && (snapshot.status != CoordinatorStatus::Idle || has_writer))
             || (snapshot.drain_deadline.is_some()
@@ -459,7 +471,9 @@ impl ProfileCoordinatorState {
             return Err(CoordinatorError::InvalidCheckpoint);
         }
         Ok(Self {
-            tenant_id, profile_id, config,
+            tenant_id,
+            profile_id,
+            config,
             version: snapshot.version,
             last_sequence: snapshot.sequence,
             last_observed_at: snapshot.observed_at,
