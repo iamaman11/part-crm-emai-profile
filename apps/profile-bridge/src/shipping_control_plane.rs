@@ -513,7 +513,7 @@ where
                 idempotency_key: next_idempotency_key()?.as_str().to_owned(),
                 sequence,
                 expected_version: cursor.version,
-                command: CoordinatorCommandDto::Heartbeat {
+                command: CoordinatorCommandDto::RenewLease {
                     session_id: cursor.session_id.as_str().to_owned(),
                     epoch: cursor.epoch,
                     fencing_token: cursor.fencing_token.as_str().to_owned(),
