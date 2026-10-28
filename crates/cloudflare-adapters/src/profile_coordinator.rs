@@ -208,6 +208,13 @@ pub enum StoredCoordinatorCommand {
         fencing_token: String,
         now_ms: u64,
     },
+    /// New event type. Historical heartbeat events replay as before.
+    RenewLease {
+        session_id: String,
+        epoch: u64,
+        fencing_token: String,
+        now_ms: u64,
+    },
     Release {
         session_id: String,
         epoch: u64,
@@ -263,6 +270,17 @@ impl StoredCoordinatorCommand {
                 fencing_token,
                 now_ms,
             } => CoordinatorCommand::Heartbeat {
+                session_id: SessionId::parse(session_id.clone())?,
+                epoch: *epoch,
+                fencing_token: FencingToken::parse(fencing_token.clone())?,
+                now: UnixMillis::new(*now_ms),
+            },
+            Self::RenewLease {
+                session_id,
+                epoch,
+                fencing_token,
+                now_ms,
+            } => CoordinatorCommand::RenewLease {
                 session_id: SessionId::parse(session_id.clone())?,
                 epoch: *epoch,
                 fencing_token: FencingToken::parse(fencing_token.clone())?,
