@@ -1200,8 +1200,7 @@ mod tests {
     }
 
     #[test]
-    fn expired_heartbeat_never_renews_hard_deadline()
-    -> Result<(), Box<dyn std::error::Error>> {
+    fn expired_heartbeat_never_renews_hard_deadline() -> Result<(), Box<dyn std::error::Error>> {
         let mut state = coordinator_with_config(CoordinatorConfig::new(100, 100, 20)?)?;
         issue(&mut state, 1, 1, 10)?;
         claim(&mut state, 2, 2, 11, "fence_01JCOORDINATOR")?;
