@@ -295,11 +295,32 @@ mod windows {
                             return;
                         }
                     }
-                    // Only a server-accepted heartbeat renews the cursor.
-                    // Uncertain or rejected replies never become permission
-                    // for subsequent cloud effects: the existing DO/D1 fence
-                    // still rejects a stale Save/commit.
-                    if coordinator.heartbeat_lease(&lease).is_err() {
+                    // One exact-key retry on transport uncertainty only.
+                    // The shared coordinator retains the same command and
+                    // proves a replay against fresh DO state; no guessed
+                    // authority or second sequence is ever minted.
+                    let acknowledged = match coordinator.heartbeat_lease(&lease) {
+                        Ok(()) => true,
+                        Err(
+                            ShippingControlPlaneError::Transport
+                            | ShippingControlPlaneError::HttpServerUncertain,
+                        ) => {
+                            thread::sleep(Duration::from_millis(HEARTBEAT_TRANSPORT_RETRY_MS));
+                            matches!(
+                                (coordinator.runtime_timing(), now()),
+                                (Ok(timing), Ok(observed_at))
+                                    if safe_reconnect_writer_window(
+                                        timing.idle_expires_at_ms(),
+                                        timing.hard_expires_at_ms(),
+                                        observed_at,
+                                    )
+                            ) && coordinator.heartbeat_lease(&lease).is_ok()
+                        }
+                        Err(_) => false,
+                    };
+                    // Only confirmed authority permits the ongoing Save to
+                    // finish; the original native checkpoint always survives.
+                    if !acknowledged {
                         observed.store(false, Ordering::Release);
                         eprintln!(
                             "P3_SAVE_HEARTBEAT=NOT_CONFIRMED;NEXT_SAFE_STEP=PRESERVE_LOCAL_BYTES"
