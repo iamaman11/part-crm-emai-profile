@@ -547,6 +547,25 @@ impl UserDiagnostic {
                 crate::operator_flow::OperatorFlowError::AuthoritativeGeneration {
                     reason:
                         crate::authoritative_generation::AuthoritativeGenerationMaterializationError::ControlPlane(
+                            crate::generation_reopen::GenerationReopenControlError::ServiceTemporarilyUnavailable,
+                        )
+                        | crate::authoritative_generation::AuthoritativeGenerationMaterializationError::ControlPlaneBeforeLocalUse(
+                            crate::generation_reopen::GenerationReopenControlError::ServiceTemporarilyUnavailable,
+                        )
+                        | crate::authoritative_generation::AuthoritativeGenerationMaterializationError::ReadBeforeLocalUse(
+                            crate::authoritative_generation::AuthoritativeGenerationPreWriteError::OpeningControl(
+                                crate::generation_reopen::GenerationReopenControlError::ServiceTemporarilyUnavailable,
+                            ),
+                        ),
+                    ..
+                },
+            )) => {
+                "The profile service is temporarily unavailable while reading the verified generation. Keep existing local files and retry the normal authorized Open after service recovery. This is not proof of revoked access or corrupt profile data."
+            }
+            Self::Launch(Launch::Operator(
+                crate::operator_flow::OperatorFlowError::AuthoritativeGeneration {
+                    reason:
+                        crate::authoritative_generation::AuthoritativeGenerationMaterializationError::ControlPlane(
                             crate::generation_reopen::GenerationReopenControlError::HttpStatus,
                         )
                         | crate::authoritative_generation::AuthoritativeGenerationMaterializationError::ControlPlaneBeforeLocalUse(
@@ -715,6 +734,21 @@ const fn operator_code(error: crate::operator_flow::OperatorFlowError) -> &'stat
                 ),
             ..
         } => "BRIDGE_SERVICE_UNREACHABLE",
+        Error::AuthoritativeGeneration {
+            reason:
+                crate::authoritative_generation::AuthoritativeGenerationMaterializationError::ControlPlane(
+                    crate::generation_reopen::GenerationReopenControlError::ServiceTemporarilyUnavailable,
+                )
+                | crate::authoritative_generation::AuthoritativeGenerationMaterializationError::ControlPlaneBeforeLocalUse(
+                    crate::generation_reopen::GenerationReopenControlError::ServiceTemporarilyUnavailable,
+                )
+                | crate::authoritative_generation::AuthoritativeGenerationMaterializationError::ReadBeforeLocalUse(
+                    crate::authoritative_generation::AuthoritativeGenerationPreWriteError::OpeningControl(
+                        crate::generation_reopen::GenerationReopenControlError::ServiceTemporarilyUnavailable,
+                    ),
+                ),
+            ..
+        } => "BRIDGE_SERVICE_TEMPORARILY_UNAVAILABLE",
         Error::AuthoritativeGeneration {
             reason:
                 crate::authoritative_generation::AuthoritativeGenerationMaterializationError::ControlPlane(
@@ -917,6 +951,18 @@ mod tests {
                     crate::generation_reopen::GenerationReopenControlError::HttpStatus,
                 ),
                 "BRIDGE_GENERATION_REQUEST_REJECTED",
+            ),
+            (
+                Reason::ControlPlane(
+                    crate::generation_reopen::GenerationReopenControlError::ServiceTemporarilyUnavailable,
+                ),
+                "BRIDGE_SERVICE_TEMPORARILY_UNAVAILABLE",
+            ),
+            (
+                Reason::ControlPlaneBeforeLocalUse(
+                    crate::generation_reopen::GenerationReopenControlError::ServiceTemporarilyUnavailable,
+                ),
+                "BRIDGE_SERVICE_TEMPORARILY_UNAVAILABLE",
             ),
             (
                 Reason::ControlPlane(

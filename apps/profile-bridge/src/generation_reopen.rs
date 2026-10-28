@@ -105,6 +105,9 @@ impl Drop for GenerationDownloadCapability {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum GenerationReopenControlError {
     Transport,
+    /// The read-only generation request received HTTP 408, 429 or 5xx.
+    /// This is never a fresh claim, retry grant or write authorization.
+    ServiceTemporarilyUnavailable,
     HttpStatus,
     InvalidResponse,
     Clock,

@@ -122,7 +122,7 @@ impl From<ShippingControlPlaneError> for crate::generation_reopen::GenerationReo
         use crate::generation_reopen::GenerationReopenControlError as Reopen;
         match reason {
             ShippingControlPlaneError::Transport => Reopen::Transport,
-            ShippingControlPlaneError::HttpServerUncertain => Reopen::HttpStatus,
+            ShippingControlPlaneError::HttpServerUncertain => Reopen::ServiceTemporarilyUnavailable,
             ShippingControlPlaneError::HttpStatus => Reopen::HttpStatus,
             ShippingControlPlaneError::InvalidResponse => Reopen::InvalidResponse,
             ShippingControlPlaneError::Clock => Reopen::Clock,
@@ -923,6 +923,16 @@ fn safe_reopen_problem_code(
     (problem.problem_type == problem_type_for_code(code)).then_some(code)
 }
 
+// Reading a generation never grants a new lease, claim or retry permission.
+// Temporary HTTP failures must not be reported as an ACL refusal.
+fn classify_read_only_reopen_http_status(status: u16) -> ShippingControlPlaneError {
+    if matches!(status, 408 | 429 | 500..=599) {
+        ShippingControlPlaneError::HttpServerUncertain
+    } else {
+        ShippingControlPlaneError::HttpStatus
+    }
+}
+
 fn decode_reopen_download_capability_response(
     mut response: MachineHttpResponse,
     request_correlation_id: &CorrelationId,
@@ -938,8 +948,9 @@ fn decode_reopen_download_capability_response(
             code,
             request_correlation_id.as_str()
         );
+        let reason = classify_read_only_reopen_http_status(response.status());
         response.body.fill(0);
-        return Err(ShippingControlPlaneError::HttpStatus);
+        return Err(reason);
     }
     if response.body.is_empty()
         || response.body.len() > MAX_REOPEN_DOWNLOAD_CAPABILITY_RESPONSE_BYTES
@@ -957,8 +968,9 @@ fn decode_reopen_opening_material_response(
     mut response: MachineHttpResponse,
 ) -> Result<BridgeGenerationOpeningMaterialResponse, ShippingControlPlaneError> {
     if !(200..=299).contains(&response.status()) {
+        let reason = classify_read_only_reopen_http_status(response.status());
         response.body.fill(0);
-        return Err(ShippingControlPlaneError::HttpStatus);
+        return Err(reason);
     }
     if response.body.is_empty() || response.body.len() > MAX_REOPEN_OPENING_MATERIAL_RESPONSE_BYTES
     {
@@ -1708,6 +1720,10 @@ mod tests {
             Reopen::HttpStatus
         );
         assert_eq!(
+            Reopen::from(ShippingControlPlaneError::HttpServerUncertain),
+            Reopen::ServiceTemporarilyUnavailable
+        );
+        assert_eq!(
             Reopen::from(ShippingControlPlaneError::InvalidResponse),
             Reopen::InvalidResponse
         );
@@ -2152,6 +2168,43 @@ mod tests {
             fixture.request_material(),
             Err(ShippingControlPlaneError::HttpStatus)
         );
+        Ok(())
+    }
+
+    #[test]
+    fn read_only_reopen_refusals_separate_temporary_failures_from_acl_denials()
+    -> Result<(), Box<dyn std::error::Error>> {
+        for (status, expected) in [
+            (401, ShippingControlPlaneError::HttpStatus),
+            (403, ShippingControlPlaneError::HttpStatus),
+            (404, ShippingControlPlaneError::HttpStatus),
+            (408, ShippingControlPlaneError::HttpServerUncertain),
+            (429, ShippingControlPlaneError::HttpServerUncertain),
+            (500, ShippingControlPlaneError::HttpServerUncertain),
+            (503, ShippingControlPlaneError::HttpServerUncertain),
+        ] {
+            let mut fixture = SealingFixture::new(MachineHttpResponse::new(
+                status,
+                b"opaque-untrusted-body".to_vec(),
+            ))?;
+            assert_eq!(
+                fixture
+                    .coordinator
+                    .download_capability(&fixture.tenant_id, &fixture.profile_id)
+                    .err(),
+                Some(expected)
+            );
+            assert_eq!(
+                super::decode_reopen_opening_material_response(MachineHttpResponse::new(
+                    status,
+                    b"opaque-untrusted-body".to_vec()
+                ))
+                .err(),
+                Some(expected)
+            );
+            // This classification cannot retry the read or mint another claim.
+            assert_eq!(fixture.coordinator.transport.requests.len(), 1);
+        }
         Ok(())
     }
 
