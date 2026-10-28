@@ -115,6 +115,32 @@ def main() -> None:
         refused(conn, container_digest="f" * 64)
         refused(conn, approved_runtime_inventory_sha256="f" * 64)
         refused(conn, approved_runtime_inventory_sha256="E" * 64)
+        # The existing D1 owner's retirement admission must reject any
+        # unresolved device job on the historical candidate. It is not proof
+        # of clean local Firefox bytes, even if CURRENT/WORKING are valid.
+        conn.execute(
+            """
+            INSERT INTO device_jobs (
+                tenant_id, job_id, device_id, profile_id, generation_id,
+                aggregate_version, status, attempt, max_attempts, last_fence,
+                current_claim_id, claim_fence, claimed_at_ms,
+                claim_heartbeat_at_ms, claim_lease_expires_at_ms, retry_at_ms,
+                updated_at_ms
+            ) VALUES (?, 'job_retirement_pending_01', ?, ?, ?, 1,
+                      'PENDING_DEVICE', 0, 3, 0, NULL, NULL, NULL, NULL,
+                      NULL, NULL, 125)
+            """,
+            (FX["TENANT"], FX["DEVICE"], FX["PROFILE"], FX["CANDIDATE"]),
+        )
+        conn.commit()
+        refused(conn)
+        assert conn.execute(
+            "SELECT status FROM device_jobs WHERE job_id='job_retirement_pending_01'"
+        ).fetchone()[0] == "PENDING_DEVICE"
+        conn.execute(
+            "DELETE FROM device_jobs WHERE job_id='job_retirement_pending_01'"
+        )
+        conn.commit()
         refused(conn, admitted_by_actor_id="other_actor")
         refused(conn, admitted_by_device_id="other_device")
         refused(conn, coordinator_epoch=0)

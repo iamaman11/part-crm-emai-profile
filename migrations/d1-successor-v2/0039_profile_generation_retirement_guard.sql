@@ -120,6 +120,16 @@ BEGIN
                 AND previous.profile_id = candidate.profile_id
                 AND previous.generation_id = candidate.generation_id
           )
+          -- A pending or uncertain device job may still need its original
+          -- generation to reconcile after an offline Windows restart.
+          -- A D1 retirement receipt does not prove all other devices clean.
+          AND NOT EXISTS (
+              SELECT 1 FROM device_jobs AS pending
+              WHERE pending.tenant_id = candidate.tenant_id
+                AND pending.profile_id = candidate.profile_id
+                AND pending.generation_id = candidate.generation_id
+                AND pending.status <> 'SUCCEEDED'
+          )
     );
 END;
 
