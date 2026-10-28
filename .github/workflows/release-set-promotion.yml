@@ -340,6 +340,22 @@ jobs:
           current_release_manifest="$policy_dir/release-set.json"
           echo "CURRENT_RELEASE_MANIFEST=$current_release_manifest" >> "$GITHUB_ENV"
 
+          # The existing known-good source and release have both passed native
+          # immutable verification. Render the final two-generation policy from
+          # those exact bits, never from a caller-supplied runtime fingerprint.
+          dual_config="$RUNNER_TEMP/wrangler.staging.verified-runtimes.json"
+          python scripts/release-core-overlay-ar11.py \
+            --source-config "$(dirname "$CONTROL_RELEASE_MANIFEST")/deploy/cloudflare/wrangler.jsonc" \
+            --release-root "$(dirname "$CONTROL_RELEASE_MANIFEST")" \
+            --deploy-manifest "$DEPLOY_MANIFEST" \
+            --runtime-release-set "$TARGET_RELEASE_MANIFEST" \
+            --runtime-archive "$TARGET_RELEASE_ROOT/components/runtime-bundle.tar" \
+            --previous-runtime-release-set "$current_release_manifest" \
+            --previous-runtime-archive "$release_root/components/runtime-bundle.tar" \
+            --expected-previous-release-set-id "$current_id" \
+            --environment staging --output "$dual_config"
+          echo "WRANGLER_CONFIG=$dual_config" >> "$GITHUB_ENV"
+
           python scripts/deployment-snapshot-ar11.py \
             --environment staging --collected-at "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
             --deployment-status "$RUNNER_TEMP/current-deployment.json" \
@@ -347,7 +363,7 @@ jobs:
             --r2-list "$RUNNER_TEMP/r2-info.json" \
             --queue-list "$RUNNER_TEMP/queue-info.json" \
             --secret-list "$RUNNER_TEMP/secret-list.json" \
-            --rendered-config "$WRANGLER_CONFIG" \
+            --rendered-config "$dual_config" \
             --deploy-manifest "$DEPLOY_MANIFEST" \
             --current-release-set "$current_release_manifest" \
             --output "$RUNNER_TEMP/pre-snapshot.json"
@@ -514,7 +530,9 @@ jobs:
             --arg release_verify_sha256 "$(sha256sum "$RUNNER_TEMP/release-verify.json" | cut -d' ' -f1)" \
             --arg preflight_sha256 "$(sha256sum "$RUNNER_TEMP/promotion-preflight.json" | cut -d' ' -f1)" \
             --arg plan_sha256 "$(sha256sum "$RUNNER_TEMP/promotion-plan.json" | cut -d' ' -f1)" \
-            '{schema_version:1,kind:"AR11_READY_TO_MUTATE",ready:true,environment:"staging",source_sha:$source_sha,release_set_id:$release_set_id,expected_current_release_set_id:$expected_current,expected_current_capability_profile_id:$expected_current_profile,target_capability_profile_id:$target_profile,admission_mode:$admission_mode,worker_exists:true,worker_identity_sha256:$worker_identity_sha256,d1_head:$d1_head,d1_ledger_sha256:$d1_ledger_sha256,secret_bindings_verified:true,quiescence:{seconds:30,worker_identity_stable:true,d1_ledger_stable:true},promotion_id:$promotion_id,recovery_strategy:$recovery_strategy,release_verify_sha256:$release_verify_sha256,promotion_preflight_sha256:$preflight_sha256,promotion_plan_sha256:$plan_sha256,credential_values_accessed:false,provider_mutation:false,production_mutation:false}' \
+            --arg approved_runtime_inventories "$(jq -jer '.env.staging.vars.PROFILE_GENERATION_APPROVED_RUNTIME_INVENTORIES' "$WRANGLER_CONFIG")" \
+            --arg runtime_policy_sha256 "$(jq -j '.env.staging.vars.PROFILE_GENERATION_APPROVED_RUNTIME_INVENTORIES' "$WRANGLER_CONFIG" | sha256sum | cut -d' ' -f1)" \
+            '{schema_version:1,kind:"AR11_READY_TO_MUTATE",ready:true,environment:"staging",source_sha:$source_sha,release_set_id:$release_set_id,expected_current_release_set_id:$expected_current,expected_current_capability_profile_id:$expected_current_profile,target_capability_profile_id:$target_profile,admission_mode:$admission_mode,worker_exists:true,worker_identity_sha256:$worker_identity_sha256,d1_head:$d1_head,d1_ledger_sha256:$d1_ledger_sha256,secret_bindings_verified:true,quiescence:{seconds:30,worker_identity_stable:true,d1_ledger_stable:true},promotion_id:$promotion_id,recovery_strategy:$recovery_strategy,release_verify_sha256:$release_verify_sha256,promotion_preflight_sha256:$preflight_sha256,promotion_plan_sha256:$plan_sha256,approved_runtime_inventories:$approved_runtime_inventories,runtime_policy_sha256:$runtime_policy_sha256,credential_values_accessed:false,provider_mutation:false,production_mutation:false}' \
             > "$RUNNER_TEMP/ready-to-mutate.json"
           jq -e --arg source "$SOURCE_SHA" --arg target "$RELEASE_SET_ID" --arg current "${{ steps.observe.outputs.current_id }}" --arg current_profile "${{ steps.observe.outputs.current_profile }}" --arg target_profile "${{ steps.policy.outputs.target_profile }}" --arg admission_mode "${{ steps.policy.outputs.admission_mode }}" '.kind == "AR11_READY_TO_MUTATE" and .ready == true and .source_sha == $source and .release_set_id == $target and .expected_current_release_set_id == $current and .expected_current_capability_profile_id == $current_profile and .target_capability_profile_id == $target_profile and .admission_mode == $admission_mode and .worker_exists == true and .secret_bindings_verified == true and .quiescence.worker_identity_stable == true and .quiescence.d1_ledger_stable == true and .credential_values_accessed == false and .provider_mutation == false and .production_mutation == false' "$RUNNER_TEMP/ready-to-mutate.json" >/dev/null
           ready_sha="$(sha256sum "$RUNNER_TEMP/ready-to-mutate.json" | cut -d' ' -f1)"
@@ -782,6 +800,7 @@ jobs:
           mkdir -p "$ready_root"
           gh run download "$READY_RUN_ID" --repo "$GITHUB_REPOSITORY" --name "$READY_ARTIFACT_NAME" --dir "$ready_root"
           for name in ready-to-mutate.json release-set.json accepted-source-evidence.json release-verify.json compatibility-evidence.json promotion-plan.json promotion-preflight.json pre-snapshot.json d1-names-after.json; do test -f "$ready_root/$name"; done
+          jq -e '.runtime_policy_sha256 | type == "string" and test("^[0-9a-f]{64}$")' "$ready_root/ready-to-mutate.json" >/dev/null
           jq -e '.schema_version == 2 and .command == "promotion.preflight" and .ready == true and (.recovery_strategy == "VERIFIED_ROLLBACK" or .recovery_strategy == "CURRENT_FORWARD_ONLY" or .recovery_strategy == "FRESH_BASELINE")' "$ready_root/promotion-preflight.json" >/dev/null
           native_recovery="$(jq -er '.recovery_strategy' "$ready_root/promotion-preflight.json")"
           jq -e --arg recovery "$native_recovery" '.recovery_strategy == $recovery' "$ready_root/ready-to-mutate.json" >/dev/null
@@ -903,6 +922,7 @@ jobs:
           test "$(jq -r '.source_sha' "$ready_root/ready-to-mutate.json")" = "${{ needs.resolve-verify.outputs.main_sha }}"
           test "$(jq -r '.ready' "$ready_root/ready-to-mutate.json")" = true
           test "$(jq -r '.provider_mutation' "$ready_root/ready-to-mutate.json")" = false
+          jq -e '.runtime_policy_sha256 | type == "string" and test("^[0-9a-f]{64}$")' "$ready_root/ready-to-mutate.json" >/dev/null
           jq -n \
             --arg authorization_digest "$AUTHORIZATION_DIGEST" \
             --arg ready_evidence_sha256 "$READY_EVIDENCE_SHA256" \
@@ -956,7 +976,10 @@ jobs:
             --release-root "$CONTROL_RELEASE_ROOT" --deploy-manifest "$RUNNER_TEMP/deploy-manifest.json" \
             --runtime-release-set "$RUNNER_TEMP/mutation-release-set/release-set.json" \
             --runtime-archive "$RUNNER_TEMP/mutation-release-set/components/runtime-bundle.tar" \
+            --ready-policy-evidence "$RUNNER_TEMP/ready/ready-to-mutate.json" \
+            --expected-previous-release-set-id "$EXPECTED_CURRENT" \
             --environment staging --output "$RUNNER_TEMP/wrangler.staging.json"
+          test "$(jq -j '.env.staging.vars.PROFILE_GENERATION_APPROVED_RUNTIME_INVENTORIES' "$RUNNER_TEMP/wrangler.staging.json" | sha256sum | cut -d' ' -f1)" = "$(jq -er '.runtime_policy_sha256' "$RUNNER_TEMP/ready/ready-to-mutate.json")"
           echo "DEPLOY_MANIFEST=$RUNNER_TEMP/deploy-manifest.json" >> "$GITHUB_ENV"
           echo "WRANGLER_CONFIG=$RUNNER_TEMP/wrangler.staging.json" >> "$GITHUB_ENV"
           npx --yes wrangler@4.94.0 deploy --dry-run --config "$RUNNER_TEMP/wrangler.staging.json" --env staging --experimental-autoconfig=false
@@ -1147,6 +1170,7 @@ jobs:
       TARGET_PROFILE: ${{ needs.resolve-verify.outputs.target_profile }}
       READY_RUN_ID: ${{ needs.resolve-verify.outputs.ready_run_id }}
       READY_ARTIFACT_NAME: ${{ needs.resolve-verify.outputs.ready_artifact_name }}
+      READY_EVIDENCE_SHA256: ${{ needs.resolve-verify.outputs.ready_evidence_sha256 }}
       CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_OBSERVE_API_TOKEN }}
       CLOUDFLARE_DEPLOY_MANIFEST_JSON: ${{ secrets.CLOUDFLARE_DEPLOY_MANIFEST_JSON }}
     steps:
@@ -1181,9 +1205,18 @@ jobs:
           tar -xf "$release_root/components/control-plane.tar" -C "$control_extract"
           manifest="$(find "$control_extract" -type f -name release-manifest.json -print -quit)"
           test -n "$manifest"
+          previous_id="$(jq -er '.expected_current_release_set_id' "$ready_root/ready-to-mutate.json")"
           umask 077
           printf '%s' "$CLOUDFLARE_DEPLOY_MANIFEST_JSON" > "$RUNNER_TEMP/deploy-manifest.json"
-          python scripts/release-core-overlay-ar11.py --source-config "$(dirname "$manifest")/deploy/cloudflare/wrangler.jsonc" --release-root "$(dirname "$manifest")" --deploy-manifest "$RUNNER_TEMP/deploy-manifest.json" --runtime-release-set "$release_root/release-set.json" --runtime-archive "$release_root/components/runtime-bundle.tar" --environment staging --output "$RUNNER_TEMP/wrangler.staging.json"
+          python scripts/release-core-overlay-ar11.py \
+            --source-config "$(dirname "$manifest")/deploy/cloudflare/wrangler.jsonc" \
+            --release-root "$(dirname "$manifest")" --deploy-manifest "$RUNNER_TEMP/deploy-manifest.json" \
+            --runtime-release-set "$release_root/release-set.json" \
+            --runtime-archive "$release_root/components/runtime-bundle.tar" \
+            --ready-policy-evidence "$ready_root/ready-to-mutate.json" \
+            --expected-previous-release-set-id "$previous_id" \
+            --environment staging --output "$RUNNER_TEMP/wrangler.staging.json"
+          test "$(jq -j '.env.staging.vars.PROFILE_GENERATION_APPROVED_RUNTIME_INVENTORIES' "$RUNNER_TEMP/wrangler.staging.json" | sha256sum | cut -d' ' -f1)" = "$(jq -er '.runtime_policy_sha256' "$ready_root/ready-to-mutate.json")"
           echo "DEPLOY_MANIFEST=$RUNNER_TEMP/deploy-manifest.json" >> "$GITHUB_ENV"
           echo "WRANGLER_CONFIG=$RUNNER_TEMP/wrangler.staging.json" >> "$GITHUB_ENV"
 
