@@ -791,6 +791,81 @@ mod tests {
     }
 
     #[test]
+    fn bounded_checkpoint_preserves_live_claim_and_replay_for_long_sessions()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let mut document = document()?;
+        document.apply(StoredCoordinatorEnvelope::new(
+            "idem_issue_long_01JADAPTER",
+            1,
+            1,
+            StoredCoordinatorCommand::IssueLaunchIntent {
+                launch_intent_id: "intent_long_01JADAPTER".to_owned(),
+                actor_id: "actor_01JADAPTER".to_owned(),
+                device_id: "device_01JADAPTER".to_owned(),
+                now_ms: 1,
+                expires_at_ms: 500,
+            },
+        ))?;
+        document.apply(StoredCoordinatorEnvelope::new(
+            "idem_claim_long_01JADAPTER",
+            2,
+            2,
+            StoredCoordinatorCommand::Claim {
+                launch_intent_id: "intent_long_01JADAPTER".to_owned(),
+                actor_id: "actor_01JADAPTER".to_owned(),
+                device_id: "device_01JADAPTER".to_owned(),
+                session_id: "session_long_01JADAPTER".to_owned(),
+                fencing_token: "fence_long_01JADAPTER".to_owned(),
+                now_ms: 2,
+            },
+        ))?;
+        // Exceeds the previous 4096-event lifetime. Every renewal advances
+        // the original coordinator fence and must not grow the DO journal.
+        for sequence in 3_u64..=4_200 {
+            document.apply(StoredCoordinatorEnvelope::new(
+                format!("idem_roll_{sequence:08}_01JADAPTER"),
+                sequence,
+                sequence,
+                StoredCoordinatorCommand::RenewLease {
+                    session_id: "session_long_01JADAPTER".to_owned(),
+                    epoch: 1,
+                    fencing_token: "fence_long_01JADAPTER".to_owned(),
+                    now_ms: sequence,
+                },
+            ))?;
+            assert!(document.journal_len() < super::COMPACT_JOURNAL_AT);
+        }
+        assert_eq!(document.projection()?.sequence, 4_200);
+        assert_eq!(document.replay()?.active_lease().map(|l| l.epoch()), Some(1));
+        assert!(document.active_claim_matches(
+            &ActorId::parse("actor_01JADAPTER")?,
+            &DeviceId::parse("device_01JADAPTER")?,
+            &SessionId::parse("session_long_01JADAPTER")?,
+        )?);
+        assert!(!document.active_claim_matches(
+            &ActorId::parse("actor_other_01JADAPTER")?,
+            &DeviceId::parse("device_01JADAPTER")?,
+            &SessionId::parse("session_long_01JADAPTER")?,
+        )?);
+        let encoded = serde_json::to_vec(&document)?;
+        let restored: StoredCoordinatorDocument = serde_json::from_slice(&encoded)?;
+        assert_eq!(restored.replay()?.checkpoint(), document.replay()?.checkpoint());
+        assert_eq!(restored.journal_len(), document.journal_len());
+        Ok(())
+    }
+
+    #[test]
+    fn old_document_without_checkpoint_remains_readable()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let original = document()?;
+        let json = serde_json::to_string(&original)?;
+        assert!(!json.contains("checkpoint"));
+        let decoded: StoredCoordinatorDocument = serde_json::from_str(&json)?;
+        assert_eq!(decoded.projection()?, original.projection()?);
+        Ok(())
+    }
+
+    #[test]
     fn persisted_turnover_fences_old_writer() -> Result<(), Box<dyn std::error::Error>> {
         let mut document = document()?;
         document.apply(StoredCoordinatorEnvelope::new(
