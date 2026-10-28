@@ -4,9 +4,8 @@ use crate::access_session::problem;
 use crate::composition::{
     device_execution_preconditions, device_job_authorization,
     generation_download_capability_signer, generation_object_retention, generation_object_verifier,
-    generation_root_keyring,
-    generation_upload_capability_signer, profile_generation_successor_commit,
-    profile_generation_successor_observer,
+    generation_root_keyring, generation_upload_capability_signer,
+    profile_generation_successor_commit, profile_generation_successor_observer,
 };
 use application_ports::device_jobs::{DeviceJobAuthorizationPort, DeviceJobCapability};
 use application_ports::generation_objects::{
@@ -973,12 +972,7 @@ async fn retire_one_old_generation(
         pending
     } else {
         let Some(candidate) = journal
-            .load_unproven_prune_review_candidate(
-                scope,
-                profile_id,
-                current,
-                runtime_inventory,
-            )
+            .load_unproven_prune_review_candidate(scope, profile_id, current, runtime_inventory)
             .await
             .map_err(|_| ())?
         else {

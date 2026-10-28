@@ -51,7 +51,9 @@ impl R2GenerationRetention {
         {
             return Ok(());
         }
-        deleted.map_err(|_| GenerationPortError::new(GenerationPortErrorClass::DependencyUnavailable))?;
+        deleted.map_err(|_| {
+            GenerationPortError::new(GenerationPortErrorClass::DependencyUnavailable)
+        })?;
         Err(GenerationPortError::new(
             GenerationPortErrorClass::IntegrityFailure,
         ))
