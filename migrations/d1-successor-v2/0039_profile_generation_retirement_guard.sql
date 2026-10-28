@@ -44,7 +44,8 @@ CREATE TABLE profile_generation_retirement_intents (
 
 -- Exactly one transactional read of CURRENT, protected independently proven
 -- N-k, and unproven candidate. Only an active TENANT_OWNER with a live device
--- binding can admit a receipt. The external Coordinator lease, original key,
+-- binding AND exact active-generation authorization can admit a receipt.
+-- The external Coordinator lease, original key,
 -- runtime bundle and local dirty-state require independent checks; no R2 effect
 -- is wired to this table.
 CREATE TRIGGER profile_generation_retirement_validate
@@ -77,6 +78,13 @@ BEGIN
           ON device.tenant_id = actor.tenant_id
          AND device.actor_id = actor.actor_id
          AND device.device_id = NEW.admitted_by_device_id
+        -- A live actor/device binding is NOT permission to operate this
+        -- exact CURRENT generation. Old grants cannot retire recovery bytes.
+        JOIN device_authorizations AS authorized
+          ON authorized.tenant_id = profile.tenant_id
+         AND authorized.profile_id = profile.profile_id
+         AND authorized.generation_id = current.generation_id
+         AND authorized.device_id = NEW.admitted_by_device_id
         WHERE profile.tenant_id = NEW.tenant_id
           AND profile.profile_id = NEW.profile_id
           AND profile.status = 'READY'
@@ -97,8 +105,15 @@ BEGIN
           AND actor.role = 'TENANT_OWNER'
           AND actor.status = 'ACTIVE'
           AND device.status = 'ACTIVE'
+          AND authorized.status = 'ACTIVE'
+          AND authorized.revoked_at_ms IS NULL
+          -- Never treat evidence from the future as an admitted operation.
+          AND NEW.admitted_at_ms >= authorized.authorized_at_ms
           AND NEW.admitted_at_ms >= profile.updated_at_ms
+          AND NEW.admitted_at_ms >= current.updated_at_ms
           AND NEW.admitted_at_ms >= candidate.updated_at_ms
+          AND NEW.admitted_at_ms >= working.updated_at_ms
+          AND NEW.admitted_at_ms >= proof.proven_at_ms
           AND NOT EXISTS (
               SELECT 1 FROM profile_generation_working_proofs AS previous
               WHERE previous.tenant_id = candidate.tenant_id

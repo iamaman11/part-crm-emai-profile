@@ -43,6 +43,22 @@ def record(conn: sqlite3.Connection, **changes: object) -> None:
     )
 
 
+def authorize_current_device(conn: sqlite3.Connection) -> None:
+    # BASE grant alone cannot permit retirement when WINNER is CURRENT.
+    conn.execute(
+        """
+        INSERT INTO device_authorizations (
+            tenant_id, device_id, profile_id, generation_id, version, status,
+            evidence_reference, authorized_by_actor_id, updated_by_actor_id,
+            authorized_at_ms, updated_at_ms, revoked_at_ms
+        ) VALUES (?, ?, ?, ?, 1, 'ACTIVE', 'evidence_current_maintenance',
+                  ?, ?, 121, 121, NULL)
+        """,
+        (FX["TENANT"], FX["DEVICE"], FX["PROFILE"], FX["WINNER"],
+         FX["OWNER"], FX["OWNER"]),
+    )
+
+
 def refused(conn: sqlite3.Connection, **change: object) -> None:
     before = conn.execute(
         "SELECT COUNT(*) FROM profile_generation_retirement_intents"
@@ -74,6 +90,22 @@ def main() -> None:
         FX["owner_verify"](conn, FX["WINNER"], 115)
         FX["owner_activate"](conn, FX["WINNER"], 3, 120)
         conn.commit()
+        refused(conn)  # BASE grant cannot be borrowed for current WINNER
+        authorize_current_device(conn)
+        conn.commit()
+        refused(conn, admitted_at_ms=120)  # grant not issued until 121
+        conn.execute(
+            "UPDATE device_authorizations SET status='REVOKED', "
+            "revoked_at_ms=123, updated_at_ms=123 "
+            "WHERE tenant_id=? AND profile_id=? AND generation_id=? AND device_id=?",
+            (FX["TENANT"], FX["PROFILE"], FX["WINNER"], FX["DEVICE"]),
+        )
+        refused(conn)  # revocation invalidates admission even with live binding
+        assert conn.execute(
+            "SELECT status FROM device_authorizations "
+            "WHERE tenant_id=? AND profile_id=? AND generation_id=? AND device_id=?",
+            (FX["TENANT"], FX["PROFILE"], FX["WINNER"], FX["DEVICE"]),
+        ).fetchone()[0] == "ACTIVE"
         refused(conn, generation_id=FX["WINNER"])
         refused(conn, generation_id=FX["BASE"])
         refused(conn, observed_current_generation_id=FX["CANDIDATE"])
