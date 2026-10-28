@@ -1843,7 +1843,7 @@ mod tests {
             assert_eq!(actual.sequence, 14);
             assert!(matches!(
                 actual.command,
-                CoordinatorCommandDto::Heartbeat { .. }
+                CoordinatorCommandDto::RenewLease { .. }
             ));
             assert!(
                 coordinator
@@ -1944,7 +1944,7 @@ mod tests {
                 // There is no authority refresh or second idempotency key here.
                 assert!(matches!(
                     command.command,
-                    CoordinatorCommandDto::Heartbeat { .. }
+                    CoordinatorCommandDto::RenewLease { .. }
                 ));
             }
         }
