@@ -10,10 +10,13 @@ promotion policy and the guarded promotion workflow.
 from __future__ import annotations
 
 import argparse
+import hashlib
+import io
 import json
 import os
 import re
 import sys
+import tarfile
 import tempfile
 from pathlib import Path
 from urllib.parse import urlparse
@@ -34,7 +37,6 @@ REQUIRED_CONTROL_FIELDS = {
     "custom_domain",
     "access_issuer",
     "access_audience",
-    "approved_runtime_inventories",
     "d1_database_name",
     "d1_database_id",
     "r2_bucket_name",
@@ -72,7 +74,91 @@ def bounded(value: Any, label: str) -> str:
     return value
 
 
-def control_manifest(document: dict[str, Any], environment: str) -> dict[str, str]:
+def verified_runtime_inventory(release_set_path: Path, archive_path: Path) -> str:
+    """Use the exact verified Release Set's packaged runtime, never a caller fingerprint."""
+    release = load(release_set_path, "accepted Release Set")
+    release_id = release.get("release_set_id")
+    if (
+        release.get("schema_version") != 3
+        or not isinstance(release_id, str)
+        or release_id != os.environ.get("RELEASE_SET_ID")
+        or RELEASE_SET_V3_RE.fullmatch(release_id) is None
+    ):
+        fail("runtime inventory is not bound to the exact accepted Release Set")
+    components = release.get("components")
+    runtime = components.get("runtime_bundle") if isinstance(components, dict) else None
+    if (
+        not isinstance(runtime, dict)
+        or runtime.get("component_id") != "runtime_bundle"
+        or runtime.get("artifact_path") != "components/runtime-bundle.tar"
+        or not isinstance(runtime.get("component_manifest_sha256"), str)
+        or SHA256_RE.fullmatch(runtime["component_manifest_sha256"]) is None
+        or not isinstance(runtime.get("release_id"), str)
+    ):
+        fail("accepted Release Set has no exact runtime component manifest identity")
+    if archive_path.is_symlink() or not archive_path.is_file():
+        fail("accepted runtime archive must be a regular file")
+    try:
+        with tarfile.open(archive_path, "r:") as archive:
+            entry = archive.getmember("runtime-manifest.json")
+            if not entry.isfile() or not (1 <= entry.size <= 2_000_000):
+                fail("runtime manifest tar member is not a bounded regular file")
+            stream = archive.extractfile(entry)
+            if stream is None:
+                fail("runtime manifest tar member cannot be read")
+            raw = stream.read(2_000_001)
+    except (tarfile.TarError, EOFError) as error:
+        raise OverlayError("accepted runtime archive is invalid") from error
+    if hashlib.sha256(raw).hexdigest() != runtime["component_manifest_sha256"]:
+        fail("runtime manifest does not match the verified immutable Release Set")
+    try:
+        document = json.loads(raw)
+    except (ValueError, UnicodeDecodeError) as error:
+        raise OverlayError("accepted runtime manifest is malformed") from error
+    if (
+        not isinstance(document, dict)
+        or document.get("schema_version") != 3
+        or document.get("kind") != "CAMOUFOX_WINDOWS_RUNTIME_COMPONENT"
+        or document.get("release_id") != runtime["release_id"]
+    ):
+        fail("accepted runtime manifest identity is inconsistent")
+    files = document.get("files")
+    entries = files.get("files") if isinstance(files, dict) else None
+    if not isinstance(entries, list) or not (1 <= len(entries) <= 10000):
+        fail("accepted runtime file inventory is missing or unbounded")
+    # Match Profile Bridge's runtime_bundle::inventory_digest exactly:
+    # sorted entries, length/path/sha256 keys in this order, trailing newline.
+    normalized = []
+    seen = set()
+    for entry in entries:
+        if not isinstance(entry, dict):
+            fail("runtime inventory entry is malformed")
+        path = entry.get("path")
+        size = entry.get("size_bytes")
+        digest = entry.get("sha256")
+        if (
+            not isinstance(path, str)
+            or not path
+            or len(path) > 512
+            or path.startswith("/")
+            or "\\" in path
+            or any(part in ("", ".", "..") for part in path.split("/"))
+            or not path.isascii()
+            or path.casefold() in seen
+            or type(size) is not int
+            or not (0 <= size <= 2**63 - 1)
+            or not isinstance(digest, str)
+            or SHA256_RE.fullmatch(digest) is None
+        ):
+            fail("runtime inventory contains an unsafe or invalid file identity")
+        seen.add(path.casefold())
+        normalized.append({"length": size, "path": path, "sha256": digest})
+    normalized.sort(key=lambda item: item["path"])
+    canonical = json.dumps(normalized, separators=(",", ":"), ensure_ascii=True) + "\n"
+    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+
+
+def control_manifest(document: dict[str, Any], environment: str, *, runtime_digest: str | None = None) -> dict[str, str]:
     if environment != "staging":
         fail("AR-11 Core overlay adapter is staging-only; production execution is forbidden")
     if "control_plane" in document:
@@ -92,6 +178,13 @@ def control_manifest(document: dict[str, Any], environment: str) -> dict[str, st
     if not isinstance(owner, str) or len(owner) > 254 or any(ord(ch) < 32 or ord(ch) == 127 for ch in owner):
         fail("control_plane.initial_owner_email must be a bounded single-line string")
     result["initial_owner_email"] = owner
+    # Environment secrets own provider identities, not runtime trust. A missing
+    # historical pin is supplied by the accepted immutable runtime Release Set.
+    # Explicit pin lists remain valid only if they include the exact shipped runtime.
+    allowed = candidate.get("approved_runtime_inventories", runtime_digest)
+    if not isinstance(allowed, str):
+        fail("runtime trust requires the verified release inventory or a protected pin")
+    result["approved_runtime_inventories"] = bounded(allowed, "control_plane.approved_runtime_inventories")
     for field in (
         "worker_name",
         "d1_database_name",
@@ -111,6 +204,8 @@ def control_manifest(document: dict[str, Any], environment: str) -> dict[str, st
         fail("control_plane.approved_runtime_inventories must be one or two exact lowercase SHA-256s")
     if "," in allowed and allowed.split(",")[0] == allowed.split(",")[1]:
         fail("control_plane.approved_runtime_inventories must not duplicate a runtime")
+    if runtime_digest is not None and runtime_digest not in allowed.split(","):
+        fail("protected runtime policy excludes the exact accepted runtime Release Set")
     issuer = urlparse(result["access_issuer"])
     if (
         issuer.scheme != "https"
@@ -167,11 +262,16 @@ def render(
     source_config: Path,
     release_root: Path,
     deploy_manifest: Path,
+    runtime_release_set: Path,
+    runtime_archive: Path,
     environment: str,
     output: Path,
 ) -> None:
     config = load(source_config, "immutable release Wrangler config")
-    manifest = control_manifest(load(deploy_manifest, "deploy manifest"), environment)
+    manifest = control_manifest(
+        load(deploy_manifest, "deploy manifest"), environment,
+        runtime_digest=verified_runtime_inventory(runtime_release_set, runtime_archive),
+    )
     envs = config.get("env")
     if not isinstance(envs, dict) or set(envs) != {"staging", "production"}:
         fail("immutable Wrangler config must contain exactly staging and production templates")
@@ -308,23 +408,71 @@ def self_test() -> None:
         (root / "worker/worker/shim.mjs").write_text("// immutable test entrypoint\n", encoding="utf-8")
         (root / "frontend").mkdir()
         (root / "frontend/index.html").write_text("<!doctype html>", encoding="utf-8")
+        # Model only the two immutable component identities, not a fake runtime
+        # trust value passed by a client or staging environment.
+        runtime_release_id = "runtime-bundle-v3-sha256-" + "e" * 64
+        fixture_files = [{"path": "browser/camoufox.exe", "size_bytes": 3, "sha256": "c" * 64}]
+        runtime_document = {
+            "schema_version": 3, "kind": "CAMOUFOX_WINDOWS_RUNTIME_COMPONENT",
+            "release_id": runtime_release_id, "files": {"files": fixture_files},
+        }
+        runtime_bytes = json.dumps(runtime_document, separators=(",", ":")).encode()
+        runtime_archive = root / "runtime.tar"
+        with tarfile.open(runtime_archive, "w") as archive:
+            member = tarfile.TarInfo("runtime-manifest.json")
+            member.size = len(runtime_bytes)
+            archive.addfile(member, io.BytesIO(runtime_bytes))
+        runtime_release_set = root / "release-set.json"
+        runtime_release_set.write_text(json.dumps({
+            "schema_version": 3, "release_set_id": release_set_id,
+            "components": {"runtime_bundle": {
+                "component_id": "runtime_bundle", "artifact_path": "components/runtime-bundle.tar",
+                "component_manifest_sha256": hashlib.sha256(runtime_bytes).hexdigest(),
+                "release_id": runtime_release_id,
+            }},
+        }), encoding="utf-8")
         manifest_path = root / "manifest.json"
         previous = os.environ.get("RELEASE_SET_ID")
         os.environ["RELEASE_SET_ID"] = release_set_id
         try:
+            expected_pin = verified_runtime_inventory(runtime_release_set, runtime_archive)
+            if expected_pin != hashlib.sha256(
+                (json.dumps([{"length": 3, "path": "browser/camoufox.exe", "sha256": "c" * 64}],
+                            separators=(",", ":")) + "\n").encode()
+            ).hexdigest():
+                fail("runtime digest differs from native shipping inventory format")
             for index, contact in enumerate([None, "owner@staging.invalid"]):
                 candidate = dict(manifest)
+                candidate.pop("approved_runtime_inventories", None)
                 if contact is not None:
                     candidate["initial_owner_email"] = contact
                 manifest_path.write_text(json.dumps({"control_plane": candidate}), encoding="utf-8")
                 output = root / f"overlay-{index}.json"
                 render(source_config=Path(__file__).resolve().parents[1] / "deploy/cloudflare/wrangler.jsonc",
-                       release_root=root, deploy_manifest=manifest_path, environment="staging", output=output)
+                       release_root=root, deploy_manifest=manifest_path,
+                       runtime_release_set=runtime_release_set, runtime_archive=runtime_archive,
+                       environment="staging", output=output)
                 observed = json.loads(output.read_text(encoding="utf-8"))
                 if observed["env"]["staging"]["vars"]["INITIAL_OWNER_EMAIL"] != (contact or ""):
                     fail("initial owner configuration was lost during canonical Core rendering")
-                if observed["env"]["staging"]["vars"]["PROFILE_GENERATION_APPROVED_RUNTIME_INVENTORIES"] != candidate["approved_runtime_inventories"]:
+                if observed["env"]["staging"]["vars"]["PROFILE_GENERATION_APPROVED_RUNTIME_INVENTORIES"] != expected_pin:
                     fail("staging WORKING runtime pin was lost during the canonical no-rebuild Core rendering")
+            mismatched = dict(manifest, approved_runtime_inventories="b" * 64)
+            try:
+                control_manifest({"control_plane": mismatched}, "staging", runtime_digest=expected_pin)
+            except OverlayError:
+                pass
+            else:
+                fail("protected runtime policy excluding the shipped runtime passed")
+            runtime_release_set.write_text(runtime_release_set.read_text().replace(
+                hashlib.sha256(runtime_bytes).hexdigest(), "f" * 64
+            ), encoding="utf-8")
+            try:
+                verified_runtime_inventory(runtime_release_set, runtime_archive)
+            except OverlayError:
+                pass
+            else:
+                fail("tampered runtime manifest identity passed immutable verification")
                 if set(observed["env"]) != {"staging"} or "build" in observed:
                     fail("setup configuration expanded the promotion target/build scope")
         finally:
@@ -341,6 +489,8 @@ def main() -> int:
     parser.add_argument("--source-config", type=Path)
     parser.add_argument("--release-root", type=Path)
     parser.add_argument("--deploy-manifest", type=Path)
+    parser.add_argument("--runtime-release-set", type=Path)
+    parser.add_argument("--runtime-archive", type=Path)
     parser.add_argument("--environment", default="staging")
     parser.add_argument("--output", type=Path)
     parser.add_argument("--self-test", action="store_true")
@@ -353,6 +503,8 @@ def main() -> int:
             args.source_config,
             args.release_root,
             args.deploy_manifest,
+            args.runtime_release_set,
+            args.runtime_archive,
             args.output,
         ):
             fail("source-config, release-root, deploy-manifest and output are required")
@@ -360,6 +512,8 @@ def main() -> int:
             source_config=args.source_config,
             release_root=args.release_root,
             deploy_manifest=args.deploy_manifest,
+            runtime_release_set=args.runtime_release_set,
+            runtime_archive=args.runtime_archive,
             environment=args.environment,
             output=args.output,
         )
