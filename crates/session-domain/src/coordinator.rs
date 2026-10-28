@@ -101,6 +101,16 @@ impl PendingLaunchIntent {
     pub const fn expires_at(&self) -> UnixMillis {
         self.expires_at
     }
+
+    #[must_use]
+    pub const fn restored(
+        launch_intent_id: LaunchIntentId,
+        actor_id: ActorId,
+        device_id: DeviceId,
+        expires_at: UnixMillis,
+    ) -> Self {
+        Self { launch_intent_id, actor_id, device_id, expires_at }
+    }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -154,6 +164,31 @@ impl CoordinatorLease {
     #[must_use]
     pub const fn hard_expires_at(&self) -> UnixMillis {
         self.hard_expires_at
+    }
+
+    /// Parsed checkpoint data cannot manufacture a valid writer state.
+    #[allow(clippy::too_many_arguments)]
+    pub fn restored(
+        session_id: SessionId,
+        device_id: DeviceId,
+        epoch: u64,
+        fencing_token: FencingToken,
+        claimed_at: UnixMillis,
+        last_heartbeat_at: UnixMillis,
+        idle_expires_at: UnixMillis,
+        hard_expires_at: UnixMillis,
+    ) -> Result<Self, CoordinatorError> {
+        if epoch == 0
+            || last_heartbeat_at < claimed_at
+            || idle_expires_at < last_heartbeat_at
+            || hard_expires_at < idle_expires_at
+        {
+            return Err(CoordinatorError::InvalidCheckpoint);
+        }
+        Ok(Self {
+            session_id, device_id, epoch, fencing_token, claimed_at,
+            last_heartbeat_at, idle_expires_at, hard_expires_at,
+        })
     }
 
     #[must_use]
@@ -327,6 +362,20 @@ struct CommandReceipt {
     decision: CoordinatorDecision,
 }
 
+/// Durable replay anchor for bounded DO journals. It is owned by the
+/// original coordinator and never constitutes an independent lease authority.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct CoordinatorCheckpoint {
+    pub version: AggregateVersion,
+    pub sequence: u64,
+    pub observed_at: UnixMillis,
+    pub next_epoch: u64,
+    pub status: CoordinatorStatus,
+    pub pending_intent: Option<PendingLaunchIntent>,
+    pub active_lease: Option<CoordinatorLease>,
+    pub drain_deadline: Option<UnixMillis>,
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ProfileCoordinatorState {
     tenant_id: TenantId,
@@ -364,6 +413,63 @@ impl ProfileCoordinatorState {
             drain_deadline: None,
             receipts: Vec::new(),
         }
+    }
+
+    #[must_use]
+    pub fn checkpoint(&self) -> CoordinatorCheckpoint {
+        CoordinatorCheckpoint {
+            version: self.version,
+            sequence: self.last_sequence,
+            observed_at: self.last_observed_at,
+            next_epoch: self.next_epoch,
+            status: self.status,
+            pending_intent: self.pending_intent.clone(),
+            active_lease: self.active_lease.clone(),
+            drain_deadline: self.drain_deadline,
+        }
+    }
+
+    /// Restore only a validated, canonical replay checkpoint. The trailing
+    /// bounded command journal repopulates recent idempotency receipts.
+    pub fn restore_checkpoint(
+        tenant_id: TenantId,
+        profile_id: ProfileId,
+        config: CoordinatorConfig,
+        snapshot: CoordinatorCheckpoint,
+    ) -> Result<Self, CoordinatorError> {
+        let expected_version = snapshot
+            .sequence
+            .checked_add(1)
+            .ok_or(CoordinatorError::InvalidCheckpoint)?;
+        let has_writer = snapshot.active_lease.is_some();
+        let active_status = matches!(
+            snapshot.status,
+            CoordinatorStatus::Active | CoordinatorStatus::Draining
+        );
+        if snapshot.version.value() != expected_version
+            || has_writer != active_status
+            || snapshot.active_lease.as_ref().is_some_and(|lease| {
+                lease.epoch() > snapshot.next_epoch
+            })
+            || (snapshot.pending_intent.is_some()
+                && (snapshot.status != CoordinatorStatus::Idle || has_writer))
+            || (snapshot.drain_deadline.is_some()
+                != (snapshot.status == CoordinatorStatus::Draining))
+        {
+            return Err(CoordinatorError::InvalidCheckpoint);
+        }
+        Ok(Self {
+            tenant_id, profile_id, config,
+            version: snapshot.version,
+            last_sequence: snapshot.sequence,
+            last_observed_at: snapshot.observed_at,
+            next_epoch: snapshot.next_epoch,
+            status: snapshot.status,
+            pending_intent: snapshot.pending_intent,
+            active_lease: snapshot.active_lease,
+            drain_deadline: snapshot.drain_deadline,
+            receipts: Vec::new(),
+        })
     }
 
     #[must_use]
@@ -783,6 +889,7 @@ fn add_millis(value: UnixMillis, delta: u64) -> Result<UnixMillis, CoordinatorEr
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum CoordinatorError {
     InvalidTimeoutConfig,
+    InvalidCheckpoint,
     InvalidSequence,
     SequenceOverflow,
     ExpectedVersionMismatch,
@@ -810,6 +917,7 @@ impl fmt::Display for CoordinatorError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter.write_str(match self {
             Self::InvalidTimeoutConfig => "coordinator timeout configuration is invalid",
+            Self::InvalidCheckpoint => "coordinator replay checkpoint is invalid",
             Self::InvalidSequence => "coordinator command sequence must be positive",
             Self::SequenceOverflow => "coordinator command sequence overflow",
             Self::ExpectedVersionMismatch => "coordinator expected version mismatch",
