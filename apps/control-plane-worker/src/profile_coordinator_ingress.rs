@@ -238,9 +238,7 @@ fn bridge_command_policy(
         } if claimed_device == device_id.as_str() => Ok(BridgeCommandPolicy::Claim),
         CoordinatorCommandDto::Heartbeat { .. }
         | CoordinatorCommandDto::RenewLease { .. }
-        | CoordinatorCommandDto::Release { .. } => {
-            Ok(BridgeCommandPolicy::ActiveSession)
-        }
+        | CoordinatorCommandDto::Release { .. } => Ok(BridgeCommandPolicy::ActiveSession),
         CoordinatorCommandDto::IssueLaunchIntent { .. }
         | CoordinatorCommandDto::Claim { .. }
         | CoordinatorCommandDto::BeginDrain
