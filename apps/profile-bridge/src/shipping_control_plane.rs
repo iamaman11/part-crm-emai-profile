@@ -892,7 +892,7 @@ fn decode_sealing_material_response(
 
 /// Only a bounded, recognized problem code matching this request is safe for installed
 /// diagnostic logs. Never emit an opaque server body, signed URL, or unvalidated text.
-fn safe_reopen_problem_code(
+pub(crate) fn safe_machine_problem_code(
     response: &MachineHttpResponse,
     request_correlation_id: &CorrelationId,
 ) -> Option<&'static str> {
@@ -939,7 +939,7 @@ fn decode_reopen_download_capability_response(
 ) -> Result<BridgeGenerationDownloadCapabilityResponse, ShippingControlPlaneError> {
     if !(200..=299).contains(&response.status()) {
         let code =
-            safe_reopen_problem_code(&response, request_correlation_id).unwrap_or("unclassified");
+            safe_machine_problem_code(&response, request_correlation_id).unwrap_or("unclassified");
         // Safe witness for the operator's existing terminal stream only. The body (potential
         // secrets/URLs/untrusted text) is never logged, and still zeroized before returning.
         eprintln!(
@@ -1286,7 +1286,7 @@ mod tests {
     use super::{
         ControlPlaneCoordinator, ControlPlaneEnrollment, ControlPlaneLeaseTiming,
         CoordinatorCursor, MAX_SEALING_MATERIAL_RESPONSE_BYTES, MachineHttpMethod, MachineHttpPort,
-        MachineHttpResponse, ShippingControlPlaneError, lease_timing, safe_reopen_problem_code,
+        MachineHttpResponse, ShippingControlPlaneError, lease_timing, safe_machine_problem_code,
         valid_signed_r2_get_url, validate_active_projection, validate_snapshot,
     };
     use crate::dirty_generation::GenerationSealingMaterialPort;
@@ -1329,7 +1329,7 @@ mod tests {
         })?;
         let response = MachineHttpResponse::new(409, known.clone());
         assert_eq!(
-            safe_reopen_problem_code(&response, &request_id),
+            safe_machine_problem_code(&response, &request_id),
             Some("lease_conflict")
         );
         // The existing generation-reopen owner also emits a precise generation conflict.
@@ -1342,17 +1342,17 @@ mod tests {
                 correlation_id: request_id.as_str().to_owned(),
             })?;
         assert_eq!(
-            safe_reopen_problem_code(&MachineHttpResponse::new(409, not_verified), &request_id),
+            safe_machine_problem_code(&MachineHttpResponse::new(409, not_verified), &request_id),
             Some("generation_not_verified")
         );
         let wrong_status = MachineHttpResponse::new(403, known);
-        assert_eq!(safe_reopen_problem_code(&wrong_status, &request_id), None);
+        assert_eq!(safe_machine_problem_code(&wrong_status, &request_id), None);
         let foreign = CorrelationId::parse("corr_other_reopen_refusal_01")?;
-        assert_eq!(safe_reopen_problem_code(&response, &foreign), None);
+        assert_eq!(safe_machine_problem_code(&response, &foreign), None);
         let secret_body = MachineHttpResponse::new(409, b"SECRET=presigned-url".to_vec());
-        assert_eq!(safe_reopen_problem_code(&secret_body, &request_id), None);
+        assert_eq!(safe_machine_problem_code(&secret_body, &request_id), None);
         let oversized_body = MachineHttpResponse::new(409, vec![b'X'; 2049]);
-        assert_eq!(safe_reopen_problem_code(&oversized_body, &request_id), None);
+        assert_eq!(safe_machine_problem_code(&oversized_body, &request_id), None);
         Ok(())
     }
 
