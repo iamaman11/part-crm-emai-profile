@@ -14,15 +14,20 @@ WORKING = ROOT / "migrations/d1-successor-v2/0038_profile_generation_working_pro
 RETIRE = ROOT / "migrations/d1-successor-v2/0039_profile_generation_retirement_guard.sql"
 
 
-def record(conn: sqlite3.Connection, **changes: object) -> None:
+def record(
+    conn: sqlite3.Connection,
+    *,
+    candidate_id: str = FX["CANDIDATE"],
+    **changes: object,
+) -> None:
     candidate = conn.execute(
         "SELECT object_key, metadata_digest, container_digest "
         "FROM profile_generations WHERE tenant_id=? AND profile_id=? AND generation_id=?",
-        (FX["TENANT"], FX["PROFILE"], FX["CANDIDATE"]),
+        (FX["TENANT"], FX["PROFILE"], candidate_id),
     ).fetchone()
     data = dict(
         tenant_id=FX["TENANT"], profile_id=FX["PROFILE"],
-        generation_id=FX["CANDIDATE"],
+        generation_id=candidate_id,
         observed_current_generation_id=FX["WINNER"],
         retained_working_generation_id=FX["BASE"],
         expected_profile_version=4,
@@ -72,6 +77,123 @@ def refused(conn: sqlite3.Connection, **change: object) -> None:
     assert conn.execute(
         "SELECT COUNT(*) FROM profile_generation_retirement_intents"
     ).fetchone()[0] == before
+
+
+
+def previous_browser_proven_lkg_can_be_retired() -> None:
+    # A real D1 path with three chained generations: BASE -> CANDIDATE ->
+    # WINNER. BASE was browser-proven for CANDIDATE; CANDIDATE is subsequently
+    # independently browser-proven for WINNER. Only the newer reserve remains
+    # protected; a historical certificate does not preserve BASE forever.
+    conn = FX["seed"]()
+    try:
+        for path in (STREAM, WORKING, RETIRE):
+            conn.executescript(path.read_text(encoding="utf-8"))
+        FX["insert_device_commit"](conn, FX["command_values"]())
+        working_test = runpy.run_path(str(ROOT / "scripts/test-k2-working-proof-d1.py"))
+        working_test["insert"](conn, FX)  # BASE is the first certified LKG
+
+        conn.execute(
+            """
+            INSERT INTO device_authorizations (
+                tenant_id, device_id, profile_id, generation_id, version,
+                status, evidence_reference, authorized_by_actor_id,
+                updated_by_actor_id, authorized_at_ms, updated_at_ms, revoked_at_ms
+            ) VALUES (?, ?, ?, ?, 1, 'ACTIVE', 'candidate_grant',
+                      ?, ?, 110, 110, NULL)
+            """,
+            (FX["TENANT"], FX["DEVICE"], FX["PROFILE"], FX["CANDIDATE"],
+             FX["OWNER"], FX["OWNER"]),
+        )
+        # Use the production successor journal, not a manual catalog pointer
+        # update, to advance CURRENT and establish the actual predecessor.
+        conn.execute(
+            """
+            INSERT INTO profile_generation_successor_commands (
+                tenant_id, profile_id, base_generation_id, generation_id,
+                command_actor_id, device_id, authority_kind, object_key,
+                metadata_digest, container_digest, container_bytes,
+                expected_profile_version, coordinator_session_id,
+                coordinator_fencing_token_digest, coordinator_epoch,
+                coordinator_version, coordinator_sequence, executed_at_ms
+            ) VALUES (?, ?, ?, ?, ?, ?, 'INTERACTIVE_LAUNCH', ?,
+                      ?, ?, 4096, 3, ?, ?, 1, 3, 2, 120)
+            """,
+            (FX["TENANT"], FX["PROFILE"], FX["CANDIDATE"], FX["WINNER"],
+             FX["OWNER"], FX["DEVICE"], FX["canonical_key"](FX["WINNER"]),
+             "f" * 64, "9" * 64, FX["SESSION"], FX["TOKEN_DIGEST"]),
+        )
+        working_test["insert"](
+            conn, FX,
+            generation_id=FX["CANDIDATE"],
+            observed_current_generation_id=FX["WINNER"],
+            metadata_digest=FX["METADATA_DIGEST"],
+            container_digest=FX["CONTAINER_DIGEST"],
+            proven_at_ms=125,
+        )
+        conn.execute(
+            """
+            UPDATE device_authorizations SET status='REVOKED',
+                revoked_at_ms=135, updated_at_ms=135
+            WHERE tenant_id=? AND profile_id=? AND generation_id=? AND device_id=?
+            """,
+            (FX["TENANT"], FX["PROFILE"], FX["BASE"], FX["DEVICE"]),
+        )
+        conn.execute(
+            """
+            INSERT INTO device_authorizations (
+                tenant_id, device_id, profile_id, generation_id, version,
+                status, evidence_reference, authorized_by_actor_id,
+                updated_by_actor_id, authorized_at_ms, updated_at_ms, revoked_at_ms
+            ) VALUES (?, ?, ?, ?, 1, 'ACTIVE', 'winner_grant',
+                      ?, ?, 130, 130, NULL)
+            """,
+            (FX["TENANT"], FX["DEVICE"], FX["PROFILE"], FX["WINNER"],
+             FX["OWNER"], FX["OWNER"]),
+        )
+        conn.commit()
+
+        source = (ROOT / "crates/cloudflare-adapters/src/d1_profile_generation_successor.rs").read_text(
+            encoding="utf-8"
+        )
+        def actual_sql(name: str) -> str:
+            found = re.search(rf'const {name}: &str = r#"(.*?)"#;', source, re.DOTALL)
+            assert found is not None, name
+            return found.group(1)
+
+        retained = conn.execute(
+            actual_sql("LOAD_CERTIFIED_WORKING_RESERVE"),
+            (FX["TENANT"], FX["PROFILE"], FX["WINNER"], "e" * 64),
+        ).fetchone()
+        assert retained is not None and retained["generation_id"] == FX["CANDIDATE"]
+        old = conn.execute(
+            actual_sql("LOAD_UNPROVEN_HISTORICAL_PRUNE_REVIEW"),
+            (FX["TENANT"], FX["PROFILE"], FX["WINNER"], "e" * 64),
+        ).fetchone()
+        assert old is not None and old["generation_id"] == FX["BASE"]
+        # The production retirement trigger, NOT a rewritten test query,
+        # decides whether the formerly certified LKG may be reclaimed.
+        refused(conn, candidate_id=FX["CANDIDATE"],
+                retained_working_generation_id=FX["CANDIDATE"])
+        record(
+            conn,
+            candidate_id=FX["BASE"],
+            retained_working_generation_id=FX["CANDIDATE"],
+            admitted_at_ms=140,
+        )
+        conn.commit()
+        assert conn.execute(
+            "SELECT generation_id FROM profile_generation_retirement_intents"
+        ).fetchone()[0] == FX["BASE"]
+        retained = conn.execute(
+            actual_sql("LOAD_CERTIFIED_WORKING_RESERVE"),
+            (FX["TENANT"], FX["PROFILE"], FX["WINNER"], "e" * 64),
+        ).fetchone()
+        assert retained is not None and retained["generation_id"] == FX["CANDIDATE"]
+        assert conn.execute("PRAGMA foreign_key_check").fetchall() == []
+        print("K2 former WORKING reserve retires after newer browser-proven LKG PASS")
+    finally:
+        conn.close()
 
 
 def main() -> None:
@@ -307,3 +429,4 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
+    previous_browser_proven_lkg_can_be_retired()

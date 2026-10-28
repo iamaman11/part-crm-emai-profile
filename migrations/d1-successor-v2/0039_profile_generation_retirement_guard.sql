@@ -114,12 +114,9 @@ BEGIN
           AND NEW.admitted_at_ms >= candidate.updated_at_ms
           AND NEW.admitted_at_ms >= working.updated_at_ms
           AND NEW.admitted_at_ms >= proof.proven_at_ms
-          AND NOT EXISTS (
-              SELECT 1 FROM profile_generation_working_proofs AS previous
-              WHERE previous.tenant_id = candidate.tenant_id
-                AND previous.profile_id = candidate.profile_id
-                AND previous.generation_id = candidate.generation_id
-          )
+          -- A prior WORKING certificate is not a permanent retention grant.
+          -- Only NEW.retained_working_generation_id stays protected. All
+          -- ACTIVE historical device grants/jobs remain protected below.
           -- A historical ACTIVE grant allows another (possibly offline)
           -- device to rely on this generation. A clean Coordinator session
           -- on the retiring device cannot speak for that other device.
