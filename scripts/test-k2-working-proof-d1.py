@@ -118,6 +118,30 @@ def main() -> int:
         selected = working(fx["WINNER"])
         assert selected is not None and selected["generation_id"] == fx["BASE"]
         assert working(fx["WINNER"], "f" * 64) is None, "N-k still needs the exact retained runtime"
+
+        # Prune review is deliberately read-only. It refuses any candidate
+        # before a WORKING reserve exists, protects both CURRENT and N-k, and
+        # never selects any generation with a previous browser WORKING proof.
+        review_source = re.search(
+            r'const LOAD_UNPROVEN_HISTORICAL_PRUNE_REVIEW: &str = r#"(.*?)"#;',
+            source,
+            re.DOTALL,
+        )
+        assert review_source is not None
+        review_query = review_source.group(1)
+        def review(current: str, approved_runtime: str = "e" * 64):
+            return conn.execute(
+                review_query, (fx["TENANT"], fx["PROFILE"], current, approved_runtime)
+            ).fetchone()
+        candidate = review(fx["WINNER"])
+        assert candidate is not None and candidate["generation_id"] == fx["CANDIDATE"]
+        assert candidate["generation_id"] not in (fx["WINNER"], fx["BASE"])
+        assert review(fx["CANDIDATE"]) is None, "stale CURRENT cannot authorize review"
+        assert review(fx["WINNER"], "f" * 64) is None, "unapproved runtime blocks review"
+        assert review(fx["WINNER"], "E" * 64) is None
+        assert fx["catalog_snapshot"](conn) == baseline or conn.execute(
+            "SELECT COUNT(*) FROM profile_generation_working_proofs"
+        ).fetchone()[0] == 1
         assert conn.execute("PRAGMA foreign_key_check").fetchall() == []
         print("K2 governed, append-only historical proof persists across CURRENT changes; no prune PASS")
     finally:

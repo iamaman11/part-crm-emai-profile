@@ -81,6 +81,72 @@ ORDER BY proof.proven_at_ms DESC, proof.generation_id DESC
 LIMIT 1
 "#;
 
+/// At most one *unproven* historical catalog object is offered for
+/// read-only prune review. This projection is deliberately NOT a deletion
+/// permit: it cannot see offline local dirty state or pin the Coordinator
+/// across R2 effects. A recorded WORKING proof is never a review candidate.
+///
+/// The selected reserve must be an exact browser-proven, released-runtime
+/// generation even when it is N-k instead of the immediately prior N-1.
+const LOAD_UNPROVEN_HISTORICAL_PRUNE_REVIEW: &str = r#"
+WITH protected AS (
+    SELECT
+        profile.tenant_id,
+        profile.profile_id,
+        profile.active_generation_id,
+        proof.generation_id AS reserved_generation_id
+    FROM browser_profiles AS profile
+    JOIN profile_generations AS current
+      ON current.tenant_id = profile.tenant_id
+     AND current.profile_id = profile.profile_id
+     AND current.generation_id = profile.active_generation_id
+    JOIN profile_generation_working_proofs AS proof
+      ON proof.tenant_id = profile.tenant_id
+     AND proof.profile_id = profile.profile_id
+    JOIN profile_generations AS reserved
+      ON reserved.tenant_id = proof.tenant_id
+     AND reserved.profile_id = proof.profile_id
+     AND reserved.generation_id = proof.generation_id
+    WHERE profile.tenant_id = ?
+      AND profile.profile_id = ?
+      AND profile.status = 'READY'
+      AND profile.active_generation_id = ?
+      AND current.status = 'VERIFIED'
+      AND current.verification_reference IS NOT NULL
+      AND reserved.status = 'VERIFIED'
+      AND reserved.verification_reference IS NOT NULL
+      AND reserved.generation_id <> current.generation_id
+      AND proof.metadata_digest = reserved.metadata_digest
+      AND proof.container_digest = reserved.container_digest
+      AND proof.runtime_inventory_sha256 = ?
+    ORDER BY proof.proven_at_ms DESC, proof.generation_id DESC
+    LIMIT 1
+)
+SELECT
+    old.generation_id,
+    old.object_key,
+    old.metadata_digest,
+    old.container_digest
+FROM protected
+JOIN profile_generations AS old
+  ON old.tenant_id = protected.tenant_id
+ AND old.profile_id = protected.profile_id
+WHERE old.status = 'VERIFIED'
+  AND old.verification_reference IS NOT NULL
+  AND old.generation_id <> protected.active_generation_id
+  AND old.generation_id <> protected.reserved_generation_id
+  -- Never select a previously demonstrated real-browser reserve for
+  -- deletion while its original root key/runtime may be the only fallback.
+  AND NOT EXISTS (
+      SELECT 1 FROM profile_generation_working_proofs AS past
+      WHERE past.tenant_id = old.tenant_id
+        AND past.profile_id = old.profile_id
+        AND past.generation_id = old.generation_id
+  )
+ORDER BY old.created_at_ms ASC, old.generation_id ASC
+LIMIT 1
+"#;
+
 const LOAD_VERIFIED_PREDECESSOR_OF_ACTIVE: &str = r#"
 SELECT
     base.generation_id,
@@ -457,6 +523,35 @@ impl D1ProfileGenerationSuccessorCommitJournal {
 }
 
 impl D1ProfileGenerationSuccessorCommitJournal {
+    /// Read-only, conservative diagnostic candidate. This result intentionally
+    /// cannot authorize an R2 DELETE; a future effect must recheck CURRENT,
+    /// the exact immutable R2 HEAD, old key/runtime, live Coordinator writer
+    /// fence, and unresolved local Save before every deletion.
+    pub async fn load_unproven_prune_review_candidate(
+        &self,
+        scope: &TenantScope,
+        profile_id: &ProfileId,
+        current_generation_id: &GenerationId,
+        approved_runtime_inventory_sha256: &str,
+    ) -> Result<Option<GenerationObjectCatalogReference>, GenerationPortError> {
+        if !is_sha256_hex(approved_runtime_inventory_sha256) {
+            return Err(historical_integrity_failure());
+        }
+        let row = query!(
+            &self.database,
+            LOAD_UNPROVEN_HISTORICAL_PRUNE_REVIEW,
+            scope.tenant_id().as_str(),
+            profile_id.as_str(),
+            current_generation_id.as_str(),
+            approved_runtime_inventory_sha256,
+        )
+        .map_err(|_| historical_dependency_failure())?
+        .first::<HistoricalPredecessorRow>(None)
+        .await
+        .map_err(|_| historical_dependency_failure())?;
+        historical_reference_from_row(row, scope, profile_id, current_generation_id)
+    }
+
     /// The D1 owner alone loads the last actually browser-proven N-k, as
     /// read-only retention evidence. It is NOT a fresh cold-probe candidate
     /// and NEVER grants DELETE without fresh old-key/runtime/CURRENT checks.
@@ -939,6 +1034,23 @@ mod tests {
         ActorContext, ActorId, AggregateVersion, CorrelationId, DeviceId, FencingToken,
         GenerationId, ProfileId, SessionId, TenantId, TenantScope, UnixMillis,
     };
+
+    #[test]
+    fn prune_review_must_never_be_an_unconditional_delete_capability() {
+        let query = super::LOAD_UNPROVEN_HISTORICAL_PRUNE_REVIEW;
+        assert!(query.contains("profile.status = 'READY'"));
+        assert!(query.contains("profile.active_generation_id = ?"));
+        assert!(query.contains("proof.runtime_inventory_sha256 = ?"));
+        assert!(query.contains("proof.metadata_digest = reserved.metadata_digest"));
+        assert!(query.contains("proof.container_digest = reserved.container_digest"));
+        assert!(query.contains("old.generation_id <> protected.active_generation_id"));
+        assert!(query.contains("old.generation_id <> protected.reserved_generation_id"));
+        assert!(query.contains("NOT EXISTS"));
+        assert!(query.contains("profile_generation_working_proofs AS past"));
+        assert!(!query.contains("DELETE "));
+        assert!(!query.contains("UPDATE "));
+        assert!(!query.contains("INSERT "));
+    }
 
     #[test]
     fn durable_working_read_selects_only_verified_receipts_not_generation_age() {
