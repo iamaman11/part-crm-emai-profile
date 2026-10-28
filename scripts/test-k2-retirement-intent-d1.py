@@ -115,6 +115,20 @@ def main() -> None:
         refused(conn, container_digest="f" * 64)
         refused(conn, approved_runtime_inventory_sha256="f" * 64)
         refused(conn, approved_runtime_inventory_sha256="E" * 64)
+        # A historical device can retain its own authorized generation.
+        # The job foreign key requires the exact old-generation grant.
+        conn.execute(
+            """
+            INSERT INTO device_authorizations (
+                tenant_id, device_id, profile_id, generation_id, version, status,
+                evidence_reference, authorized_by_actor_id, updated_by_actor_id,
+                authorized_at_ms, updated_at_ms, revoked_at_ms
+            ) VALUES (?, ?, ?, ?, 1, 'ACTIVE', 'evidence_old_maintenance',
+                      ?, ?, 124, 124, NULL)
+            """,
+            (FX["TENANT"], FX["DEVICE"], FX["PROFILE"], FX["CANDIDATE"],
+             FX["OWNER"], FX["OWNER"]),
+        )
         # The existing D1 owner's retirement admission must reject any
         # unresolved device job on the historical candidate. It is not proof
         # of clean local Firefox bytes, even if CURRENT/WORKING are valid.
@@ -139,6 +153,11 @@ def main() -> None:
         ).fetchone()[0] == "PENDING_DEVICE"
         conn.execute(
             "DELETE FROM device_jobs WHERE job_id='job_retirement_pending_01'"
+        )
+        conn.execute(
+            "DELETE FROM device_authorizations "
+            "WHERE tenant_id=? AND profile_id=? AND generation_id=? AND device_id=?",
+            (FX["TENANT"], FX["PROFILE"], FX["CANDIDATE"], FX["DEVICE"]),
         )
         conn.commit()
         refused(conn, admitted_by_actor_id="other_actor")
