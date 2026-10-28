@@ -32,12 +32,18 @@ const PUBLIC_KEY_BINDING_REVISION: &str = "0033_device_public_key_binding.sql";
 const DEVICE_APPLICATION_AUTHORITY_REVISION: &str = "0034_device_application_authority.sql";
 const SUCCESSOR_CONTRACT_REVISION: &str = "0035_pas2_payload_fingerprint_contract.sql";
 const INITIAL_GENERATION_REVISION: &str = "0036_profile_generation_initialization.sql";
-const CURRENT_SUCCESSOR_FILES: [&str; 5] = [
+const STREAMING_GENERATION_REVISION: &str = "0037_generation_streaming_container_limit.sql";
+const WORKING_PROOF_REVISION: &str = "0038_profile_generation_working_proof.sql";
+const RETIREMENT_GUARD_REVISION: &str = "0039_profile_generation_retirement_guard.sql";
+const CURRENT_SUCCESSOR_FILES: [&str; 8] = [
     BRIDGE_ENROLLMENT_REVISION,
     PUBLIC_KEY_BINDING_REVISION,
     DEVICE_APPLICATION_AUTHORITY_REVISION,
     SUCCESSOR_CONTRACT_REVISION,
     INITIAL_GENERATION_REVISION,
+    STREAMING_GENERATION_REVISION,
+    WORKING_PROOF_REVISION,
+    RETIREMENT_GUARD_REVISION,
 ];
 
 #[derive(Debug, Clone)]
@@ -141,6 +147,39 @@ impl CatalogSuccessor {
             code_rollback_allowed: true,
             contract_preconditions: Vec::new(),
         });
+        ordered_history.push(STREAMING_GENERATION_REVISION.to_owned());
+        migration_source_roots.push(CURRENT_SUCCESSOR_ROOT.to_owned());
+        post_epoch.push(MigrationContract {
+            migration_file: STREAMING_GENERATION_REVISION.to_owned(),
+            migration_class: MigrationClass::Expand,
+            rollout_order: RolloutOrder::MigrateBeforeCode,
+            fail_forward_required: false,
+            destructive: false,
+            code_rollback_allowed: true,
+            contract_preconditions: Vec::new(),
+        });
+        ordered_history.push(WORKING_PROOF_REVISION.to_owned());
+        migration_source_roots.push(CURRENT_SUCCESSOR_ROOT.to_owned());
+        post_epoch.push(MigrationContract {
+            migration_file: WORKING_PROOF_REVISION.to_owned(),
+            migration_class: MigrationClass::Expand,
+            rollout_order: RolloutOrder::MigrateBeforeCode,
+            fail_forward_required: false,
+            destructive: false,
+            code_rollback_allowed: true,
+            contract_preconditions: Vec::new(),
+        });
+        ordered_history.push(RETIREMENT_GUARD_REVISION.to_owned());
+        migration_source_roots.push(CURRENT_SUCCESSOR_ROOT.to_owned());
+        post_epoch.push(MigrationContract {
+            migration_file: RETIREMENT_GUARD_REVISION.to_owned(),
+            migration_class: MigrationClass::Expand,
+            rollout_order: RolloutOrder::MigrateBeforeCode,
+            fail_forward_required: false,
+            destructive: false,
+            code_rollback_allowed: true,
+            contract_preconditions: Vec::new(),
+        });
         validate_contiguous_history(&ordered_history, predecessor_authority.historical_len)?;
         let history_digest =
             successor_history_digest(root, &ordered_history, &migration_source_roots)?;
@@ -214,9 +253,9 @@ impl CatalogSuccessor {
             .ordered_history
             .last()
             .ok_or_else(|| D1Error::new("Catalog successor-v2 migration lineage is empty"))?;
-        if latest != INITIAL_GENERATION_REVISION {
+        if latest != RETIREMENT_GUARD_REVISION {
             return Err(D1Error::new(
-                "Catalog initial-generation runtime requires exact schema0036",
+                "Catalog retired-generation guard requires exact schema0039",
             ));
         }
         let target = latest;
@@ -787,8 +826,9 @@ fn repository_identity_from_components(components: &[Value]) -> Result<String, D
 mod tests {
     use super::{
         BRIDGE_ENROLLMENT_REVISION, CURRENT_SUCCESSOR_ROOT, DEVICE_APPLICATION_AUTHORITY_REVISION,
-        INITIAL_GENERATION_REVISION, PREDECESSOR_SUCCESSOR_ROOT, PUBLIC_KEY_BINDING_REVISION,
-        SUCCESSOR_CONTRACT_REVISION, component_authority, release_contract, repository_projection,
+        PREDECESSOR_SUCCESSOR_ROOT, PUBLIC_KEY_BINDING_REVISION, RETIREMENT_GUARD_REVISION,
+        STREAMING_GENERATION_REVISION, SUCCESSOR_CONTRACT_REVISION, WORKING_PROOF_REVISION,
+        component_authority, release_contract, repository_projection,
     };
     use serde_json::Value;
     use std::error::Error;
@@ -801,7 +841,7 @@ mod tests {
     #[test]
     fn current_catalog_appends_initialization_after_pas2_contract() -> Result<(), Box<dyn Error>> {
         let authority = component_authority(&repository_root(), "catalog")?;
-        assert_eq!(authority.ordered_history.len(), 36);
+        assert_eq!(authority.ordered_history.len(), 39);
         assert_eq!(authority.ordered_history[31], BRIDGE_ENROLLMENT_REVISION);
         assert_eq!(authority.ordered_history[32], PUBLIC_KEY_BINDING_REVISION);
         assert_eq!(
@@ -811,9 +851,9 @@ mod tests {
         assert_eq!(authority.ordered_history[34], SUCCESSOR_CONTRACT_REVISION);
         assert_eq!(
             authority.current_repository_revision,
-            INITIAL_GENERATION_REVISION
+            RETIREMENT_GUARD_REVISION
         );
-        assert_eq!(authority.post_epoch.len(), 10);
+        assert_eq!(authority.post_epoch.len(), 13);
         Ok(())
     }
 
@@ -822,16 +862,10 @@ mod tests {
         let contract = release_contract(&repository_root(), "catalog")?;
         assert_eq!(
             contract["target_schema_revision"],
-            INITIAL_GENERATION_REVISION
+            RETIREMENT_GUARD_REVISION
         );
-        assert_eq!(
-            contract["supported_schema_min"],
-            INITIAL_GENERATION_REVISION
-        );
-        assert_eq!(
-            contract["supported_schema_max"],
-            INITIAL_GENERATION_REVISION
-        );
+        assert_eq!(contract["supported_schema_min"], RETIREMENT_GUARD_REVISION);
+        assert_eq!(contract["supported_schema_max"], RETIREMENT_GUARD_REVISION);
         Ok(())
     }
 
@@ -862,7 +896,7 @@ mod tests {
         let sources = catalog["executable_migration_sources"]
             .as_array()
             .ok_or("executable migration source projection is missing")?;
-        assert_eq!(sources.len(), 36);
+        assert_eq!(sources.len(), 39);
         assert_eq!(sources[26]["source_root"], PREDECESSOR_SUCCESSOR_ROOT);
         assert_eq!(sources[27]["source_root"], "migrations/d1");
         assert_eq!(sources[31]["migration_file"], BRIDGE_ENROLLMENT_REVISION);
@@ -876,6 +910,12 @@ mod tests {
         assert_eq!(sources[33]["source_root"], CURRENT_SUCCESSOR_ROOT);
         assert_eq!(sources[34]["migration_file"], SUCCESSOR_CONTRACT_REVISION);
         assert_eq!(sources[34]["source_root"], CURRENT_SUCCESSOR_ROOT);
+        assert_eq!(sources[36]["migration_file"], STREAMING_GENERATION_REVISION);
+        assert_eq!(sources[36]["source_root"], CURRENT_SUCCESSOR_ROOT);
+        assert_eq!(sources[37]["migration_file"], WORKING_PROOF_REVISION);
+        assert_eq!(sources[37]["source_root"], CURRENT_SUCCESSOR_ROOT);
+        assert_eq!(sources[38]["migration_file"], RETIREMENT_GUARD_REVISION);
+        assert_eq!(sources[38]["source_root"], CURRENT_SUCCESSOR_ROOT);
         assert_eq!(
             projection["executable_schema_authority"],
             serde_json::json!([

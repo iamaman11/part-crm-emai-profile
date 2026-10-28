@@ -49,6 +49,14 @@ jobs:
           node scripts/check-d1-release-schema-identity.mjs
           node scripts/check-d1-release-schema-identity.mjs --self-test
 
+      - name: Prove K2 608 MiB D1 successor-v2 migration and append-only recovery
+        run: python scripts/test-k2-generation-stream-limit-d1.py
+
+      - name: Prove K2 append-only historical WORKING evidence cannot authorize prune
+        run: |
+          python scripts/test-k2-working-proof-d1.py
+          python scripts/test-k2-retirement-intent-d1.py
+
       - name: Execute all opsctl D1 commands as real CLI processes
         run: |
           cargo run --locked --quiet --manifest-path tools/opsctl/Cargo.toml -- --root . d1 repository \

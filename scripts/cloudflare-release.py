@@ -971,19 +971,23 @@ def self_test() -> None:
         if first_archive.read_bytes() != second_archive.read_bytes():
             fail("identical D2 inputs produced non-deterministic release archives")
         schema_contract = first.get("schema_contract")
+        expected_latest_schema = "0039_profile_generation_retirement_guard.sql"
         if not isinstance(schema_contract, dict) or not (
             schema_contract.get("database_component") == "catalog"
-            and schema_contract.get("target_schema_revision") == "0036_profile_generation_initialization.sql"
-            and schema_contract.get("supported_schema_min") == "0036_profile_generation_initialization.sql"
-            and schema_contract.get("supported_schema_max") == "0036_profile_generation_initialization.sql"
+            and schema_contract.get("target_schema_revision") == expected_latest_schema
+            and schema_contract.get("supported_schema_min") == expected_latest_schema
+            and schema_contract.get("supported_schema_max") == expected_latest_schema
         ):
-            fail("Catalog fixture release did not bind the exact 0036 schema contract")
+            fail("Catalog fixture release did not bind the exact 0039 schema contract")
         for revision in (
             "0032_bridge_device_enrollment_authority.sql",
             "0033_device_public_key_binding.sql",
             "0034_device_application_authority.sql",
             "0035_pas2_payload_fingerprint_contract.sql",
             "0036_profile_generation_initialization.sql",
+            "0037_generation_streaming_container_limit.sql",
+            "0038_profile_generation_working_proof.sql",
+            "0039_profile_generation_retirement_guard.sql",
         ):
             require_regular_file(first_dir / "migrations" / "d1" / revision, "materialized successor migration")
 

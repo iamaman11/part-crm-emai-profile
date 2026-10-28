@@ -33,6 +33,18 @@ jobs:
       - name: Show pinned toolchain
         run: rustup show active-toolchain
 
+      # Keep OS/toolchain/manifests/flags in the action's hashed key.
+      # The independent opsctl Cargo workspace is used by this job as well.
+      # Restored artifacts never substitute any check or exact-head test.
+      - name: Restore versioned Rust dependencies and opsctl
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2 (immutable)
+        with:
+          shared-key: profile-bridge-ci-v1
+          workspaces: |
+            . -> target
+            tools/opsctl -> target
+          cache-on-failure: 'true'
+
       - name: Compile repository policy scripts
         run: >-
           python -m py_compile
@@ -535,6 +547,18 @@ jobs:
 
       - name: Show pinned toolchain
         run: rustup show active-toolchain
+
+      # Keep OS/toolchain/manifests/flags in the action's hashed key.
+      # The independent opsctl Cargo workspace is used by this job as well.
+      # Restored artifacts never substitute any check or exact-head test.
+      - name: Restore versioned Rust dependencies and opsctl
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2 (immutable)
+        with:
+          shared-key: profile-bridge-ci-v1
+          workspaces: |
+            . -> target
+            tools/opsctl -> target
+          cache-on-failure: 'true'
 
       - name: Check and test native crates
         run: >-

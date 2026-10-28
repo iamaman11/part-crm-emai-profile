@@ -4,6 +4,7 @@ use sha2::{Digest, Sha256};
 use std::fs::{self, File, OpenOptions};
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
+#[cfg(test)]
 use std::sync::atomic::{AtomicU64, Ordering};
 
 const ROOT_MARKER: &str = ".profile-platform-root";
@@ -20,6 +21,7 @@ const MAX_INVENTORY_FILES: usize = 100_000;
 const MAX_RELATIVE_PATH_BYTES: usize = 512;
 const FNV_OFFSET_BASIS: u64 = 0xcbf2_9ce4_8422_2325;
 const FNV_PRIME: u64 = 0x0000_0100_0000_01b3;
+#[cfg(test)]
 static REJECTED_GENERATION_SEQUENCE: AtomicU64 = AtomicU64::new(1);
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -204,14 +206,12 @@ impl MaterializationRoot {
         }
     }
 
-    /// Remove an invalid post-commit local candidate from its canonical generation path.
+    /// Destructive local-loss test fixture only, never a shipping recovery operation.
     ///
-    /// This is intentionally different from normal generation open: the exact canonical directory
-    /// may already be corrupted (including a missing generation marker). The safe tenant/profile
-    /// parents and exact generation segment are still validated, symbolic links/non-directories
-    /// are rejected, and any active Bridge writer lock blocks removal. The real directory is first
-    /// atomically renamed away from the canonical generation path before best-effort destruction,
-    /// so a cleanup failure cannot make its bytes eligible for authoritative-local reopen.
+    /// A successor may contain the only unsynchronized browser writes or have a
+    /// cloud commit whose HTTP reply was lost. Production retries and cache cleanup
+    /// must not delete the candidate without exact-attempt reconciliation.
+    #[cfg(test)]
     pub fn reject_generation_for_rematerialization(
         &self,
         tenant_id: &TenantId,
@@ -363,6 +363,43 @@ impl BridgeWorkspaceLock {
             lock_path,
             ownership,
         })
+    }
+
+    /// May be called only while the root's OS admission lock is held *exclusively*,
+    /// after the operator obtained a fresh coordinator claim for this exact device
+    /// and generation, and proved that no native Firefox writer still owns user_data.
+    /// The persistent marker is crash evidence, not proof of a surviving OS writer.
+    pub(super) fn replace_interrupted(
+        workspace: &GenerationWorkspace,
+        device_id: &DeviceId,
+        fresh_epoch: u64,
+    ) -> Result<Self, LocalProfileError> {
+        let lock_path = workspace.path().join(BRIDGE_LOCK_FILE);
+        let metadata = fs::symlink_metadata(&lock_path)?;
+        if metadata.file_type().is_symlink() || !metadata.is_file() {
+            return Err(LocalProfileError::LockBusy);
+        }
+        if metadata.len() > 512 || fresh_epoch <= 1 {
+            return Err(LocalProfileError::LockBusy);
+        }
+        let previous = read_control_text(&lock_path)?;
+        let owner_prefix = format!("profile-platform-bridge-lock-v1\n{}\n", device_id.as_str());
+        let previous_epoch = previous
+            .strip_prefix(&owner_prefix)
+            .and_then(|suffix| suffix.strip_suffix('\n'))
+            .and_then(|value| value.parse::<u64>().ok())
+            .ok_or(LocalProfileError::LockBusy)?;
+        if previous_epoch == 0 || previous_epoch >= fresh_epoch {
+            return Err(LocalProfileError::LockBusy);
+        }
+        // There is no live Bridge admission handle (the caller has the exclusive OS root
+        // lock) or live Firefox writer (caller preflight). Recheck immediately before
+        // unlink; never remove the directory, cookies, WAL, or identity sidecars.
+        if read_control_text(&lock_path)? != previous {
+            return Err(LocalProfileError::LockBusy);
+        }
+        fs::remove_file(&lock_path)?;
+        Self::acquire(workspace, device_id, fresh_epoch)
     }
 
     pub fn release(self) -> Result<(), LocalProfileError> {

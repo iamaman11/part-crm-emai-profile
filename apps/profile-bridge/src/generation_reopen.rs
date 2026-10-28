@@ -1,6 +1,11 @@
+use crate::generation_object_spool::VerifiedGenerationObjectFile;
+use encrypted_generation_domain::MAX_STREAM_CONTAINER_BYTES;
 use encrypted_generation_domain::{GenerationDek, MAX_GENERATION_CONTAINER_BYTES};
 use profile_platform_primitives::{GenerationId, ProfileId, TenantId};
 use sha2::{Digest, Sha256};
+use std::fs::{self, OpenOptions};
+use std::io::{self, Write};
+use std::path::Path;
 
 /// Server-selected immutable generation download capability.
 ///
@@ -100,6 +105,9 @@ impl Drop for GenerationDownloadCapability {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum GenerationReopenControlError {
     Transport,
+    /// The read-only generation request received HTTP 408, 429 or 5xx.
+    /// This is never a fresh claim, retry grant or write authorization.
+    ServiceTemporarilyUnavailable,
     HttpStatus,
     InvalidResponse,
     Clock,
@@ -122,6 +130,40 @@ pub trait GenerationReopenControlPort {
         profile_id: &ProfileId,
         metadata_prelude: &[u8],
     ) -> Result<GenerationDek, Self::Error>;
+
+    /// Optional historical read-only candidate. Never a WORKING certificate.
+    /// Existing mocks/implementations fail closed until they deliberately
+    /// implement this feature; normal CURRENT reopen stays unchanged.
+    fn verified_predecessor_capability(
+        &mut self,
+        _tenant_id: &TenantId,
+        _profile_id: &ProfileId,
+    ) -> Result<Option<GenerationDownloadCapability>, Self::Error> {
+        Ok(None)
+    }
+
+    fn verified_predecessor_opening_material(
+        &mut self,
+        _tenant_id: &TenantId,
+        _profile_id: &ProfileId,
+        _metadata_prelude: &[u8],
+    ) -> Result<Option<GenerationDek>, Self::Error> {
+        Ok(None)
+    }
+
+    /// The server may persist a receipt ONLY for a completed real-browser
+    /// historical probe. Default mocks reject it; a hash is never authority.
+    fn certify_verified_predecessor_working(
+        &mut self,
+        _tenant_id: &TenantId,
+        _profile_id: &ProfileId,
+        _current: &GenerationId,
+        _historical: &GenerationId,
+        _opening_prelude: &[u8],
+        _runtime_inventory_sha256: &str,
+    ) -> Result<bool, Self::Error> {
+        Ok(false)
+    }
 }
 
 /// Response from the narrow exact-URL GET effect. Redirects are not represented as success: the
@@ -199,6 +241,17 @@ pub trait GenerationObjectDownloadPort {
         &mut self,
         capability: &GenerationDownloadCapability,
     ) -> Result<Vec<u8>, Self::Error>;
+
+    /// Additive spool path for cold 256/512 MiB restore. The default keeps
+    /// old small-object adapters and synthetic tests exactly as before.
+    /// Only the authoritative materialization owner supplies the pending path.
+    fn download_generation_object_to_new_pending_file(
+        &mut self,
+        _capability: &GenerationDownloadCapability,
+        _destination: &Path,
+    ) -> Result<Option<VerifiedGenerationObjectFile>, Self::Error> {
+        Ok(None)
+    }
 }
 
 pub struct VerifiedGenerationObjectDownloader<T> {
@@ -251,15 +304,560 @@ where
     }
 }
 
+/// A single already-signed HTTPS R2 GET that writes its response incrementally
+/// to an UNPUBLISHED sink. A 200 response alone is never cloud/open proof.
+/// The effect must not follow redirects, retry or select an object URL.
+pub trait SignedGenerationObjectStreamGetPort {
+    type Error;
+
+    fn get_exact_stream(
+        &mut self,
+        signed_url: &str,
+        max_bytes: u64,
+        destination: &mut dyn Write,
+    ) -> Result<u16, Self::Error>;
+}
+
+/// A bounded authenticated ciphertext-spool downloader. No DEK, browser
+/// profile or server authority is created by this network effect.
+pub struct VerifiedGenerationObjectStreamDownloader<T> {
+    transport: T,
+}
+
+impl<T> VerifiedGenerationObjectStreamDownloader<T> {
+    #[must_use]
+    pub const fn new(transport: T) -> Self {
+        Self { transport }
+    }
+}
+
+impl<T: SignedGenerationObjectStreamGetPort> GenerationObjectDownloadPort
+    for VerifiedGenerationObjectStreamDownloader<T>
+{
+    type Error = GenerationObjectDownloadError;
+
+    fn download_generation_object(
+        &mut self,
+        capability: &GenerationDownloadCapability,
+    ) -> Result<Vec<u8>, Self::Error> {
+        // Narrow legacy compatibility for *already existing* local bytes
+        // missing only the host-local binding. A 512 MiB object is never
+        // allocated in memory. The existing authoritative owner must compare
+        // every native Firefox byte under its OS lock before repairing binding.
+        let expected = usize::try_from(capability.container_bytes())
+            .map_err(|_| GenerationObjectDownloadError::InvalidCapability)?;
+        if expected == 0 || expected > MAX_GENERATION_CONTAINER_BYTES {
+            return Err(GenerationObjectDownloadError::InvalidCapability);
+        }
+        let url = capability
+            .signed_url()
+            .ok_or(GenerationObjectDownloadError::InvalidCapability)?;
+        struct BoundedLegacyWriter {
+            bytes: Vec<u8>,
+            ceiling: usize,
+        }
+        impl Write for BoundedLegacyWriter {
+            fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
+                let next = self.bytes.len().checked_add(bytes.len()).ok_or_else(|| {
+                    io::Error::new(io::ErrorKind::InvalidData, "generation object overflow")
+                })?;
+                if next > self.ceiling {
+                    return Err(io::Error::new(
+                        io::ErrorKind::InvalidData,
+                        "generation object exceeded descriptor",
+                    ));
+                }
+                self.bytes.extend_from_slice(bytes);
+                Ok(bytes.len())
+            }
+
+            fn flush(&mut self) -> io::Result<()> {
+                Ok(())
+            }
+        }
+        let mut writer = BoundedLegacyWriter {
+            bytes: Vec::new(),
+            ceiling: expected,
+        };
+        let status = self
+            .transport
+            .get_exact_stream(url, capability.container_bytes(), &mut writer)
+            .map_err(|_| GenerationObjectDownloadError::Transport)?;
+        if status != 200 {
+            return Err(GenerationObjectDownloadError::HttpStatus);
+        }
+        if writer.bytes.len() != expected {
+            return Err(GenerationObjectDownloadError::SizeMismatch);
+        }
+        if <[u8; 32]>::from(Sha256::digest(&writer.bytes)) != capability.container_digest() {
+            return Err(GenerationObjectDownloadError::DigestMismatch);
+        }
+        Ok(writer.bytes)
+    }
+
+    fn download_generation_object_to_new_pending_file(
+        &mut self,
+        capability: &GenerationDownloadCapability,
+        destination: &Path,
+    ) -> Result<Option<VerifiedGenerationObjectFile>, Self::Error> {
+        self.download_to_new_pending_file(capability, destination)
+            .map(Some)
+    }
+}
+
+/// Enforce the authoritative descriptor BEFORE an untrusted response can
+/// fill disk. Hash exactly the bytes written, never an untrusted Content-Length.
+struct BoundedGenerationGetWriter<'a> {
+    file: &'a mut std::fs::File,
+    expected_bytes: u64,
+    written: u64,
+    hasher: Sha256,
+}
+
+impl Write for BoundedGenerationGetWriter<'_> {
+    fn write(&mut self, value: &[u8]) -> io::Result<usize> {
+        let next = self
+            .written
+            .checked_add(value.len() as u64)
+            .ok_or_else(|| {
+                io::Error::new(io::ErrorKind::InvalidData, "generation GET length overflow")
+            })?;
+        if next > self.expected_bytes {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "generation GET exceeds original signed descriptor",
+            ));
+        }
+        self.file.write_all(value)?;
+        self.hasher.update(value);
+        self.written = next;
+        Ok(value.len())
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        self.file.flush()
+    }
+}
+
+impl<T: SignedGenerationObjectStreamGetPort> VerifiedGenerationObjectStreamDownloader<T> {
+    /// Staging path must be absolute, on an existing trusted regular directory
+    /// and have a reserved .pending-* name. Create-new means even a failed
+    /// previous GET cannot silently be replaced. On every error staged bytes
+    /// remain unpublished, available for conservative crash diagnostics.
+    pub fn download_to_new_pending_file(
+        &mut self,
+        capability: &GenerationDownloadCapability,
+        destination: &Path,
+    ) -> Result<VerifiedGenerationObjectFile, GenerationObjectDownloadError> {
+        if !destination.is_absolute()
+            || !destination
+                .file_name()
+                .and_then(|name| name.to_str())
+                .is_some_and(|name| name.starts_with(".pending-") && name.len() <= 128)
+            || capability.container_bytes() == 0
+            || capability.container_bytes() > MAX_STREAM_CONTAINER_BYTES
+            || !(1..=300).contains(&capability.expires_seconds())
+        {
+            return Err(GenerationObjectDownloadError::InvalidCapability);
+        }
+        let parent = destination
+            .parent()
+            .ok_or(GenerationObjectDownloadError::InvalidCapability)?;
+        let metadata =
+            fs::symlink_metadata(parent).map_err(|_| GenerationObjectDownloadError::Transport)?;
+        if !metadata.is_dir() || metadata.file_type().is_symlink() {
+            return Err(GenerationObjectDownloadError::InvalidCapability);
+        }
+        let url = capability
+            .signed_url()
+            .ok_or(GenerationObjectDownloadError::InvalidCapability)?;
+        let mut output = OpenOptions::new()
+            .create_new(true)
+            .write(true)
+            .open(destination)
+            .map_err(|_| GenerationObjectDownloadError::Transport)?;
+        let mut writer = BoundedGenerationGetWriter {
+            file: &mut output,
+            expected_bytes: capability.container_bytes(),
+            written: 0,
+            hasher: Sha256::new(),
+        };
+        let status = self
+            .transport
+            .get_exact_stream(url, capability.container_bytes(), &mut writer)
+            .map_err(|_| GenerationObjectDownloadError::Transport)?;
+        if status != 200 {
+            return Err(GenerationObjectDownloadError::HttpStatus);
+        }
+        if writer.written != capability.container_bytes() {
+            return Err(GenerationObjectDownloadError::SizeMismatch);
+        }
+        let digest: [u8; 32] = writer.hasher.finalize().into();
+        if digest != capability.container_digest() {
+            return Err(GenerationObjectDownloadError::DigestMismatch);
+        }
+        output
+            .sync_all()
+            .map_err(|_| GenerationObjectDownloadError::Transport)?;
+        drop(output);
+        VerifiedGenerationObjectFile::open(
+            destination,
+            capability.container_bytes(),
+            capability.container_digest(),
+        )
+        .map_err(|_| GenerationObjectDownloadError::DigestMismatch)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
         GenerationDownloadCapability, GenerationObjectDownloadError, GenerationObjectDownloadPort,
         SignedGenerationObjectGetPort, SignedGenerationObjectGetResponse,
-        VerifiedGenerationObjectDownloader,
+        VerifiedGenerationObjectDownloader, VerifiedGenerationObjectStreamDownloader,
     };
     use profile_platform_primitives::GenerationId;
     use sha2::{Digest, Sha256};
+
+    /// Data is generated into the caller's bounded sink, not into a giant
+    /// fake HTTP Vec: exercise exactly the large-payload GET architecture.
+    #[derive(Clone, Copy)]
+    struct StreamGet {
+        status: u16,
+        bytes: u64,
+        byte: u8,
+        fail_after: Option<u64>,
+    }
+
+    impl super::SignedGenerationObjectStreamGetPort for StreamGet {
+        type Error = std::io::Error;
+
+        fn get_exact_stream(
+            &mut self,
+            _signed_url: &str,
+            _max_bytes: u64,
+            target: &mut dyn std::io::Write,
+        ) -> Result<u16, Self::Error> {
+            let block = [self.byte; 65_536];
+            let mut sent = 0_u64;
+            while sent < self.bytes {
+                let count = (self.bytes - sent).min(block.len() as u64) as usize;
+                target.write_all(&block[..count])?;
+                sent += count as u64;
+                if self.fail_after.is_some_and(|threshold| sent >= threshold) {
+                    return Err(std::io::Error::new(
+                        std::io::ErrorKind::ConnectionReset,
+                        "synthetic signed GET interruption",
+                    ));
+                }
+            }
+            Ok(self.status)
+        }
+    }
+
+    fn stream_capability(
+        bytes: u64,
+        byte: u8,
+    ) -> Result<GenerationDownloadCapability, Box<dyn std::error::Error>> {
+        let mut sha = Sha256::new();
+        let block = [byte; 65_536];
+        let mut remaining = bytes;
+        while remaining != 0 {
+            let take = (remaining.min(block.len() as u64)) as usize;
+            sha.update(&block[..take]);
+            remaining -= take as u64;
+        }
+        Ok(GenerationDownloadCapability::new(
+            GenerationId::parse("generation_stream_get_descriptor")?,
+            "tenants/t/profiles/p/generations/g.bpgc".to_owned(),
+            [0x10; 32],
+            sha.finalize().into(),
+            bytes,
+            "https://0123456789abcdef0123456789abcdef.r2.cloudflarestorage.com/bucket/item?X-Amz-Signature=SECRET".to_owned(),
+            120,
+        ))
+    }
+
+    #[test]
+    fn stream_get_writes_verified_fsynced_bpgc_without_generation_sized_vec()
+    -> Result<(), Box<dyn std::error::Error>> {
+        use super::VerifiedGenerationObjectStreamDownloader;
+        use std::io::Read;
+        use std::sync::atomic::{AtomicU64, Ordering};
+        static NEXT: AtomicU64 = AtomicU64::new(1);
+        let dir = std::env::temp_dir().join(format!(
+            "k2-stream-get-valid-{}-{}",
+            std::process::id(),
+            NEXT.fetch_add(1, Ordering::Relaxed),
+        ));
+        std::fs::create_dir(&dir)?;
+        let len = 2_500_031_u64;
+        let capability = stream_capability(len, 0x72)?;
+        let path = dir.join(".pending-signed-get-valid");
+        let mut download = VerifiedGenerationObjectStreamDownloader::new(StreamGet {
+            status: 200,
+            bytes: len,
+            byte: 0x72,
+            fail_after: None,
+        });
+        let mut spool = download.download_to_new_pending_file(&capability, &path)?;
+        assert_eq!(spool.expected_bytes(), len);
+        let mut buffer = [0_u8; 65_536];
+        let mut total = 0_u64;
+        loop {
+            let count = spool.reader().read(&mut buffer)?;
+            if count == 0 {
+                break;
+            }
+            assert!(buffer[..count].iter().all(|byte| *byte == 0x72));
+            total += count as u64;
+        }
+        assert_eq!(total, len);
+        spool.recheck_and_rewind()?;
+        // A crash/retry can never silently replace the first pending file.
+        assert!(
+            download
+                .download_to_new_pending_file(&capability, &path)
+                .is_err()
+        );
+        drop(spool);
+        std::fs::remove_dir_all(dir)?;
+        Ok(())
+    }
+
+    #[test]
+    fn stream_get_redirect_mismatch_overflow_and_disconnect_never_publish()
+    -> Result<(), Box<dyn std::error::Error>> {
+        use super::{
+            GenerationObjectDownloadError as Error, VerifiedGenerationObjectStreamDownloader,
+        };
+        use std::sync::atomic::{AtomicU64, Ordering};
+        static NEXT: AtomicU64 = AtomicU64::new(1);
+        let dir = std::env::temp_dir().join(format!(
+            "k2-stream-get-invalid-{}-{}",
+            std::process::id(),
+            NEXT.fetch_add(1, Ordering::Relaxed),
+        ));
+        std::fs::create_dir(&dir)?;
+        let len = 131_077_u64;
+        let capability = stream_capability(len, 0x42)?;
+        for (index, simulated, expected) in [
+            (
+                0,
+                StreamGet {
+                    status: 302,
+                    bytes: len,
+                    byte: 0x42,
+                    fail_after: None,
+                },
+                Error::HttpStatus,
+            ),
+            (
+                1,
+                StreamGet {
+                    status: 200,
+                    bytes: len - 1,
+                    byte: 0x42,
+                    fail_after: None,
+                },
+                Error::SizeMismatch,
+            ),
+            (
+                2,
+                StreamGet {
+                    status: 200,
+                    bytes: len,
+                    byte: 0x43,
+                    fail_after: None,
+                },
+                Error::DigestMismatch,
+            ),
+            (
+                3,
+                StreamGet {
+                    status: 200,
+                    bytes: len + 1,
+                    byte: 0x42,
+                    fail_after: None,
+                },
+                Error::Transport,
+            ),
+            (
+                4,
+                StreamGet {
+                    status: 200,
+                    bytes: len,
+                    byte: 0x42,
+                    fail_after: Some(65_536),
+                },
+                Error::Transport,
+            ),
+        ] {
+            let path = dir.join(format!(".pending-untrusted-{index}"));
+            let mut downloader = VerifiedGenerationObjectStreamDownloader::new(simulated);
+            let outcome = downloader.download_to_new_pending_file(&capability, &path);
+            assert!(matches!(outcome, Err(reason) if reason == expected));
+            assert!(
+                path.exists(),
+                "partial network data must not be quietly published"
+            );
+        }
+        assert!(!dir.join("generation_stream_get_descriptor").exists());
+        std::fs::remove_dir_all(dir)?;
+        Ok(())
+    }
+
+    struct StreamFileGet(std::path::PathBuf);
+
+    impl super::SignedGenerationObjectStreamGetPort for StreamFileGet {
+        type Error = std::io::Error;
+
+        fn get_exact_stream(
+            &mut self,
+            _signed_url: &str,
+            max_bytes: u64,
+            target: &mut dyn std::io::Write,
+        ) -> Result<u16, Self::Error> {
+            let mut source = std::fs::File::open(&self.0)?;
+            let copied = std::io::copy(&mut source, target)?;
+            if copied > max_bytes {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::InvalidData,
+                    "over limit",
+                ));
+            }
+            Ok(200)
+        }
+    }
+
+    #[test]
+    fn verified_r2_file_stream_then_authenticated_bpgc_open_reuses_existing_format()
+    -> Result<(), Box<dyn std::error::Error>> {
+        use super::VerifiedGenerationObjectStreamDownloader;
+        use encrypted_generation_domain::{
+            GenerationDek, GenerationIdentity, GenerationMetadata, KeyId, NoncePrefix,
+            open_generation_streaming, seal_generation_streaming,
+        };
+        use profile_platform_primitives::{ProfileId, TenantId};
+        use std::io::{Read, Write};
+        use std::sync::atomic::{AtomicU64, Ordering};
+        static NEXT: AtomicU64 = AtomicU64::new(1);
+        let dir = std::env::temp_dir().join(format!(
+            "k2-stream-r2-bpgc-{}-{}",
+            std::process::id(),
+            NEXT.fetch_add(1, Ordering::Relaxed),
+        ));
+        std::fs::create_dir(&dir)?;
+        let original = dir.join("already-sealed.bpgc");
+        let plaintext_bytes = 1_350_017_u64;
+        let key = GenerationDek::new(KeyId::parse("k2_verified_r2_stream_test_key")?, [0x35; 32]);
+        let generation = GenerationId::parse("generation_signed_verified_stream")?;
+        let metadata = GenerationMetadata::for_reader(
+            GenerationIdentity::new(
+                TenantId::parse("tenant_verified_stream")?,
+                ProfileId::parse("profile_verified_stream")?,
+                generation.clone(),
+                None,
+            ),
+            key.key_id().clone(),
+            NoncePrefix::new([0x42; 16]),
+            65_536,
+            &mut std::io::repeat(0x73).take(plaintext_bytes),
+        )?;
+        let mut source = std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&original)?;
+        let expected = seal_generation_streaming(
+            &metadata,
+            &key,
+            &mut std::io::repeat(0x73).take(plaintext_bytes),
+            &mut source,
+        )?;
+        source.flush()?;
+        source.sync_all()?;
+        drop(source);
+
+        let capability = GenerationDownloadCapability::new(
+            generation,
+            metadata.object_key(),
+            expected.metadata_digest().bytes(),
+            expected.container_digest().bytes(),
+            expected.container_bytes(),
+            "https://0123456789abcdef0123456789abcdef.r2.cloudflarestorage.com/bucket/object?X-Amz-Signature=SECRET".to_owned(),
+            120,
+        );
+        let pending = dir.join(".pending-network-ciphertext");
+        let mut fetcher = VerifiedGenerationObjectStreamDownloader::new(StreamFileGet(original));
+        let mut object = fetcher.download_to_new_pending_file(&capability, &pending)?;
+        let prelude = object.read_descriptor_verified_metadata_prelude()?;
+        let inspected = encrypted_generation_domain::inspect_generation_metadata_prelude(&prelude)?;
+        assert_eq!(inspected.metadata_digest(), expected.metadata_digest());
+        assert_eq!(
+            inspected.metadata().generation_id(),
+            capability.generation_id()
+        );
+        let mut opened_count = 0_u64;
+        struct CountSink<'a>(&'a mut u64);
+        impl Write for CountSink<'_> {
+            fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+                *self.0 += bytes.len() as u64;
+                Ok(bytes.len())
+            }
+            fn flush(&mut self) -> std::io::Result<()> {
+                Ok(())
+            }
+        }
+        let reopened =
+            open_generation_streaming(object.reader(), &key, &mut CountSink(&mut opened_count))?;
+        assert_eq!(reopened, expected);
+        assert_eq!(opened_count, plaintext_bytes);
+        object.recheck_and_rewind()?;
+        assert_eq!(object.expected_bytes(), expected.container_bytes());
+        drop(object);
+        std::fs::remove_dir_all(dir)?;
+        Ok(())
+    }
+
+    #[test]
+    fn streamed_transport_legacy_incomplete_workspace_fallback_is_strictly_bounded()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let dir = std::env::temp_dir().join(format!("k2-legacy-fallback-{}", std::process::id()));
+        // A missing fixture from a previous failed test must not be silently
+        // overwritten. Distinct test components use distinct generation IDs.
+        let file = dir.join("existing-ciphertext");
+        std::fs::create_dir(&dir)?;
+        let data = b"bounded legacy encrypted bytes";
+        std::fs::write(&file, data)?;
+        let generation = GenerationId::parse("generation_legacy_stream_bridge")?;
+        let descriptor = GenerationDownloadCapability::new(
+            generation,
+            "tenants/t/profiles/p/generations/g.bpgc".to_owned(),
+            [0x77; 32],
+            Sha256::digest(data).into(),
+            data.len() as u64,
+            "https://0123456789abcdef0123456789abcdef.r2.cloudflarestorage.com/bucket/item?X-Amz-Signature=SECRET".to_owned(),
+            120,
+        );
+        let mut downloader = VerifiedGenerationObjectStreamDownloader::new(StreamFileGet(file));
+        let result = downloader.download_generation_object(&descriptor)?;
+        assert_eq!(result, data);
+        let oversized = GenerationDownloadCapability::new(
+            GenerationId::parse("generation_legacy_stream_too_large")?,
+            "tenants/t/profiles/p/generations/g.bpgc".to_owned(),
+            [0x77; 32],
+            [0x99; 32],
+            (encrypted_generation_domain::MAX_GENERATION_CONTAINER_BYTES + 1) as u64,
+            "https://0123456789abcdef0123456789abcdef.r2.cloudflarestorage.com/bucket/item?X-Amz-Signature=SECRET".to_owned(),
+            120,
+        );
+        assert!(matches!(
+            downloader.download_generation_object(&oversized),
+            Err(GenerationObjectDownloadError::InvalidCapability)
+        ));
+        std::fs::remove_dir_all(dir)?;
+        Ok(())
+    }
 
     struct FakeGet {
         status: u16,

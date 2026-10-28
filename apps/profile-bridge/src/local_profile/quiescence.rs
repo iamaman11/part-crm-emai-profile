@@ -34,6 +34,51 @@ impl BridgeWorkspaceLock {
         })
     }
 
+    /// Same-device recovery after an interrupted Bridge. The caller must have already
+    /// redeemed fresh device/ACL and exact coordinator generation/lease authority.
+    /// Root-wide exclusive OS admission excludes *all* live cooperative Bridge writers
+    /// and Windows delivery activation until the new per-generation marker is created.
+    pub(crate) fn recover_interrupted_launch(
+        workspace: &GenerationWorkspace,
+        device_id: &DeviceId,
+        fresh_epoch: u64,
+    ) -> Result<Self, LocalProfileError> {
+        let root = workspace_root(workspace)?;
+        let exclusive = open_root_marker(root)?;
+        exclusive.try_lock().map_err(map_try_lock_error)?;
+
+        // A stale Windows parent.lock file is permitted only when its actual OS handle
+        // is free. On other platforms, uncertain Firefox markers remain fail-closed.
+        // This checks the original working directory, never a replacement clone.
+        if !matches!(
+            crate::browser_execution::browser_writer_locks_absent(workspace),
+            Ok(true)
+        ) {
+            return Err(LocalProfileError::LockBusy);
+        }
+
+        let inner = filesystem::BridgeWorkspaceLock::replace_interrupted(
+            workspace,
+            device_id,
+            fresh_epoch,
+        )?;
+        drop(exclusive);
+
+        // The newly established marker blocks delivery activation while we switch
+        // from exclusive crash reconciliation to ordinary shared writer admission.
+        let admission = open_root_marker(root)?;
+        if let Err(error) = admission.try_lock_shared() {
+            // A concurrent updater won admission first. Release our new marker;
+            // never start the browser while that updater owns the root.
+            inner.release()?;
+            return Err(map_try_lock_error(error));
+        }
+        Ok(Self {
+            inner,
+            _admission: admission,
+        })
+    }
+
     pub fn release(self) -> Result<(), LocalProfileError> {
         let Self {
             inner,
@@ -231,6 +276,135 @@ mod tests {
             DeliveryActivationGuard::acquire(&root),
             Err(LocalProfileError::LockBusy)
         ));
+        Ok(())
+    }
+
+    #[test]
+    fn interrupted_same_device_reclaims_only_old_marker_and_preserves_browser_files()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let (_test_root, root, workspace, device) = fixture("same-device-recovery")?;
+        let user_data = workspace.path().join("user_data");
+        fs::create_dir(&user_data)?;
+        let cookies = user_data.join("cookies.sqlite");
+        let wal = user_data.join("cookies.sqlite-wal");
+        let fingerprint = workspace.path().join("camoufox-config.json");
+        let identity = workspace.path().join(".profile-browser-identity-v1");
+        fs::write(&cookies, b"original-cookie-db")?;
+        fs::write(&wal, b"uncheckpointed-wal")?;
+        // Firefox on Windows can leave parent.lock on disk after power loss.
+        // A *free* kernel file handle is not an active native browser writer.
+        #[cfg(windows)]
+        fs::write(user_data.join("parent.lock"), b"stale-native-parent-lock")?;
+        fs::write(&fingerprint, b"pinned-config")?;
+        fs::write(&identity, b"pinned-identity")?;
+
+        // Simulate the predecessor dying without explicit release. No root OS lock
+        // survives, but its persistent marker remains.
+        fs::write(
+            workspace.path().join(BRIDGE_LOCK_FILE),
+            format!("profile-platform-bridge-lock-v1\n{}\n5\n", device.as_str()),
+        )?;
+        assert!(matches!(
+            BridgeWorkspaceLock::acquire(&workspace, &device, 6),
+            Err(LocalProfileError::LockBusy)
+        ));
+        let recovered = BridgeWorkspaceLock::recover_interrupted_launch(&workspace, &device, 6)?;
+        assert_eq!(fs::read(cookies)?, b"original-cookie-db");
+        assert_eq!(fs::read(wal)?, b"uncheckpointed-wal");
+        assert_eq!(fs::read(fingerprint)?, b"pinned-config");
+        assert_eq!(fs::read(identity)?, b"pinned-identity");
+        assert!(matches!(
+            DeliveryActivationGuard::acquire(&root),
+            Err(LocalProfileError::LockBusy)
+        ));
+        assert!(matches!(
+            BridgeWorkspaceLock::acquire(&workspace, &device, 7),
+            Err(LocalProfileError::LockBusy)
+        ));
+        recovered.release()?;
+        assert!(DeliveryActivationGuard::acquire(&root)?.confirms_quiescence());
+        Ok(())
+    }
+
+    #[test]
+    fn interrupted_reclaim_rejects_foreign_malformed_and_unadvanced_epoch()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let (_test_root, _root, workspace, device) = fixture("reclaim-fail-closed")?;
+        let marker = workspace.path().join(BRIDGE_LOCK_FILE);
+        let foreign = DeviceId::parse("device_foreign_reclaim_test")?;
+        fs::write(
+            &marker,
+            format!("profile-platform-bridge-lock-v1\n{}\n5\n", foreign.as_str()),
+        )?;
+        assert!(matches!(
+            BridgeWorkspaceLock::recover_interrupted_launch(&workspace, &device, 6),
+            Err(LocalProfileError::LockBusy)
+        ));
+
+        let prior = format!("profile-platform-bridge-lock-v1\n{}\n5\n", device.as_str());
+        fs::write(&marker, &prior)?;
+        for epoch in [1, 4, 5] {
+            assert!(matches!(
+                BridgeWorkspaceLock::recover_interrupted_launch(&workspace, &device, epoch),
+                Err(LocalProfileError::LockBusy)
+            ));
+            assert_eq!(fs::read_to_string(&marker)?, prior);
+        }
+        fs::write(&marker, b"untrusted-marker\n")?;
+        assert!(matches!(
+            BridgeWorkspaceLock::recover_interrupted_launch(&workspace, &device, 6),
+            Err(LocalProfileError::LockBusy)
+        ));
+        assert_eq!(fs::read(&marker)?, b"untrusted-marker\n");
+        Ok(())
+    }
+
+    #[test]
+    fn interrupted_reclaim_refuses_active_bridge_admission()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let (_test_root, root, workspace, device) = fixture("bridge-still-live")?;
+        fs::write(
+            workspace.path().join(BRIDGE_LOCK_FILE),
+            format!("profile-platform-bridge-lock-v1\n{}\n5\n", device.as_str()),
+        )?;
+        let active = super::open_root_marker(root.path())?;
+        active.try_lock_shared()?;
+        assert!(matches!(
+            BridgeWorkspaceLock::recover_interrupted_launch(&workspace, &device, 6),
+            Err(LocalProfileError::LockBusy)
+        ));
+        assert!(workspace.path().join(BRIDGE_LOCK_FILE).exists());
+        Ok(())
+    }
+
+    #[test]
+    fn interrupted_reclaim_refuses_native_firefox_writer() -> Result<(), Box<dyn std::error::Error>>
+    {
+        let (_test_root, _root, workspace, device) = fixture("firefox-still-live")?;
+        let user_data = workspace.path().join("user_data");
+        fs::create_dir(&user_data)?;
+        fs::write(
+            workspace.path().join(BRIDGE_LOCK_FILE),
+            format!("profile-platform-bridge-lock-v1\n{}\n5\n", device.as_str()),
+        )?;
+        #[cfg(windows)]
+        let writer = {
+            use std::os::windows::fs::OpenOptionsExt;
+            std::fs::OpenOptions::new()
+                .write(true)
+                .create(true)
+                .share_mode(0)
+                .open(user_data.join("parent.lock"))?
+        };
+        #[cfg(not(windows))]
+        fs::write(user_data.join(".parentlock"), b"unresolved-native-writer")?;
+        assert!(matches!(
+            BridgeWorkspaceLock::recover_interrupted_launch(&workspace, &device, 6),
+            Err(LocalProfileError::LockBusy)
+        ));
+        assert!(workspace.path().join(BRIDGE_LOCK_FILE).exists());
+        #[cfg(windows)]
+        drop(writer);
         Ok(())
     }
 }

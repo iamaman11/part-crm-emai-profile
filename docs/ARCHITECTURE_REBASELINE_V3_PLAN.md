@@ -67,6 +67,136 @@ Binding rules:
    CURRENT; CURRENT stage Issues own only their stage scope/evidence; closed/reference Issues are
    provenance. None may become a second roadmap.
 
+### V2 / #802 product-reliability sequencing constraint — final accepted local-first policy (2026-10-25)
+
+**Owner decision ACCEPTED, runtime NOT YET ACCEPTED.** V2/B7 already owns this
+refinement in [#802](https://github.com/iamaman11/part-crm-emai-profile/issues/802).
+It does not insert a new CAP stage, new CURRENT Issue or new independent
+architecture/program authority. [#266](https://github.com/iamaman11/part-crm-emai-profile/issues/266)
+retains the live stage pointer; #584 retains V2 acceptance ownership.
+
+**Final application rule:** native Firefox has one persistent local working
+`user_data` (cookies, SQLite/WAL, session, IndexedDB and extensions).
+Neither loss of Bridge/Windows/network nor an unknown cloud commit may erase
+or replace it. Under *freshly proven* ACL/device/CNG, exact current generation,
+exclusive coordinator lease/fence, compatible runtime/identity and OS process/
+writer-lock evidence, Bridge permits Firefox's same-directory native recovery.
+Without permission or without proof of no other writer, retain all bytes and
+report `RECOVERY_OR_CONFLICT`; do not promise unconditionally offline opening
+or recovery from the destruction of every copy/key.
+
+**Responsibility split:** heartbeat renews exclusive writer authority only;
+controlled native Firefox close independently triggers the save. Bridge and
+the existing save/reopen owners persist minimal `LOCAL_UNSYNCED` intent
+without taking mandatory extra full working-directory clones. After network
+recovery *while the app is running* or on the next authorized application
+start if it exited, the same existing owner must automatically reconcile the
+exact pending upload/commit before any additional candidate is created.
+Unknown HTTP results never authorize stale fencing, blind N+2, `Clean` or
+`Saved`. An app that is not running has no instant reconnect guarantee;
+do not add a background daemon merely to make that claim.
+
+**Steady-state full-generation budget:** in cloud storage each Profile may
+retain one current immutable encrypted N and **at most one** independent,
+decryption-key-available and real-browser-proven WORKING/LKG reserve. The
+reserve may be N-k, not necessarily N−1; a VERIFIED hash alone is not WORKING.
+Both full objects must include all applicable cookies, SQLite/WAL,
+IndexedDB, extensions, sessions and settings. Locally retain one primary
+working directory, not per-save full clones or permanent sealed buffers.
+Durable journal/audit *metadata* may persist separately. During a dirty,
+lost-response, conflicted or interrupted-prune transaction, additional
+full objects/workspaces may **temporarily** be necessary: protect all
+unsynced/unknown/only-copy/LKG bytes and old decryption keys until exact
+evidence permits no-replace, crash-safe, idempotent cleanup. Never destroy
+recoverability merely to enforce a physical two-copy cap.
+
+### Integrated delivery decision (2026-10-26): one Draft branch, batched CI
+
+**Accepted by product owner:** keep ALL K1+K2+K3 source in the *same*
+existing Draft #806 branch, not separate sibling PRs or a second persisted
+state machine. Minimize redundant GitHub Actions by integrating reviewed
+related edits before remote push; prefer narrowly scoped local/cheap tests
+while coding and one full exact-head GitHub CI per complete integration
+candidate. However do not defer all verification to one massive unreviewable
+commit: check file contracts, negative security paths and source shape before
+batching. On any CI failure group fixes by underlying cause; rerun full
+exact-head gates for the final candidate.
+
+**No release authority conveyed by this decision:** the three code slices
+are still individually required to be complete end-to-end; K1 includes D1
+positive fresh-fence NOT_APPLIED_RETRYABLE and durable offline-to-online
+resume, K2 includes bounded streaming 256/512MiB and independently WORKING
+LKG with safe keys and pruning, K3 includes truthful ordinary UX and complete
+fault/negative matrices. A single green CI is not Windows/staging B7 proof.
+If an incomplete slice can only be blocked safely, do not ship that Draft
+intermediate as a user-facing release. Protected main, D1/R2 effects and
+installed Windows remain outside the Draft implementation authorization.
+
+### Accepted #802/#806 delivery batching: THREE completed code slices + ONE release acceptance
+
+**Decision 2026-10-25: ACCEPTED; execution batching only.** Do not
+introduce a new CAP stage, issue, controller, database, SM, daemon, credential
+owner or acceptance authority. #802 is the one normative product contract;
+Draft PR #806 implements it. #584 still owns B7 installed acceptance,
+#266 remains the CURRENT-only pointer and **this document** continues to
+own the ordered execution program. The existing P0-A…F and S01–S17,
+R01–R20, W01–W08, WP1–WP6, G1–G8 remain mandatory, including negative
+security, crash and loss-of-authority tests; batching never waives a gate.
+
+| Delivery slice (finish one real end-to-end behavior) | Existing scope brought together | Completion criteria / evidence required |
+| --- | --- | --- |
+| **K1 — local-first durable Save / Recovery, P0** | P0-A/B, save/recovery portion of P0-C, P0-E owner evidence | Native Firefox/Camoufox working directory and original cookies/WAL/IndexedDB/identity survive power loss, close while offline, broken seal/PUT, lost commit reply, lease expiry and restart. Controlled-close records minimal durable LOCAL_UNSYNCED before dependent cloud work; running Bridge resumes on reconnect, otherwise next authorized launch; existing D1 owner supplies affirmative NOT_APPLIED_RETRYABLE for the SAME attempt under fresh ACL/lease/fence. ACTIVE_EXACT performs only exact local completion; UNKNOWN/CONFLICT preserves all bytes and fences unsafe use. No N+2, stale-fence PUT, duplicate writer, phantom Saved, mandatory clone or second state store. Proof includes real fault injection at each transition and composed operator/server tests, not just an observer. |
+| **K2 — scalable encrypted generations + one working backup** | streaming portion P0-C, P0-D, storage portion P0-F | 256/512 MiB actual user-data roundtrip through bounded-memory snapshot/encrypt/PUT/download/verify/open; no permanent 64MiB limit and no per-save runaway full memory or disk copies. One cloud current N plus at most one *independently decrypted and real-browser-WORKING* LKG at SETTLED points with viable key/runtime; preserve extra evidence while dirty/unknown. Prove 100 sequential saves, 100 Profiles, key rotation/cold restore, safe no-replace prune with interruption; no only-copy deletion. |
+| **K3 — truthful UX, diagnostics + integrated resilience tests** | P0-E/F, all product-level and negative tests not already gated in K1/K2 | Owner-derived, read-only status projection only; simple Open → Close UX; Saved only after cloud active+local ready+owned releases+checkpoint retirement. Redacted stable diagnosis/next safe step; no raw IDs or manual journal/DB repair. Complete traceable S01–S17, R01–R20, WP1–WP6, ordinary >15min/8h sessions, sleep/revoke/second writer, 100-save retention and regression/fault-injection evidence, and no hidden test-only bypass. |
+| **Final acceptance — NOT a fourth code slice** | Existing G1–G8, W01–W08, B7/B8/B10 | Exact-head required CI (no pending/fail and conditional skip never claimed as a run test), full diff/security review, guarded merge and accepted main, immutable signed Windows installer/release identity, individually authorized staging effect with post-effect verification, actual installed Windows/Camoufox cold read/save/reopen and W01–W08. Only exact evidence permits closure of #802 and PR #806. |
+
+**Execution efficiency contract:** each large K slice must have a pre-agreed bounded
+write-set, natural owner, exact evidence/transition matrix, affected callers,
+rollback/fail-closed disposition and independently runnable positive+negative
+tests. Inside each K slice use small reviewable commits and the cheapest
+relevant gates; run the full required exact-head CI at the integrated K-slice
+boundary and before guarded merge, not per trivial formatting commit. Never
+use bigger slices as permission to merge an untested giant change or hide
+missing provider/Windows evidence. Failed acceptance stays in the owning
+K slice and is re-tested; do not create new workstreams or report partial
+implementation as K PASS.
+
+**Existing V2/#802 execution order and proof, not parallel projects:**
+
+1. **P0-A — local crash recovery first.** Reconcile surviving per-generation
+   Bridge lock files after verified OS-handle/process quiescence, fresh
+   authorization and single-writer proof; preserve same-directory Firefox
+   state and pinned immutable identity. `materialization_inventory_digest`
+   already excludes mutable `user_data/**` and must **not** be weakened.
+2. **P0-B — narrow heartbeat authority correctness.** Preserve confirmed
+   reject vs transport/408/429/5xx uncertainty, exact bounded retry and
+   no unauthorized second writer; no browser snapshot on heartbeat.
+3. **P0-C — auto-resume + large-profile save.** Wire ordinary controlled-close
+   and authorized reconnect/next-start exact attempt reconciliation through
+   the existing save owner. Replace clone + 64 MiB plaintext + extra full
+   sealed copies with bounded memory/storage streaming, preserving durable
+   partial-transaction evidence, verified R2 and CAS/D1.
+4. **P0-D — bounded backup and cleanup.** Record last demonstrated WORKING
+   generation and retain its independently decryptable object/key. After
+   safe promotion/retention checks, prune only proven expendable full local
+   and cloud generations, without rewriting append-only audit or silently
+   rolling back pointers. Reconcile interrupted prune and prove new-machine
+   key restore/cross-device conflicts.
+5. **P0-E/F — normal UX and final proof.** Display distinct local-working,
+   local-unsynced, syncing, cloud-saved and blocked/conflict states. Test
+   installed Windows shutdown/Bridge kill/WAL recovery; offline-close →
+   reconnect→one commit; lost PUT/commit reply; ACL revoke and two devices;
+   256/512 MiB; 100 sequential saves and 100 Profiles. At settled points
+   inspect **both** full R2 objects and on-disk copies (at most N+LKG in
+   steady state). Exact-head full CI, clean-host installed Camoufox and
+   separately authorized provider staging all remain mandatory.
+
+Preserve the existing G1–G8 guarded source/release/staging/evidence process.
+Production is not authorized by this policy. Simplify within existing
+Firefox/Bridge/coordinator/local-profile/generation/R2-D1 semantic owners;
+do not introduce another sync service, heartbeat worker, state store,
+recovery state machine or blanket timeout-based deletion.
+
 ## 3. Binding execution order
 
 The table below is the accepted top-level sequence and the sole authority for future-stage order. A

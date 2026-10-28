@@ -1,11 +1,13 @@
 use super::{
     CloudGenerationRepository, CloudGenerationStatus, ContainerDigest, EncryptedGenerationError,
     GenerationDek, GenerationIdentity, GenerationMetadata, KeyId,
-    MAX_GENERATION_METADATA_PRELUDE_BYTES, NoncePrefix, PlaintextDigest, PublishResult,
+    MAX_GENERATION_METADATA_PRELUDE_BYTES, MAX_STREAM_CONTAINER_BYTES, MAX_STREAM_PLAINTEXT_BYTES,
+    NoncePrefix, PlaintextDigest, PublishResult, StreamingGenerationError,
     inspect_generation_metadata_prelude, open_generation, open_generation_expected,
-    seal_generation,
+    open_generation_streaming, seal_generation, seal_generation_streaming,
 };
 use profile_platform_primitives::{GenerationId, ProfileId, TenantId, UnixMillis};
+use std::io::Read;
 
 fn ids(
     generation: &str,
@@ -91,6 +93,156 @@ fn canonical_metadata_prelude_inspection_is_bounded_and_prefix_exact()
         ),
         Err(EncryptedGenerationError::InvalidContainer)
     );
+    Ok(())
+}
+
+/// BPGC0001 is not a new cloud wire format: bounded stream seal MUST produce
+/// the identical signed ciphertext descriptor as legacy all-memory sealing.
+#[test]
+fn streamed_wire_is_byte_identical_and_reopen_checks_digest_and_final_tag()
+-> Result<(), Box<dyn std::error::Error>> {
+    for length in [0, 1, 1_024, 1_025, 4_096, 33_007] {
+        let plaintext = (0..length)
+            .map(|offset| (offset % 251) as u8)
+            .collect::<Vec<_>>();
+        let metadata = metadata("generation_streamed_same_wire", 0x49, &plaintext)?;
+        let old = seal_generation(&metadata, &key(0x4a)?, &plaintext)?;
+        let mut streamed = Vec::new();
+        let report = seal_generation_streaming(
+            &metadata,
+            &key(0x4a)?,
+            &mut plaintext.as_slice(),
+            &mut streamed,
+        )?;
+        assert_eq!(streamed, old.container());
+        assert_eq!(report.metadata(), &metadata);
+        assert_eq!(report.metadata_digest(), old.metadata_digest());
+        assert_eq!(report.container_digest(), old.container_digest());
+        assert_eq!(report.container_bytes(), streamed.len() as u64);
+        let mut reopened = Vec::new();
+        let opened =
+            open_generation_streaming(&mut streamed.as_slice(), &key(0x4a)?, &mut reopened)?;
+        assert_eq!(reopened, plaintext);
+        assert_eq!(opened, report);
+    }
+    Ok(())
+}
+
+#[test]
+fn streamed_open_refuses_truncation_tampering_foreign_key_and_trailing_data()
+-> Result<(), Box<dyn std::error::Error>> {
+    let plaintext = vec![0x5c; 6_789];
+    let metadata = metadata("generation_streamed_reject", 0x61, &plaintext)?;
+    let original = seal_generation(&metadata, &key(0x77)?, &plaintext)?.into_container();
+    let mut changes = Vec::new();
+    changes.push(original[..original.len() - 1].to_vec());
+    let mut tag = original.clone();
+    let last = tag.len() - 1;
+    tag[last] ^= 0x01;
+    changes.push(tag);
+    let mut chunk = original.clone();
+    chunk[110] ^= 0x01;
+    changes.push(chunk);
+    let mut extra = original.clone();
+    extra.push(0x00);
+    changes.push(extra);
+    for bad in changes {
+        let mut unpublished = Vec::new();
+        assert!(
+            open_generation_streaming(&mut bad.as_slice(), &key(0x77)?, &mut unpublished,).is_err()
+        );
+    }
+    let mut unpublished = Vec::new();
+    assert!(
+        open_generation_streaming(&mut original.as_slice(), &key(0x78)?, &mut unpublished,)
+            .is_err()
+    );
+    Ok(())
+}
+
+#[test]
+fn streamed_seal_refuses_source_change_even_if_first_pass_digest_was_valid()
+-> Result<(), Box<dyn std::error::Error>> {
+    let original = vec![3_u8; 8_193];
+    let metadata = metadata("generation_streamed_source_change", 0x52, &original)?;
+    let mut altered = original.clone();
+    altered[8_000] ^= 1;
+    let mut unpublished = Vec::new();
+    assert!(matches!(
+        seal_generation_streaming(
+            &metadata,
+            &key(0x74)?,
+            &mut altered.as_slice(),
+            &mut unpublished,
+        ),
+        Err(StreamingGenerationError::Crypto(
+            EncryptedGenerationError::MetadataMismatch
+        ))
+    ));
+    let mut short = &original[..original.len() - 1];
+    assert!(matches!(
+        seal_generation_streaming(&metadata, &key(0x74)?, &mut short, &mut Vec::new()),
+        Err(StreamingGenerationError::Io(_))
+    ));
+    let mut larger = original.clone();
+    larger.push(0);
+    assert!(matches!(
+        seal_generation_streaming(
+            &metadata,
+            &key(0x74)?,
+            &mut larger.as_slice(),
+            &mut Vec::new(),
+        ),
+        Err(StreamingGenerationError::Crypto(
+            EncryptedGenerationError::MetadataMismatch
+        ))
+    ));
+    Ok(())
+}
+
+#[test]
+fn encoded_512_mib_native_profile_and_min_chunk_framing_fit_stream_bounds() {
+    // BPGW0001: magic + count, then 2-byte path length, max 512-byte
+    // relative path, 8-byte size and contents for each of 100_000 files.
+    // Keep this proof in the crypto package too: changes to its bound must
+    // not silently invalidate real Firefox 512 MiB snapshots.
+    const RAW_512_MIB: u64 = 536_870_912;
+    const MAX_FILES: u64 = 100_000;
+    const PATH_AND_FILE_HEADER: u64 = 2 + 512 + 8;
+    const MIN_CHUNK_SIZE: u64 = 1_024;
+    const RECORD_OVERHEAD: u64 = 1 + 8 + 4 + 4 + 16;
+    let encoded = 12 + RAW_512_MIB + MAX_FILES * PATH_AND_FILE_HEADER;
+    assert!(encoded <= MAX_STREAM_PLAINTEXT_BYTES);
+    let max_records = MAX_STREAM_PLAINTEXT_BYTES.div_ceil(MIN_CHUNK_SIZE);
+    let worst_ciphertext =
+        12 + 4_096 + MAX_STREAM_PLAINTEXT_BYTES + (max_records + 1) * RECORD_OVERHEAD;
+    assert!(worst_ciphertext <= MAX_STREAM_CONTAINER_BYTES);
+}
+
+#[test]
+fn metadata_reader_accepts_stream_only_sizes_without_allocating_payload()
+-> Result<(), Box<dyn std::error::Error>> {
+    let (tenant, profile, generation) = ids("generation_streaming_over_old_cap")?;
+    let total = 67_108_864_u64 + 1;
+    let mut data = std::io::repeat(0x33).take(total);
+    let built = GenerationMetadata::for_reader(
+        GenerationIdentity::new(tenant, profile, generation, None),
+        key_id()?,
+        NoncePrefix::new([0x25; 16]),
+        65_536,
+        &mut data,
+    )?;
+    assert_eq!(built.plaintext_bytes(), total);
+    assert!(built.canonical_digest().is_ok());
+    // Legacy in-memory API retains the old bound and cannot accidentally
+    // decode into a 512 MiB Vec when it sees streaming metadata.
+    // A nonallocating sink proves the 64 MiB+ stream can be sealed with
+    // no assembled giant Vec; legacy in-RAM open deliberately stays capped.
+    let mut input = std::io::repeat(0x33).take(total);
+    let summary = seal_generation_streaming(&built, &key(0x22)?, &mut input, &mut std::io::sink())?;
+    assert!(summary.container_bytes() > total);
+    assert_eq!(summary.metadata(), &built);
+    assert_eq!(MAX_STREAM_PLAINTEXT_BYTES, 603_979_776);
     Ok(())
 }
 
@@ -468,8 +620,46 @@ fn orphan_plan_protects_current_and_rollback_generations() -> Result<(), Box<dyn
     repository.commit_current(1, second.generation_id())?;
 
     let plan = repository.plan_orphans(UnixMillis::new(10))?;
-    assert_eq!(plan.generation_ids(), [orphan.generation_id().clone()]);
-    assert!(plan.reclaimable_bytes() > 0);
+    assert!(plan.generation_ids().is_empty());
+    assert_eq!(plan.reclaimable_bytes(), 0);
+    // The orphan is not a proven deletion candidate just because it is old.
+    assert_eq!(
+        repository
+            .record(orphan.generation_id())
+            .map(|r| r.status()),
+        Some(CloudGenerationStatus::Verified)
+    );
+    Ok(())
+}
+
+#[test]
+fn one_hundred_successive_pointer_commits_cannot_implicitly_prune_unknown_lkg()
+-> Result<(), Box<dyn std::error::Error>> {
+    let mut repository = CloudGenerationRepository::default();
+    for cycle in 0..100_u64 {
+        let generation_id = format!("generation_100_save_retention_{cycle:03}");
+        let plaintext = cycle.to_be_bytes();
+        let generation = metadata(&generation_id, cycle as u8, &plaintext)?;
+        repository.publish(
+            generation.clone(),
+            &key(0x65)?,
+            &plaintext,
+            UnixMillis::new(cycle + 1),
+        )?;
+        repository.commit_current(cycle, generation.generation_id())?;
+        let plan = repository.plan_orphans(UnixMillis::new(cycle + 1))?;
+        assert!(plan.generation_ids().is_empty());
+        assert_eq!(plan.reclaimable_bytes(), 0);
+    }
+    // This is a 100-commit synthetic NO-PRUNE guard, not 100 live R2
+    // uploads or a bounded physical-retention acceptance.
+    assert_eq!(repository.pointer().version(), 100);
+    assert!(
+        repository
+            .support_summary()?
+            .render_metadata_only()
+            .contains("total_generations=100")
+    );
     Ok(())
 }
 

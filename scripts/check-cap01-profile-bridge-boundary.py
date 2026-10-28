@@ -10,6 +10,8 @@ from pathlib import Path
 
 PRODUCTION_MAIN = Path("apps/profile-bridge/src/main.rs")
 PRODUCTION_COMPOSITION = Path("apps/profile-bridge/src/shipping_composition.rs")
+PRODUCTION_RECOVERY_OWNER = Path("apps/profile-bridge/src/shipping_generation_successor_control.rs")
+PRODUCTION_OPERATOR = Path("apps/profile-bridge/src/operator_flow.rs")
 ACTIVE_DELIVERY_RUNTIME = Path("apps/profile-bridge/src/windows_delivery_runtime.rs")
 MANIFEST = Path("apps/profile-bridge/Cargo.toml")
 AUX_BIN_ROOT = Path("apps/profile-bridge/src/bin")
@@ -61,15 +63,59 @@ REQUIRED_COMPOSITION_MARKERS = (
     "ManagedCamouhostProcess::pair(",
     ".close_observer()",
     "ProfileBridgeOperator::new(",
-    ".open_authoritative_with_runtime_health(",
+    ".open_authoritative_with_runtime_health_and_pending_recovery(",
+    "complete_active_exact_after_restart(",
+    "resume_exact_successor_under_fresh_lease(",
+    "resume_lone_local_unsynced_under_fresh_lease(",
+    "confirm_retained_exact_retry_nonapplication(",
+    ".reprove_retained_save_writer()",
     ".observe_controlled_close(&session_id)",
-    ".close(now()?)",
-    ".save_retained_successor(",
+    ".close_with_durable_local_intent(&materialization_root, now()?)",
+    ".save_retained_successor_streaming(",
     ".runtime_timing()",
     ".heartbeat(observed_at)",
     "RuntimeDisplayMode::Headful",
     "ShippingCompositionError::CommittedRecoveryRequired",
     "Err(ShippingCompositionError::UnsupportedPlatform)",
+)
+
+# Post-commit recovery must stay INSIDE the existing authenticated operator.
+# Marker checks supplement Rust owner tests; they cannot grant an effect.
+REQUIRED_RECOVERY_OWNER_MARKERS = (
+    "fn complete_active_exact_after_restart<",
+    "fn resume_exact_successor_under_fresh_lease<",
+    "fn resume_lone_local_unsynced_under_fresh_lease<",
+    "deterministic_lone_unsynced_successor(",
+    "recover_local_unsynced_native_clone(",
+    "persist_streaming_exact_save_attempt_from_lone_intent(",
+    "discover_unresolved_streaming_exact_save_attempt(",
+    "verified.first_seal_under_current_lease(fresh_lease)",
+    "request_local_unsynced_retry_decision(",
+    "fresh_lease.tenant_id() != tenant_id",
+    "fresh_lease.profile_id() != profile_id",
+    "attempt.successor_id() != selected_generation.as_str()",
+    "observe_verified_exact_attempt(",
+    "browser_writer_locks_absent(&base)",
+    "browser_writer_locks_absent(&candidate)",
+    "BridgeWorkspaceLock::recover_interrupted_launch(",
+    "persist_committed_successor_binding(",
+    "retire_active_exact_attempt_after_restart(",
+)
+REQUIRED_OPERATOR_RECOVERY_MARKERS = (
+    "has_unresolved_save_attempt_for_profile(",
+    "let recovered = observe_pending(",
+    "persist_local_unsynced_intent(root, &source, retained.lease())",
+    "retire_local_unsynced_after_exact_checkpoint(",
+    # Only a fully retired ACTIVE_EXACT for the originally selected N may
+    # continue into the browser. A committed N+1 from a claim for N must
+    # exit for a NEW authorized launch, never silently reuse the old N.
+    "if recovered != PendingSaveRecovery::ReadySelected",
+    "if recovered == PendingSaveRecovery::CommittedNewerRequiresClaim",
+    "discover_unresolved_streaming_exact_save_attempt(",
+    "browser_writer_locks_absent(&base)",
+    "browser_writer_locks_absent(&candidate)",
+    "self.coordinator.close_without_browser_use(&lease)",
+    "return Err(self.fail_before_local_use(",
 )
 
 REQUIRED_ACTIVE_DELIVERY_MARKERS = (
@@ -110,6 +156,7 @@ FORBIDDEN_UNGOVERNED_EFFECT_MARKERS = (
 
 FORBIDDEN_COMPOSITION_MARKERS = (
     "CompositionUnavailable",
+    ".save_retained_successor(",
     "profile-bridge-synthetic",
     "FakeCamouhost",
     "FakeProcessControl",
@@ -187,6 +234,8 @@ def validate(root: Path) -> None:
     main_path = root / PRODUCTION_MAIN
     composition_path = root / PRODUCTION_COMPOSITION
     active_delivery_path = root / ACTIVE_DELIVERY_RUNTIME
+    recovery_path = root / PRODUCTION_RECOVERY_OWNER
+    operator_path = root / PRODUCTION_OPERATOR
     manifest_path = root / MANIFEST
     if not main_path.is_file():
         fail(f"missing production entrypoint: {PRODUCTION_MAIN}")
@@ -196,6 +245,9 @@ def validate(root: Path) -> None:
         fail(f"missing production composition: {PRODUCTION_COMPOSITION}")
     if composition_path.is_symlink():
         fail(f"production composition must not be a symlink: {PRODUCTION_COMPOSITION}")
+    for guarded in (recovery_path, operator_path):
+        if not guarded.is_file() or guarded.is_symlink():
+            fail(f"missing or unsafe Profile Bridge recovery owner: {guarded}")
     if not active_delivery_path.is_file():
         fail(f"missing active delivery runtime owner: {ACTIVE_DELIVERY_RUNTIME}")
     if active_delivery_path.is_symlink():
@@ -222,6 +274,15 @@ def validate(root: Path) -> None:
         if marker in composition:
             fail(f"shipping composition contains forbidden alternate/effect marker: {marker}")
 
+    recovery = recovery_path.read_text(encoding="utf-8").replace("\r\n", "\n")
+    for marker in REQUIRED_RECOVERY_OWNER_MARKERS:
+        if marker not in recovery:
+            fail(f"exact postcommit recovery owner marker missing: {marker}")
+    operator = operator_path.read_text(encoding="utf-8").replace("\r\n", "\n")
+    for marker in REQUIRED_OPERATOR_RECOVERY_MARKERS:
+        if marker not in operator:
+            fail(f"postcommit continuation guard missing: {marker}")
+
     active_delivery = active_delivery_path.read_text(encoding="utf-8").replace("\r\n", "\n")
     for marker in REQUIRED_ACTIVE_DELIVERY_MARKERS:
         if marker not in active_delivery:
@@ -231,10 +292,14 @@ def validate(root: Path) -> None:
             fail(f"active delivery runtime contains forbidden alternate/effect marker: {marker}")
 
     close_observe = composition.find(".observe_controlled_close(&session_id)")
-    mutating_close = composition.find(".close(now()?)")
-    save = composition.find(".save_retained_successor(")
-    if min(close_observe, mutating_close, save) < 0 or not close_observe < mutating_close < save:
-        fail("shipping controlled-close witness must precede the sole mutating close and canonical save")
+    mutating_close = composition.find(".close_with_durable_local_intent(&materialization_root, now()?)")
+    save = composition.find(".save_retained_successor_streaming(")
+    if (
+        min(close_observe, mutating_close, save) < 0
+        or not close_observe < mutating_close < save
+        or composition.count(".save_retained_successor_streaming(") != 2
+    ):
+        fail("shipping controlled-close witness must precede canonical streaming save and same-attempt retry")
 
     manifest = tomllib.loads(manifest_path.read_text(encoding="utf-8"))
     validate_binary_inventory(manifest)
@@ -310,15 +375,31 @@ def write_fixture(root: Path) -> None:
         "// ManagedCamouhostProcess::pair(\n"
         "// .close_observer()\n"
         "// ProfileBridgeOperator::new(\n"
-        "// .open_authoritative_with_runtime_health(\n"
+        "// .open_authoritative_with_runtime_health_and_pending_recovery(\n"
+        "// complete_active_exact_after_restart(\n"
+        "// resume_exact_successor_under_fresh_lease(\n"
+        "// resume_lone_local_unsynced_under_fresh_lease(\n"
+        "// confirm_retained_exact_retry_nonapplication(\n"
+        "// .reprove_retained_save_writer()\n"
         "// .observe_controlled_close(&session_id)\n"
-        "// .close(now()?)\n"
-        "// .save_retained_successor(\n"
+        "// .close_with_durable_local_intent(&materialization_root, now()?)\n"
+        "// .save_retained_successor_streaming(\n"
+        "// .save_retained_successor_streaming(\n"
         "// .runtime_timing()\n"
         "// .heartbeat(observed_at)\n"
         "// RuntimeDisplayMode::Headful\n"
         "// ShippingCompositionError::CommittedRecoveryRequired\n"
         "// Err(ShippingCompositionError::UnsupportedPlatform)\n",
+        encoding="utf-8",
+    )
+    recovery = root / PRODUCTION_RECOVERY_OWNER
+    recovery.write_text(
+        "".join(f"// {marker}\n" for marker in REQUIRED_RECOVERY_OWNER_MARKERS),
+        encoding="utf-8",
+    )
+    operator = root / PRODUCTION_OPERATOR
+    operator.write_text(
+        "".join(f"// {marker}\n" for marker in REQUIRED_OPERATOR_RECOVERY_MARKERS),
         encoding="utf-8",
     )
     active_delivery = root / ACTIVE_DELIVERY_RUNTIME
@@ -389,6 +470,10 @@ def self_test() -> None:
         safe_composition = composition.read_text(encoding="utf-8")
         active_delivery = root / ACTIVE_DELIVERY_RUNTIME
         safe_active_delivery = active_delivery.read_text(encoding="utf-8")
+        recovery = root / PRODUCTION_RECOVERY_OWNER
+        safe_recovery = recovery.read_text(encoding="utf-8")
+        operator = root / PRODUCTION_OPERATOR
+        safe_operator = operator.read_text(encoding="utf-8")
 
         main.write_text(
             safe_main + "use profile_bridge::operator_flow::ProfileBridgeOperator;\n",
@@ -506,11 +591,143 @@ def self_test() -> None:
         composition.write_text(safe_composition, encoding="utf-8")
 
         composition.write_text(
-            safe_composition.replace("// .open_authoritative_with_runtime_health(\n", "// .open(\n"),
+            safe_composition.replace(
+                "// .open_authoritative_with_runtime_health_and_pending_recovery(\n",
+                "// .open(\n",
+            ),
             encoding="utf-8",
         )
         expect_rejected(root, "shipping local-only open predecessor")
         composition.write_text(safe_composition, encoding="utf-8")
+
+        composition.write_text(
+            safe_composition.replace(
+                "// .open_authoritative_with_runtime_health_and_pending_recovery(\n",
+                "// .open_authoritative_with_runtime_health(\n",
+            ),
+            encoding="utf-8",
+        )
+        expect_rejected(root, "shipping launch skips exact pending-save observation")
+        composition.write_text(safe_composition, encoding="utf-8")
+
+        composition.write_text(
+            safe_composition.replace("// complete_active_exact_after_restart(\n", ""),
+            encoding="utf-8",
+        )
+        expect_rejected(root, "shipping launch does not invoke owned postcommit exact observation")
+        composition.write_text(safe_composition, encoding="utf-8")
+
+        composition.write_text(
+            safe_composition.replace(
+                "// resume_lone_local_unsynced_under_fresh_lease(\n",
+                "",
+            ),
+            encoding="utf-8",
+        )
+        expect_rejected(root, "missing lone LOCAL_UNSYNCED first-sealing path")
+        composition.write_text(safe_composition, encoding="utf-8")
+
+        composition.write_text(
+            safe_composition.replace(
+                "// resume_exact_successor_under_fresh_lease(\n",
+                "",
+            ),
+            encoding="utf-8",
+        )
+        expect_rejected(root, "missing exact sealed successor retry path")
+        composition.write_text(safe_composition, encoding="utf-8")
+
+        composition.write_text(
+            safe_composition.replace(
+                "// confirm_retained_exact_retry_nonapplication(\n", "",
+            ),
+            encoding="utf-8",
+        )
+        expect_rejected(root, "live retry bypasses D1 nonapplication")
+        composition.write_text(safe_composition, encoding="utf-8")
+
+        composition.write_text(
+            safe_composition.replace(
+                "// .reprove_retained_save_writer()\n", "",
+            ),
+            encoding="utf-8",
+        )
+        expect_rejected(root, "live retry bypasses DO current writer proof")
+        composition.write_text(safe_composition, encoding="utf-8")
+
+        recovery.write_text(
+            safe_recovery.replace(
+                "// persist_streaming_exact_save_attempt_from_lone_intent(\n",
+                "",
+            ),
+            encoding="utf-8",
+        )
+        expect_rejected(root, "missing durably published streamed first sealed checkpoint")
+        recovery.write_text(safe_recovery, encoding="utf-8")
+
+        recovery.write_text(
+            safe_recovery.replace("// recover_local_unsynced_native_clone(\n", ""),
+            encoding="utf-8",
+        )
+        expect_rejected(root, "recovered LOCAL_UNSYNCED loses verified native N+1 clone")
+        recovery.write_text(safe_recovery, encoding="utf-8")
+
+        recovery.write_text(
+            safe_recovery.replace("// verified.first_seal_under_current_lease(fresh_lease)\n", ""),
+            encoding="utf-8",
+        )
+        expect_rejected(root, "recovered streaming BPAT loses origin-fence verification")
+        recovery.write_text(safe_recovery, encoding="utf-8")
+
+        recovery.write_text(
+            safe_recovery.replace("// persist_committed_successor_binding(\n", ""),
+            encoding="utf-8",
+        )
+        expect_rejected(root, "local recovery cannot skip exact committed binding owner")
+        recovery.write_text(safe_recovery, encoding="utf-8")
+
+        recovery.write_text(
+            safe_recovery.replace("// retire_active_exact_attempt_after_restart(\n", ""),
+            encoding="utf-8",
+        )
+        expect_rejected(root, "local recovery cannot skip exact checkpoint retirement")
+        recovery.write_text(safe_recovery, encoding="utf-8")
+
+        operator.write_text(
+            safe_operator.replace(
+                "// if recovered != PendingSaveRecovery::ReadySelected\n", ""
+            ),
+            encoding="utf-8",
+        )
+        expect_rejected(root, "operator cannot bypass remaining pending-evidence guard")
+        operator.write_text(safe_operator, encoding="utf-8")
+
+        operator.write_text(
+            safe_operator.replace(
+                "// if recovered == PendingSaveRecovery::CommittedNewerRequiresClaim\n", ""
+            ),
+            encoding="utf-8",
+        )
+        expect_rejected(root, "operator cannot conflate committed N+1 with selected N")
+        operator.write_text(safe_operator, encoding="utf-8")
+
+        operator.write_text(
+            safe_operator.replace(
+                "// self.coordinator.close_without_browser_use(&lease)\n", ""
+            ),
+            encoding="utf-8",
+        )
+        expect_rejected(root, "operator cannot abandon a proven unused coordinator lease")
+        operator.write_text(safe_operator, encoding="utf-8")
+
+        operator.write_text(
+            safe_operator.replace(
+                "// browser_writer_locks_absent(&candidate)\n", ""
+            ),
+            encoding="utf-8",
+        )
+        expect_rejected(root, "operator cannot declare Clean with unknown successor Firefox writer")
+        operator.write_text(safe_operator, encoding="utf-8")
 
         composition.write_text(
             safe_composition.replace("// .observe_controlled_close(&session_id)\n", ""),
@@ -520,10 +737,29 @@ def self_test() -> None:
         composition.write_text(safe_composition, encoding="utf-8")
 
         composition.write_text(
-            safe_composition.replace("// .save_retained_successor(\n", ""),
+            safe_composition.replace(
+                "// .close_with_durable_local_intent(&materialization_root, now()?)\n", "",
+            ),
+            encoding="utf-8",
+        )
+        expect_rejected(root, "shipping save cannot bypass pre-cloud durable local intent")
+        composition.write_text(safe_composition, encoding="utf-8")
+
+        composition.write_text(
+            safe_composition.replace("// .save_retained_successor_streaming(\n", "", 1),
             encoding="utf-8",
         )
         expect_rejected(root, "shipping close without canonical successor save")
+        composition.write_text(safe_composition, encoding="utf-8")
+
+        composition.write_text(
+            safe_composition.replace(
+                "// .save_retained_successor_streaming(\n",
+                "// .save_retained_successor(\n",
+            ),
+            encoding="utf-8",
+        )
+        expect_rejected(root, "in-memory predecessor cannot replace streaming production save")
         composition.write_text(safe_composition, encoding="utf-8")
 
         composition.write_text(

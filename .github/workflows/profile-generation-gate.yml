@@ -29,6 +29,13 @@ jobs:
           EXPECTED_SOURCE_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
         run: python -c "import os, subprocess; actual = subprocess.check_output(['git', 'rev-parse', 'HEAD'], text=True).strip(); expected = os.environ['EXPECTED_SOURCE_SHA']; assert actual == expected, f'expected {expected}, got {actual}'"
 
+      # Build cache is never a substitute for exact-head tests or an
+      # independently validated platform/security gate outcome.
+      - name: Restore pinned Rust build cache
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6
+        with:
+          shared-key: profile-bridge-ci-v1
+
       - name: Show pinned toolchain
         run: rustup show active-toolchain
 
@@ -58,12 +65,14 @@ jobs:
           scripts/test-profile-generation-registry.py
           scripts/test-profile-generation-registry-edge-cases.py
           scripts/test-profile-generation-integrity-guards.py
+          scripts/test-k2-historical-predecessor-d1.py
 
       - name: Prove governed registry and activation
         run: |
           python scripts/test-profile-generation-registry.py
           python scripts/test-profile-generation-registry-edge-cases.py
           python scripts/test-profile-generation-integrity-guards.py
+          python scripts/test-k2-historical-predecessor-d1.py
 
       - name: Verify additive OpenAPI contract
         run: |

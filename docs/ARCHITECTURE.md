@@ -412,6 +412,27 @@ normal P2 server-authorized launch: the Bridge may reuse an exact local copy or 
 server-selected active verified generation, but it has no older-generation fallback or caller-selected
 reopen path.
 
+### 11.2 Local-first Windows crash resilience (accepted 2026-10-25)
+
+The baseline is the existing native Firefox profile/WAL/session recovery
+on a persistent local working directory. Cloud encrypted immutable
+generations, lease/fencing, and CAS are complementary remote coordination
+and backup, **not** a replacement for native local crash survival.
+Preserve unsynced working bytes and explicit recovery evidence across
+power loss, process failure and uncertain network/cloud saves. A
+transient failed heartbeat is not itself proof of revocation; an
+unproved lease must not be reused to publish remotely. Exact local
+restart requires fresh current access/single-writer authority and
+cannot erase a newer cloud branch or reuse a stale fence.
+
+The binding detailed lifecycle owner is
+[LOCAL_PROFILE_LIFECYCLE.md](LOCAL_PROFILE_LIFECYCLE.md), section 1.1.
+Prior 2F text above describes accepted source evidence, not an
+exception to the updated local-first product invariant. Current
+force-close-on-any-heartbeat-failure and 64 MiB full-RAM packaging
+remain *implementation gaps*, not target architecture. Provider/hosted
+staging and installed Windows acceptance are independent proofs.
+
 ## 12. Key Hierarchy
 
 ```text

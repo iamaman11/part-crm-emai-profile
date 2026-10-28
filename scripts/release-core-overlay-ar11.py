@@ -24,6 +24,7 @@ ACCOUNT_RE = re.compile(r"^[0-9a-f]{32}$")
 D1_RE = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$")
 AUDIENCE_RE = re.compile(r"^[A-Za-z0-9_-]{16,128}$")
 SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
+APPROVED_RUNTIME_INVENTORIES_RE = re.compile(r"^[0-9a-f]{64}(?:,[0-9a-f]{64})?$")
 RELEASE_SET_V3_RE = re.compile(r"^release-set-v3-sha256-[0-9a-f]{64}$")
 TARGET_AUTHORIZATION_VAR = "TARGET_AUTHORIZATION_OBSERVATION"
 TARGET_AUTHORIZATION_SCHEMA = "target-v1"
@@ -33,6 +34,7 @@ REQUIRED_CONTROL_FIELDS = {
     "custom_domain",
     "access_issuer",
     "access_audience",
+    "approved_runtime_inventories",
     "d1_database_name",
     "d1_database_id",
     "r2_bucket_name",
@@ -104,6 +106,11 @@ def control_manifest(document: dict[str, Any], environment: str) -> dict[str, st
         fail("control_plane.d1_database_id is not a D1 UUID")
     if AUDIENCE_RE.fullmatch(result["access_audience"]) is None:
         fail("control_plane.access_audience shape is invalid")
+    allowed = result["approved_runtime_inventories"]
+    if APPROVED_RUNTIME_INVENTORIES_RE.fullmatch(allowed) is None:
+        fail("control_plane.approved_runtime_inventories must be one or two exact lowercase SHA-256s")
+    if "," in allowed and allowed.split(",")[0] == allowed.split(",")[1]:
+        fail("control_plane.approved_runtime_inventories must not duplicate a runtime")
     issuer = urlparse(result["access_issuer"])
     if (
         issuer.scheme != "https"
@@ -188,6 +195,7 @@ def render(
         "${STAGING_CUSTOM_DOMAIN}": manifest["custom_domain"],
         "${STAGING_ACCESS_ISSUER}": manifest["access_issuer"],
         "${STAGING_ACCESS_AUDIENCE}": manifest["access_audience"],
+        "${STAGING_APPROVED_RUNTIME_INVENTORIES}": manifest["approved_runtime_inventories"],
         "${STAGING_INITIAL_OWNER_EMAIL}": manifest["initial_owner_email"],
         "${STAGING_D1_DATABASE_NAME}": manifest["d1_database_name"],
         "${STAGING_D1_DATABASE_ID}": manifest["d1_database_id"],
@@ -290,6 +298,7 @@ def self_test() -> None:
         "worker_name": "profile-staging", "account_id": "c" * 32,
         "custom_domain": "staging.example.invalid",
         "access_issuer": "https://team.cloudflareaccess.com", "access_audience": "d" * 32,
+        "approved_runtime_inventories": "a" * 64,
         "d1_database_name": "catalog-staging", "d1_database_id": "11111111-1111-1111-1111-111111111111",
         "r2_bucket_name": "profiles-staging", "integration_events_queue": "events-staging",
     }
@@ -314,6 +323,8 @@ def self_test() -> None:
                 observed = json.loads(output.read_text(encoding="utf-8"))
                 if observed["env"]["staging"]["vars"]["INITIAL_OWNER_EMAIL"] != (contact or ""):
                     fail("initial owner configuration was lost during canonical Core rendering")
+                if observed["env"]["staging"]["vars"]["PROFILE_GENERATION_APPROVED_RUNTIME_INVENTORIES"] != candidate["approved_runtime_inventories"]:
+                    fail("staging WORKING runtime pin was lost during the canonical no-rebuild Core rendering")
                 if set(observed["env"]) != {"staging"} or "build" in observed:
                     fail("setup configuration expanded the promotion target/build scope")
         finally:

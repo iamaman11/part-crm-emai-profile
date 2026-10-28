@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import json
+import re
 import sqlite3
 from pathlib import Path
 from typing import Callable
@@ -660,6 +661,160 @@ def test_direct_generation_mutations_remain_governed() -> None:
         connection.close()
 
 
+
+def _shipping_reopen_query(name: str) -> str:
+    """Load real D1 read SQL rather than duplicating an optimistic fixture."""
+    adapter = (
+        ROOT / "crates/cloudflare-adapters/src/d1_device_preconditions.rs"
+    ).read_text(encoding="utf-8")
+    match = re.search(
+        rf'const {re.escape(name)}: &str = r#"(.*?)"#;',
+        adapter,
+        flags=re.DOTALL,
+    )
+    if match is None:
+        raise AssertionError(f"missing shipping read owner: {name}")
+    statement = match.group(1).strip()
+    if not statement.startswith("SELECT"):
+        raise AssertionError(f"read owner must be SELECT-only: {name}")
+    return statement
+
+
+def _shipping_launch_admission_query() -> str:
+    """Load the genuine launch owner's device/grant admission D1 write SQL."""
+    adapter = (
+        ROOT / "crates/cloudflare-adapters/src/d1_device_authorization.rs"
+    ).read_text(encoding="utf-8")
+    match = re.search(
+        r'const ADMIT_PROFILE_DEVICE: &str = r#"(.*?)"#;',
+        adapter,
+        flags=re.DOTALL,
+    )
+    if match is None:
+        raise AssertionError("missing canonical launch grant admission owner")
+    statement = match.group(1).strip()
+    for marker in (
+        "INSERT INTO device_authorizations",
+        "generation.generation_id = profile.active_generation_id",
+        "binding.evidence_reference LIKE 'p256_spki_der:%'",
+        "member.status = 'ACTIVE'",
+        "binding.status = 'ACTIVE'",
+        "profile_grants",
+        "ON CONFLICT(tenant_id, device_id, profile_id, generation_id) DO NOTHING",
+    ):
+        if marker not in statement:
+            raise AssertionError(f"launch grant cannot omit {marker}")
+    return statement
+
+
+def test_committed_successor_has_exact_d1_cold_reopen_read_admission() -> None:
+    """Committed N+1 must pass real launch authorization before cold GET.
+
+    Executes the actual D1 read/launch-write SQL under real migrations, not
+    a synthetic INSERT for the generation grant. Coordinator fencing, R2
+    HEAD/signing and installed Windows B7 still require separate proof.
+    """
+    read_active = _shipping_reopen_query("LOAD_ACTIVE_GENERATION_OBJECT_REFERENCE")
+    read_admission = _shipping_reopen_query("EVALUATE_EXECUTION_PRECONDITIONS")
+    admit_device = _shipping_launch_admission_query()
+    conn = seed()
+    try:
+        before = tuple(
+            conn.execute(
+                "SELECT active_generation_id, version FROM browser_profiles "
+                "WHERE tenant_id = ? AND profile_id = ?",
+                (TENANT, PROFILE),
+            ).fetchone()
+        )
+        initial = conn.execute(read_active, (TENANT, PROFILE)).fetchone()
+        assert initial is not None and initial["generation_id"] == BASE
+
+        insert_device_commit(conn, command_values())
+        conn.commit()
+        active = conn.execute(read_active, (TENANT, PROFILE)).fetchone()
+        assert active is not None
+        assert active["generation_id"] == CANDIDATE
+        assert active["object_key"] == canonical_key(CANDIDATE)
+        assert active["metadata_digest"] == METADATA_DIGEST
+        assert active["container_digest"] == CONTAINER_DIGEST
+        assert conn.execute(read_active, ("tenant_foreign", PROFILE)).fetchone() is None
+
+        def admission(generation_id: str, device_id: str = DEVICE) -> tuple[int, int, int]:
+            values = (
+                TENANT, PROFILE, generation_id, TENANT, PROFILE, generation_id,
+                TENANT, device_id, PROFILE, generation_id,
+            )
+            row = conn.execute(read_admission, values).fetchone()
+            assert row is not None
+            result = tuple(int(v) for v in row)
+            assert len(result) == 3 and set(result).issubset({0, 1})
+            return result
+
+        # Upload/commit does not silently grant another capability. A separate
+        # per-generation device authorization is still required for cold GET.
+        assert admission(CANDIDATE) == (1, 1, 0)
+        assert admission(BASE) == (0, 1, 1)
+
+        # The previous fixture's direct INSERT missed the normal B7 launch
+        # owner completely. Use the exact production admission SQL, which
+        # must authorize CURRENT N+1 only under active membership, Profile
+        # grant and the authenticated P-256 actor/device binding.
+        # The seeded legacy binding is intentionally NOT a valid P-256 proof.
+        conn.execute(admit_device, (TENANT, OWNER, PROFILE, 120, DEVICE))
+        assert admission(CANDIDATE) == (1, 1, 0)
+        assert conn.execute(
+            "SELECT COUNT(*) FROM device_authorizations WHERE tenant_id = ? "
+            "AND profile_id = ? AND generation_id = ?",
+            (TENANT, PROFILE, CANDIDATE),
+        ).fetchone()[0] == 0
+
+        # The production binding owner provides this evidence after device
+        # connection. Do not fabricate an authorization row for the candidate.
+        conn.execute(
+            "UPDATE device_actor_bindings SET evidence_reference = ? "
+            "WHERE tenant_id = ? AND actor_id = ? AND device_id = ?",
+            ("p256_spki_der:verified_binding_fixture", TENANT, OWNER, DEVICE),
+        )
+        conn.execute(
+            admit_device,
+            (TENANT, OWNER, PROFILE, 120, "device_foreign_cold_reopen"),
+        )
+        assert admission(CANDIDATE, "device_foreign_cold_reopen") == (1, 1, 0)
+        assert admission(CANDIDATE) == (1, 1, 0)
+        conn.execute(admit_device, (TENANT, OWNER, PROFILE, 120, DEVICE))
+        conn.commit()
+        assert admission(CANDIDATE) == (1, 1, 1)
+        assert admission(CANDIDATE, "device_foreign_cold_reopen") == (1, 1, 0)
+        assert admission(BASE) == (0, 1, 1)
+
+        # Repeating launch admission is idempotent and must NEVER revive an
+        # explicitly revoked generation grant, even for the same device.
+        conn.execute(
+            "UPDATE device_authorizations SET status = 'REVOKED', version = 2, "
+            "updated_by_actor_id = ?, updated_at_ms = 130, revoked_at_ms = 130 "
+            "WHERE tenant_id = ? AND device_id = ? AND profile_id = ? AND generation_id = ?",
+            (OWNER, TENANT, DEVICE, PROFILE, CANDIDATE),
+        )
+        conn.execute(admit_device, (TENANT, OWNER, PROFILE, 140, DEVICE))
+        conn.commit()
+        assert admission(CANDIDATE) == (1, 1, 0)
+        assert admission(BASE) == (0, 1, 1)
+
+        current = conn.execute(read_active, (TENANT, PROFILE)).fetchone()
+        assert current is not None and current["generation_id"] == CANDIDATE
+        assert before != (
+            conn.execute(
+                "SELECT active_generation_id, version FROM browser_profiles "
+                "WHERE tenant_id = ? AND profile_id = ?",
+                (TENANT, PROFILE),
+            ).fetchone()
+        )
+        assert conn.execute("PRAGMA foreign_key_check").fetchall() == []
+        assert conn.execute("PRAGMA integrity_check").fetchone()[0] == "ok"
+    finally:
+        conn.close()
+
+
 def main() -> int:
     test_schema_is_metadata_only()
     test_exact_command_atomically_verifies_activates_and_succeeds_job()
@@ -670,6 +825,7 @@ def main() -> int:
     test_late_activation_failure_rolls_back_journal_candidate_and_job()
     test_late_job_terminalization_failure_rolls_back_activation_and_candidate()
     test_direct_generation_mutations_remain_governed()
+    test_committed_successor_has_exact_d1_cold_reopen_read_admission()
     print("Phase 2F device-generation atomic D1 commit invariants are valid.")
     return 0
 

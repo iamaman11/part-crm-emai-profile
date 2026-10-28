@@ -540,6 +540,109 @@ def build_current_fresh_zero_bootstrap_bytes(
     return document.encode("utf-8")
 
 
+
+# D1/wrangler impose a limit on a single SQL execution payload, distinct from
+# the SQLite schema limit. Keep immutable CURRENT baseline bytes for hashing
+# and audit; render bounded statement-complete chunks for provider execution.
+# Never split inside CREATE TRIGGER ... BEGIN ... END.
+MAX_BOOTSTRAP_PART_BYTES = 64 * 1024
+
+
+def bootstrap_statements(payload: bytes) -> list[bytes]:
+    document = payload.decode("utf-8")
+    pending = ""
+    statements: list[bytes] = []
+    for line in document.splitlines(keepends=True):
+        pending += line
+        if sqlite3.complete_statement(pending):
+            statements.append(pending.encode("utf-8"))
+            pending = ""
+    if pending.strip():
+        fail("CURRENT baseline contains an incomplete SQL statement")
+    if pending:
+        # Trailing whitespace belongs to the last chunk and is authenticated.
+        if not statements:
+            fail("CURRENT baseline contains no complete SQL statements")
+        statements[-1] += pending.encode("utf-8")
+    if not statements or b"".join(statements) != payload:
+        fail("CURRENT baseline statement framing changed canonical bytes")
+    return statements
+
+
+def bootstrap_parts(payload: bytes) -> list[bytes]:
+    chunks: list[bytes] = []
+    pending = b""
+    for statement in bootstrap_statements(payload):
+        if len(statement) > MAX_BOOTSTRAP_PART_BYTES:
+            fail("CURRENT baseline contains one oversized unsplittable SQL statement")
+        if pending and len(pending) + len(statement) > MAX_BOOTSTRAP_PART_BYTES:
+            chunks.append(pending)
+            pending = b""
+        pending += statement
+    if pending:
+        chunks.append(pending)
+    if not chunks or b"".join(chunks) != payload:
+        fail("CURRENT baseline chunks do not reproduce exact canonical bytes")
+    return chunks
+
+
+def write_bootstrap_parts(destination: Path, payload: bytes) -> list[Path]:
+    # A partial or substituted output must never be reused as provider input.
+    if destination.is_symlink() or destination.exists():
+        fail("CURRENT baseline chunk destination already exists")
+    destination.mkdir(parents=True)
+    chunks = bootstrap_parts(payload)
+    paths: list[Path] = []
+    manifest = {"schema_version": 1, "source_sha256": sha256_bytes(payload), "parts": []}
+    for index, chunk in enumerate(chunks, start=1):
+        name = f"part-{index:04d}.sql"
+        path = destination / name
+        path.write_bytes(chunk)
+        paths.append(path)
+        manifest["parts"].append({"name": name, "sha256": sha256_bytes(chunk), "bytes": len(chunk)})
+    (destination / "manifest.json").write_text(
+        json.dumps(manifest, sort_keys=True, separators=(",", ":")) + "\n",
+        encoding="utf-8",
+    )
+    verify_bootstrap_parts(destination, payload)
+    return paths
+
+
+def verify_bootstrap_parts(directory: Path, expected: bytes) -> list[Path]:
+    if directory.is_symlink() or not directory.is_dir():
+        fail("CURRENT baseline chunk directory is not a regular directory")
+    manifest_path = directory / "manifest.json"
+    if manifest_path.is_symlink() or not manifest_path.is_file():
+        fail("CURRENT baseline chunk manifest is missing or substituted")
+    try:
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    except (ValueError, OSError) as error:
+        raise BootstrapError("CURRENT baseline chunk manifest is invalid") from error
+    chunks = bootstrap_parts(expected)
+    if not isinstance(manifest, dict) or set(manifest) != {"schema_version", "source_sha256", "parts"}:
+        fail("CURRENT baseline chunk manifest schema drift")
+    if manifest["schema_version"] != 1 or manifest["source_sha256"] != sha256_bytes(expected):
+        fail("CURRENT baseline chunk source identity differs from canonical authority")
+    rows = manifest["parts"]
+    if not isinstance(rows, list) or len(rows) != len(chunks):
+        fail("CURRENT baseline chunk manifest count is incomplete")
+    names = {"manifest.json"}
+    paths: list[Path] = []
+    for index, (row, chunk) in enumerate(zip(rows, chunks, strict=True), start=1):
+        name = f"part-{index:04d}.sql"
+        if not isinstance(row, dict) or row != {
+            "name": name, "sha256": sha256_bytes(chunk), "bytes": len(chunk)
+        }:
+            fail("CURRENT baseline chunk manifest does not match deterministic partition")
+        path = directory / name
+        if path.is_symlink() or not path.is_file() or path.read_bytes() != chunk:
+            fail("CURRENT baseline part differs from typed immutable SQL")
+        paths.append(path)
+        names.add(name)
+    if {p.name for p in directory.iterdir()} != names:
+        fail("CURRENT baseline chunk directory contains an unexpected file")
+    return paths
+
 def prove_current_fresh_zero_convergence(
     projection: Any,
     repository_root: Path = ROOT,
@@ -611,6 +714,21 @@ def current_fresh_zero_self_test() -> None:
     projection = current_repository_projection()
     prove_current_fresh_zero_convergence(projection)
     payload = build_current_fresh_zero_bootstrap_bytes(projection)
+    with tempfile.TemporaryDirectory(prefix="cloudflare-d1-bootstrap-chunks-") as temporary:
+        output = Path(temporary) / "parts"
+        original = write_bootstrap_parts(output, payload)
+        if b"".join(path.read_bytes() for path in original) != payload:
+            fail("CURRENT baseline execution partition changed final schema bytes")
+        first = original[0]
+        untouched = first.read_bytes()
+        first.write_bytes(untouched + b"-- substituted")
+        expect_rejected(
+            "CURRENT baseline chunk substitution",
+            lambda: verify_bootstrap_parts(output, payload),
+        )
+        first.write_bytes(untouched)
+        if verify_bootstrap_parts(output, payload) != original:
+            fail("CURRENT baseline chunk restoration was not deterministic")
     if b"ALTER TABLE" in payload.upper() or b"DROP TABLE" in payload.upper():
         fail("CURRENT empty baseline still replays historical table transitions")
     prove_fk_corruption_detected()
@@ -792,9 +910,11 @@ def main() -> int:
 
     build = subparsers.add_parser("build")
     build.add_argument("--output", type=Path, default=DEFAULT_OUTPUT)
+    build.add_argument("--chunk-directory", type=Path, default=None)
 
     verify = subparsers.add_parser("verify")
     verify.add_argument("--file", type=Path, required=True)
+    verify.add_argument("--chunk-directory", type=Path, default=None)
 
     args = parser.parse_args()
     if args.command == "check":
@@ -807,6 +927,9 @@ def main() -> int:
         payload = build_current_fresh_zero_bootstrap_bytes(current_repository_projection())
         args.output.parent.mkdir(parents=True, exist_ok=True)
         args.output.write_bytes(payload)
+        if args.chunk_directory is not None:
+            parts = write_bootstrap_parts(args.chunk_directory, payload)
+            print(f"CURRENT provider-safe baseline chunks: count={len(parts)} max_bytes={MAX_BOOTSTRAP_PART_BYTES}")
         print(f"Built CURRENT empty-D1 baseline: path={args.output} bytes={len(payload)} sha256={sha256_bytes(payload)}")
         return 0
     if args.command == "verify":
@@ -814,6 +937,8 @@ def main() -> int:
         actual = args.file.read_bytes()
         if actual != expected:
             fail("bootstrap SQL differs from exact current migration authority")
+        if args.chunk_directory is not None:
+            verify_bootstrap_parts(args.chunk_directory, expected)
         print(f"Verified deterministic empty-D1 bootstrap sha256={sha256_bytes(actual)}.")
         return 0
     fail(f"unsupported command: {args.command}")

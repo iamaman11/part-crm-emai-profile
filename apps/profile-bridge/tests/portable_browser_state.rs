@@ -447,6 +447,12 @@ mod p3_fixture {
             operator.active_local_state(),
             Some(LocalGenerationState::InUse)
         );
+        // The installed controlled Close must durably pin the original
+        // LOCAL_UNSYNCED N+1 before the streaming upload starts. A plain
+        // synthetic close is not the Windows release Save entrypoint.
+        #[cfg(windows)]
+        operator.close_with_durable_local_intent(&root, UnixMillis::new(20))?;
+        #[cfg(not(windows))]
         operator.close(UnixMillis::new(20))?;
         assert_eq!(
             operator.pending_dirty_local_state(),
@@ -456,6 +462,17 @@ mod p3_fixture {
         let mut put = BackendPut {
             state: Rc::clone(&state),
         };
+        // Real installed Windows builds prove the shipping stream path. Linux
+        // integration compilation remains on the test-only predecessor: the
+        // production streaming operator method is intentionally Windows-only.
+        #[cfg(windows)]
+        let completion = operator.save_retained_successor_streaming(
+            &root,
+            transport.clone(),
+            &mut put,
+            UnixMillis::new(30),
+        )?;
+        #[cfg(not(windows))]
         let completion = operator.save_retained_successor(
             &root,
             transport.clone(),
@@ -468,7 +485,10 @@ mod p3_fixture {
 
         // Force the second launch to consume the exact committed encrypted object rather than any
         // locally retained successor workspace.
-        root.reject_generation_for_rematerialization(&tenant_id, &profile_id, &successor)?;
+        // This test exclusively owns a disposable local fixture. Shipping never
+        // discards an unresolved successor merely to force a fresh cloud read.
+        let disposable_successor = root.open_generation(&tenant_id, &profile_id, &successor)?;
+        std::fs::remove_dir_all(disposable_successor.path())?;
         assert!(
             root.open_generation(&tenant_id, &profile_id, &successor)
                 .is_err()
@@ -491,6 +511,13 @@ mod p3_fixture {
         );
 
         let events = state.borrow().events.clone();
+        #[cfg(windows)]
+        {
+            let retry = event_index(&events, "retry:nonapplied:")?;
+            let put = event_index(&events, "put:")?;
+            let commit = event_index(&events, "commit:")?;
+            assert!(retry < put && put < commit);
+        }
         let commit = event_index(&events, "commit:")?;
         let clean_release = event_index(&events, "coordinator:release:Clean")?;
         let capability = event_index(&events, "download-capability:")?;
@@ -502,9 +529,422 @@ mod p3_fixture {
         assert!(get < opening);
         assert!(events.iter().all(|event| !event.contains("device-job")));
 
-        operator.abort(UnixMillis::new(50))?;
+        // K2 integration fixture: move CURRENT to an actual second committed
+        // generation, retaining the previous immutable encrypted object.
+        // Never select the historical object from the live CURRENT pointer.
+        #[cfg(windows)]
+        operator.close_with_durable_local_intent(&root, UnixMillis::new(50))?;
+        #[cfg(not(windows))]
+        operator.close(UnixMillis::new(50))?;
+        #[cfg(windows)]
+        let next = operator.save_retained_successor_streaming(
+            &root,
+            transport.clone(),
+            &mut put,
+            UnixMillis::new(60),
+        )?;
+        #[cfg(not(windows))]
+        let next = operator.save_retained_successor(
+            &root,
+            transport.clone(),
+            &mut put,
+            UnixMillis::new(60),
+        )?;
+        assert!(next.is_saved());
+        let current = next.committed().generation_id().clone();
+        assert_ne!(current, successor);
+        // CURRENT is encrypted with the rotated key. The previous version
+        // must still decrypt the historical object and launch Camoufox.
+        {
+            let backend = state.borrow();
+            let latest = backend
+                .object
+                .as_ref()
+                .ok_or("rotated current encrypted object missing")?;
+            let metadata = inspect_generation_metadata_prelude(latest)?;
+            assert_eq!(metadata.metadata().key_id().as_str(), ROTATED_ROOT_KEY_ID);
+        }
+        let (historical_request, historical_container) = {
+            let backend = state.borrow();
+            assert_eq!(backend.active_generation, current);
+            let (request, bytes) = backend
+                .retained_object
+                .as_ref()
+                .ok_or("the previous committed immutable object was not retained")?;
+            assert_eq!(request.generation_id(), successor.as_str());
+            (request.clone(), bytes.clone())
+        };
+        assert_eq!(
+            historical_request.object_key(),
+            canonical_generation_object_key(&tenant_id, &profile_id, &successor)
+        );
+        let historical_metadata = inspect_generation_metadata_prelude(&historical_container)?;
+        assert_eq!(
+            historical_metadata.metadata().key_id().as_str(),
+            ROOT_KEY_ID
+        );
+        // Fresh CURRENT coordinator authority, immutable old R2 bytes and a
+        // physically empty independent workspace. Unlike the old synthetic
+        // acceptance this NEVER promotes the historical generation to CURRENT.
+        let historical_path = std::env::temp_dir().join(format!(
+            "profile-bridge-historical-camoufox-{}-{counter}",
+            std::process::id()
+        ));
+        let _historical_cleanup = CleanupRoot(historical_path.clone());
+        let historical_root = MaterializationRoot::open_or_create(historical_path)?;
+        assert!(
+            historical_root
+                .open_generation(&tenant_id, &profile_id, &successor)
+                .is_err()
+        );
+        let fresh_claim =
+            ClaimUri::parse("profilebridge://claim/claim_s0_historical_lkg_cold_000003")?;
+        let historical_slot = crate::camouhost_process::RuntimeBindingSlot::new();
+        let historical_preflight =
+            crate::shipping_preflight::ShippingBrowserLaunchPreflight::new(historical_slot.clone());
+        let historical_config = crate::camouhost_process::ManagedCamouhostConfig::new(
+            paths.python.clone(),
+            paths.runtime_root.clone(),
+            paths.display_mode,
+            Some(origin.url()),
+            None,
+        )?;
+        let (historical_process, historical_camouhost) =
+            crate::camouhost_process::ManagedCamouhostProcess::pair(
+                historical_config,
+                historical_slot,
+            );
+        let mut historical_operator = ProfileBridgeOperator::new(
+            FakeDeviceIdentity::new(DeviceId::parse(DEVICE)?),
+            FakeDeviceKeyStore::default(),
+            DeviceAuthentication,
+            ControlPlaneEnrollment::new(transport.clone()),
+            ControlPlaneCoordinator::new(transport.clone()),
+            TestRuntimeBundle {
+                bundle: approved_real_bundle(&paths)?,
+            },
+            historical_preflight,
+            historical_process,
+            historical_camouhost,
+        );
+        let mut historical_download = VerifiedGenerationObjectDownloader::new(BackendGet {
+            state: Rc::clone(&state),
+        });
+        let restored = historical_operator.probe_verified_predecessor_once(
+            &fresh_claim,
+            &root,
+            &historical_root,
+            &mut historical_download,
+            UnixMillis::new(70),
+            &mut || origin.expect("verify", 3).map_err(|_| ()),
+        )?;
+        assert_eq!(restored.predecessor_generation_id(), &successor);
+        assert_eq!(restored.current_generation_id(), &current);
+        assert_eq!(restored.tenant_id(), &tenant_id);
+        assert_eq!(restored.profile_id(), &profile_id);
+        assert_eq!(
+            restored.runtime_inventory_sha256(),
+            approved_real_bundle(&paths)?
+                .manifest()
+                .inventory_sha256()
+                .as_str()
+        );
+        assert_eq!(state.borrow().active_generation, current);
+        let restored_workspace = historical_root.open_generation(
+            &tenant_id,
+            &profile_id,
+            restored.predecessor_generation_id(),
+        )?;
+        let historical_binding = crate::browser_execution::load_materialization_binding(
+            &restored_workspace,
+            &tenant_id,
+            &profile_id,
+            restored.predecessor_generation_id(),
+        )?;
+        assert_eq!(
+            restored.source_container_sha256(),
+            historical_binding.source_container_sha256()
+        );
+        let redacted = format!("{restored:?}");
+        for private in [
+            tenant_id.as_str(),
+            profile_id.as_str(),
+            current.as_str(),
+            successor.as_str(),
+            restored.source_container_sha256(),
+            restored.runtime_inventory_sha256(),
+        ] {
+            assert!(!redacted.contains(private));
+        }
+        assert!(redacted.contains("authorization: \"NONE\""));
+        assert_eq!(
+            restored.materialized_inventory_digest(),
+            historical_binding.materialized_inventory_digest()
+        );
+        assert_eq!(
+            historical_binding.browser_identity(),
+            base_binding.browser_identity()
+        );
+        let original_current = root.open_generation(&tenant_id, &profile_id, &current)?;
+        assert!(
+            !original_current
+                .path()
+                .join(".profile-platform.lock")
+                .exists()
+        );
+        {
+            let state_ref = state.borrow();
+            let events = &state_ref.events;
+            assert!(
+                events
+                    .iter()
+                    .any(|e| e.starts_with("historical-download-capability:"))
+            );
+            assert!(events.iter().any(|e| e.starts_with("historical-get:")));
+            assert_eq!(
+                events
+                    .iter()
+                    .filter(|e| e.starts_with("historical-download-capability:"))
+                    .count(),
+                2,
+                "historical R2 permission must be revalidated after the real browser has stopped"
+            );
+            assert_eq!(
+                events
+                    .iter()
+                    .filter(|e| e.starts_with("historical-opening-material:"))
+                    .count(),
+                2,
+                "old root must remain derivable after the real historical Camoufox closes"
+            );
+            assert_eq!(
+                events
+                    .iter()
+                    .filter(|e| e.starts_with("historical-working-proof:"))
+                    .count(),
+                1,
+                "D1 receipt may be requested only after verified real browser stop"
+            );
+            assert_eq!(
+                state_ref.historical_working_proof.as_deref(),
+                Some(successor.as_str())
+            );
+            assert!(!events.iter().any(|e| e.contains("historical-commit")));
+            assert!(
+                events.iter().any(|e| e == "coordinator:release:Clean"),
+                "the existing coordinator must release CURRENT cleanly only after verified historical stop"
+            );
+        }
+
+        // Subsequent negative probes hold a NEW genuine CURRENT lease.
+        // The completed historical success never keeps a second writer.
+        use crate::operator_flow::EnrollmentPort as _;
+        use application_ports::ProfileCoordinatorPort as _;
+        let negative_claim =
+            ClaimUri::parse("profilebridge://claim/claim_s0_historical_failure_000004")?;
+        let probe_device_id = DeviceId::parse(DEVICE)?;
+        let mut enrollment = ControlPlaneEnrollment::new(transport.clone());
+        let admitted =
+            enrollment.redeem_claim(&negative_claim, &probe_device_id, UnixMillis::new(81))?;
+        assert_eq!(admitted.generation_id(), &current);
+        let mut historical_control = ControlPlaneCoordinator::new(transport.clone());
+        let lease = historical_control.claim_launch_intent(
+            admitted.actor(),
+            admitted.profile_id(),
+            &probe_device_id,
+            admitted.launch_intent_id(),
+        )?;
+        assert_eq!(lease.profile_id(), &profile_id);
+        assert_eq!(lease.device_id(), &probe_device_id);
+        let runtime = approved_real_bundle(&paths)?;
+
+        // A *real* historical Camoufox launch cannot certify WORKING if
+        // the authoritative D1 predecessor/current fence changes while the
+        // browser is running. Reject the second, post-close server read.
+        state.borrow_mut().historical_capability_reads = 0;
+        state.borrow_mut().historical_recheck_rejected = true;
+        let stale_path = std::env::temp_dir().join(format!(
+            "profile-bridge-stale-historical-recheck-{}-{counter}",
+            std::process::id()
+        ));
+        let _stale_cleanup = CleanupRoot(stale_path.clone());
+        let stale_root = MaterializationRoot::open_or_create(stale_path)?;
+        let stale_slot = crate::camouhost_process::RuntimeBindingSlot::new();
+        let mut stale_preflight =
+            crate::shipping_preflight::ShippingBrowserLaunchPreflight::new(stale_slot.clone());
+        let stale_config = crate::camouhost_process::ManagedCamouhostConfig::new(
+            paths.python.clone(),
+            paths.runtime_root.clone(),
+            paths.display_mode,
+            Some(origin.url()),
+            None,
+        )?;
+        let (mut stale_process, mut stale_camouhost) =
+            crate::camouhost_process::ManagedCamouhostProcess::pair(stale_config, stale_slot);
+        let mut stale_downloader = VerifiedGenerationObjectDownloader::new(BackendGet {
+            state: Rc::clone(&state),
+        });
+        let stale = crate::authoritative_generation::cold_launch_verified_predecessor_once(
+            &root,
+            &stale_root,
+            &current,
+            &lease,
+            &runtime,
+            &mut historical_control,
+            &mut stale_downloader,
+            &mut stale_preflight,
+            &mut stale_process,
+            &mut stale_camouhost,
+            &mut || origin.expect("verify", 4).map_err(|_| ()),
+        );
+        assert!(matches!(
+            stale,
+            Err(
+                crate::authoritative_generation::HistoricalColdProbeError::PostLaunchAuthorityUnconfirmed
+            )
+        ));
+        assert_eq!(state.borrow().historical_capability_reads, 2);
+        assert_eq!(state.borrow().active_generation, current);
+        assert!(
+            !original_current
+                .path()
+                .join(".profile-platform.lock")
+                .exists()
+        );
+        state.borrow_mut().historical_capability_reads = 0;
+        state.borrow_mut().historical_recheck_rejected = false;
+
+        // Even a correct real Camoufox cold launch is NOT a durable LKG if
+        // the old decryption root disappears before its post-close proof.
+        // This checks the existing opening-material owner, not a new SM.
+        let lost_after_launch_path = std::env::temp_dir().join(format!(
+            "profile-bridge-old-key-revoked-after-launch-{}-{counter}",
+            std::process::id()
+        ));
+        let _lost_cleanup = CleanupRoot(lost_after_launch_path.clone());
+        let lost_root = MaterializationRoot::open_or_create(lost_after_launch_path)?;
+        let lost_slot = crate::camouhost_process::RuntimeBindingSlot::new();
+        let mut lost_preflight =
+            crate::shipping_preflight::ShippingBrowserLaunchPreflight::new(lost_slot.clone());
+        let lost_config = crate::camouhost_process::ManagedCamouhostConfig::new(
+            paths.python.clone(),
+            paths.runtime_root.clone(),
+            paths.display_mode,
+            Some(origin.url()),
+            None,
+        )?;
+        let (mut lost_process, mut lost_camouhost) =
+            crate::camouhost_process::ManagedCamouhostProcess::pair(lost_config, lost_slot);
+        let mut lost_downloader = VerifiedGenerationObjectDownloader::new(BackendGet {
+            state: Rc::clone(&state),
+        });
+        let denied = crate::authoritative_generation::cold_launch_verified_predecessor_once(
+            &root,
+            &lost_root,
+            &current,
+            &lease,
+            &runtime,
+            &mut historical_control,
+            &mut lost_downloader,
+            &mut lost_preflight,
+            &mut lost_process,
+            &mut lost_camouhost,
+            &mut || {
+                origin.expect("verify", 5).map_err(|_| ())?;
+                state.borrow_mut().historical_root_available = false;
+                Ok(())
+            },
+        );
+        assert!(matches!(
+            denied,
+            Err(
+                crate::authoritative_generation::HistoricalColdProbeError::PostLaunchAuthorityUnconfirmed
+            )
+        ));
+        assert_eq!(state.borrow().active_generation, current);
+        assert_eq!(
+            state.borrow().coordinator_status,
+            CoordinatorStatusDto::Active
+        );
+        assert!(
+            !original_current
+                .path()
+                .join(".profile-platform.lock")
+                .exists()
+        );
+        // On an uncertain proof, the disposable historical workspace is
+        // retained; neither a missing old key nor the new check grants prune.
+        assert!(
+            lost_root
+                .open_generation(&tenant_id, &profile_id, &successor)
+                .is_ok()
+        );
+        state.borrow_mut().historical_root_available = true;
+
+        // Negative admission against the SAME unchanged CURRENT pointer and
+        // coordinator: missing original root key must block before any browser
+        // process is spawned, and cannot overwrite the proven prior cold copy.
+        state.borrow_mut().historical_root_available = false;
+        let missing_key_path = std::env::temp_dir().join(format!(
+            "profile-bridge-missing-old-root-{}-{counter}",
+            std::process::id()
+        ));
+        let _missing_key_cleanup = CleanupRoot(missing_key_path.clone());
+        let missing_key_root = MaterializationRoot::open_or_create(missing_key_path)?;
+        let missing_slot = crate::camouhost_process::RuntimeBindingSlot::new();
+        let mut missing_preflight =
+            crate::shipping_preflight::ShippingBrowserLaunchPreflight::new(missing_slot.clone());
+        let missing_config = crate::camouhost_process::ManagedCamouhostConfig::new(
+            paths.python.clone(),
+            paths.runtime_root.clone(),
+            paths.display_mode,
+            Some(origin.url()),
+            None,
+        )?;
+        let (mut missing_process, mut missing_camouhost) =
+            crate::camouhost_process::ManagedCamouhostProcess::pair(missing_config, missing_slot);
+        let mut missing_download = VerifiedGenerationObjectDownloader::new(BackendGet {
+            state: Rc::clone(&state),
+        });
+        let failure = crate::authoritative_generation::cold_launch_verified_predecessor_once(
+            &root,
+            &missing_key_root,
+            &current,
+            &lease,
+            &runtime,
+            &mut historical_control,
+            &mut missing_download,
+            &mut missing_preflight,
+            &mut missing_process,
+            &mut missing_camouhost,
+            &mut || Err(()),
+        );
+        assert!(matches!(
+            failure,
+            Err(crate::authoritative_generation::HistoricalColdProbeError::Materialization(_))
+        ));
+        assert!(
+            missing_key_root
+                .open_generation(&tenant_id, &profile_id, &successor)
+                .is_err()
+        );
+        assert_eq!(state.borrow().active_generation, current);
+        assert!(
+            !original_current
+                .path()
+                .join(".profile-platform.lock")
+                .exists()
+        );
+        assert_eq!(
+            fs::read(restored_workspace.path().join("prefs.js"))?,
+            b"portable-browser-state"
+        );
+        state.borrow_mut().historical_root_available = true;
+        // No fake successor lease was minted. The original CURRENT lease is
+        // released through its canonical coordinator owner.
+        historical_control.close_lease(&lease)?;
         eprintln!(
-            "S0_REAL_PORTABLE_BROWSER_STATE=PASSED;MANAGED_PROCESS=1;MANAGED_IPC=1;COOKIE=1;LOCAL_STORAGE=1;INDEXED_DB=1;AUTHORITATIVE_RESTORE=1;IDENTITY_REUSED=1"
+            "S0_REAL_PORTABLE_BROWSER_STATE=PASSED;STREAMING_BPAT=1;MANAGED_PROCESS=1;MANAGED_IPC=1;COOKIE=1;LOCAL_STORAGE=1;INDEXED_DB=1;AUTHORITATIVE_RESTORE=1;IDENTITY_REUSED=1;HISTORICAL_NONCURRENT_COLD_CAMOUFOX=1;HISTORICAL_OLD_KEY=1;HISTORICAL_MISSING_OLD_KEY_BLOCKED=1;HISTORICAL_CURRENT_POINTER_UNCHANGED=1;HISTORICAL_POST_LAUNCH_FENCE_RECHECK_BLOCKED=1;LIVE_LKG_CERTIFICATE=0"
         );
         Ok(())
     }

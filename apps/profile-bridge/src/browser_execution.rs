@@ -10,8 +10,11 @@ use std::collections::BTreeMap;
 use std::fs::{self, OpenOptions};
 use std::io::Write;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
 
 const MATERIALIZATION_SCHEMA: &str = "profile-platform-materialization-v2";
+const EXACT_TEXT_STAGE_ATTEMPTS: usize = 16;
+static EXACT_TEXT_STAGE_SEQUENCE: AtomicU64 = AtomicU64::new(1);
 const BRIDGE_LOCK_FILE: &str = ".profile-platform.lock";
 const BRIDGE_LOCK_SCHEMA: &str = "profile-platform-bridge-lock-v1";
 const FIREFOX_PARENT_LOCK_FILE: &str = ".parentlock";
@@ -126,6 +129,47 @@ pub fn restore_materialization_binding_after_authoritative_open(
     .map_err(map_execution_error)?;
     persist_materialization_binding(workspace, &binding)?;
     Ok(binding)
+}
+
+/// Publish host-local readiness for a successor only after the exact sealed object was
+/// verified and committed by the existing save owner. The generation-owned identity must
+/// already be present and canonical: unlike initial materialization, this path must never
+/// synthesize or replace browser data after the authoritative commit.
+pub(crate) fn persist_committed_successor_binding(
+    workspace: &GenerationWorkspace,
+    tenant_id: &TenantId,
+    profile_id: &ProfileId,
+    generation_id: &GenerationId,
+    committed_container_sha256: &str,
+) -> Result<(), BrowserLaunchBlocker> {
+    if workspace.tenant_id() != tenant_id
+        || workspace.profile_id() != profile_id
+        || workspace.generation_id() != generation_id
+    {
+        return Err(BrowserLaunchBlocker::MaterializationStale);
+    }
+    let identity_record = read_regular_file(&browser_identity_record_path(workspace))?;
+    let identity = BrowserIdentityManifest::from_canonical_record(&identity_record)
+        .map_err(map_execution_error)?;
+    if identity.to_canonical_record() != identity_record {
+        return Err(BrowserLaunchBlocker::InvalidMaterializationEvidence);
+    }
+    let binding = MaterializationBinding::new(
+        tenant_id.clone(),
+        profile_id.clone(),
+        generation_id.clone(),
+        committed_container_sha256,
+        workspace.materialization_inventory_digest()?,
+        identity,
+    )
+    .map_err(map_execution_error)?;
+    // Existing create-new/idempotent-exact sidecar owner rejects a conflicting binding.
+    // If writing fails, no locally ready outcome may be reported by the save caller.
+    persist_materialization_binding(workspace, &binding)?;
+    if load_materialization_binding(workspace, tenant_id, profile_id, generation_id)? != binding {
+        return Err(BrowserLaunchBlocker::MaterializationStale);
+    }
+    Ok(())
 }
 
 pub fn evaluate_browser_launch(
@@ -293,24 +337,81 @@ fn required<'a>(
         .ok_or(BrowserLaunchBlocker::InvalidMaterializationEvidence)
 }
 
-fn persist_exact_text(path: &Path, content: &str) -> Result<(), BrowserLaunchBlocker> {
-    match OpenOptions::new().write(true).create_new(true).open(path) {
-        Ok(mut file) => {
-            file.write_all(content.as_bytes())
-                .map_err(LocalProfileError::from)?;
-            file.sync_all().map_err(LocalProfileError::from)?;
-            Ok(())
-        }
-        Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
-            let existing = read_regular_file(path)?;
-            if existing == content {
+/// Publish immutable local readiness only after the complete record has been synced.
+/// Direct create-new on the canonical name could expose a torn sidecar after power loss;
+/// a retry would then see AlreadyExists and remain blocked with no usable evidence.
+/// A same-volume hard link is no-replace and never overwrites foreign/dirty evidence.
+fn persist_exact_text(canonical_path: &Path, content: &str) -> Result<(), BrowserLaunchBlocker> {
+    match fs::symlink_metadata(canonical_path) {
+        Ok(_) => {
+            return if read_regular_file(canonical_path)? == content {
                 Ok(())
             } else {
                 Err(BrowserLaunchBlocker::MaterializationStale)
-            }
+            };
         }
-        Err(error) => Err(LocalProfileError::from(error).into()),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+        Err(error) => return Err(LocalProfileError::from(error).into()),
     }
+    let parent = canonical_path
+        .parent()
+        .ok_or(BrowserLaunchBlocker::InvalidMaterializationEvidence)?;
+    let file_name = canonical_path
+        .file_name()
+        .and_then(|value| value.to_str())
+        .ok_or(BrowserLaunchBlocker::InvalidMaterializationEvidence)?;
+    // Browser identity is part of the encrypted workspace inventory. A crash before
+    // publication must not leave its incomplete staging text inside user-data snapshots.
+    // Both destinations have the same scoped profile directory as an existing owner.
+    let staging_parent = if file_name == BROWSER_IDENTITY_RECORD_FILE {
+        parent
+            .parent()
+            .ok_or(BrowserLaunchBlocker::InvalidMaterializationEvidence)?
+    } else {
+        parent
+    };
+    for _ in 0..EXACT_TEXT_STAGE_ATTEMPTS {
+        let sequence = EXACT_TEXT_STAGE_SEQUENCE.fetch_add(1, Ordering::Relaxed);
+        let staging = staging_parent.join(format!(
+            ".{file_name}.pending-{}-{sequence}",
+            std::process::id()
+        ));
+        let mut file = match OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&staging)
+        {
+            Ok(file) => file,
+            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => continue,
+            Err(error) => return Err(LocalProfileError::from(error).into()),
+        };
+        let write_result = file
+            .write_all(content.as_bytes())
+            .and_then(|()| file.sync_all());
+        drop(file);
+        if let Err(error) = write_result {
+            // This name belongs to this exact create-new attempt. Never touch the target.
+            let _ = fs::remove_file(&staging);
+            return Err(LocalProfileError::from(error).into());
+        }
+        let published = fs::hard_link(&staging, canonical_path);
+        // The hard link, once created, owns the complete fsynced bytes. Failure to
+        // remove this exact staging name is a cleanup failure, not permission to
+        // silently declare local readiness and accumulate unbounded staged files.
+        fs::remove_file(&staging).map_err(LocalProfileError::from)?;
+        match published {
+            Ok(()) => return Ok(()),
+            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
+                return if read_regular_file(canonical_path)? == content {
+                    Ok(())
+                } else {
+                    Err(BrowserLaunchBlocker::MaterializationStale)
+                };
+            }
+            Err(error) => return Err(LocalProfileError::from(error).into()),
+        }
+    }
+    Err(BrowserLaunchBlocker::InvalidMaterializationEvidence)
 }
 
 fn sha256_hex(content: &[u8]) -> String {
@@ -429,7 +530,8 @@ fn map_execution_error(_error: BrowserExecutionError) -> BrowserLaunchBlocker {
 mod tests {
     use super::{
         BROWSER_IDENTITY_RECORD_FILE, BrowserLaunchBlocker, evaluate_browser_launch,
-        load_materialization_binding, persist_materialization_binding,
+        load_materialization_binding, persist_browser_identity,
+        persist_committed_successor_binding, persist_materialization_binding,
     };
     use crate::local_profile::{BridgeWorkspaceLock, MaterializationRoot};
     use crate::test_support::remove_test_root;
@@ -512,6 +614,125 @@ mod tests {
             5617,
             route,
         )?)
+    }
+
+    #[test]
+    fn atomic_exact_text_publication_never_exposes_partial_canonical_evidence()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let root_path = root_path("atomic-exact-text")?;
+        let root = MaterializationRoot::open_or_create(&root_path)?;
+        let tenant = TenantId::parse("tenant_01JATOMICTEXT")?;
+        let profile = ProfileId::parse("profile_01JATOMICTEXT")?;
+        let generation = GenerationId::parse("generation_01JATOMICTEXT")?;
+        let workspace = root.create_generation(&tenant, &profile, &generation)?;
+        let canonical = workspace.path().join(BROWSER_IDENTITY_RECORD_FILE);
+        let profile_directory = workspace
+            .path()
+            .parent()
+            .ok_or("missing profile directory")?;
+        let partial = profile_directory.join("..profile-browser-identity-v1.pending-interrupted");
+        fs::write(&partial, b"truncated-record")?;
+        assert!(
+            !workspace
+                .inventory()?
+                .entries()
+                .iter()
+                .any(|entry| { entry.relative_path().contains(".pending-") })
+        );
+        // Staging garbage is not allowed to impersonate the canonical record.
+        assert!(!canonical.exists());
+        persist_browser_identity(&workspace, &identity()?)?;
+        assert_eq!(
+            fs::read_to_string(&canonical)?,
+            identity()?.to_canonical_record()
+        );
+        persist_browser_identity(&workspace, &identity()?)?;
+        let canonical_before = fs::read(&canonical)?;
+        fs::write(&canonical, b"corrupt-existing-evidence")?;
+        assert_eq!(
+            persist_browser_identity(&workspace, &identity()?),
+            Err(BrowserLaunchBlocker::MaterializationStale)
+        );
+        assert_eq!(fs::read(&canonical)?, b"corrupt-existing-evidence");
+        assert_ne!(canonical_before, fs::read(&canonical)?);
+        // No remaining .pending from a successful owned publish. A foreign
+        // abandoned attempt is not deleted without an ownership witness.
+        let files = fs::read_dir(profile_directory)?
+            .map(|item| item.map(|item| item.file_name().to_string_lossy().to_string()))
+            .collect::<Result<Vec<_>, _>>()?;
+        assert_eq!(
+            files
+                .iter()
+                .filter(|name| name.starts_with("..profile-browser-identity-v1.pending-"))
+                .count(),
+            1
+        );
+        assert!(partial.exists());
+        remove_test_root(&root_path)?;
+        Ok(())
+    }
+
+    #[test]
+    fn committed_successor_binding_requires_original_identity_and_rejects_conflicting_rewrite()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let root_path = root_path("committed-binding-fail-closed")?;
+        let root = MaterializationRoot::open_or_create(&root_path)?;
+        let tenant = TenantId::parse("tenant_01JCOMMITTEDBIND")?;
+        let profile = ProfileId::parse("profile_01JCOMMITTEDBIND")?;
+        let generation = GenerationId::parse("generation_01JCOMMITTEDBIND")?;
+        let workspace = root.create_generation(&tenant, &profile, &generation)?;
+        let prefs = workspace.path().join("prefs.js");
+        fs::write(&prefs, b"browser-retained-bytes")?;
+
+        // A copied directory without the actual generation-owned identity is not ready.
+        assert!(
+            persist_committed_successor_binding(
+                &workspace,
+                &tenant,
+                &profile,
+                &generation,
+                &"a".repeat(64),
+            )
+            .is_err()
+        );
+        assert_eq!(fs::read(&prefs)?, b"browser-retained-bytes");
+        assert!(load_materialization_binding(&workspace, &tenant, &profile, &generation).is_err());
+
+        persist_browser_identity(&workspace, &identity()?)?;
+        persist_committed_successor_binding(
+            &workspace,
+            &tenant,
+            &profile,
+            &generation,
+            &"a".repeat(64),
+        )?;
+        let original = load_materialization_binding(&workspace, &tenant, &profile, &generation)?;
+        assert_eq!(original.source_container_sha256(), "a".repeat(64));
+        // Exact idempotent replay is safe; different immutable object identity cannot rewrite it.
+        persist_committed_successor_binding(
+            &workspace,
+            &tenant,
+            &profile,
+            &generation,
+            &"a".repeat(64),
+        )?;
+        assert_eq!(
+            persist_committed_successor_binding(
+                &workspace,
+                &tenant,
+                &profile,
+                &generation,
+                &"b".repeat(64),
+            ),
+            Err(BrowserLaunchBlocker::MaterializationStale)
+        );
+        assert_eq!(
+            load_materialization_binding(&workspace, &tenant, &profile, &generation)?,
+            original
+        );
+        assert_eq!(fs::read(&prefs)?, b"browser-retained-bytes");
+        remove_test_root(&root_path)?;
+        Ok(())
     }
 
     #[test]

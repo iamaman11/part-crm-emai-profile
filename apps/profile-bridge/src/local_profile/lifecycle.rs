@@ -77,6 +77,25 @@ impl LocalGenerationRecord {
         self.locked
     }
 
+    /// Reconstruct only the ephemeral in-memory DirtyLocal lifecycle after
+    /// native browser quiescence, verified original intent and fresh exclusive
+    /// admission. It neither restores an expired lease nor mutates disk state.
+    #[cfg(any(windows, test))]
+    pub(crate) fn from_verified_unsynced_close(
+        generation_id: GenerationId,
+        bytes: u64,
+        observed_at: UnixMillis,
+    ) -> Self {
+        Self {
+            generation_id,
+            state: LocalGenerationState::DirtyLocal,
+            bytes,
+            last_activity_at: observed_at,
+            session_started_at: None,
+            locked: true,
+        }
+    }
+
     pub fn set_locked(&mut self, locked: bool) -> Result<(), LocalProfileError> {
         if self.state == LocalGenerationState::Evicted && locked {
             return Err(LocalProfileError::InvalidTransition);
@@ -313,38 +332,17 @@ impl QuotaPolicy {
                 .ok_or(LocalProfileError::InventorySizeOverflow)?;
         }
         let bytes_to_reclaim = total_bytes.saturating_sub(self.maximum_bytes);
-        let mut eligible = generations
-            .iter()
-            .filter(|generation| {
-                matches!(
-                    generation.state,
-                    LocalGenerationState::SyncedEvictable
-                        | LocalGenerationState::SupersededEvictable
-                ) && !generation.locked
-            })
-            .collect::<Vec<_>>();
-        eligible.sort_by(|left, right| {
-            left.last_activity_at
-                .cmp(&right.last_activity_at)
-                .then_with(|| left.generation_id.cmp(&right.generation_id))
-        });
-
-        let mut reclaimable_bytes = 0_u64;
-        let mut candidates = Vec::new();
-        for generation in eligible {
-            if reclaimable_bytes >= bytes_to_reclaim {
-                break;
-            }
-            reclaimable_bytes = reclaimable_bytes
-                .checked_add(generation.bytes)
-                .ok_or(LocalProfileError::InventorySizeOverflow)?;
-            candidates.push(generation.generation_id.clone());
-        }
+        // An in-memory "evictable" state proves neither a durable cloud
+        // commit nor that another copy can decrypt and launch Camoufox.
+        // The original profile may still be the only recoverable native
+        // SQLite/WAL. Until the existing filesystem/coordinator owner can
+        // provide independent WORKING/LKG and no-pending-save evidence,
+        // quota pressure is diagnostic only, never deletion authority.
         Ok(QuotaPlan {
             total_bytes,
             bytes_to_reclaim,
-            reclaimable_bytes,
-            candidates,
+            reclaimable_bytes: 0,
+            candidates: Vec::new(),
         })
     }
 }
@@ -440,9 +438,41 @@ mod tests {
 
         base.set_locked(false)?;
         let plan = QuotaPolicy::new(256)?.plan(&[base.clone(), candidate])?;
-        assert_eq!(plan.candidates(), [base_id]);
-        base.evict()?;
-        assert_eq!(base.state(), LocalGenerationState::Evicted);
+        assert_eq!(plan.total_bytes(), 384);
+        assert_eq!(plan.bytes_to_reclaim(), 128);
+        assert!(plan.candidates().is_empty());
+        assert_eq!(plan.reclaimable_bytes(), 0);
+        assert!(!plan.is_satisfied());
+        assert_eq!(base.state(), LocalGenerationState::SupersededEvictable);
+        Ok(())
+    }
+
+    #[test]
+    fn quota_pressure_does_not_erase_any_of_one_hundred_uncertified_native_copies()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let mut records = Vec::new();
+        for cycle in 0..100_u64 {
+            let generation_id =
+                GenerationId::parse(format!("generation_local_retention_{cycle:03}"))?;
+            let mut record = LocalGenerationRecord::new(generation_id, 64, UnixMillis::new(1));
+            record.set_locked(true)?;
+            record.begin_use(UnixMillis::new(2))?;
+            record.graceful_close(UnixMillis::new(3))?;
+            if cycle % 2 == 0 {
+                record.mark_synced(UnixMillis::new(4))?;
+            } else {
+                record.mark_superseded(UnixMillis::new(4))?;
+            }
+            record.set_locked(false)?;
+            records.push(record);
+        }
+        let plan = QuotaPolicy::new(64)?.plan(&records)?;
+        assert_eq!(plan.total_bytes(), 6_400);
+        assert_eq!(plan.bytes_to_reclaim(), 6_336);
+        assert_eq!(plan.reclaimable_bytes(), 0);
+        assert!(plan.candidates().is_empty());
+        assert!(!plan.is_satisfied());
+        assert!(records.iter().all(|record| record.bytes() == 64));
         Ok(())
     }
 

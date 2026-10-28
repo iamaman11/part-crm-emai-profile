@@ -212,6 +212,19 @@ pub trait GenerationObjectDescriptorVerifyPort {
     ) -> impl Future<Output = Result<bool, GenerationPortError>>;
 }
 
+/// Read-only predecessor candidate from the existing D1 successor journal.
+/// Not WORKING/LKG evidence: R2 bytes, old root key and compatible Camoufox
+/// must independently pass an authorized cold launch before any recovery or prune.
+/// The requester may name CURRENT but never choose the historical generation.
+pub trait VerifiedPredecessorObjectReferencePort {
+    fn load_verified_predecessor_of_active(
+        &self,
+        scope: &TenantScope,
+        profile_id: &ProfileId,
+        current_generation_id: &GenerationId,
+    ) -> impl Future<Output = Result<Option<GenerationObjectCatalogReference>, GenerationPortError>>;
+}
+
 /// Loads the one server-authoritative active VERIFIED generation object reference for a Profile.
 /// Implementations must fail closed rather than selecting any stale/non-active generation.
 pub trait ActiveGenerationObjectReferencePort {

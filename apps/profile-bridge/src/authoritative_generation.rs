@@ -2,19 +2,24 @@ use crate::browser_execution::{
     BrowserLaunchBlocker, browser_writer_locks_absent, load_materialization_binding,
     restore_materialization_binding_after_authoritative_open,
 };
+use crate::generation_object_spool::VerifiedGenerationObjectFile;
 use crate::generation_reopen::{
     GenerationObjectDownloadError, GenerationObjectDownloadPort, GenerationReopenControlError,
     GenerationReopenControlPort,
 };
 use crate::generation_snapshot::{
-    GenerationSnapshotError, materialize_workspace_snapshot_with_pre_publish,
-    verify_workspace_matches_snapshot,
+    GenerationSnapshotError, StreamedWorkspaceSnapshot,
+    materialize_workspace_snapshot_streaming_with_pre_publish,
+    materialize_workspace_snapshot_with_pre_publish, verify_workspace_matches_snapshot,
 };
 use crate::local_profile::{BridgeWorkspaceLock, LocalProfileError, MaterializationRoot};
 use encrypted_generation_domain::{
     canonical_generation_object_key, inspect_generation_metadata_prelude, open_generation_expected,
+    open_generation_streaming,
 };
 use profile_platform_primitives::{DeviceId, GenerationId, ProfileId, TenantId};
+use std::fs::{self, OpenOptions};
+use std::io::{Seek, SeekFrom};
 
 const LOWER_HEX: &[u8; 16] = b"0123456789abcdef";
 
@@ -232,6 +237,36 @@ where
     }
     let source_container_sha256 = encode_sha256(capability.container_digest());
 
+    // The sole authoritative reopen owner selects the encrypted spool path.
+    // No caller controls the generation, object, digest, DEK or workspace.
+    // Same descriptor yields one deterministic no-replace pending file;
+    // interrupted/foreign evidence cannot silently be overwritten.
+    let staged_ciphertext_path = root.path().join(format!(
+        ".pending-r2-{}",
+        encode_sha256(capability.container_digest())
+    ));
+    let stream = if incomplete_local.is_none() {
+        downloader
+            .download_generation_object_to_new_pending_file(&capability, &staged_ciphertext_path)
+    } else {
+        Ok(None)
+    }
+    .map_err(|error| {
+        prewrite_refusal(AuthoritativeGenerationPreWriteError::Download(error.into()))
+    })?;
+    if let Some(ciphertext) = stream {
+        return materialize_streamed_authoritative_generation(
+            root,
+            tenant_id,
+            profile_id,
+            generation_id,
+            control,
+            &capability,
+            ciphertext,
+            &staged_ciphertext_path,
+        );
+    }
+
     let container = downloader
         .download_generation_object(&capability)
         .map_err(|error| {
@@ -331,6 +366,635 @@ where
     Ok(())
 }
 
+/// Read-only historical candidate admission via the SAME snapshot and
+/// encrypted-generation owners as ordinary CURRENT reopen. The provider selects
+/// the immediate verified predecessor under a live CURRENT coordinator fence;
+/// the caller can neither choose an old generation nor supply an old DEK.
+///
+/// The isolated root must be independent of the native primary and initially
+/// contain no copy of the historical generation. This proves R2/old-key AEAD
+/// restore and canonical browser binding, NOT a real Camoufox WORKING launch,
+/// durable LKG certification or a safe-prune disposition.
+#[allow(clippy::too_many_arguments)]
+pub fn materialize_verified_predecessor_for_cold_launch<C, D>(
+    primary: &MaterializationRoot,
+    isolated: &MaterializationRoot,
+    tenant_id: &TenantId,
+    profile_id: &ProfileId,
+    current_id: &GenerationId,
+    device_id: &DeviceId,
+    workspace_epoch: u64,
+    control: &mut C,
+    downloader: &mut D,
+) -> Result<GenerationId, AuthoritativeGenerationMaterializationError>
+where
+    C: GenerationReopenControlPort,
+    C::Error: Into<GenerationReopenControlError>,
+    D: GenerationObjectDownloadPort,
+    D::Error: Into<GenerationObjectDownloadError>,
+{
+    let mut ignored_prelude = Vec::new();
+    materialize_historical_with_opening_prelude(
+        primary,
+        isolated,
+        tenant_id,
+        profile_id,
+        current_id,
+        device_id,
+        workspace_epoch,
+        control,
+        downloader,
+        &mut ignored_prelude,
+    )
+}
+
+/// Reuses the same cold-open owner while retaining ONLY its bounded canonical
+/// metadata prelude for a post-browser old-key availability recheck.
+/// The immutable object and decrypted user_data are never copied here.
+#[allow(clippy::too_many_arguments)]
+fn materialize_historical_with_opening_prelude<C, D>(
+    primary: &MaterializationRoot,
+    isolated: &MaterializationRoot,
+    tenant_id: &TenantId,
+    profile_id: &ProfileId,
+    current_id: &GenerationId,
+    device_id: &DeviceId,
+    workspace_epoch: u64,
+    control: &mut C,
+    downloader: &mut D,
+    opening_prelude: &mut Vec<u8>,
+) -> Result<GenerationId, AuthoritativeGenerationMaterializationError>
+where
+    C: GenerationReopenControlPort,
+    C::Error: Into<GenerationReopenControlError>,
+    D: GenerationObjectDownloadPort,
+    D::Error: Into<GenerationObjectDownloadError>,
+{
+    use AuthoritativeGenerationMaterializationError as Error;
+    use AuthoritativeGenerationPreWriteError as PreWrite;
+    let primary_path = fs::canonicalize(primary.path()).map_err(|_| Error::Local)?;
+    let isolated_path = fs::canonicalize(isolated.path()).map_err(|_| Error::Local)?;
+    if primary_path.starts_with(&isolated_path) || isolated_path.starts_with(&primary_path) {
+        return Err(Error::InvalidLocalEvidence);
+    }
+    if workspace_epoch == 0 {
+        return Err(Error::InvalidLocalEvidence);
+    }
+    let capability = control
+        .verified_predecessor_capability(tenant_id, profile_id)
+        .map_err(|error| Error::ControlPlaneBeforeLocalUse(error.into()))?
+        .ok_or(Error::ReadBeforeLocalUse(PreWrite::DescriptorMismatch))?;
+    let predecessor_id = capability.generation_id().clone();
+    if &predecessor_id == current_id
+        || capability.object_key()
+            != canonical_generation_object_key(tenant_id, profile_id, &predecessor_id)
+    {
+        return Err(Error::ReadBeforeLocalUse(PreWrite::DescriptorMismatch));
+    }
+    // Never reuse a preexisting, potentially modified local cold-probe cache.
+    // No browser files have been touched in either root at this boundary.
+    if !matches!(
+        isolated.open_generation(tenant_id, profile_id, &predecessor_id),
+        Err(LocalProfileError::Io(std::io::ErrorKind::NotFound))
+    ) {
+        return Err(Error::InvalidLocalEvidence);
+    }
+    let expected_digest = encode_sha256(capability.container_digest());
+    let mut view = HistoricalCandidateReopen {
+        control,
+        one_time_capability: Some(capability),
+        opening_prelude: None,
+    };
+    ensure_authoritative_generation(
+        isolated,
+        tenant_id,
+        profile_id,
+        &predecessor_id,
+        device_id,
+        workspace_epoch,
+        &mut view,
+        downloader,
+    )?;
+    let recovered = isolated
+        .open_generation(tenant_id, profile_id, &predecessor_id)
+        .map_err(|_| Error::InvalidLocalEvidence)?;
+    let binding = load_materialization_binding(&recovered, tenant_id, profile_id, &predecessor_id)
+        .map_err(|_| Error::BrowserIdentity)?;
+    if binding.source_container_sha256() != expected_digest
+        || recovered
+            .materialization_inventory_digest()
+            .map_err(|_| Error::Local)?
+            != binding.materialized_inventory_digest()
+    {
+        return Err(Error::InvalidLocalEvidence);
+    }
+    // No historical opening material => no proof that the old root key
+    // was ever available. Keep the original local bytes and refuse admission.
+    *opening_prelude = view
+        .opening_prelude
+        .take()
+        .ok_or(Error::InvalidLocalEvidence)?;
+    Ok(predecessor_id)
+}
+
+/// One-shot historical Camoufox cold probe under an *already acquired*
+/// server-selected CURRENT coordinator lease. It never changes the selected
+/// generation or issues a Save/commit, and must not run alongside a CURRENT
+/// native writer. It uses the existing snapshot, preflight, lock and managed
+/// runtime owners rather than inventing a second browser lifecycle.
+///
+/// Success requires the independent observer to check the live browser
+/// (including cookies/IndexedDB in acceptance), then a clean process stop.
+/// A passed one-time probe is NOT yet a durable WORKING certificate or prune grant.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum HistoricalColdProbeError {
+    CurrentNotQuiescent,
+    Materialization(AuthoritativeGenerationMaterializationError),
+    WorkspaceLock,
+    Preflight,
+    BrowserStateNotVerified,
+    PostLaunchAuthorityUnconfirmed,
+    Runtime,
+    CleanupUncertain,
+}
+
+impl core::fmt::Display for HistoricalColdProbeError {
+    fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        formatter.write_str(match self {
+            Self::CurrentNotQuiescent => "CURRENT is not quiescent or authorized for cold probe",
+            Self::Materialization(_) => "historical generation could not be restored",
+            Self::WorkspaceLock => "historical workspace lock is unavailable",
+            Self::Preflight => "historical browser preflight did not pass",
+            Self::BrowserStateNotVerified => {
+                "historical browser state was not independently verified"
+            }
+            Self::PostLaunchAuthorityUnconfirmed => {
+                "historical browser stopped but fresh CURRENT and reserve authority are unconfirmed"
+            }
+            Self::Runtime => "historical browser did not launch and close cleanly",
+            Self::CleanupUncertain => "historical probe process or locks have uncertain cleanup",
+        })
+    }
+}
+
+impl std::error::Error for HistoricalColdProbeError {}
+
+/// Exact, non-authoritative witness from one real historical cold probe.
+/// Not durable and never grants R2 deletion or a WORKING/LKG designation.
+/// A separate server owner must revalidate and durably certify live reserve.
+#[derive(Eq, PartialEq)]
+pub struct HistoricalColdProbeObservation {
+    tenant_id: TenantId,
+    profile_id: ProfileId,
+    current_generation_id: GenerationId,
+    predecessor_generation_id: GenerationId,
+    source_container_sha256: String,
+    runtime_inventory_sha256: String,
+    materialized_inventory_digest: u64,
+    /// Bounded original metadata, not a DEK or reusable bearer.
+    opening_prelude: Vec<u8>,
+}
+
+impl core::fmt::Debug for HistoricalColdProbeObservation {
+    fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        formatter
+            .debug_struct("HistoricalColdProbeObservation")
+            .field("scope", &"[REDACTED]")
+            .field("current_generation", &"[REDACTED]")
+            .field("predecessor_generation", &"[REDACTED]")
+            .field("container_digest", &"[REDACTED]")
+            .field("runtime_digest", &"[REDACTED]")
+            .field("materialized_inventory_digest", &"[REDACTED]")
+            .field("authorization", &"NONE")
+            .finish()
+    }
+}
+
+impl HistoricalColdProbeObservation {
+    #[must_use]
+    pub const fn tenant_id(&self) -> &TenantId {
+        &self.tenant_id
+    }
+
+    #[must_use]
+    pub const fn profile_id(&self) -> &ProfileId {
+        &self.profile_id
+    }
+
+    #[must_use]
+    pub const fn current_generation_id(&self) -> &GenerationId {
+        &self.current_generation_id
+    }
+
+    #[must_use]
+    pub const fn predecessor_generation_id(&self) -> &GenerationId {
+        &self.predecessor_generation_id
+    }
+
+    #[must_use]
+    pub fn source_container_sha256(&self) -> &str {
+        &self.source_container_sha256
+    }
+
+    #[must_use]
+    pub fn runtime_inventory_sha256(&self) -> &str {
+        &self.runtime_inventory_sha256
+    }
+
+    #[must_use]
+    pub const fn materialized_inventory_digest(&self) -> u64 {
+        self.materialized_inventory_digest
+    }
+
+    #[must_use]
+    pub fn opening_prelude(&self) -> &[u8] {
+        &self.opening_prelude
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+pub fn cold_launch_verified_predecessor_once<C, D, B, P, H, V>(
+    primary: &MaterializationRoot,
+    isolated: &MaterializationRoot,
+    current_id: &GenerationId,
+    lease: &session_domain::ProfileLease,
+    runtime_bundle: &crate::runtime_bundle::ApprovedRuntimeBundle,
+    control: &mut C,
+    downloader: &mut D,
+    preflight: &mut B,
+    process: &mut P,
+    camouhost: &mut H,
+    observe_browser_state: &mut V,
+) -> Result<HistoricalColdProbeObservation, HistoricalColdProbeError>
+where
+    C: GenerationReopenControlPort,
+    C::Error: Into<GenerationReopenControlError>,
+    D: GenerationObjectDownloadPort,
+    D::Error: Into<GenerationObjectDownloadError>,
+    B: crate::operator_flow::BrowserLaunchPreflightPort,
+    P: crate::ProcessControlPort,
+    H: bridge_domain::CamouhostPort,
+    V: FnMut() -> Result<(), ()>,
+{
+    use HistoricalColdProbeError as Error;
+
+    // Only a fresh CURRENT claim from the original coordinator may authorize
+    // historical bytes. Never manufacture or reuse an old-generation lease.
+    if lease.epoch() == 0
+        || lease.status() != session_domain::LeaseStatus::Active
+        || primary.path() == isolated.path()
+        // An unresolved LOCAL_UNSYNCED/dirty Save keeps the native CURRENT
+        // primary and its original recovery owner ahead of all cloud work.
+        // Never interpret a historical browser launch as recovery of newer WAL.
+        || !matches!(
+            crate::shipping_save_attempt::has_unresolved_save_attempt_for_profile(
+                primary,
+                lease.tenant_id(),
+                lease.profile_id(),
+            ),
+            Ok(false)
+        )
+    {
+        return Err(Error::CurrentNotQuiescent);
+    }
+    let current = primary
+        .open_generation(lease.tenant_id(), lease.profile_id(), current_id)
+        .map_err(|_| Error::CurrentNotQuiescent)?;
+    // Protect CURRENT with its ordinary Bridge lock for the whole probe:
+    // another live local session must not coexist with a historical browser.
+    let current_lock = BridgeWorkspaceLock::acquire(&current, lease.device_id(), lease.epoch())
+        .map_err(|_| Error::CurrentNotQuiescent)?;
+    let result = (|| {
+        if !matches!(browser_writer_locks_absent(&current), Ok(true)) {
+            return Err(Error::CurrentNotQuiescent);
+        }
+        let mut historical_opening_prelude = Vec::new();
+        let historical_id = materialize_historical_with_opening_prelude(
+            primary,
+            isolated,
+            lease.tenant_id(),
+            lease.profile_id(),
+            current_id,
+            lease.device_id(),
+            lease.epoch(),
+            control,
+            downloader,
+            &mut historical_opening_prelude,
+        )
+        .map_err(Error::Materialization)?;
+        let historical = isolated
+            .open_generation(lease.tenant_id(), lease.profile_id(), &historical_id)
+            .map_err(|_| Error::WorkspaceLock)?;
+        let historical_lock =
+            BridgeWorkspaceLock::acquire(&historical, lease.device_id(), lease.epoch())
+                .map_err(|_| Error::WorkspaceLock)?;
+        let outcome = (|| {
+            preflight
+                .evaluate_before_launch(
+                    &historical,
+                    lease.device_id(),
+                    lease.epoch(),
+                    runtime_bundle,
+                )
+                .map_err(|_| Error::Preflight)?;
+            if let Err(_source) = crate::runtime_bundle::RuntimeSessionOrchestrator::launch(
+                runtime_bundle,
+                lease.session_id(),
+                process,
+                camouhost,
+            ) {
+                // The orchestrator already rolls back on IPC failure; the
+                // extra fence covers its initial process-spawn failure case.
+                return if process.force_terminate(lease.session_id()).is_ok() {
+                    Err(Error::Runtime)
+                } else {
+                    Err(Error::CleanupUncertain)
+                };
+            }
+            // A successful Ready only proves the managed browser launched.
+            // Give the existing acceptance observer a live page to inspect
+            // cookies, localStorage and IndexedDB *before* closing Camoufox.
+            // The observer never grants a writer or changes CURRENT.
+            let observed = observe_browser_state().map_err(|_| Error::BrowserStateNotVerified);
+            if crate::runtime_bundle::RuntimeSessionOrchestrator::close(
+                runtime_bundle,
+                lease.session_id(),
+                process,
+                camouhost,
+            )
+            .is_err()
+            {
+                return if process.force_terminate(lease.session_id()).is_ok() {
+                    Err(Error::Runtime)
+                } else {
+                    Err(Error::CleanupUncertain)
+                };
+            }
+            observed?;
+            // The browser may outlive a previous coordinator fence, key
+            // authorization or D1 CURRENT pointer. A successful launch alone
+            // is never a current WORKING claim. Under both native locks and
+            // after clean browser stop, ask the server AGAIN: it must still
+            // select the identical journal-linked predecessor and ciphertext.
+            // Any expired cursor, revoke, changed pointer, R2 mismatch or
+            // unavailable provider is an UNCONFIRMED outcome, not permission
+            // to prune.
+            let restored = isolated
+                .open_generation(lease.tenant_id(), lease.profile_id(), &historical_id)
+                .map_err(|_| Error::PostLaunchAuthorityUnconfirmed)?;
+            let binding = load_materialization_binding(
+                &restored,
+                lease.tenant_id(),
+                lease.profile_id(),
+                &historical_id,
+            )
+            .map_err(|_| Error::PostLaunchAuthorityUnconfirmed)?;
+            let confirmed = control
+                .verified_predecessor_capability(lease.tenant_id(), lease.profile_id())
+                .map_err(|_| Error::PostLaunchAuthorityUnconfirmed)?
+                .ok_or(Error::PostLaunchAuthorityUnconfirmed)?;
+            // A successful historical GET/decrypt before the browser launched
+            // does NOT prove that its old root key is still retained after
+            // Camoufox stopped. Recheck the SAME authenticated server-side
+            // keyring and exact original metadata prelude under the live
+            // CURRENT coordinator fence; never accept an ephemeral probe as
+            // durable WORKING if the key has since been withdrawn.
+            let inspected = inspect_generation_metadata_prelude(&historical_opening_prelude)
+                .map_err(|_| Error::PostLaunchAuthorityUnconfirmed)?;
+            if inspected.prelude_bytes() != historical_opening_prelude.len() {
+                return Err(Error::PostLaunchAuthorityUnconfirmed);
+            }
+            let available_old_key = control
+                .verified_predecessor_opening_material(
+                    lease.tenant_id(),
+                    lease.profile_id(),
+                    &historical_opening_prelude,
+                )
+                .map_err(|_| Error::PostLaunchAuthorityUnconfirmed)?
+                .ok_or(Error::PostLaunchAuthorityUnconfirmed)?;
+            if available_old_key.key_id() != inspected.metadata().key_id() {
+                return Err(Error::PostLaunchAuthorityUnconfirmed);
+            }
+            // Shipping Windows verifies the native writer's actual OS lock
+            // before accepting even a non-authoritative cold observation.
+            // Unix Firefox may leave a stale .parentlock marker after the
+            // *managed process* closes cleanly: generic prelaunch/Clean
+            // admission intentionally rejects that marker, but it must not
+            // reject this read-only, never-prune Linux acceptance observation.
+            // RuntimeSessionOrchestrator::close above is still mandatory.
+            #[cfg(windows)]
+            if !matches!(browser_writer_locks_absent(&current), Ok(true))
+                || !matches!(browser_writer_locks_absent(&restored), Ok(true))
+            {
+                return Err(Error::PostLaunchAuthorityUnconfirmed);
+            }
+            // Regardless of platform, the server must still independently
+            // select the exact immutable historical object after browser stop.
+            if confirmed.generation_id() != &historical_id
+                || confirmed.object_key()
+                    != canonical_generation_object_key(
+                        lease.tenant_id(),
+                        lease.profile_id(),
+                        &historical_id,
+                    )
+                || encode_sha256(confirmed.container_digest()) != binding.source_container_sha256()
+                || !matches!(
+                    crate::shipping_save_attempt::has_unresolved_save_attempt_for_profile(
+                        primary,
+                        lease.tenant_id(),
+                        lease.profile_id(),
+                    ),
+                    Ok(false)
+                )
+            {
+                return Err(Error::PostLaunchAuthorityUnconfirmed);
+            }
+            Ok(HistoricalColdProbeObservation {
+                tenant_id: lease.tenant_id().clone(),
+                profile_id: lease.profile_id().clone(),
+                current_generation_id: current_id.clone(),
+                predecessor_generation_id: historical_id,
+                source_container_sha256: binding.source_container_sha256().to_owned(),
+                runtime_inventory_sha256: runtime_bundle
+                    .manifest()
+                    .inventory_sha256()
+                    .as_str()
+                    .to_owned(),
+                materialized_inventory_digest: binding.materialized_inventory_digest(),
+                opening_prelude: historical_opening_prelude,
+            })
+        })();
+        if historical_lock.release().is_err() {
+            return Err(Error::CleanupUncertain);
+        }
+        outcome
+    })();
+    if current_lock.release().is_err() {
+        return Err(Error::CleanupUncertain);
+    }
+    result
+}
+
+/// One ephemeral read-only view: the server-issued predecessor GET bearer is
+/// consumed exactly once; opening material is reauthorized against the current
+/// D1 pointer and old metadata on its separate request. No second state owner.
+struct HistoricalCandidateReopen<'a, C> {
+    control: &'a mut C,
+    one_time_capability: Option<crate::generation_reopen::GenerationDownloadCapability>,
+    opening_prelude: Option<Vec<u8>>,
+}
+
+impl<C> GenerationReopenControlPort for HistoricalCandidateReopen<'_, C>
+where
+    C: GenerationReopenControlPort,
+    C::Error: Into<GenerationReopenControlError>,
+{
+    type Error = GenerationReopenControlError;
+
+    fn download_capability(
+        &mut self,
+        _tenant_id: &TenantId,
+        _profile_id: &ProfileId,
+    ) -> Result<crate::generation_reopen::GenerationDownloadCapability, Self::Error> {
+        self.one_time_capability
+            .take()
+            .ok_or(GenerationReopenControlError::InvalidResponse)
+    }
+
+    fn opening_material(
+        &mut self,
+        tenant_id: &TenantId,
+        profile_id: &ProfileId,
+        metadata_prelude: &[u8],
+    ) -> Result<encrypted_generation_domain::GenerationDek, Self::Error> {
+        if metadata_prelude.is_empty()
+            || metadata_prelude.len()
+                > encrypted_generation_domain::MAX_GENERATION_METADATA_PRELUDE_BYTES
+            || self.opening_prelude.is_some()
+        {
+            return Err(GenerationReopenControlError::InvalidResponse);
+        }
+        let old_key = self
+            .control
+            .verified_predecessor_opening_material(tenant_id, profile_id, metadata_prelude)
+            .map_err(Into::into)?
+            .ok_or(GenerationReopenControlError::InvalidResponse)?;
+        self.opening_prelude = Some(metadata_prelude.to_vec());
+        Ok(old_key)
+    }
+}
+
+/// Cold materialization only. A complete descriptor-verified ciphertext
+/// exists, but neither a metadata prelude nor an AEAD chunk alone can publish
+/// user_data. The decrypted BPGW file is an unpublished bounded scratch input;
+/// the ONE existing snapshot owner performs full-file checks and no-replace
+/// publication with generation-bound browser identity in pre-publish.
+#[allow(clippy::too_many_arguments)]
+fn materialize_streamed_authoritative_generation<C>(
+    root: &MaterializationRoot,
+    tenant_id: &TenantId,
+    profile_id: &ProfileId,
+    generation_id: &GenerationId,
+    control: &mut C,
+    capability: &crate::generation_reopen::GenerationDownloadCapability,
+    mut ciphertext: VerifiedGenerationObjectFile,
+    ciphertext_path: &std::path::Path,
+) -> Result<(), AuthoritativeGenerationMaterializationError>
+where
+    C: GenerationReopenControlPort,
+    C::Error: Into<GenerationReopenControlError>,
+{
+    use AuthoritativeGenerationMaterializationError as Error;
+    use AuthoritativeGenerationPreWriteError as PreWrite;
+    let prelude = ciphertext
+        .read_descriptor_verified_metadata_prelude()
+        .map_err(|_| Error::ReadBeforeLocalUse(PreWrite::MetadataMismatch))?;
+    let inspected = inspect_generation_metadata_prelude(&prelude)
+        .map_err(|_| Error::ReadBeforeLocalUse(PreWrite::MetadataMismatch))?;
+    let metadata = inspected.metadata();
+    if metadata.tenant_id() != tenant_id
+        || metadata.profile_id() != profile_id
+        || metadata.generation_id() != generation_id
+        || metadata.object_key()
+            != canonical_generation_object_key(tenant_id, profile_id, generation_id)
+        || inspected.metadata_digest().bytes() != capability.metadata_digest()
+    {
+        return Err(Error::ReadBeforeLocalUse(PreWrite::MetadataMismatch));
+    }
+    let key = control
+        .opening_material(tenant_id, profile_id, &prelude)
+        .map_err(|reason| Error::ReadBeforeLocalUse(PreWrite::OpeningControl(reason.into())))?;
+    if key.key_id() != metadata.key_id() {
+        return Err(Error::ReadBeforeLocalUse(PreWrite::OpeningMaterialMismatch));
+    }
+    let plaintext_path = root.path().join(format!(
+        ".pending-bpgw-{}",
+        encode_sha256(capability.container_digest())
+    ));
+    let mut plaintext = OpenOptions::new()
+        .create_new(true)
+        .read(true)
+        .write(true)
+        .open(&plaintext_path)
+        .map_err(|_| Error::Local)?;
+    let report = open_generation_streaming(ciphertext.reader(), &key, &mut plaintext)
+        .map_err(|_| Error::ReadBeforeLocalUse(PreWrite::Decryption))?;
+    if report.metadata() != metadata
+        || report.metadata_digest().bytes() != capability.metadata_digest()
+        || report.container_digest().bytes() != capability.container_digest()
+        || report.container_bytes() != capability.container_bytes()
+    {
+        return Err(Error::ReadBeforeLocalUse(PreWrite::Decryption));
+    }
+    ciphertext
+        .recheck_and_rewind()
+        .map_err(|_| Error::ReadBeforeLocalUse(PreWrite::Decryption))?;
+    plaintext.sync_all().map_err(|_| Error::Local)?;
+    if plaintext.metadata().map_err(|_| Error::Local)?.len() != metadata.plaintext_bytes() {
+        return Err(Error::ReadBeforeLocalUse(PreWrite::Decryption));
+    }
+    plaintext
+        .seek(SeekFrom::Start(0))
+        .map_err(|_| Error::Local)?;
+    let digest = encode_sha256(capability.container_digest());
+    let outcome = materialize_workspace_snapshot_streaming_with_pre_publish(
+        root,
+        tenant_id,
+        profile_id,
+        generation_id,
+        &mut plaintext,
+        StreamedWorkspaceSnapshot {
+            plaintext_bytes: metadata.plaintext_bytes(),
+            plaintext_digest: metadata.plaintext_digest().bytes(),
+        },
+        |workspace| {
+            restore_materialization_binding_after_authoritative_open(
+                workspace,
+                tenant_id,
+                profile_id,
+                generation_id,
+                &digest,
+            )
+            .map(|_| ())
+            .map_err(|_| GenerationSnapshotError::PrePublish)
+        },
+    )
+    .map_err(|error| match error {
+        GenerationSnapshotError::Local(_) => Error::Local,
+        GenerationSnapshotError::PrePublish => Error::BrowserIdentity,
+        _ => Error::Snapshot,
+    });
+    outcome?;
+    // Only after the full AEAD tag + BPGW + browser binding are verified and
+    // the canonical workspace is published may the two owned scratch files
+    // be retired. Failure to remove one prevents a false Clean terminal.
+    drop(plaintext);
+    drop(ciphertext);
+    fs::remove_file(&plaintext_path).map_err(|_| Error::Local)?;
+    fs::remove_file(ciphertext_path).map_err(|_| Error::Local)?;
+    Ok(())
+}
+
 fn encode_sha256(digest: [u8; 32]) -> String {
     let mut encoded = String::with_capacity(64);
     for byte in digest {
@@ -345,6 +1009,7 @@ mod tests {
     use super::{
         AuthoritativeGenerationMaterializationError, AuthoritativeGenerationPreWriteError,
         encode_sha256, ensure_authoritative_generation,
+        materialize_verified_predecessor_for_cold_launch,
     };
     use crate::browser_execution::{load_materialization_binding, persist_materialization_binding};
     use crate::generation_reopen::{
@@ -362,6 +1027,7 @@ mod tests {
     use profile_platform_primitives::{DeviceId, GenerationId, ProfileId, TenantId};
     use sha2::{Digest, Sha256};
     use std::fs;
+    use std::io::Write;
     use std::path::PathBuf;
     use std::sync::atomic::{AtomicU64, Ordering};
 
@@ -554,6 +1220,50 @@ mod tests {
         }
     }
 
+    /// The CURRENT route deliberately cannot supply historical material.
+    /// Only the explicitly read-only predecessor callbacks may do so.
+    struct HistoricalFakeControl(FakeControl);
+
+    impl GenerationReopenControlPort for HistoricalFakeControl {
+        type Error = GenerationReopenControlError;
+
+        fn download_capability(
+            &mut self,
+            _tenant_id: &TenantId,
+            _profile_id: &ProfileId,
+        ) -> Result<GenerationDownloadCapability, Self::Error> {
+            Err(GenerationReopenControlError::InvalidResponse)
+        }
+
+        fn opening_material(
+            &mut self,
+            _tenant_id: &TenantId,
+            _profile_id: &ProfileId,
+            _metadata_prelude: &[u8],
+        ) -> Result<GenerationDek, Self::Error> {
+            Err(GenerationReopenControlError::InvalidResponse)
+        }
+
+        fn verified_predecessor_capability(
+            &mut self,
+            tenant_id: &TenantId,
+            profile_id: &ProfileId,
+        ) -> Result<Option<GenerationDownloadCapability>, Self::Error> {
+            self.0.download_capability(tenant_id, profile_id).map(Some)
+        }
+
+        fn verified_predecessor_opening_material(
+            &mut self,
+            tenant_id: &TenantId,
+            profile_id: &ProfileId,
+            prelude: &[u8],
+        ) -> Result<Option<GenerationDek>, Self::Error> {
+            self.0
+                .opening_material(tenant_id, profile_id, prelude)
+                .map(Some)
+        }
+    }
+
     struct FakeDownloader {
         container: Vec<u8>,
         calls: u64,
@@ -575,6 +1285,320 @@ mod tests {
             self.calls += 1;
             Ok(self.container.clone())
         }
+    }
+
+    /// Exercise the real owner through the additive file path, never the
+    /// legacy Vec download. The source is a previously sealed BPGC container.
+    struct FakeStreamDownloader {
+        container: Vec<u8>,
+        calls: u64,
+    }
+
+    impl GenerationObjectDownloadPort for FakeStreamDownloader {
+        type Error = GenerationObjectDownloadError;
+
+        fn download_generation_object(
+            &mut self,
+            _capability: &GenerationDownloadCapability,
+        ) -> Result<Vec<u8>, Self::Error> {
+            Err(GenerationObjectDownloadError::InvalidCapability)
+        }
+
+        fn download_generation_object_to_new_pending_file(
+            &mut self,
+            capability: &GenerationDownloadCapability,
+            destination: &std::path::Path,
+        ) -> Result<Option<crate::generation_object_spool::VerifiedGenerationObjectFile>, Self::Error>
+        {
+            if u64::try_from(self.container.len()).ok() != Some(capability.container_bytes())
+                || <[u8; 32]>::from(Sha256::digest(&self.container))
+                    != capability.container_digest()
+            {
+                return Err(GenerationObjectDownloadError::DigestMismatch);
+            }
+            let mut output = fs::OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .open(destination)
+                .map_err(|_| GenerationObjectDownloadError::Transport)?;
+            output
+                .write_all(&self.container)
+                .map_err(|_| GenerationObjectDownloadError::Transport)?;
+            output
+                .sync_all()
+                .map_err(|_| GenerationObjectDownloadError::Transport)?;
+            drop(output);
+            self.calls += 1;
+            let verified = crate::generation_object_spool::VerifiedGenerationObjectFile::open(
+                destination,
+                capability.container_bytes(),
+                capability.container_digest(),
+            )
+            .map_err(|_| GenerationObjectDownloadError::DigestMismatch)?;
+            Ok(Some(verified))
+        }
+    }
+
+    #[test]
+    fn historical_old_key_is_streamed_into_independent_cold_workspace_without_current_change()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let fixture = Fixture::new()?;
+        let path = fixture.root_path.with_extension("isolated-historical");
+        let cold = MaterializationRoot::open_or_create(path.clone())?;
+        let selected_current = GenerationId::parse("generation_historical_current_01")?;
+        let device = DeviceId::parse("device_historical_cold_01")?;
+        let mut control = HistoricalFakeControl(fixture.control());
+        let mut downloader = FakeStreamDownloader {
+            container: fixture.container.clone(),
+            calls: 0,
+        };
+        let historical = materialize_verified_predecessor_for_cold_launch(
+            &fixture.root,
+            &cold,
+            &fixture.tenant_id,
+            &fixture.profile_id,
+            &selected_current,
+            &device,
+            7,
+            &mut control,
+            &mut downloader,
+        )?;
+        assert_eq!(historical, fixture.generation_id);
+        assert_eq!(downloader.calls, 1);
+        assert_eq!(control.0.opening_calls, 1);
+        assert!(
+            fixture
+                .root
+                .open_generation(&fixture.tenant_id, &fixture.profile_id, &historical)
+                .is_err()
+        );
+        let restored =
+            cold.open_generation(&fixture.tenant_id, &fixture.profile_id, &historical)?;
+        assert_eq!(
+            fs::read(restored.path().join("prefs.js"))?,
+            b"authoritative-prefs"
+        );
+        assert_eq!(
+            fs::read(restored.path().join("user_data/storage/state.bin"))?,
+            b"authoritative-state"
+        );
+        assert!(matches!(
+            materialize_verified_predecessor_for_cold_launch(
+                &fixture.root,
+                &cold,
+                &fixture.tenant_id,
+                &fixture.profile_id,
+                &selected_current,
+                &device,
+                8,
+                &mut control,
+                &mut downloader,
+            ),
+            Err(AuthoritativeGenerationMaterializationError::InvalidLocalEvidence)
+        ));
+        fixture.cleanup();
+        crate::test_support::remove_test_root(&path)?;
+        Ok(())
+    }
+
+    #[test]
+    fn historical_cold_probe_blocks_current_selection_and_absent_original_key()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let fixture = Fixture::new()?;
+        let path = fixture.root_path.with_extension("isolated-missing-key");
+        let cold = MaterializationRoot::open_or_create(path.clone())?;
+        let device = DeviceId::parse("device_historical_missing_key_01")?;
+        let mut control = HistoricalFakeControl(fixture.control());
+        let mut downloader = FakeStreamDownloader {
+            container: fixture.container.clone(),
+            calls: 0,
+        };
+        assert!(matches!(
+            materialize_verified_predecessor_for_cold_launch(
+                &fixture.root,
+                &cold,
+                &fixture.tenant_id,
+                &fixture.profile_id,
+                &fixture.generation_id,
+                &device,
+                7,
+                &mut control,
+                &mut downloader,
+            ),
+            Err(
+                AuthoritativeGenerationMaterializationError::ReadBeforeLocalUse(
+                    AuthoritativeGenerationPreWriteError::DescriptorMismatch
+                )
+            )
+        ));
+        assert_eq!(downloader.calls, 0);
+        control.0.key_bytes = [0_u8; 32];
+        let current = GenerationId::parse("generation_historical_current_02")?;
+        assert!(
+            materialize_verified_predecessor_for_cold_launch(
+                &fixture.root,
+                &cold,
+                &fixture.tenant_id,
+                &fixture.profile_id,
+                &current,
+                &device,
+                8,
+                &mut control,
+                &mut downloader,
+            )
+            .is_err()
+        );
+        assert!(
+            cold.open_generation(
+                &fixture.tenant_id,
+                &fixture.profile_id,
+                &fixture.generation_id
+            )
+            .is_err()
+        );
+        assert!(
+            fixture
+                .root
+                .open_generation(
+                    &fixture.tenant_id,
+                    &fixture.profile_id,
+                    &fixture.generation_id
+                )
+                .is_err()
+        );
+        fixture.cleanup();
+        crate::test_support::remove_test_root(&path)?;
+        Ok(())
+    }
+
+    #[test]
+    fn cold_streamed_reopen_authenticates_before_materialization_and_reuses_binding()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let fixture = Fixture::new()?;
+        let mut control = fixture.control();
+        let mut downloader = FakeStreamDownloader {
+            container: fixture.container.clone(),
+            calls: 0,
+        };
+        let device = DeviceId::parse("device_authgen_streamed")?;
+        ensure_authoritative_generation(
+            &fixture.root,
+            &fixture.tenant_id,
+            &fixture.profile_id,
+            &fixture.generation_id,
+            &device,
+            3,
+            &mut control,
+            &mut downloader,
+        )?;
+        ensure_authoritative_generation(
+            &fixture.root,
+            &fixture.tenant_id,
+            &fixture.profile_id,
+            &fixture.generation_id,
+            &device,
+            4,
+            &mut control,
+            &mut downloader,
+        )?;
+        assert_eq!(downloader.calls, 1);
+        assert_eq!(control.opening_calls, 1);
+        let materialized = fixture.root.open_generation(
+            &fixture.tenant_id,
+            &fixture.profile_id,
+            &fixture.generation_id,
+        )?;
+        assert_eq!(
+            fs::read(materialized.path().join("user_data/storage/state.bin"))?,
+            b"authoritative-state"
+        );
+        assert_eq!(
+            fs::read(materialized.path().join(BROWSER_IDENTITY_RECORD_FILE))?,
+            fixture.browser_identity_record
+        );
+        assert!(
+            load_materialization_binding(
+                &materialized,
+                &fixture.tenant_id,
+                &fixture.profile_id,
+                &fixture.generation_id
+            )
+            .is_ok()
+        );
+        let digest = encode_sha256(fixture.container_digest);
+        assert!(
+            !fixture
+                .root
+                .path()
+                .join(format!(".pending-r2-{digest}"))
+                .exists()
+        );
+        assert!(
+            !fixture
+                .root
+                .path()
+                .join(format!(".pending-bpgw-{digest}"))
+                .exists()
+        );
+        fixture.cleanup();
+        Ok(())
+    }
+
+    #[test]
+    fn cold_streamed_reopen_rejects_tampered_aead_without_publishing_browser_files()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let fixture = Fixture::new()?;
+        let mut body = fixture.container.clone();
+        let last = body.len() - 1;
+        body[last] ^= 0x41;
+        let mut control = fixture.control();
+        control.container_digest = Sha256::digest(&body).into();
+        let mut downloader = FakeStreamDownloader {
+            container: body,
+            calls: 0,
+        };
+        let outcome = ensure_authoritative_generation(
+            &fixture.root,
+            &fixture.tenant_id,
+            &fixture.profile_id,
+            &fixture.generation_id,
+            &DeviceId::parse("device_authgen_streamed_reject")?,
+            3,
+            &mut control,
+            &mut downloader,
+        );
+        assert_eq!(
+            outcome,
+            Err(
+                AuthoritativeGenerationMaterializationError::ReadBeforeLocalUse(
+                    AuthoritativeGenerationPreWriteError::Decryption
+                )
+            )
+        );
+        assert_eq!(control.opening_calls, 1);
+        assert_eq!(downloader.calls, 1);
+        assert!(matches!(
+            fixture.root.open_generation(
+                &fixture.tenant_id,
+                &fixture.profile_id,
+                &fixture.generation_id
+            ),
+            Err(crate::local_profile::LocalProfileError::Io(
+                std::io::ErrorKind::NotFound
+            ))
+        ));
+        assert!(
+            fixture
+                .root
+                .path()
+                .join(format!(
+                    ".pending-r2-{}",
+                    encode_sha256(control.container_digest)
+                ))
+                .exists()
+        );
+        fixture.cleanup();
+        Ok(())
     }
 
     #[test]

@@ -103,7 +103,7 @@ fn actual_deployed_context_traverses_separate_sealed_contract_and_current_expand
                 .ok_or("migration name is missing")
         })
         .collect::<Result<Vec<_>, _>>()?;
-    assert_eq!(history.len(), 36);
+    assert_eq!(history.len(), 39);
     let target = json!({"source":{"authority":"accepted-main","repository":"iamaman11/part-crm-emai-profile","ref":"refs/heads/main","event":"push","commit_sha":SOURCE},"schema_contract":catalog["release_schema_contract"]});
     let mut current = target.clone();
     current["source"]["commit_sha"] = json!("fd6c29cc403053f10d9716ff7ad616887ab9850e");
@@ -170,9 +170,24 @@ fn actual_deployed_context_traverses_separate_sealed_contract_and_current_expand
             ],
         )?;
         let native_plan = plan(&root, dir)?;
-        assert_eq!(native_plan["planned_migrations"], json!([history[count]]));
-        assert_eq!(native_plan["target_revision"], history[count]);
-        assert_eq!(native_plan["desired_target_revision"], history[35]);
+        let expected = if count == 35 {
+            json!([
+                history[count],
+                history[count + 1],
+                history[count + 2],
+                history[count + 3]
+            ])
+        } else {
+            json!([history[count]])
+        };
+        assert_eq!(native_plan["planned_migrations"], expected);
+        let expected_target = if count == 35 {
+            &history[count + 3]
+        } else {
+            &history[count]
+        };
+        assert_eq!(native_plan["target_revision"], expected_target.as_str());
+        assert_eq!(native_plan["desired_target_revision"], history[38]);
         write(&dir.join("native-stage.json"), &native_plan)?;
         write(
             &dir.join("deployment-snapshot.json"),
@@ -316,7 +331,15 @@ fn actual_deployed_context_traverses_separate_sealed_contract_and_current_expand
             &fs::read(dir.join("target.json"))?,
         )?;
         assert_eq!(tx.transaction_plan.phase, phase);
-        assert_eq!(tx.transaction_plan.schema_target, history[count]);
+        let expected_transaction_target = if count == 35 {
+            &history[count + 3]
+        } else {
+            &history[count]
+        };
+        assert_eq!(
+            tx.transaction_plan.schema_target,
+            *expected_transaction_target
+        );
         let auth = json!({"schema_version":1,"transaction_id":tx.transaction_id,"target":tx.transaction_plan.target,"phase":phase,
             "authorized_provider_effects":tx.transaction_plan.allowed_provider_effects,"issued_at_unix_seconds":now,"expires_at_unix_seconds":now+800,
             "observation_fresh_until_unix_seconds":now+900,"authorization_reference":"fixture:exact-human-authorization"});
@@ -480,17 +503,20 @@ fn actual_deployed_context_traverses_separate_sealed_contract_and_current_expand
                 &count.to_string(),
             ],
         )?;
-        receipt = append_execution_event(
-            &receipt,
-            ExecutionEventInput {
-                kind: ExecutionEventKind::MigrationApplied,
-                occurred_at_unix_seconds: now + 3,
-                migration_id: Some(history[count].clone()),
-            },
-        )?;
+        let stage_len = if count == 35 { 4 } else { 1 };
+        for migration in &history[count..count + stage_len] {
+            receipt = append_execution_event(
+                &receipt,
+                ExecutionEventInput {
+                    kind: ExecutionEventKind::MigrationApplied,
+                    occurred_at_unix_seconds: now + 3,
+                    migration_id: Some(migration.clone()),
+                },
+            )?;
+        }
         let actual_ledger: Vec<String> =
             serde_json::from_slice(&fs::read(dir.join("observed-ledger.json"))?)?;
-        assert_eq!(actual_ledger, history[..count + 1]);
+        assert_eq!(actual_ledger, history[..count + stage_len]);
         verify_migration_ledger(&tx, &actual_ledger)?;
         assert!(verify_migration_ledger(&tx, &history[..count]).is_err());
         for kind in [
@@ -510,7 +536,7 @@ fn actual_deployed_context_traverses_separate_sealed_contract_and_current_expand
         let mut post: ProviderObservationInput = serde_json::from_value(observed)?;
         post.observed_at_unix_seconds = now + 5;
         post.remote_migrations = actual_ledger;
-        post.wrangler_pending_migrations = history[count + 1..].to_vec();
+        post.wrangler_pending_migrations = history[count + stage_len..].to_vec();
         post.remote_ledger_sha256 =
             canonical_digest(&json!({"remote_migrations":post.remote_migrations}))?;
         assert!(
@@ -651,9 +677,9 @@ if count==34:
  # The first ALTER failed atomically, and the corrected SQL must retain all rows.
  assert db.execute("SELECT count(*) FROM sqlite_master WHERE name='idempotency_records_pas2_contract_legacy'").fetchone()==(0,)
  db.execute('PRAGMA case_sensitive_like=OFF')
-for m in sources[count:count+1]:
+for i,m in enumerate(sources[count:count+(4 if count==35 else 1)],start=count):
  db.executescript((bounded/m['migration_file']).read_text())
- db.execute('INSERT INTO d1_migrations(id,name) VALUES(?,?)',(count+1,m['migration_file']))
+ db.execute('INSERT INTO d1_migrations(id,name) VALUES(?,?)',(i+1,m['migration_file']))
 (scratch/'observed-ledger.json').write_text(json.dumps([r[0] for r in db.execute('SELECT name FROM d1_migrations ORDER BY id')]))
 assert json.loads((scratch/'before.json').read_text())==json.loads(json.dumps(snapshot()))
 assert db.execute('PRAGMA foreign_key_check').fetchall()==[]

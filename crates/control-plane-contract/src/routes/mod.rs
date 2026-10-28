@@ -113,7 +113,7 @@ fn bridge_profile_generation_machine_route(method: &str, path: &str) -> bool {
             "profiles",
             _,
             "generation-successor",
-            "upload-capability" | "sealing-material" | "commit"
+            "upload-capability" | "sealing-material" | "commit" | "observe"
         ] | [
             "bridge",
             "v1",
@@ -182,6 +182,7 @@ mod tests {
             "/bridge/v1/tenants/tenant_01/profiles/profile_01/generation-successor/upload-capability",
             "/bridge/v1/tenants/tenant_01/profiles/profile_01/generation-successor/sealing-material",
             "/bridge/v1/tenants/tenant_01/profiles/profile_01/generation-successor/commit",
+            "/bridge/v1/tenants/tenant_01/profiles/profile_01/generation-successor/observe",
             "/bridge/v1/tenants/tenant_01/profiles/profile_01/generation-reopen/download-capability",
         ] {
             assert_eq!(classify("POST", path), RouteClass::ProfileCoordinatorApi);

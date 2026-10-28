@@ -17,6 +17,7 @@ mod dirty_generation_local;
 pub mod dirty_generation_publish;
 pub mod fake_mail_query;
 pub mod generation_initialization;
+pub mod generation_object_spool;
 pub mod generation_reopen;
 mod generation_snapshot;
 pub mod installed_connection;
@@ -30,6 +31,7 @@ pub mod shipping_generation_save;
 pub mod shipping_generation_successor_control;
 pub mod shipping_network;
 pub mod shipping_preflight;
+mod shipping_save_attempt;
 pub mod user_diagnostics;
 pub mod windows_delivery;
 pub mod windows_delivery_archive;
@@ -65,6 +67,8 @@ pub use test_fakes::{
 pub mod windows_device_application;
 #[cfg(windows)]
 mod windows_device_pairing;
+#[cfg(windows)]
+pub mod windows_generation_get;
 #[cfg(windows)]
 pub mod windows_generation_put;
 #[cfg(windows)]

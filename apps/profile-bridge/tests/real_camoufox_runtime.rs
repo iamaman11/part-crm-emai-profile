@@ -345,10 +345,16 @@ fn run_managed_cold_launch_cycle() -> Result<(), Box<dyn std::error::Error>> {
 
     let config = ManagedCamouhostConfig::new(python, runtime_root, display_mode, None, None)?;
     let (mut process, camouhost) = ManagedCamouhostProcess::pair(config, slot);
+    let mut cold_observer = camouhost.cold_probe_observer();
+    assert!(cold_observer.observe_live().is_err());
     let mut camouhost = StageTracingCamouhost::new(camouhost);
     let session = SessionId::parse("session_01JAR10REAL")?;
     RuntimeSessionOrchestrator::launch(&bundle, &session, &mut process, &mut camouhost)?;
+    // The candidate witness must be independent of the already authenticated
+    // Launch/Ready exchange, with the SAME fingerprint and managed session.
+    cold_observer.observe_live()?;
     RuntimeSessionOrchestrator::close(&bundle, &session, &mut process, &mut camouhost)?;
+    assert!(cold_observer.observe_live().is_err());
 
     #[cfg(windows)]
     assert_eq!(

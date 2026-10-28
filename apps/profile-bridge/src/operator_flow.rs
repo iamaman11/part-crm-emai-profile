@@ -1,6 +1,8 @@
 use crate::ProcessControlPort;
 use crate::authoritative_generation::{
-    AuthoritativeGenerationMaterializationError, ensure_authoritative_generation,
+    AuthoritativeGenerationMaterializationError, HistoricalColdProbeError,
+    HistoricalColdProbeObservation, cold_launch_verified_predecessor_once,
+    ensure_authoritative_generation,
 };
 use crate::browser_execution::browser_writer_locks_absent;
 #[cfg(any(test, feature = "synthetic-test-bin"))]
@@ -8,15 +10,17 @@ use crate::browser_mail_query::BrowserMailExecutionProof;
 #[cfg(any(test, feature = "synthetic-test-bin"))]
 use crate::dirty_close::RetainedDirtyCloseError;
 use crate::dirty_close::{DirtyCloseCompletion, DirtyCloseLocalOutcome, RetainedDirtyClose};
-use crate::dirty_generation::GenerationSealingMaterialPort;
 #[cfg(any(test, feature = "synthetic-test-bin"))]
 use crate::dirty_generation::PreparedDirtyGeneration;
+use crate::dirty_generation::{DirtyGenerationError, GenerationSealingMaterialPort};
 #[cfg(any(test, feature = "synthetic-test-bin"))]
 use crate::dirty_generation_finalize::DirtyGenerationCommitClientPort;
 use crate::generation_reopen::{
     GenerationObjectDownloadError, GenerationObjectDownloadPort, GenerationReopenControlError,
     GenerationReopenControlPort,
 };
+#[cfg(any(windows, test))]
+use crate::local_profile::RecoveryClone;
 use crate::local_profile::{
     BridgeWorkspaceLock, GenerationWorkspace, LocalGenerationRecord, LocalGenerationState,
     LocalProfileError, MaterializationRoot,
@@ -24,12 +28,37 @@ use crate::local_profile::{
 use crate::runtime_bundle::{
     ApprovedRuntimeBundle, RuntimeLaunchError, RuntimeSessionOrchestrator,
 };
-use crate::shipping_control_plane::MachineHttpPort;
+use crate::shipping_control_plane::{MachineHttpPort, ShippingControlPlaneError};
+#[cfg(any(windows, test))]
+use crate::shipping_generation_save::SignedGenerationObjectStreamPutPort;
+use crate::shipping_generation_save::{CommittedGenerationSuccessor, ShippingGenerationSaveError};
+#[cfg(any(test, feature = "synthetic-test-bin", debug_assertions))]
 use crate::shipping_generation_save::{
-    CommittedGenerationSuccessor, SignedGenerationObjectPutPort,
-    prepare_retained_generation_successor, publish_verify_and_commit_successor,
+    SignedGenerationObjectPutPort, prepare_retained_generation_successor,
+    publish_verify_and_commit_successor,
 };
+#[cfg(any(test, feature = "synthetic-test-bin", debug_assertions))]
 use crate::shipping_generation_successor_control::ControlPlaneGenerationSuccessor;
+use crate::shipping_generation_successor_control::GenerationSuccessorControlError;
+#[cfg(any(windows, test))]
+use crate::shipping_generation_successor_control::{
+    RestartExactLocalCompletionError, publish_streamed_exact_under_writer,
+};
+use crate::shipping_save_attempt::{
+    SaveAttemptEvidenceError, discover_unresolved_streaming_exact_save_attempt,
+    has_unresolved_save_attempt_for_profile, persist_local_unsynced_intent,
+};
+#[cfg(any(windows, test))]
+use crate::shipping_save_attempt::{
+    ScopedPendingSaveEvidence, classify_scoped_pending_save_evidence,
+    original_local_unsynced_successor, persist_streaming_exact_save_attempt_from_native,
+    retire_fully_saved_streaming_attempt, retire_local_unsynced_after_streamed_checkpoint,
+};
+#[cfg(any(test, feature = "synthetic-test-bin", debug_assertions))]
+use crate::shipping_save_attempt::{
+    inspect_exact_save_attempt, persist_exact_save_attempt, retire_fully_saved_attempt,
+    retire_local_unsynced_after_exact_checkpoint,
+};
 #[cfg(any(test, feature = "synthetic-test-bin"))]
 use application_ports::generation_objects::{
     GenerationObjectExactVerifyPort, GenerationObjectUploadPort,
@@ -65,6 +94,19 @@ pub trait RuntimeBundleSelectionPort {
     type Error;
 
     fn select_bundle(&mut self) -> Result<ApprovedRuntimeBundle, Self::Error>;
+}
+
+/// Ephemeral result from the existing, freshly authorized pending-Save owner.
+/// Neither a persisted phase nor independent permission to open a browser.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum PendingSaveRecovery {
+    /// The already-selected authoritative generation is locally ready.
+    ReadySelected,
+    /// Exact N+1 committed while this claim still selected N.
+    /// Never launch N; release the unused claim only with fresh native proof.
+    CommittedNewerRequiresClaim,
+    /// Unknown, blocked, conflicting or incomplete recovery.
+    Blocked,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -256,6 +298,7 @@ impl OperatorTerminalRecord {
 pub struct OperatorGenerationSaveCompletion {
     committed: CommittedGenerationSuccessor,
     local: DirtyCloseCompletion,
+    checkpoint_retired: bool,
 }
 
 impl OperatorGenerationSaveCompletion {
@@ -273,7 +316,142 @@ impl OperatorGenerationSaveCompletion {
     /// candidate to remain locally accepted and both retained ownership layers to be released.
     #[must_use]
     pub fn is_saved(&self) -> bool {
-        self.local.is_fully_saved_locally()
+        self.local.is_fully_saved_locally() && self.checkpoint_retired
+    }
+}
+
+/// Read-only projection of the *existing* Save owners' typed failure.
+/// This is not a persisted phase, retry grant, cleanup policy, or second SM.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum GenerationSaveFailureReason {
+    OwnerState,
+    LocalSource,
+    LocalIntentWrite,
+    CandidateIdentity,
+    NativeSourceChanged,
+    SnapshotTooLarge,
+    SealingMaterial,
+    Encryption,
+    LocalPreparation,
+    CheckpointWrite,
+    CheckpointRead,
+    CheckpointIntegrity,
+    CheckpointRetirement,
+    ControlTransport,
+    ControlEffectUncertain,
+    ControlRejected,
+    ControlInvalidResponse,
+    ControlClock,
+    UploadOutcomeUncertain,
+    VerificationUnproven,
+    DescriptorMismatch,
+}
+
+impl GenerationSaveFailureReason {
+    /// Only an ambiguous cloud interaction may enter the existing bounded
+    /// same-attempt reconnect loop. Local corruption and explicit rejection
+    /// are never "fixed" by another PUT.
+    #[must_use]
+    pub const fn allows_bounded_cloud_reconcile(self) -> bool {
+        matches!(
+            self,
+            Self::ControlTransport
+                | Self::ControlEffectUncertain
+                | Self::UploadOutcomeUncertain
+                | Self::VerificationUnproven
+        )
+    }
+
+    /// Stable, redacted user/support code, never a storage key or raw HTTP.
+    #[must_use]
+    pub const fn code(self) -> &'static str {
+        match self {
+            Self::OwnerState => "BRIDGE_SAVE_OWNER_STATE_INVALID",
+            Self::LocalSource => "BRIDGE_SAVE_LOCAL_SOURCE_UNAVAILABLE",
+            Self::LocalIntentWrite => "BRIDGE_SAVE_LOCAL_INTENT_FAILED",
+            Self::CandidateIdentity => "BRIDGE_SAVE_CANDIDATE_IDENTITY_INVALID",
+            Self::NativeSourceChanged => "BRIDGE_SAVE_NATIVE_SOURCE_CHANGED",
+            Self::SnapshotTooLarge => "BRIDGE_SAVE_SNAPSHOT_TOO_LARGE",
+            Self::SealingMaterial => "BRIDGE_SAVE_SEALING_MATERIAL_UNAVAILABLE",
+            Self::Encryption => "BRIDGE_SAVE_ENCRYPTION_FAILED",
+            Self::LocalPreparation => "BRIDGE_SAVE_LOCAL_PREPARATION_FAILED",
+            Self::CheckpointWrite => "BRIDGE_SAVE_CHECKPOINT_WRITE_FAILED",
+            Self::CheckpointRead => "BRIDGE_SAVE_CHECKPOINT_READ_FAILED",
+            Self::CheckpointIntegrity => "BRIDGE_SAVE_CHECKPOINT_INTEGRITY_FAILED",
+            Self::CheckpointRetirement => "BRIDGE_SAVE_CHECKPOINT_RETIRE_FAILED",
+            Self::ControlTransport => "BRIDGE_SAVE_CONTROL_TRANSPORT_UNKNOWN",
+            Self::ControlEffectUncertain => "BRIDGE_SAVE_CONTROL_EFFECT_UNCERTAIN",
+            Self::ControlRejected => "BRIDGE_SAVE_CONTROL_REJECTED",
+            Self::ControlInvalidResponse => "BRIDGE_SAVE_CONTROL_RESPONSE_INVALID",
+            Self::ControlClock => "BRIDGE_SAVE_CONTROL_CLOCK_FAILED",
+            Self::UploadOutcomeUncertain => "BRIDGE_SAVE_UPLOAD_OUTCOME_UNCERTAIN",
+            Self::VerificationUnproven => "BRIDGE_SAVE_SERVER_VERIFY_NOT_PROVEN",
+            Self::DescriptorMismatch => "BRIDGE_SAVE_DESCRIPTOR_MISMATCH",
+        }
+    }
+}
+
+fn save_control_reason<S>(
+    source: GenerationSuccessorControlError<S>,
+) -> GenerationSaveFailureReason {
+    use GenerationSaveFailureReason as Reason;
+    match source {
+        GenerationSuccessorControlError::Sealing(_) => Reason::SealingMaterial,
+        GenerationSuccessorControlError::ControlPlane(error) => match error {
+            ShippingControlPlaneError::Transport => Reason::ControlTransport,
+            ShippingControlPlaneError::HttpServerUncertain => Reason::ControlEffectUncertain,
+            ShippingControlPlaneError::HttpStatus => Reason::ControlRejected,
+            ShippingControlPlaneError::InvalidResponse => Reason::ControlInvalidResponse,
+            ShippingControlPlaneError::Clock => Reason::ControlClock,
+        },
+    }
+}
+
+fn save_generation_reason<S, U>(
+    source: ShippingGenerationSaveError<GenerationSuccessorControlError<S>, U>,
+) -> GenerationSaveFailureReason {
+    use GenerationSaveFailureReason as Reason;
+    match source {
+        ShippingGenerationSaveError::InvalidRetainedAuthority => Reason::OwnerState,
+        ShippingGenerationSaveError::CandidateIdentity => Reason::CandidateIdentity,
+        ShippingGenerationSaveError::Prepare(error) => match error {
+            DirtyGenerationError::InvalidState => Reason::OwnerState,
+            DirtyGenerationError::IdentityMismatch | DirtyGenerationError::CandidateMatchesBase => {
+                Reason::CandidateIdentity
+            }
+            DirtyGenerationError::SnapshotTooLarge => Reason::SnapshotTooLarge,
+            DirtyGenerationError::SourceChanged => Reason::NativeSourceChanged,
+            DirtyGenerationError::KeyUnavailable => Reason::SealingMaterial,
+            DirtyGenerationError::EncryptionFailed => Reason::Encryption,
+            DirtyGenerationError::Local(_) => Reason::LocalPreparation,
+        },
+        ShippingGenerationSaveError::Control(source) => save_control_reason(source),
+        // A signed PUT error cannot tell whether the storage effect applied.
+        ShippingGenerationSaveError::Upload(_) => Reason::UploadOutcomeUncertain,
+        ShippingGenerationSaveError::VerificationNotProven => Reason::VerificationUnproven,
+        ShippingGenerationSaveError::DescriptorMismatch => Reason::DescriptorMismatch,
+    }
+}
+
+fn save_checkpoint_reason(source: SaveAttemptEvidenceError) -> GenerationSaveFailureReason {
+    match source {
+        SaveAttemptEvidenceError::Io(_) | SaveAttemptEvidenceError::Unavailable => {
+            GenerationSaveFailureReason::CheckpointWrite
+        }
+        SaveAttemptEvidenceError::Invalid | SaveAttemptEvidenceError::Changed => {
+            GenerationSaveFailureReason::CheckpointIntegrity
+        }
+    }
+}
+
+fn save_checkpoint_read_reason(source: SaveAttemptEvidenceError) -> GenerationSaveFailureReason {
+    match source {
+        SaveAttemptEvidenceError::Io(_) | SaveAttemptEvidenceError::Unavailable => {
+            GenerationSaveFailureReason::CheckpointRead
+        }
+        SaveAttemptEvidenceError::Invalid | SaveAttemptEvidenceError::Changed => {
+            GenerationSaveFailureReason::CheckpointIntegrity
+        }
     }
 }
 
@@ -281,9 +459,23 @@ impl OperatorGenerationSaveCompletion {
 pub enum OperatorFlowError {
     Busy,
     CleanupRequired,
+    /// The HTTP effect/response is uncertain; the last confirmed coordinator
+    /// deadline has not been extended. Caller must retry or quiesce before it.
+    HeartbeatTransportUncertain,
     Stage(OperatorFailureStage),
+    /// Exact N+1 was confirmed committed, old N never launched, its canonical
+    /// checkpoint is still durable, and the unused claim was released cleanly.
+    /// A NEW authenticated launch must select N+1; the consumed N URI cannot.
+    FreshAuthorizedOpenRequired,
+    GenerationSave {
+        reason: GenerationSaveFailureReason,
+    },
     AuthoritativeGeneration {
         reason: AuthoritativeGenerationMaterializationError,
+        cleanup: CleanupFailures,
+    },
+    HistoricalProbe {
+        reason: HistoricalColdProbeError,
         cleanup: CleanupFailures,
     },
     Preflight {
@@ -308,10 +500,14 @@ impl OperatorFlowError {
     pub const fn stage(&self) -> Option<OperatorFailureStage> {
         match self {
             Self::Busy | Self::CleanupRequired => None,
+            Self::GenerationSave { .. } | Self::FreshAuthorizedOpenRequired => {
+                Some(OperatorFailureStage::GenerationSave)
+            }
+            Self::HeartbeatTransportUncertain => Some(OperatorFailureStage::CoordinatorHeartbeat),
             Self::Stage(stage) | Self::Runtime { stage, .. } | Self::Terminal { stage, .. } => {
                 Some(*stage)
             }
-            Self::AuthoritativeGeneration { .. } => {
+            Self::AuthoritativeGeneration { .. } | Self::HistoricalProbe { .. } => {
                 Some(OperatorFailureStage::AuthoritativeGeneration)
             }
             Self::Preflight { .. } => Some(OperatorFailureStage::BrowserPreflight),
@@ -324,10 +520,27 @@ impl fmt::Display for OperatorFlowError {
         match self {
             Self::Busy => formatter.write_str("an operator session is already active"),
             Self::CleanupRequired => formatter.write_str("previous operator cleanup is unresolved"),
+            Self::HeartbeatTransportUncertain => {
+                formatter.write_str("coordinator heartbeat transport result is uncertain")
+            }
             Self::Stage(stage) => write!(formatter, "operator flow failed at {stage:?}"),
+            Self::FreshAuthorizedOpenRequired => formatter.write_str(
+                "new server-authorized Open required for committed successor; old one-time claim cannot be reused",
+            ),
+            Self::GenerationSave { reason } => {
+                write!(
+                    formatter,
+                    "operator generation save failed: {}",
+                    reason.code()
+                )
+            }
             Self::AuthoritativeGeneration { reason, cleanup } => write!(
                 formatter,
                 "authoritative generation preparation failed: {reason}; cleanup={cleanup:?}"
+            ),
+            Self::HistoricalProbe { reason, cleanup } => write!(
+                formatter,
+                "historical browser cold probe failed: {reason}; cleanup={cleanup:?}"
             ),
             Self::Preflight {
                 reason,
@@ -365,6 +578,17 @@ struct ActiveOperatorSession {
     workspace_lock: Option<BridgeWorkspaceLock>,
     local_record: LocalGenerationRecord,
     runtime_bundle: ApprovedRuntimeBundle,
+}
+
+/// A transient, read-only observation from the ONE operator owner. Not a
+/// persisted ProfileStatus, permission, cloud fact, or second state machine.
+#[cfg(any(windows, test))]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct OperatorDiagnosticFacts {
+    pub(crate) active_local: Option<LocalGenerationState>,
+    pub(crate) retained_local: Option<LocalGenerationState>,
+    pub(crate) candidate_prepared: bool,
+    pub(crate) cleanup_blocked: bool,
 }
 
 pub struct ProfileBridgeOperator<D, K, A, E, C, R, B, P, H> {
@@ -462,6 +686,8 @@ where
         Dl::Error: Into<GenerationObjectDownloadError>,
         BeforeRuntime: FnMut() -> Result<(), ()>,
     {
+        // Preserve the one accepted authoritative launch body. Pending-save
+        // observation is optional and never replaces its lease/admission checks.
         self.open_with_materialization(
             claim,
             root,
@@ -479,7 +705,180 @@ where
                 )
             },
             before_runtime_start,
+            |_coordinator, _tenant, _profile, _selected, _lease| PendingSaveRecovery::Blocked,
         )
+    }
+
+    /// Recover interrupted local generation evidence BEFORE browser use,
+    /// under the single existing freshly claimed coordinator writer. The
+    /// callback may first-seal the original N+1 or finish an exact checkpoint;
+    /// only a completed ACTIVE_EXACT binding may allow an ordinary Open.
+    /// The unresolved-checkpoint guard remains authoritative.
+    pub fn open_authoritative_with_runtime_health_and_pending_recovery<
+        Dl,
+        BeforeRuntime,
+        ObservePending,
+    >(
+        &mut self,
+        claim: &ClaimUri,
+        root: &MaterializationRoot,
+        downloader: &mut Dl,
+        now: UnixMillis,
+        before_runtime_start: BeforeRuntime,
+        observe_pending: ObservePending,
+    ) -> Result<(), OperatorFlowError>
+    where
+        C: GenerationReopenControlPort,
+        <C as GenerationReopenControlPort>::Error: Into<GenerationReopenControlError>,
+        Dl: GenerationObjectDownloadPort,
+        Dl::Error: Into<GenerationObjectDownloadError>,
+        BeforeRuntime: FnMut() -> Result<(), ()>,
+        ObservePending: FnMut(
+            &mut C,
+            &profile_platform_primitives::TenantId,
+            &ProfileId,
+            &GenerationId,
+            &ProfileLease,
+        ) -> PendingSaveRecovery,
+    {
+        self.open_with_materialization(
+            claim,
+            root,
+            now,
+            |coordinator, tenant_id, profile_id, generation_id, device_id, epoch| {
+                ensure_authoritative_generation(
+                    root,
+                    tenant_id,
+                    profile_id,
+                    generation_id,
+                    device_id,
+                    epoch,
+                    coordinator,
+                    downloader,
+                )
+            },
+            before_runtime_start,
+            observe_pending,
+        )
+    }
+
+    /// Explicit maintenance/proof operation. Uses the SAME installed device,
+    /// one-time server claim, CURRENT coordinator, native locks, bundle,
+    /// preflight and managed Camoufox as ordinary Open. It does not replace
+    /// normal Open, is not a background worker and does not claim an LKG
+    /// certificate or delete any generation. Caller supplies an isolated
+    /// marked local root, which must not overlap the live primary.
+    ///
+    /// A cold-probe failure releases the coordinator as Uncertain. Only a
+    /// fully observed, cleanly stopped, post-launch reauthorized probe may
+    /// use the narrowly typed clean release. No local Save/commit is issued.
+    pub fn probe_verified_predecessor_once<Dl, V>(
+        &mut self,
+        claim: &ClaimUri,
+        primary: &MaterializationRoot,
+        isolated: &MaterializationRoot,
+        downloader: &mut Dl,
+        now: UnixMillis,
+        observe_browser_state: &mut V,
+    ) -> Result<HistoricalColdProbeObservation, OperatorFlowError>
+    where
+        C: GenerationReopenControlPort,
+        <C as GenerationReopenControlPort>::Error: Into<GenerationReopenControlError>,
+        Dl: GenerationObjectDownloadPort,
+        Dl::Error: Into<GenerationObjectDownloadError>,
+        V: FnMut() -> Result<(), ()>,
+    {
+        if self.cleanup_blocked {
+            return Err(OperatorFlowError::CleanupRequired);
+        }
+        if self.active.is_some() || self.retained_dirty.is_some() {
+            return Err(OperatorFlowError::Busy);
+        }
+        let bundle = self
+            .runtime_bundles
+            .select_bundle()
+            .map_err(|_| OperatorFlowError::Stage(OperatorFailureStage::RuntimeBundle))?;
+        let device_id = self
+            .device_identity
+            .device_id()
+            .map_err(|_| OperatorFlowError::Stage(OperatorFailureStage::DeviceIdentity))?;
+        let key = self
+            .device_keys
+            .ensure_key_handle(&device_id)
+            .map_err(|_| OperatorFlowError::Stage(OperatorFailureStage::DeviceKey))?;
+        self.device_authentication
+            .authenticate(&device_id, &key)
+            .map_err(|_| OperatorFlowError::Stage(OperatorFailureStage::DeviceAuthentication))?;
+        let enrollment = self
+            .enrollment
+            .redeem_claim(claim, &device_id, now)
+            .map_err(|_| OperatorFlowError::Stage(OperatorFailureStage::Enrollment))?;
+        let lease = self
+            .coordinator
+            .claim_launch_intent(
+                enrollment.actor(),
+                enrollment.profile_id(),
+                &device_id,
+                enrollment.launch_intent_id(),
+            )
+            .map_err(|_| OperatorFlowError::Stage(OperatorFailureStage::CoordinatorClaim))?;
+        if lease.tenant_id() != enrollment.actor().tenant_scope().tenant_id()
+            || lease.profile_id() != enrollment.profile_id()
+            || lease.device_id() != &device_id
+        {
+            return Err(self.fail_before_local_use(OperatorFailureStage::LeaseValidation, lease));
+        }
+        let observed = cold_launch_verified_predecessor_once(
+            primary,
+            isolated,
+            enrollment.generation_id(),
+            &lease,
+            &bundle,
+            &mut self.coordinator,
+            downloader,
+            &mut self.browser_preflight,
+            &mut self.process,
+            &mut self.camouhost,
+            observe_browser_state,
+        );
+        // The original Coordinator/Bridge keep the same live fence until
+        // the D1 owner has durably acknowledged the real-browser proof.
+        // If unknown/rejected, release Uncertain and never claim WORKING.
+        let observed = match observed {
+            Ok(observation) => match self.coordinator.certify_verified_predecessor_working(
+                observation.tenant_id(),
+                observation.profile_id(),
+                observation.current_generation_id(),
+                observation.predecessor_generation_id(),
+                observation.opening_prelude(),
+                observation.runtime_inventory_sha256(),
+            ) {
+                Ok(true) => Ok(observation),
+                _ => Err(HistoricalColdProbeError::PostLaunchAuthorityUnconfirmed),
+            },
+            Err(error) => Err(error),
+        };
+        let release_failed = if observed.is_ok() {
+            self.coordinator
+                .close_verified_historical_probe(&lease)
+                .is_err()
+        } else {
+            self.coordinator.close_lease(&lease).is_err()
+        };
+        let unsafe_cleanup = matches!(observed, Err(HistoricalColdProbeError::CleanupUncertain));
+        let cleanup = CleanupFailures {
+            process: unsafe_cleanup,
+            workspace_lock: unsafe_cleanup,
+            coordinator_lease: release_failed,
+        };
+        if cleanup.any() {
+            self.cleanup_blocked = true;
+        }
+        match observed {
+            Ok(observation) if !release_failed => Ok(observation),
+            Ok(_) => Err(OperatorFlowError::CleanupRequired),
+            Err(reason) => Err(OperatorFlowError::HistoricalProbe { reason, cleanup }),
+        }
     }
 
     /// Test/synthetic entrypoint for already-materialized fixtures. Shipping code cannot compile
@@ -497,16 +896,18 @@ where
             now,
             |_coordinator, _tenant_id, _profile_id, _generation_id, _device_id, _epoch| Ok(()),
             || Ok(()),
+            |_coordinator, _tenant, _profile, _selected, _lease| PendingSaveRecovery::Blocked,
         )
     }
 
-    fn open_with_materialization<F, BeforeRuntime>(
+    fn open_with_materialization<F, BeforeRuntime, ObservePending>(
         &mut self,
         claim: &ClaimUri,
         root: &MaterializationRoot,
         now: UnixMillis,
         mut ensure_materialized: F,
         mut before_runtime_start: BeforeRuntime,
+        mut observe_pending: ObservePending,
     ) -> Result<(), OperatorFlowError>
     where
         F: FnMut(
@@ -518,6 +919,13 @@ where
             u64,
         ) -> Result<(), AuthoritativeGenerationMaterializationError>,
         BeforeRuntime: FnMut() -> Result<(), ()>,
+        ObservePending: FnMut(
+            &mut C,
+            &profile_platform_primitives::TenantId,
+            &ProfileId,
+            &GenerationId,
+            &ProfileLease,
+        ) -> PendingSaveRecovery,
     {
         if self.cleanup_blocked {
             return Err(OperatorFlowError::CleanupRequired);
@@ -563,6 +971,105 @@ where
             || lease.device_id() != &device_id
         {
             return Err(self.fail_before_local_use(OperatorFailureStage::LeaseValidation, lease));
+        }
+
+        // Any surviving exact save or interrupted checkpoint stage is unresolved
+        // recovery evidence. Even if the old cloud pointer is still accessible,
+        // launching it as a clean browser could discard newer local SQLite/WAL.
+        // Do not consume the browser/runtime path or start a download. The
+        // coordinator lease is conservatively closed, never marked Clean.
+        if !matches!(
+            has_unresolved_save_attempt_for_profile(
+                root,
+                enrollment.actor().tenant_scope().tenant_id(),
+                enrollment.profile_id(),
+            ),
+            Ok(false)
+        ) {
+            // Freshly authenticated device/enrollment and lease have been
+            // checked. Reconcile the exact server pointer READ-ONLY; an HTTP
+            // miss, uncertain reply or commit observation is not enough to
+            // declare local successor ready or re-enter the old writer fence.
+            let recovered = observe_pending(
+                &mut self.coordinator,
+                enrollment.actor().tenant_scope().tenant_id(),
+                enrollment.profile_id(),
+                enrollment.generation_id(),
+                &lease,
+            );
+            // A successful exact N->N+1 retry cannot use this old N claim.
+            // Before permitting its normal replacement, prove the original
+            // browser never started, the exact pending ciphertext is intact,
+            // and BOTH native Firefox writers are absent after upload.
+            // This is NOT a Saved acknowledgement: the checkpoint survives
+            // for the next fresh, server-selected N+1 ACTIVE_EXACT completion.
+            if recovered == PendingSaveRecovery::CommittedNewerRequiresClaim {
+                let no_native_writer = discover_unresolved_streaming_exact_save_attempt(
+                    root,
+                    enrollment.actor().tenant_scope().tenant_id(),
+                    enrollment.profile_id(),
+                )
+                .ok()
+                .flatten()
+                .filter(|exact| exact.base_generation_id() == enrollment.generation_id().as_str())
+                .and_then(|exact| {
+                    let next = GenerationId::parse(exact.successor_id()).ok()?;
+                    if next == *enrollment.generation_id() {
+                        return None;
+                    }
+                    let base = root
+                        .open_generation(
+                            enrollment.actor().tenant_scope().tenant_id(),
+                            enrollment.profile_id(),
+                            enrollment.generation_id(),
+                        )
+                        .ok()?;
+                    let candidate = root
+                        .open_generation(
+                            enrollment.actor().tenant_scope().tenant_id(),
+                            enrollment.profile_id(),
+                            &next,
+                        )
+                        .ok()?;
+                    Some(
+                        matches!(browser_writer_locks_absent(&base), Ok(true))
+                            && matches!(browser_writer_locks_absent(&candidate), Ok(true)),
+                    )
+                })
+                .unwrap_or(false);
+                if no_native_writer {
+                    if self.coordinator.close_without_browser_use(&lease).is_ok() {
+                        // The consumed claim cannot select N+1. The existing
+                        // application launch owner must issue a NEW claim.
+                        return Err(OperatorFlowError::FreshAuthorizedOpenRequired);
+                    }
+                    self.cleanup_blocked = true;
+                    return Err(OperatorFlowError::Terminal {
+                        stage: OperatorFailureStage::GenerationSave,
+                        local_state: LocalGenerationState::RecoveryRequired,
+                        cleanup: CleanupFailures {
+                            process: false,
+                            workspace_lock: false,
+                            coordinator_lease: true,
+                        },
+                    });
+                }
+            }
+            // A recovery callback never overrides the conservative guard.
+            // Only the specific fully completed checkpoint may disappear; a
+            // torn sibling, unsafe writer or failed local binding still blocks.
+            if recovered != PendingSaveRecovery::ReadySelected
+                || !matches!(
+                    has_unresolved_save_attempt_for_profile(
+                        root,
+                        enrollment.actor().tenant_scope().tenant_id(),
+                        enrollment.profile_id(),
+                    ),
+                    Ok(false)
+                )
+            {
+                return Err(self.fail_before_local_use(OperatorFailureStage::GenerationSave, lease));
+            }
         }
 
         if let Err(reason) = ensure_materialized(
@@ -612,9 +1119,29 @@ where
                 return Err(self.fail_before_local_use(OperatorFailureStage::LocalWorkspace, lease));
             }
         };
+        // A new server-authorized lease may follow a Bridge/Windows crash, leaving
+        // only the previous generation's persistent marker. Do not treat the marker
+        // as a live writer, but do not unlink it blindly: the recovery owner proves
+        // an exclusive OS root admission, same device/older epoch and no active
+        // native Firefox writer before it replaces *only* that marker.
         let workspace_lock =
             match BridgeWorkspaceLock::acquire(&workspace, &device_id, lease.epoch()) {
                 Ok(value) => value,
+                Err(LocalProfileError::LockBusy) => {
+                    match BridgeWorkspaceLock::recover_interrupted_launch(
+                        &workspace,
+                        &device_id,
+                        lease.epoch(),
+                    ) {
+                        Ok(value) => value,
+                        Err(_) => {
+                            return Err(self.fail_before_local_use(
+                                OperatorFailureStage::LocalWorkspace,
+                                lease,
+                            ));
+                        }
+                    }
+                }
                 Err(_) => {
                     return Err(
                         self.fail_before_local_use(OperatorFailureStage::LocalWorkspace, lease)
@@ -713,10 +1240,58 @@ where
         if !matches!(self.process.is_running(lease.session_id()), Ok(true)) {
             return Err(self.fail_active_runtime(OperatorFailureStage::RuntimeAbort, now));
         }
-        if self.coordinator.heartbeat_lease(&lease).is_ok() {
-            return Ok(());
+        match self.coordinator.heartbeat_lease(&lease) {
+            Ok(()) => Ok(()),
+            // No coordinator acknowledgment, no extension of authority. The
+            // shipping owner may make one bounded retry strictly before the
+            // previously confirmed lease deadline, never publish or claim Saved.
+            Err(error) if self.coordinator.heartbeat_transport_uncertain(&error) => {
+                Err(OperatorFlowError::HeartbeatTransportUncertain)
+            }
+            // Explicit HTTP rejection, malformed authority or unknown port
+            // failures are NOT proof that we may retain a browser writer.
+            Err(_) => {
+                Err(self.fail_active_runtime(OperatorFailureStage::CoordinatorHeartbeat, now))
+            }
         }
-        Err(self.fail_active_runtime(OperatorFailureStage::CoordinatorHeartbeat, now))
+    }
+
+    /// A clean native Firefox close retains the original exclusive workspace
+    /// and the LIVE coordinator session. Reconfirm that exact session with
+    /// the authoritative DO before retrying ANY failed exact cloud effect.
+    /// This never reopens the browser, renews from a timeout, or mints a fence.
+    /// An unacknowledged response leaves all native data and intent untouched.
+    pub fn reprove_retained_save_writer(&mut self) -> Result<(), OperatorFlowError>
+    where
+        C: ProfileCoordinatorRuntimePort,
+    {
+        if self.cleanup_blocked || self.active.is_some() {
+            return Err(OperatorFlowError::CleanupRequired);
+        }
+        let lease = self
+            .retained_dirty
+            .as_ref()
+            .map(|retained| retained.lease().clone())
+            .ok_or(OperatorFlowError::Stage(
+                OperatorFailureStage::GenerationSave,
+            ))?;
+        match self.coordinator.heartbeat_lease(&lease) {
+            Ok(()) => Ok(()),
+            Err(error) if self.coordinator.heartbeat_transport_uncertain(&error) => {
+                Err(OperatorFlowError::HeartbeatTransportUncertain)
+            }
+            Err(_) => Err(OperatorFlowError::Stage(
+                OperatorFailureStage::CoordinatorHeartbeat,
+            )),
+        }
+    }
+
+    /// Only the shipping owner may call this after local monotonic observation
+    /// passes the last *server-confirmed* idle/hard deadline. Unlike temporary
+    /// transport uncertainty, positively expired writer authority demands
+    /// immediate process fencing, with all native browser bytes retained.
+    pub fn stop_after_confirmed_lease_expiry(&mut self, now: UnixMillis) -> OperatorFlowError {
+        self.fail_active_runtime(OperatorFailureStage::CoordinatorHeartbeat, now)
     }
 
     pub fn close(&mut self, now: UnixMillis) -> Result<(), OperatorFlowError> {
@@ -773,10 +1348,42 @@ where
         }
     }
 
-    /// Canonical ordinary P3 save. Pre-commit failures retain dirty local ownership and the exact
-    /// coordinator lease for retry. Once `publish_verify_and_commit_successor` returns, N+1 is the
-    /// backend authority permanently; local completion can require recovery but can never fall back
-    /// to N or undo the commit.
+    /// Installed controlled-close boundary: after native Firefox has ceased
+    /// writing, persist minimal LOCAL_UNSYNCED evidence before cloud-dependent
+    /// generation sealing, upload or coordinator commit. The original retained
+    /// workspace lock and all original user_data bytes are left in place.
+    ///
+    /// A failed marker write stops cloud save and never declares Clean/Saved.
+    /// The ordinary synthetic close remains available only for its existing
+    /// targeted tests and does not create a second shipping entrypoint.
+    pub fn close_with_durable_local_intent(
+        &mut self,
+        root: &MaterializationRoot,
+        now: UnixMillis,
+    ) -> Result<(), OperatorFlowError> {
+        self.close(now)?;
+        let retained = self
+            .retained_dirty
+            .as_ref()
+            .ok_or(OperatorFlowError::Stage(
+                OperatorFailureStage::GenerationSave,
+            ))?;
+        let source =
+            retained
+                .open_base_workspace(root)
+                .map_err(|_| OperatorFlowError::GenerationSave {
+                    reason: GenerationSaveFailureReason::LocalSource,
+                })?;
+        persist_local_unsynced_intent(root, &source, retained.lease()).map_err(|_| {
+            OperatorFlowError::GenerationSave {
+                reason: GenerationSaveFailureReason::LocalIntentWrite,
+            }
+        })
+    }
+
+    /// Legacy in-memory Save exists only in debug/test or explicitly synthetic builds.
+    /// Installed production release uses `save_retained_successor_streaming` only.
+    #[cfg(any(test, feature = "synthetic-test-bin", debug_assertions))]
     pub fn save_retained_successor<T, U>(
         &mut self,
         root: &MaterializationRoot,
@@ -799,9 +1406,11 @@ where
                 .ok_or(OperatorFlowError::Stage(
                     OperatorFailureStage::GenerationSave,
                 ))?;
-            let workspace = retained
-                .open_base_workspace(root)
-                .map_err(|_| OperatorFlowError::Stage(OperatorFailureStage::GenerationSave))?;
+            let workspace = retained.open_base_workspace(root).map_err(|_| {
+                OperatorFlowError::GenerationSave {
+                    reason: GenerationSaveFailureReason::LocalSource,
+                }
+            })?;
             (
                 retained.lease().clone(),
                 retained.base_record().clone(),
@@ -810,32 +1419,115 @@ where
         };
 
         let mut control = ControlPlaneGenerationSuccessor::new(transport, &mut self.coordinator);
-        let prepared = prepare_retained_generation_successor(
-            &base_record,
-            &workspace,
+        if self
+            .retained_dirty
+            .as_ref()
+            .is_some_and(|retained| retained.prepared_successor().is_none())
+        {
+            let prepared = prepare_retained_generation_successor(
+                &base_record,
+                &workspace,
+                root,
+                lease.tenant_id(),
+                lease.profile_id(),
+                &lease,
+                &mut control,
+            )
+            .map_err(|source| OperatorFlowError::GenerationSave {
+                reason: save_generation_reason(source),
+            })?;
+            self.retained_dirty
+                .as_mut()
+                .ok_or(OperatorFlowError::Stage(
+                    OperatorFailureStage::GenerationSave,
+                ))?
+                .remember_prepared_successor(prepared)
+                .map_err(|_| OperatorFlowError::GenerationSave {
+                    reason: GenerationSaveFailureReason::OwnerState,
+                })?;
+        }
+
+        // No re-seal/re-key/new candidate on an ordinary retry after PUT/verify/
+        // commit response loss. A different candidate or changed browser bytes
+        // invalidate this attempt rather than causing a destructive rebuild.
+        let prepared = self
+            .retained_dirty
+            .as_ref()
+            .and_then(RetainedDirtyClose::prepared_successor)
+            .ok_or(OperatorFlowError::Stage(
+                OperatorFailureStage::GenerationSave,
+            ))?;
+        if workspace.inventory().ok().as_ref() != Some(prepared.candidate_inventory())
+            || prepared.candidate_workspace().inventory().ok().as_ref()
+                != Some(prepared.candidate_inventory())
+        {
+            return Err(OperatorFlowError::GenerationSave {
+                reason: GenerationSaveFailureReason::NativeSourceChanged,
+            });
+        }
+
+        // Crash-surviving ciphertext and exact attempt identity must be
+        // published and re-read BEFORE the first network upload or commit.
+        // A conflicting/torn checkpoint is a hard stop; no local bytes are
+        // cleaned, no old generation is invalidated, no cloud effect is made.
+        persist_exact_save_attempt(root, &workspace, prepared, &lease).map_err(|source| {
+            OperatorFlowError::GenerationSave {
+                reason: save_checkpoint_reason(source),
+            }
+        })?;
+        let recovered = inspect_exact_save_attempt(
             root,
             lease.tenant_id(),
             lease.profile_id(),
-            &lease,
-            &mut control,
+            prepared.candidate_workspace().generation_id(),
         )
-        .map_err(|_| OperatorFlowError::Stage(OperatorFailureStage::GenerationSave))?;
+        .map_err(|source| OperatorFlowError::GenerationSave {
+            reason: save_checkpoint_read_reason(source),
+        })?
+        .ok_or(OperatorFlowError::GenerationSave {
+            reason: GenerationSaveFailureReason::CheckpointIntegrity,
+        })?;
+        if recovered.ciphertext() != prepared.sealed().container()
+            || recovered.container_digest() != prepared.container_digest()
+            || !recovered.matches_original_lease(&lease)
+        {
+            return Err(OperatorFlowError::GenerationSave {
+                reason: GenerationSaveFailureReason::CheckpointIntegrity,
+            });
+        }
+
+        // The complete sealed checkpoint is already crash-durable and
+        // independently verified. Retire only the matching tiny offline
+        // close intent before PUT: on a crash its full exact checkpoint
+        // remains the sole local unsynced proof, never missing evidence.
+        retire_local_unsynced_after_exact_checkpoint(root, &workspace, &lease, &recovered)
+            .map_err(|_| OperatorFlowError::GenerationSave {
+                reason: GenerationSaveFailureReason::CheckpointRetirement,
+            })?;
+
         let committed = publish_verify_and_commit_successor(
             lease.tenant_id(),
             lease.profile_id(),
             base_record.generation_id(),
-            &prepared,
+            prepared,
             &lease,
             &mut control,
             upload,
         )
-        .map_err(|_| OperatorFlowError::Stage(OperatorFailureStage::GenerationSave))?;
+        .map_err(|source| OperatorFlowError::GenerationSave {
+            reason: save_generation_reason(source),
+        })?;
         drop(control);
 
-        let (completion, session_id, local_state) = {
+        let (completion, session_id, local_state, checkpoint_retired) = {
             let retained = self
                 .retained_dirty
                 .as_mut()
+                .ok_or(OperatorFlowError::Stage(
+                    OperatorFailureStage::GenerationSave,
+                ))?;
+            let prepared = retained
+                .take_prepared_successor()
                 .ok_or(OperatorFlowError::Stage(
                     OperatorFailureStage::GenerationSave,
                 ))?;
@@ -847,8 +1539,17 @@ where
                 &mut self.coordinator,
                 now,
             );
+            // Retire ONLY after the canonical server commit, exact local
+            // readiness publication and both writer/lease releases succeed.
+            // Failure preserves the checkpoint and blocks claiming Saved.
+            // Neither dirty/unknown nor locally blocked generations are
+            // eligible for checkpoint deletion.
+            let checkpoint_retired = completion.as_ref().is_ok_and(|outcome| {
+                outcome.is_fully_saved_locally()
+                    && retire_fully_saved_attempt(root, &prepared, &committed, &lease).is_ok()
+            });
             let local_state = retained.base_record().state();
-            (completion, session_id, local_state)
+            (completion, session_id, local_state, checkpoint_retired)
         };
 
         let completion = match completion {
@@ -880,9 +1581,10 @@ where
             workspace_lock: !completion.workspace_lock_released(),
             coordinator_lease: !completion.coordinator_lease_released(),
         };
-        let rematerialization_blocked = matches!(
+        let local_readiness_blocked = matches!(
             completion.local_outcome(),
             DirtyCloseLocalOutcome::RematerializationBlocked { .. }
+                | DirtyCloseLocalOutcome::MaterializationBindingBlocked { .. }
         );
         self.retained_dirty = None;
         self.last_terminal = Some(OperatorTerminalRecord {
@@ -891,13 +1593,306 @@ where
             local_state,
             cleanup_failures: cleanup,
         });
-        if cleanup.any() || rematerialization_blocked {
+        if cleanup.any() || local_readiness_blocked || !checkpoint_retired {
             self.cleanup_blocked = true;
         }
 
         Ok(OperatorGenerationSaveCompletion {
             committed,
             local: completion,
+            checkpoint_retired,
+        })
+    }
+
+    /// Ordinary installed Windows close uses the SAME retained local writer and
+    /// coordinator, but seals its original Firefox files directly to a durable
+    /// BPAT instead of constructing a generation-sized plaintext/ciphertext Vec.
+    /// Retries reuse the exact saved attempt; no second save owner or N+2.
+    #[cfg(any(windows, test))]
+    pub fn save_retained_successor_streaming<T, U>(
+        &mut self,
+        root: &MaterializationRoot,
+        mut transport: T,
+        upload: &mut U,
+        now: UnixMillis,
+    ) -> Result<OperatorGenerationSaveCompletion, OperatorFlowError>
+    where
+        C: GenerationSealingMaterialPort,
+        T: MachineHttpPort,
+        U: SignedGenerationObjectStreamPutPort,
+    {
+        if self.cleanup_blocked {
+            return Err(OperatorFlowError::CleanupRequired);
+        }
+        let (lease, base_record, workspace) = {
+            let retained = self
+                .retained_dirty
+                .as_ref()
+                .ok_or(OperatorFlowError::Stage(
+                    OperatorFailureStage::GenerationSave,
+                ))?;
+            let source = retained.open_base_workspace(root).map_err(|_| {
+                OperatorFlowError::GenerationSave {
+                    reason: GenerationSaveFailureReason::LocalSource,
+                }
+            })?;
+            (
+                retained.lease().clone(),
+                retained.base_record().clone(),
+                source,
+            )
+        };
+        let tenant = lease.tenant_id();
+        let profile = lease.profile_id();
+
+        // The first offline-close intent identifies EXACTLY ONE N+1. If a
+        // complete fsynced BPAT already exists, never reseal or regenerate it.
+        let has_checkpoint =
+            match discover_unresolved_streaming_exact_save_attempt(root, tenant, profile) {
+                Ok(Some(_)) => true,
+                Ok(None) => false,
+                Err(_)
+                    if matches!(
+                        classify_scoped_pending_save_evidence(root, tenant, profile),
+                        Ok(ScopedPendingSaveEvidence::LocalUnsynced {
+                            ref base_generation,
+                            ..
+                        }) if base_generation == base_record.generation_id()
+                    ) =>
+                {
+                    false
+                }
+                Err(source) => {
+                    return Err(OperatorFlowError::GenerationSave {
+                        reason: save_checkpoint_read_reason(source),
+                    });
+                }
+            };
+        if !has_checkpoint {
+            let candidate_id = original_local_unsynced_successor(root, &workspace, &lease)
+                .map_err(|source| OperatorFlowError::GenerationSave {
+                    reason: save_checkpoint_read_reason(source),
+                })?
+                .ok_or(OperatorFlowError::GenerationSave {
+                    reason: GenerationSaveFailureReason::CandidateIdentity,
+                })?;
+            if candidate_id == *base_record.generation_id() {
+                return Err(OperatorFlowError::GenerationSave {
+                    reason: GenerationSaveFailureReason::CandidateIdentity,
+                });
+            }
+            let source_inventory =
+                workspace
+                    .inventory()
+                    .map_err(|_| OperatorFlowError::GenerationSave {
+                        reason: GenerationSaveFailureReason::NativeSourceChanged,
+                    })?;
+            let candidate =
+                match RecoveryClone::create(&workspace, root, tenant, profile, &candidate_id) {
+                    Ok(clone) => {
+                        let inventory = clone.verify_clone_only().map_err(|_| {
+                            OperatorFlowError::GenerationSave {
+                                reason: GenerationSaveFailureReason::NativeSourceChanged,
+                            }
+                        })?;
+                        if inventory != source_inventory {
+                            return Err(OperatorFlowError::GenerationSave {
+                                reason: GenerationSaveFailureReason::NativeSourceChanged,
+                            });
+                        }
+                        clone.workspace().clone()
+                    }
+                    Err(LocalProfileError::TargetAlreadyExists) => {
+                        // A crash before BPAT fsync may have left the original
+                        // N+1 clone. Reuse only its exact unchanged native bytes.
+                        let candidate = root
+                            .open_generation(tenant, profile, &candidate_id)
+                            .map_err(|_| OperatorFlowError::GenerationSave {
+                                reason: GenerationSaveFailureReason::LocalPreparation,
+                            })?;
+                        if candidate.inventory().ok().as_ref() != Some(&source_inventory) {
+                            return Err(OperatorFlowError::GenerationSave {
+                                reason: GenerationSaveFailureReason::NativeSourceChanged,
+                            });
+                        }
+                        candidate
+                    }
+                    Err(_) => {
+                        return Err(OperatorFlowError::GenerationSave {
+                            reason: GenerationSaveFailureReason::LocalPreparation,
+                        });
+                    }
+                };
+            persist_streaming_exact_save_attempt_from_native(
+                root,
+                &workspace,
+                &candidate,
+                &lease,
+                &mut self.coordinator,
+            )
+            .map_err(|source| OperatorFlowError::GenerationSave {
+                reason: save_checkpoint_reason(source),
+            })?;
+        }
+        let mut exact = discover_unresolved_streaming_exact_save_attempt(root, tenant, profile)
+            .map_err(|source| OperatorFlowError::GenerationSave {
+                reason: save_checkpoint_read_reason(source),
+            })?
+            .ok_or(OperatorFlowError::GenerationSave {
+                reason: GenerationSaveFailureReason::CheckpointIntegrity,
+            })?;
+        if !exact.original_lease(&lease)
+            || !exact.original_device(&lease)
+            || exact.base_generation_id() != base_record.generation_id().as_str()
+        {
+            return Err(OperatorFlowError::GenerationSave {
+                reason: GenerationSaveFailureReason::CheckpointIntegrity,
+            });
+        }
+        let candidate_id = GenerationId::parse(exact.successor_id()).map_err(|_| {
+            OperatorFlowError::GenerationSave {
+                reason: GenerationSaveFailureReason::CandidateIdentity,
+            }
+        })?;
+        let candidate = root
+            .open_generation(tenant, profile, &candidate_id)
+            .map_err(|_| OperatorFlowError::GenerationSave {
+                reason: GenerationSaveFailureReason::LocalPreparation,
+            })?;
+        let snapshot_inventory =
+            candidate
+                .inventory()
+                .map_err(|_| OperatorFlowError::GenerationSave {
+                    reason: GenerationSaveFailureReason::NativeSourceChanged,
+                })?;
+        if workspace.inventory().ok().as_ref() != Some(&snapshot_inventory) {
+            return Err(OperatorFlowError::GenerationSave {
+                reason: GenerationSaveFailureReason::NativeSourceChanged,
+            });
+        }
+        retire_local_unsynced_after_streamed_checkpoint(root, &workspace, &lease, &exact).map_err(
+            |_| OperatorFlowError::GenerationSave {
+                reason: GenerationSaveFailureReason::CheckpointRetirement,
+            },
+        )?;
+
+        let committed = publish_streamed_exact_under_writer(
+            tenant,
+            profile,
+            base_record.generation_id(),
+            &mut exact,
+            &lease,
+            &mut transport,
+            upload,
+        )
+        .map_err(|error| {
+            let reason = match error {
+                RestartExactLocalCompletionError::LocalEvidenceChanged => {
+                    GenerationSaveFailureReason::CheckpointIntegrity
+                }
+                RestartExactLocalCompletionError::WriterOrLockUnresolved
+                | RestartExactLocalCompletionError::BindingOrRetirementFailed => {
+                    GenerationSaveFailureReason::OwnerState
+                }
+                RestartExactLocalCompletionError::UploadOrCommitUncertain => {
+                    GenerationSaveFailureReason::UploadOutcomeUncertain
+                }
+                RestartExactLocalCompletionError::ControlPlane(error) => match error {
+                    ShippingControlPlaneError::Transport => {
+                        GenerationSaveFailureReason::ControlTransport
+                    }
+                    ShippingControlPlaneError::HttpServerUncertain => {
+                        GenerationSaveFailureReason::ControlEffectUncertain
+                    }
+                    ShippingControlPlaneError::HttpStatus => {
+                        GenerationSaveFailureReason::ControlRejected
+                    }
+                    ShippingControlPlaneError::InvalidResponse => {
+                        GenerationSaveFailureReason::ControlInvalidResponse
+                    }
+                    ShippingControlPlaneError::Clock => GenerationSaveFailureReason::ControlClock,
+                },
+            };
+            OperatorFlowError::GenerationSave { reason }
+        })?
+        .ok_or(OperatorFlowError::GenerationSave {
+            reason: GenerationSaveFailureReason::ControlRejected,
+        })?;
+
+        // Backend N+1 is authoritative now. Complete only the same native
+        // snapshot and its existing binding; never silently return to N.
+        let (completion, session_id, local_state, checkpoint_retired) = {
+            let retained = self
+                .retained_dirty
+                .as_mut()
+                .ok_or(OperatorFlowError::Stage(
+                    OperatorFailureStage::GenerationSave,
+                ))?;
+            let session_id = retained.lease().session_id().clone();
+            let completion = retained.complete_committed_streamed_successor(
+                &candidate,
+                &snapshot_inventory,
+                &committed,
+                &mut self.coordinator,
+                now,
+            );
+            let checkpoint_retired = completion.as_ref().is_ok_and(|outcome| {
+                outcome.is_fully_saved_locally()
+                    && retire_fully_saved_streaming_attempt(
+                        root, &mut exact, &candidate, &committed, &lease,
+                    )
+                    .is_ok()
+            });
+            let local_state = retained.base_record().state();
+            (completion, session_id, local_state, checkpoint_retired)
+        };
+        let completion = match completion {
+            Ok(value) => value,
+            Err(_) => {
+                let cleanup = CleanupFailures {
+                    process: false,
+                    workspace_lock: true,
+                    coordinator_lease: true,
+                };
+                self.retained_dirty = None;
+                self.last_terminal = Some(OperatorTerminalRecord {
+                    session_id,
+                    generation_id: committed.generation_id().clone(),
+                    local_state,
+                    cleanup_failures: cleanup,
+                });
+                self.cleanup_blocked = true;
+                return Err(OperatorFlowError::Terminal {
+                    stage: OperatorFailureStage::GenerationSave,
+                    local_state,
+                    cleanup,
+                });
+            }
+        };
+        let cleanup = CleanupFailures {
+            process: false,
+            workspace_lock: !completion.workspace_lock_released(),
+            coordinator_lease: !completion.coordinator_lease_released(),
+        };
+        let local_readiness_blocked = matches!(
+            completion.local_outcome(),
+            DirtyCloseLocalOutcome::RematerializationBlocked { .. }
+                | DirtyCloseLocalOutcome::MaterializationBindingBlocked { .. }
+        );
+        self.retained_dirty = None;
+        self.last_terminal = Some(OperatorTerminalRecord {
+            session_id,
+            generation_id: committed.generation_id().clone(),
+            local_state,
+            cleanup_failures: cleanup,
+        });
+        if cleanup.any() || local_readiness_blocked || !checkpoint_retired {
+            self.cleanup_blocked = true;
+        }
+        Ok(OperatorGenerationSaveCompletion {
+            committed,
+            local: completion,
+            checkpoint_retired,
         })
     }
 
@@ -990,6 +1985,28 @@ where
     #[must_use]
     pub fn has_pending_dirty_close(&self) -> bool {
         self.retained_dirty.is_some()
+    }
+
+    /// Observe existing local owner facts without I/O, lease refresh, or an
+    /// assertion that the browser is still alive or cloud state is current.
+    #[cfg(any(windows, test))]
+    #[must_use]
+    pub(crate) fn diagnostic_facts(&self) -> OperatorDiagnosticFacts {
+        OperatorDiagnosticFacts {
+            active_local: self.active_local_state(),
+            retained_local: self.pending_dirty_local_state(),
+            candidate_prepared: self
+                .retained_dirty
+                .as_ref()
+                .is_some_and(|dirty| dirty.prepared_successor().is_some()),
+            cleanup_blocked: self.cleanup_blocked,
+        }
+    }
+
+    /// Original closed writer context, descriptive only. This MUST be
+    /// re-proved by the server before any retry and NEVER outlive its expiry.
+    pub fn retained_save_lease(&self) -> Option<&ProfileLease> {
+        self.retained_dirty.as_ref().map(RetainedDirtyClose::lease)
     }
 
     #[must_use]
@@ -1222,10 +2239,96 @@ impl From<LocalProfileError> for OperatorFlowError {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn operator_evidence_is_read_only_and_does_not_infer_remote_writer_authority()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let fixture = Fixture::new()?;
+        let operator = operator(&fixture, FakeCamouhost::default())?;
+        let facts = operator.diagnostic_facts();
+        assert_eq!(facts.active_local, None);
+        assert_eq!(facts.retained_local, None);
+        assert!(!facts.candidate_prepared);
+        assert!(!facts.cleanup_blocked);
+        assert_eq!(operator.coordinator().claimed, 0);
+        Ok(())
+    }
+
+    #[test]
+    fn save_owner_maps_control_and_local_causes_without_granting_retries() {
+        use super::{
+            GenerationSaveFailureReason as Reason, save_checkpoint_read_reason,
+            save_checkpoint_reason, save_control_reason, save_generation_reason,
+        };
+        use crate::dirty_generation::DirtyGenerationError;
+        use crate::shipping_control_plane::ShippingControlPlaneError as Http;
+        use crate::shipping_generation_save::ShippingGenerationSaveError as Save;
+        use crate::shipping_generation_successor_control::GenerationSuccessorControlError as Control;
+        use crate::shipping_save_attempt::SaveAttemptEvidenceError as Evidence;
+        assert_eq!(
+            save_control_reason(Control::<()>::ControlPlane(Http::Transport)),
+            Reason::ControlTransport
+        );
+        assert_eq!(
+            save_control_reason(Control::<()>::ControlPlane(Http::HttpServerUncertain)),
+            Reason::ControlEffectUncertain
+        );
+        assert_eq!(
+            save_control_reason(Control::<()>::ControlPlane(Http::HttpStatus)),
+            Reason::ControlRejected
+        );
+        assert_eq!(
+            save_generation_reason(Save::<Control<()>, ()>::Prepare(
+                DirtyGenerationError::SourceChanged
+            )),
+            Reason::NativeSourceChanged
+        );
+        assert_eq!(
+            save_generation_reason(Save::<Control<()>, ()>::Prepare(
+                DirtyGenerationError::SnapshotTooLarge
+            )),
+            Reason::SnapshotTooLarge
+        );
+        assert_eq!(
+            save_generation_reason(Save::<Control<()>, ()>::Upload(())),
+            Reason::UploadOutcomeUncertain
+        );
+        assert_eq!(
+            save_checkpoint_reason(Evidence::Invalid),
+            Reason::CheckpointIntegrity
+        );
+        assert_eq!(
+            save_checkpoint_reason(Evidence::Io(std::io::ErrorKind::PermissionDenied)),
+            Reason::CheckpointWrite
+        );
+        assert_eq!(
+            save_checkpoint_read_reason(Evidence::Io(std::io::ErrorKind::PermissionDenied)),
+            Reason::CheckpointRead
+        );
+        for reason in [
+            Reason::ControlRejected,
+            Reason::NativeSourceChanged,
+            Reason::CheckpointIntegrity,
+            Reason::SealingMaterial,
+            Reason::SnapshotTooLarge,
+            Reason::ControlInvalidResponse,
+        ] {
+            assert!(!reason.allows_bounded_cloud_reconcile());
+        }
+        for reason in [
+            Reason::ControlTransport,
+            Reason::ControlEffectUncertain,
+            Reason::UploadOutcomeUncertain,
+            Reason::VerificationUnproven,
+        ] {
+            assert!(reason.allows_bounded_cloud_reconcile());
+        }
+    }
+
     use super::{
         AuthoritativeGenerationMaterializationError, BrowserLaunchPreflightPort,
         DeviceAuthenticationPort, EnrollmentPort, OperationalRejectionReason, OperatorEnrollment,
-        OperatorFailureStage, OperatorFlowError, ProfileBridgeOperator, RuntimeBundleSelectionPort,
+        OperatorFailureStage, OperatorFlowError, PendingSaveRecovery, ProfileBridgeOperator,
+        RuntimeBundleSelectionPort,
     };
     use crate::local_profile::{
         BridgeWorkspaceLock, GenerationWorkspace, LocalGenerationState, LocalProfileError,
@@ -1249,6 +2352,8 @@ mod tests {
         Sha256Digest,
     };
     use session_domain::ProfileLease;
+    use sha2::{Digest, Sha256};
+    use std::cell::Cell;
     use std::fs;
     use std::path::PathBuf;
     use std::sync::atomic::{AtomicU64, Ordering};
@@ -1304,6 +2409,7 @@ mod tests {
         expected_launch_intent_id: LaunchIntentId,
         claim_fail: bool,
         heartbeat_fail: bool,
+        heartbeat_transport_uncertain: bool,
         close_fail: bool,
         claimed: u64,
         heartbeats: u64,
@@ -1357,6 +2463,10 @@ mod tests {
             } else {
                 Ok(())
             }
+        }
+
+        fn heartbeat_transport_uncertain(&self, _error: &Self::Error) -> bool {
+            self.heartbeat_transport_uncertain
         }
     }
 
@@ -1551,6 +2661,7 @@ mod tests {
                 expected_launch_intent_id: self.launch_intent_id.clone(),
                 claim_fail: false,
                 heartbeat_fail: false,
+                heartbeat_transport_uncertain: false,
                 close_fail: false,
                 claimed: 0,
                 heartbeats: 0,
@@ -1620,6 +2731,7 @@ mod tests {
                 runtime_health_started = true;
                 Ok(())
             },
+            |_coordinator, _tenant, _profile, _selected, _lease| PendingSaveRecovery::Blocked,
         );
         assert!(matches!(
             result,
@@ -1667,6 +2779,7 @@ mod tests {
                     runtime_health_started = true;
                     Ok(())
                 },
+                |_coordinator, _tenant, _profile, _selected, _lease| PendingSaveRecovery::Blocked,
             );
             assert!(matches!(
                 result,
@@ -1709,6 +2822,7 @@ mod tests {
                     )
                 },
                 || Ok(()),
+                |_coordinator, _tenant, _profile, _selected, _lease| PendingSaveRecovery::Blocked,
             );
             assert!(matches!(
                 result,
@@ -1737,6 +2851,7 @@ mod tests {
                 ))
             },
             || Ok(()),
+            |_coordinator, _tenant, _profile, _selected, _lease| PendingSaveRecovery::Blocked,
         );
         assert!(matches!(
             result,
@@ -1744,6 +2859,87 @@ mod tests {
         ));
         assert_eq!(operator.coordinator().closed, 1);
         assert_eq!(operator.coordinator().clean_closed, 0);
+        Ok(())
+    }
+
+    #[test]
+    fn shipping_controlled_close_preserves_wal_with_durable_offline_intent()
+    -> Result<(), Box<dyn std::error::Error>> {
+        use crate::shipping_save_attempt::has_unresolved_save_attempt_for_profile;
+        let fixture = Fixture::new()?;
+        let mut owner = operator(&fixture, FakeCamouhost::default())?;
+        owner.open(&fixture.claim_uri, &fixture.root, UnixMillis::new(10))?;
+        let workspace = fixture.root.open_generation(
+            fixture.actor.tenant_scope().tenant_id(),
+            &fixture.profile_id,
+            &fixture.generation_id,
+        )?;
+        let wal = workspace.path().join("user_data/cookies.sqlite-wal");
+        fs::create_dir_all(wal.parent().ok_or("missing WAL parent")?)?;
+        fs::write(&wal, b"local-firefox-unsynced-wal")?;
+        owner.close_with_durable_local_intent(&fixture.root, UnixMillis::new(20))?;
+        assert!(owner.has_pending_dirty_close());
+        assert_eq!(fs::read(&wal)?, b"local-firefox-unsynced-wal");
+        assert!(has_unresolved_save_attempt_for_profile(
+            &fixture.root,
+            fixture.actor.tenant_scope().tenant_id(),
+            &fixture.profile_id,
+        )?);
+        // The old process has vanished; the checkpoint prefix remains at the
+        // canonical root, so a new process cannot silently use an old N
+        // and discard the just-closed unsynced WAL.
+        drop(owner);
+        let mut restarted = operator(&fixture, FakeCamouhost::default())?;
+        assert_eq!(
+            restarted.open(&fixture.claim_uri, &fixture.root, UnixMillis::new(21)),
+            Err(OperatorFlowError::Stage(
+                OperatorFailureStage::GenerationSave
+            )),
+        );
+        assert_eq!(restarted.coordinator().claimed, 1);
+        assert_eq!(restarted.coordinator().closed, 1);
+        assert!(restarted.process().actions().is_empty());
+        assert_eq!(fs::read(&wal)?, b"local-firefox-unsynced-wal");
+        Ok(())
+    }
+
+    #[test]
+    fn retained_native_close_reproves_same_live_writer_without_browser_restart()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let fixture = Fixture::new()?;
+        let mut owner = operator(&fixture, FakeCamouhost::default())?;
+        owner.open(&fixture.claim_uri, &fixture.root, UnixMillis::new(10))?;
+        owner.close_with_durable_local_intent(&fixture.root, UnixMillis::new(20))?;
+        assert_eq!(owner.retained_save_lease(), Some(&fixture.lease));
+        let original = fixture.root.open_generation(
+            fixture.actor.tenant_scope().tenant_id(),
+            &fixture.profile_id,
+            &fixture.generation_id,
+        )?;
+        let before = original.inventory()?;
+        owner.reprove_retained_save_writer()?;
+        assert_eq!(owner.coordinator().heartbeats, 1);
+        assert_eq!(owner.coordinator().claimed, 1);
+        assert_eq!(owner.coordinator().closed, 0);
+        assert!(owner.has_pending_dirty_close());
+        assert_eq!(original.inventory()?, before);
+        owner.coordinator.heartbeat_fail = true;
+        owner.coordinator.heartbeat_transport_uncertain = true;
+        assert_eq!(
+            owner.reprove_retained_save_writer(),
+            Err(OperatorFlowError::HeartbeatTransportUncertain),
+        );
+        assert!(owner.has_pending_dirty_close());
+        assert_eq!(original.inventory()?, before);
+        owner.coordinator.heartbeat_transport_uncertain = false;
+        assert_eq!(
+            owner.reprove_retained_save_writer(),
+            Err(OperatorFlowError::Stage(
+                OperatorFailureStage::CoordinatorHeartbeat
+            )),
+        );
+        assert_eq!(owner.coordinator().claimed, 1);
+        assert_eq!(original.inventory()?, before);
         Ok(())
     }
 
@@ -1849,6 +3045,143 @@ mod tests {
     }
 
     #[test]
+    fn transient_heartbeat_transport_failure_preserves_native_working_browser_and_allows_reconfirmation()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let fixture = Fixture::new()?;
+        let mut coordinator = fixture.coordinator();
+        coordinator.heartbeat_fail = true;
+        coordinator.heartbeat_transport_uncertain = true;
+        let mut operator = ProfileBridgeOperator::new(
+            FakeDeviceIdentity::new(fixture.device_id.clone()),
+            FakeDeviceKeyStore::default(),
+            FakeDeviceAuthentication { allow: true },
+            fixture.enrollment()?,
+            coordinator,
+            FakeRuntimeBundles {
+                bundle: approved_bundle()?,
+                allow: true,
+            },
+            FakeBrowserPreflight {
+                allow: true,
+                calls: 0,
+            },
+            FakeProcessControl::default(),
+            FakeCamouhost::default(),
+        );
+        operator.open(&fixture.claim_uri, &fixture.root, UnixMillis::new(10))?;
+        let working = fixture.root.open_generation(
+            fixture.actor.tenant_scope().tenant_id(),
+            &fixture.profile_id,
+            &fixture.generation_id,
+        )?;
+        let wal = working.path().join("user_data").join("cookies.sqlite-wal");
+        fs::create_dir_all(wal.parent().ok_or("no WAL parent")?)?;
+        fs::write(&wal, b"native-unsynced-wal-original")?;
+
+        assert_eq!(
+            operator.heartbeat(UnixMillis::new(11)),
+            Err(OperatorFlowError::HeartbeatTransportUncertain)
+        );
+        assert_eq!(
+            operator.active_session_id(),
+            Some(fixture.lease.session_id())
+        );
+        assert_eq!(
+            operator.active_local_state(),
+            Some(LocalGenerationState::InUse)
+        );
+        assert_eq!(operator.coordinator().closed, 0);
+        assert!(operator.last_terminal().is_none());
+        assert_eq!(
+            operator.process().actions(),
+            [ProcessAction::Spawn(fixture.lease.session_id().clone())]
+        );
+        assert_eq!(fs::read(&wal)?, b"native-unsynced-wal-original");
+
+        operator.coordinator.heartbeat_fail = false;
+        operator.heartbeat(UnixMillis::new(12))?;
+        assert_eq!(operator.coordinator().heartbeats, 2);
+        assert_eq!(operator.coordinator().closed, 0);
+        assert_eq!(fs::read(&wal)?, b"native-unsynced-wal-original");
+        operator.close(UnixMillis::new(13))?;
+        assert!(operator.has_pending_dirty_close());
+        assert_eq!(fs::read(&wal)?, b"native-unsynced-wal-original");
+        Ok(())
+    }
+
+    #[test]
+    fn eight_hours_of_simulated_confirmed_heartbeats_retain_one_native_writer_and_original_wal()
+    -> Result<(), Box<dyn std::error::Error>> {
+        // This is an eight-hour *logical clock* integration regression, NOT
+        // evidence of an eight-hour elapsed Windows/browser/provider soak.
+        // The shipping Coordinator independently owns real lease deadlines.
+        const EIGHT_HOURS_MS: u64 = 8 * 60 * 60 * 1_000;
+        const HEARTBEAT_INTERVAL_MS: u64 = 30_000;
+        let fixture = Fixture::new()?;
+        let mut owner = operator(&fixture, FakeCamouhost::default())?;
+        // The fake enrollment claim expires at 1_000 ms. Advance the
+        // logical clock only after the initial authorised Open.
+        let start = 10_u64;
+        owner.open(&fixture.claim_uri, &fixture.root, UnixMillis::new(start))?;
+        let workspace = fixture.root.open_generation(
+            fixture.actor.tenant_scope().tenant_id(),
+            &fixture.profile_id,
+            &fixture.generation_id,
+        )?;
+        let wal = workspace
+            .path()
+            .join("user_data")
+            .join("cookies.sqlite-wal");
+        fs::create_dir_all(wal.parent().ok_or("missing WAL parent")?)?;
+        let original_wal = b"native-firefox-eight-hour-logical-WAL-unchanged";
+        fs::write(&wal, original_wal)?;
+
+        let intervals = EIGHT_HOURS_MS / HEARTBEAT_INTERVAL_MS;
+        for interval in 1..=intervals {
+            let simulated_now = UnixMillis::new(start + interval * HEARTBEAT_INTERVAL_MS);
+            if interval == 72 || interval == 600 {
+                // A failed transport heartbeat is not a revoked lease or
+                // a signal to destroy native SQLite/WAL. Reconfirm the
+                // original coordinator session, never mint another claim.
+                owner.coordinator.heartbeat_fail = true;
+                owner.coordinator.heartbeat_transport_uncertain = true;
+                assert_eq!(
+                    owner.heartbeat(simulated_now),
+                    Err(OperatorFlowError::HeartbeatTransportUncertain)
+                );
+                assert_eq!(owner.active_session_id(), Some(fixture.lease.session_id()));
+                owner.coordinator.heartbeat_fail = false;
+                owner.coordinator.heartbeat_transport_uncertain = false;
+            }
+            owner.heartbeat(simulated_now)?;
+            if interval % 120 == 0 {
+                assert_eq!(fs::read(&wal)?, original_wal);
+                assert_eq!(owner.coordinator().claimed, 1);
+                assert_eq!(owner.coordinator().closed, 0);
+                assert_eq!(
+                    owner.process().actions(),
+                    [ProcessAction::Spawn(fixture.lease.session_id().clone())]
+                );
+            }
+        }
+
+        assert_eq!(owner.coordinator().heartbeats, intervals + 2);
+        assert_eq!(owner.coordinator().claimed, 1);
+        assert_eq!(owner.coordinator().clean_closed, 0);
+        assert!(owner.last_terminal().is_none());
+        owner.close_with_durable_local_intent(
+            &fixture.root,
+            UnixMillis::new(start + EIGHT_HOURS_MS + 1),
+        )?;
+        assert!(owner.has_pending_dirty_close());
+        assert_eq!(owner.coordinator().closed, 0);
+        assert_eq!(fs::read(&wal)?, original_wal);
+        // Closing an active browser does not authorize a cloud Saved verdict.
+        // The original local intent still requires the existing Save owner.
+        Ok(())
+    }
+
+    #[test]
     fn lost_heartbeat_stops_runtime_and_enters_recovery() -> Result<(), Box<dyn std::error::Error>>
     {
         let fixture = Fixture::new()?;
@@ -1872,6 +3205,14 @@ mod tests {
             FakeCamouhost::default(),
         );
         operator.open(&fixture.claim_uri, &fixture.root, UnixMillis::new(10))?;
+        let original = fixture.root.open_generation(
+            fixture.actor.tenant_scope().tenant_id(),
+            &fixture.profile_id,
+            &fixture.generation_id,
+        )?;
+        let wal = original.path().join("user_data").join("cookies.sqlite-wal");
+        fs::create_dir_all(wal.parent().ok_or("missing WAL parent")?)?;
+        fs::write(&wal, b"native-WAL-must-survive-explicit-heartbeat-refusal")?;
         assert_eq!(
             operator.heartbeat(UnixMillis::new(11)),
             Err(OperatorFlowError::Terminal {
@@ -1882,6 +3223,12 @@ mod tests {
         );
         assert_eq!(operator.coordinator().heartbeats, 1);
         assert_eq!(operator.coordinator().closed, 1);
+        assert_eq!(operator.coordinator().clean_closed, 0);
+        assert_eq!(operator.coordinator().claimed, 1);
+        assert_eq!(
+            fs::read(&wal)?,
+            b"native-WAL-must-survive-explicit-heartbeat-refusal"
+        );
         assert_eq!(operator.active_session_id(), None);
         assert_eq!(
             operator.last_terminal().map(|value| value.local_state()),
@@ -1894,6 +3241,111 @@ mod tests {
                 ProcessAction::ForceTerminate(fixture.lease.session_id().clone()),
             ]
         );
+        Ok(())
+    }
+
+    #[test]
+    fn pending_attempt_observation_requires_fresh_lease_and_never_starts_browser()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let fixture = Fixture::new()?;
+        let tenant = fixture.actor.tenant_scope().tenant_id().as_str();
+        let profile = fixture.profile_id.as_str();
+        let mut hash = Sha256::new();
+        hash.update(b"bridge-p3-save-attempt-profile-scope-v1\0");
+        for part in [tenant, profile] {
+            hash.update((part.len() as u64).to_be_bytes());
+            hash.update(part.as_bytes());
+        }
+        // An interrupted/staged checkpoint must be noticed even if its bytes
+        // are torn and unfit for any cloud operation.
+        let fingerprint = hash
+            .finalize()
+            .iter()
+            .map(|byte| format!("{byte:02x}"))
+            .collect::<String>();
+        let pending = fixture.root.path().join(format!(
+            ".profile-save-attempt-v1-{fingerprint}-untrusted.pending"
+        ));
+        fs::write(&pending, b"torn-attempt")?;
+
+        let mut owner = operator(&fixture, FakeCamouhost::default())?;
+        let observed = Cell::new(0_u32);
+        let materializations = Cell::new(0_u32);
+        let runtime_starts = Cell::new(0_u32);
+        assert_eq!(
+            owner.open_with_materialization(
+                &fixture.claim_uri,
+                &fixture.root,
+                UnixMillis::new(10),
+                |_coordinator, _tenant, _profile, _generation, _device, _epoch| {
+                    materializations.set(materializations.get() + 1);
+                    Ok(())
+                },
+                || {
+                    runtime_starts.set(runtime_starts.get() + 1);
+                    Ok(())
+                },
+                |_live_coordinator,
+                 actual_tenant,
+                 actual_profile,
+                 selected_generation,
+                 fresh_lease| {
+                    assert_eq!(actual_tenant.as_str(), tenant);
+                    assert_eq!(actual_profile.as_str(), profile);
+                    assert_eq!(selected_generation, &fixture.generation_id);
+                    assert_eq!(fresh_lease.device_id(), &fixture.device_id);
+                    observed.set(observed.get() + 1);
+                    PendingSaveRecovery::CommittedNewerRequiresClaim
+                },
+            ),
+            Err(OperatorFlowError::Stage(
+                OperatorFailureStage::GenerationSave
+            ))
+        );
+        assert_eq!(observed.get(), 1);
+        assert_eq!(materializations.get(), 0);
+        assert_eq!(runtime_starts.get(), 0);
+        assert_eq!(owner.coordinator().claimed, 1);
+        assert_eq!(owner.coordinator().closed, 1);
+        // A forged success over torn evidence must NEVER release Clean.
+        assert_eq!(owner.coordinator().clean_closed, 0);
+        assert!(owner.process().actions().is_empty());
+        assert_eq!(fs::read(&pending)?, b"torn-attempt");
+
+        // The same torn evidence never triggers observation or browser use
+        // if the coordinator refused a fresh launch claim.
+        let mut rejected = operator(&fixture, FakeCamouhost::default())?;
+        rejected.coordinator.claim_fail = true;
+        let unauthorized_observations = Cell::new(0_u32);
+        let unauthorized_materializations = Cell::new(0_u32);
+        let unauthorized_starts = Cell::new(0_u32);
+        assert_eq!(
+            rejected.open_with_materialization(
+                &fixture.claim_uri,
+                &fixture.root,
+                UnixMillis::new(11),
+                |_coordinator, _tenant, _profile, _generation, _device, _epoch| {
+                    unauthorized_materializations.set(unauthorized_materializations.get() + 1);
+                    Ok(())
+                },
+                || {
+                    unauthorized_starts.set(unauthorized_starts.get() + 1);
+                    Ok(())
+                },
+                |_coordinator, _tenant, _profile, _selected, _lease| {
+                    unauthorized_observations.set(1);
+                    PendingSaveRecovery::Blocked
+                },
+            ),
+            Err(OperatorFlowError::Stage(
+                OperatorFailureStage::CoordinatorClaim
+            ))
+        );
+        assert_eq!(unauthorized_observations.get(), 0);
+        assert_eq!(unauthorized_materializations.get(), 0);
+        assert_eq!(unauthorized_starts.get(), 0);
+        assert!(rejected.process().actions().is_empty());
+        assert_eq!(fs::read(&pending)?, b"torn-attempt");
         Ok(())
     }
 
@@ -2071,6 +3523,7 @@ mod tests {
                 started_health = true;
                 Ok(())
             },
+            |_coordinator, _tenant, _profile, _selected, _lease| PendingSaveRecovery::Blocked,
         );
         assert!(matches!(result, Err(OperatorFlowError::Preflight { .. })));
         assert!(!started_health);
@@ -2093,6 +3546,7 @@ mod tests {
                 started_health = true;
                 Ok(())
             },
+            |_coordinator, _tenant, _profile, _selected, _lease| PendingSaveRecovery::Blocked,
         )?;
         assert!(started_health);
         assert_eq!(
@@ -2117,6 +3571,7 @@ mod tests {
                 start_attempts += 1;
                 Err(())
             },
+            |_coordinator, _tenant, _profile, _selected, _lease| PendingSaveRecovery::Blocked,
         );
         assert_eq!(
             error,

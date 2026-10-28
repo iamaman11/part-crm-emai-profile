@@ -122,6 +122,7 @@ async (request) => {
             const canvas = document.createElement('canvas');
             const gl = canvas.getContext(kind);
             if (!gl) return null;
+            if (!spec) throw new Error('WebGL2 context exists without generated fingerprint data');
             const parameters = {};
             for (const key of spec.parameters) {
               const numericKey = Number(key);
@@ -535,6 +536,7 @@ def resolve_profile_root(require_bridge_lock: bool) -> Path:
 
 def load_generation_config(root: Path) -> tuple[dict[str, Any], str]:
     config, raw = load_canonical_json(root / CONFIG_NAME, MAX_CONFIG_BYTES)
+    generation_webgl2_enabled(config)
     expected = os.environ.get(EXPECTED_CONFIG_SHA256_ENV)
     digest = sha256_bytes(raw)
     if not valid_sha256(expected) or expected != digest:
@@ -547,18 +549,51 @@ def stable_probe_digest(page: Any) -> str:
     return sha256_bytes(canonical_json(probe))
 
 
-def browser_visible_probe_request(config: dict[str, Any]) -> dict[str, Any]:
-    required_maps = (
-        "webGl:parameters",
-        "webGl2:parameters",
-        "webGl:shaderPrecisionFormats",
-        "webGl2:shaderPrecisionFormats",
-        "webGl:contextAttributes",
-        "webGl2:contextAttributes",
-    )
-    for key in required_maps:
+# The pinned Camoufox launcher samples a coherent GPU record, extracts its
+# webGl2Enabled bit into Firefox's 'webgl.enable-webgl2' preference, and omits
+# WebGL2 maps for GPUs where that context is disabled. We must preserve that
+# original choice when launching the same generation again; an absent map is
+# never an invitation to invent WebGL2 fingerprint values.
+WEBGL_REQUIRED_KEYS = (
+    "webGl:parameters",
+    "webGl:shaderPrecisionFormats",
+    "webGl:contextAttributes",
+)
+WEBGL2_OPTIONAL_KEYS = (
+    "webGl2:parameters",
+    "webGl2:shaderPrecisionFormats",
+    "webGl2:contextAttributes",
+)
+
+
+def generation_webgl2_enabled(config: dict[str, Any]) -> bool:
+    for key in WEBGL_REQUIRED_KEYS:
         if not isinstance(config.get(key), dict):
             raise RuntimeContractError(f"materialized {key} observation surface is invalid")
+    webgl2_found = [key in config for key in WEBGL2_OPTIONAL_KEYS]
+    if any(webgl2_found) and not all(webgl2_found):
+        raise RuntimeContractError("materialized WebGL2 observation surfaces are inconsistent")
+    if all(webgl2_found):
+        for key in WEBGL2_OPTIONAL_KEYS:
+            if not isinstance(config[key], dict):
+                raise RuntimeContractError(f"materialized {key} observation surface is invalid")
+        return True
+    # A disabled WebGL2 generation must not retain stray WebGL2 config keys.
+    if any(key.startswith("webGl2:") for key in config):
+        raise RuntimeContractError("materialized disabled WebGL2 has stray spoofing values")
+    return False
+
+
+def verify_generated_webgl2_choice(config: dict[str, Any], options: dict[str, Any]) -> None:
+    prefs = options.get("firefox_user_prefs")
+    if not isinstance(prefs, dict) or type(prefs.get("webgl.enable-webgl2")) is not bool:
+        raise RuntimeContractError("Camoufox did not publish WebGL2 enablement")
+    if generation_webgl2_enabled(config) != prefs["webgl.enable-webgl2"]:
+        raise RuntimeContractError("Camoufox generated WebGL2 maps disagree with its Firefox preference")
+
+
+def browser_visible_probe_request(config: dict[str, Any]) -> dict[str, Any]:
+    enabled_webgl2 = generation_webgl2_enabled(config)
     fonts = config.get("fonts")
     if not isinstance(fonts, list) or not fonts or any(not isinstance(value, str) or not value for value in fonts):
         raise RuntimeContractError("materialized font observation surface is invalid")
@@ -572,7 +607,7 @@ def browser_visible_probe_request(config: dict[str, Any]) -> dict[str, Any]:
             "parameters": list(config["webGl2:parameters"].keys()),
             "shader_precision": list(config["webGl2:shaderPrecisionFormats"].keys()),
             "context_attributes": list(config["webGl2:contextAttributes"].keys()),
-        },
+        } if enabled_webgl2 else None,
         "fonts": copy.deepcopy(fonts),
         "voices_applicable": "voices" in config,
         "voice_count": len(config.get("voices", [])),
@@ -816,6 +851,7 @@ def camoufox_kwargs(
     root: Path,
     config: dict[str, Any],
 ) -> dict[str, Any]:
+    enabled_webgl2 = generation_webgl2_enabled(config)
     user_data_dir = root / USER_DATA_NAME
     if user_data_dir.is_symlink():
         raise RuntimeContractError("browser user-data directory may not be a symlink")
@@ -830,6 +866,7 @@ def camoufox_kwargs(
         "firefox_user_prefs": {
             "privacy.baselineFingerprintingProtection": False,
             "webgl.disabled": False,
+            "webgl.enable-webgl2": enabled_webgl2,
             **touch_runtime_preferences(config),
         },
         "headless": resolve_headless_mode(),
@@ -1110,6 +1147,7 @@ def materialize_candidate_identity(root: Path) -> dict[str, str]:
     # conversion gaps from this exact generated fingerprint; never substitute host-derived facts.
     # The real-browser pre-navigation probe below proves that the pinned browser reproduces them.
     preserve_generated_browserforge_projection(config, fingerprint)
+    verify_generated_webgl2_choice(config, options)
     config_bytes = canonical_json(config)
     config_path.write_bytes(config_bytes)
     config_sha256 = sha256_bytes(config_bytes)
@@ -1183,6 +1221,7 @@ def run_ipc() -> int:
     close_observation: dict[str, Any] | None = None
     browser_visible_observed = False
     navigation_admitted = False
+    post_navigation_browser_visible_observed = False
 
     try:
         for raw in sys.stdin:
@@ -1221,17 +1260,35 @@ def run_ipc() -> int:
                 and parts[1] == active_session
                 and manager is not None
                 and context is not None
-                and not browser_visible_observed
-                and not navigation_admitted
+                and (
+                    (not browser_visible_observed and not navigation_admitted)
+                    or (
+                        browser_visible_observed
+                        and navigation_admitted
+                        and not post_navigation_browser_visible_observed
+                    )
+                )
             ):
                 try:
-                    page = context.pages[0] if context.pages else context.new_page()
+                    # The initial pre-navigation observation may create the
+                    # first page as before. A later live-session witness must
+                    # not create or resurrect a browser page: a user-closed
+                    # browser is not an independently working reserve.
+                    if context.pages:
+                        page = context.pages[0]
+                    elif not navigation_admitted:
+                        page = context.new_page()
+                    else:
+                        raise RuntimeContractError("post-navigation browser page is absent")
                     payload = browser_visible_observation(page, config)
                 except BaseException as error:
                     report_runtime_failure("browser_visible", error)
                     emit("error|runtime")
                     return 5
-                browser_visible_observed = True
+                if navigation_admitted:
+                    post_navigation_browser_visible_observed = True
+                else:
+                    browser_visible_observed = True
                 emit_browser_visible(active_session, payload)
                 continue
 

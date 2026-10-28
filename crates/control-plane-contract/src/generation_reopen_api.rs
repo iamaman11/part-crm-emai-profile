@@ -6,7 +6,81 @@ pub const BRIDGE_PROFILE_GENERATION_DOWNLOAD_CAPABILITY_PATH_TEMPLATE: &str =
     "/bridge/v1/tenants/{tenantId}/profiles/{profileId}/generation-reopen/download-capability";
 pub const BRIDGE_PROFILE_GENERATION_OPENING_MATERIAL_PATH_TEMPLATE: &str =
     "/bridge/v1/tenants/{tenantId}/profiles/{profileId}/generation-reopen/opening-material";
+/// Read-only historical *candidate*, not a WORKING certificate or recovery grant.
+pub const BRIDGE_PROFILE_GENERATION_PREDECESSOR_DOWNLOAD_PATH_TEMPLATE: &str = "/bridge/v1/tenants/{tenantId}/profiles/{profileId}/generation-working-candidate/download-capability";
+pub const BRIDGE_PROFILE_GENERATION_PREDECESSOR_OPENING_PATH_TEMPLATE: &str = "/bridge/v1/tenants/{tenantId}/profiles/{profileId}/generation-working-candidate/opening-material";
 pub const GENERATION_DOWNLOAD_CAPABILITY_MAX_EXPIRES_SECONDS: u32 = 300;
+
+pub const BRIDGE_PROFILE_GENERATION_WORKING_PROOF_PATH_TEMPLATE: &str =
+    "/bridge/v1/tenants/{tenantId}/profiles/{profileId}/generation-working-candidate/certify";
+
+/// Sent ONLY after an independently observed, cleanly stopped real Camoufox
+/// cold launch and post-close reauthorization under the SAME CURRENT lease.
+/// The server always selects and authenticates predecessor/CURRENT itself.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct BridgeGenerationWorkingProofRequest {
+    current_generation_id: String,
+    predecessor_generation_id: String,
+    metadata_prelude_hex: String,
+    runtime_inventory_sha256: String,
+    coordinator_session_id: String,
+    coordinator_fencing_token: String,
+    coordinator_epoch: u64,
+}
+
+impl BridgeGenerationWorkingProofRequest {
+    #[allow(clippy::too_many_arguments)]
+    #[must_use]
+    pub fn new(
+        current_generation_id: impl Into<String>,
+        predecessor_generation_id: impl Into<String>,
+        metadata_prelude_hex: impl Into<String>,
+        runtime_inventory_sha256: impl Into<String>,
+        coordinator_session_id: impl Into<String>,
+        coordinator_fencing_token: impl Into<String>,
+        coordinator_epoch: u64,
+    ) -> Self {
+        Self {
+            current_generation_id: current_generation_id.into(),
+            predecessor_generation_id: predecessor_generation_id.into(),
+            metadata_prelude_hex: metadata_prelude_hex.into(),
+            runtime_inventory_sha256: runtime_inventory_sha256.into(),
+            coordinator_session_id: coordinator_session_id.into(),
+            coordinator_fencing_token: coordinator_fencing_token.into(),
+            coordinator_epoch,
+        }
+    }
+
+    #[must_use]
+    pub fn current_generation_id(&self) -> &str {
+        &self.current_generation_id
+    }
+    #[must_use]
+    pub fn predecessor_generation_id(&self) -> &str {
+        &self.predecessor_generation_id
+    }
+    #[must_use]
+    pub fn metadata_prelude_hex(&self) -> &str {
+        &self.metadata_prelude_hex
+    }
+    #[must_use]
+    pub fn runtime_inventory_sha256(&self) -> &str {
+        &self.runtime_inventory_sha256
+    }
+    #[must_use]
+    pub fn coordinator_session_id(&self) -> &str {
+        &self.coordinator_session_id
+    }
+    #[must_use]
+    pub fn coordinator_fencing_token(&self) -> &str {
+        &self.coordinator_fencing_token
+    }
+    #[must_use]
+    pub const fn coordinator_epoch(&self) -> u64 {
+        self.coordinator_epoch
+    }
+}
 
 /// Machine request for authoritative reopen. Generation identity and object metadata are
 /// intentionally absent: the server re-reads the one active VERIFIED generation from Catalog.

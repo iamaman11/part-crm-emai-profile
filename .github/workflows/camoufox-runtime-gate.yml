@@ -104,15 +104,32 @@ jobs:
           print(f'PROVENANCE_ASSET=camoufox-{target}.provenance.json')
           PY
 
-      - name: Resolve exact candidate from durable publication authority
+      # A verified published browser archive is an immutable input shared
+      # across Draft pushes. The exact patch-lock hash scopes both targets;
+      # never use prefix restore keys or cross-source fallback. Cache contents
+      # are NOT trust/evidence: SHA-256 and provenance are reverified below.
+      - name: Restore exact immutable Camoufox candidate (speed only)
+        id: candidate-cache
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0, immutable SHA
+        with:
+          path: artifacts/camoufox-candidate
+          key: s0-camoufox-published-v1-${{ runner.os }}-${{ matrix.target }}-${{ hashFiles('runtime/camouhost/camoufox-patch-lock.json') }}
+
+      - name: Download published candidate only when exact cache absent
+        if: steps.candidate-cache.outputs.cache-hit != 'true'
         env:
           GH_TOKEN: ${{ github.token }}
-          TARGET: ${{ matrix.target }}
         run: |
           set -euo pipefail
           rm -rf artifacts/camoufox-candidate
           mkdir -p artifacts/camoufox-candidate
           gh release download "$RELEASE_ID" --repo "$GITHUB_REPOSITORY" --dir artifacts/camoufox-candidate --pattern "$ARCHIVE_ASSET" --pattern "$PROVENANCE_ASSET"
+
+      - name: ALWAYS verify cached or downloaded Camoufox candidate identity
+        env:
+          TARGET: ${{ matrix.target }}
+        run: |
+          set -euo pipefail
           archive="artifacts/camoufox-candidate/${ARCHIVE_ASSET}"
           provenance="artifacts/camoufox-candidate/${PROVENANCE_ASSET}"
           test -f "$archive" && test -f "$provenance"
@@ -157,6 +174,14 @@ jobs:
           EXPECTED_SOURCE_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
         run: python -c "import os, subprocess; actual = subprocess.check_output(['git', 'rev-parse', 'HEAD'], text=True).strip(); expected = os.environ['EXPECTED_SOURCE_SHA']; assert actual == expected, f'expected {expected}, got {actual}'"
 
+      # Compile cache only: Cargo still validates every source against this checkout.
+      # Separate runtime builds from the smaller shared Rust policy cache.
+      - name: Restore Camoufox Bridge Rust compilation cache
+        if: needs.scope.outputs.heavy == 'true'
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2, immutable
+        with:
+          shared-key: camoufox-profile-bridge-v1
+
       - name: Accept mechanically proven runtime-unrelated PR without browser replay
         if: needs.scope.outputs.heavy == 'false'
         run: echo 'Camoufox runtime inputs are mechanically proven untouched; full physical/runtime proof will run again on accepted main.'
@@ -195,6 +220,7 @@ jobs:
         if: needs.scope.outputs.heavy == 'true'
         run: |
           python3.12 -m py_compile scripts/check-cap01-profile-bridge-boundary.py
+          python3.12 scripts/test-camouhost-webgl2-contract.py
           python3.12 scripts/check-cap01-profile-bridge-boundary.py
           python3.12 scripts/check-cap01-profile-bridge-boundary.py --self-test
 
@@ -306,6 +332,14 @@ jobs:
           EXPECTED_SOURCE_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
         run: python -c "import os, subprocess; actual = subprocess.check_output(['git', 'rev-parse', 'HEAD'], text=True).strip(); expected = os.environ['EXPECTED_SOURCE_SHA']; assert actual == expected, f'expected {expected}, got {actual}'"
 
+      # Separate Windows release/debug compilation from Linux and policy jobs.
+      # Restored files are never test evidence: both real-browser gates still run.
+      - name: Restore Camoufox Bridge Rust compilation cache
+        if: needs.scope.outputs.heavy == 'true'
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2, immutable
+        with:
+          shared-key: camoufox-profile-bridge-v1
+
       - name: Accept mechanically proven runtime-unrelated PR without Windows browser replay
         if: needs.scope.outputs.heavy == 'false'
         shell: pwsh
@@ -343,6 +377,15 @@ jobs:
           name: s0-camoufox-windows-${{ github.event.pull_request.head.sha || github.sha }}
           path: artifacts/camoufox-candidate
 
+      # Cache only raw PUBLIC locked Python distribution + wheels, never
+      # an installed browser/runtime tree or a reusable profile. On every hit
+      # the Windows materializer re-hashes each blob against runtime-lock.json.
+      - name: Restore locked Windows distributions (speed only)
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: artifacts/camouhost-locked-distributions
+          key: s0-camouhost-windows-distributions-v1-${{ runner.os }}-${{ hashFiles('runtime/camouhost/runtime-lock.json', 'scripts/camouhost-runtime-build-windows.py') }}
+
       - name: Materialize exact clean-host Windows runtime from verified candidate
         id: windows-runtime
         if: needs.scope.outputs.heavy == 'true'
@@ -355,7 +398,7 @@ jobs:
           python -m py_compile scripts/camouhost-runtime-build-windows.py scripts/verify-camoufox-patched-candidate.py
           python scripts/verify-camoufox-patched-candidate.py --self-test
           python scripts/camouhost-runtime-build-windows.py self-test
-          python scripts/camouhost-runtime-build-windows.py build --runtime-lock runtime/camouhost/runtime-lock.json --patch-lock runtime/camouhost/camoufox-patch-lock.json --runtime-source runtime/camouhost/real.py --browser-candidate artifacts/camoufox-candidate/camoufox-windows.x86_64.zip --browser-provenance artifacts/camoufox-candidate/camoufox-windows.provenance.json --build-source-commit "$candidateBuildSha" --output "$runtimeRoot" --build-python "$buildPython"
+          python scripts/camouhost-runtime-build-windows.py build --runtime-lock runtime/camouhost/runtime-lock.json --patch-lock runtime/camouhost/camoufox-patch-lock.json --runtime-source runtime/camouhost/real.py --browser-candidate artifacts/camoufox-candidate/camoufox-windows.x86_64.zip --browser-provenance artifacts/camoufox-candidate/camoufox-windows.provenance.json --build-source-commit "$candidateBuildSha" --output "$runtimeRoot" --build-python "$buildPython" --distribution-cache "artifacts/camouhost-locked-distributions"
           if (-not (Test-Path -LiteralPath (Join-Path $runtimeRoot 'python\python.exe') -PathType Leaf)) { throw 'embedded Python missing' }
           if (-not (Test-Path -LiteralPath (Join-Path $runtimeRoot 'browser\camoufox.exe') -PathType Leaf)) { throw 'packaged Camoufox missing' }
           if (-not (Test-Path -LiteralPath (Join-Path $runtimeRoot 'camouhost\browser-candidate-provenance.json') -PathType Leaf)) { throw 'browser candidate provenance missing' }

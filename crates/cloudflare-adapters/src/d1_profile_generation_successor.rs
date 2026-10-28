@@ -1,13 +1,260 @@
+use application_ports::generation_objects::{
+    GenerationObjectCatalogReference, GenerationObjectDescriptor,
+    VerifiedPredecessorObjectReferencePort,
+};
+use application_ports::generations::{GenerationPortError, GenerationPortErrorClass};
 use application_ports::profile_generation_successor::{
     ProfileGenerationSuccessorCommitError, ProfileGenerationSuccessorCommitErrorClass,
     ProfileGenerationSuccessorCommitOutcome, ProfileGenerationSuccessorCommitPort,
-    ProfileGenerationSuccessorCommitRequest,
+    ProfileGenerationSuccessorCommitRequest, ProfileGenerationSuccessorObservationPort,
+    ProfileGenerationSuccessorRetryDecisionPort,
 };
-use profile_platform_primitives::{ActorContext, FencingToken, TenantId};
+use encrypted_generation_domain::canonical_generation_object_key;
+use profile_platform_primitives::{
+    ActorContext, DeviceId, FencingToken, GenerationId, ProfileId, TenantId, TenantScope,
+};
 use serde::Deserialize;
 use sha2::{Digest, Sha256};
 use worker::d1::D1Database;
 use worker::query;
+
+/// Strictly one journal-linked immediate predecessor. This is an immutable
+/// candidate descriptor, not a browser WORKING certificate or deletion grant.
+/// The only D1 write path for the browser-proven historical LKG receipt.
+/// A receipt is immutable metadata and NEVER an R2 delete permission.
+const INSERT_HISTORICAL_WORKING_PROOF: &str = r#"
+INSERT INTO profile_generation_working_proofs (
+    tenant_id, profile_id, generation_id, observed_current_generation_id,
+    metadata_digest, container_digest, root_key_id, runtime_inventory_sha256,
+    observed_by_actor_id, observed_by_device_id, coordinator_session_id,
+    coordinator_epoch, proven_at_ms
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+ON CONFLICT (tenant_id, profile_id, generation_id) DO NOTHING
+RETURNING generation_id
+"#;
+
+const LOAD_HISTORICAL_WORKING_PROOF: &str = r#"
+SELECT generation_id FROM profile_generation_working_proofs
+WHERE tenant_id = ? AND profile_id = ? AND generation_id = ?
+  AND observed_current_generation_id = ?
+  AND metadata_digest = ? AND container_digest = ?
+  AND root_key_id = ? AND runtime_inventory_sha256 = ?
+  AND observed_by_actor_id = ? AND observed_by_device_id = ?
+  AND coordinator_session_id = ? AND coordinator_epoch = ?
+"#;
+
+/// Only an already recorded real-browser reserve is eligible after CURRENT
+/// advances. Receipt identity must still match immutable VERIFIED Catalog
+/// bytes. Its old key, R2 checksum and compatible runtime are rechecked on
+/// every actual cold GET; a receipt NEVER permits deletion by itself.
+const LOAD_CERTIFIED_WORKING_RESERVE: &str = r#"
+SELECT
+    reserve.generation_id,
+    reserve.object_key,
+    reserve.metadata_digest,
+    reserve.container_digest
+FROM browser_profiles AS profile
+JOIN profile_generations AS current
+  ON current.tenant_id = profile.tenant_id
+ AND current.profile_id = profile.profile_id
+ AND current.generation_id = profile.active_generation_id
+JOIN profile_generation_working_proofs AS proof
+  ON proof.tenant_id = profile.tenant_id
+ AND proof.profile_id = profile.profile_id
+JOIN profile_generations AS reserve
+  ON reserve.tenant_id = proof.tenant_id
+ AND reserve.profile_id = proof.profile_id
+ AND reserve.generation_id = proof.generation_id
+WHERE profile.tenant_id = ?
+  AND profile.profile_id = ?
+  AND profile.status = 'READY'
+  AND profile.active_generation_id = ?
+  AND current.status = 'VERIFIED'
+  AND current.verification_reference IS NOT NULL
+  AND reserve.status = 'VERIFIED'
+  AND reserve.verification_reference IS NOT NULL
+  AND reserve.generation_id <> current.generation_id
+  AND proof.metadata_digest = reserve.metadata_digest
+  AND proof.container_digest = reserve.container_digest
+  AND proof.runtime_inventory_sha256 = ?
+  AND NOT EXISTS (
+      SELECT 1 FROM profile_generation_retirement_intents AS retired
+      WHERE retired.tenant_id = reserve.tenant_id
+        AND retired.profile_id = reserve.profile_id
+        AND retired.generation_id = reserve.generation_id
+  )
+ORDER BY proof.proven_at_ms DESC, proof.generation_id DESC
+LIMIT 1
+"#;
+
+/// At most one unused historical catalog object is offered for retention
+/// review. It is NOT a DELETE permit. A previous WORKING proof can be
+/// retired after a newer independently checked LKG is selected.
+///
+/// The selected reserve must be an exact browser-proven, released-runtime
+/// generation even when it is N-k instead of the immediately prior N-1.
+const LOAD_UNPROVEN_HISTORICAL_PRUNE_REVIEW: &str = r#"
+WITH protected AS (
+    SELECT
+        profile.tenant_id,
+        profile.profile_id,
+        profile.active_generation_id,
+        proof.generation_id AS reserved_generation_id
+    FROM browser_profiles AS profile
+    JOIN profile_generations AS current
+      ON current.tenant_id = profile.tenant_id
+     AND current.profile_id = profile.profile_id
+     AND current.generation_id = profile.active_generation_id
+    JOIN profile_generation_working_proofs AS proof
+      ON proof.tenant_id = profile.tenant_id
+     AND proof.profile_id = profile.profile_id
+    JOIN profile_generations AS reserved
+      ON reserved.tenant_id = proof.tenant_id
+     AND reserved.profile_id = proof.profile_id
+     AND reserved.generation_id = proof.generation_id
+    WHERE profile.tenant_id = ?
+      AND profile.profile_id = ?
+      AND profile.status = 'READY'
+      AND profile.active_generation_id = ?
+      AND current.status = 'VERIFIED'
+      AND current.verification_reference IS NOT NULL
+      AND reserved.status = 'VERIFIED'
+      AND reserved.verification_reference IS NOT NULL
+      AND reserved.generation_id <> current.generation_id
+      AND proof.metadata_digest = reserved.metadata_digest
+      AND proof.container_digest = reserved.container_digest
+      AND proof.runtime_inventory_sha256 = ?
+      AND NOT EXISTS (
+          SELECT 1 FROM profile_generation_retirement_intents AS retired
+          WHERE retired.tenant_id = reserved.tenant_id
+            AND retired.profile_id = reserved.profile_id
+            AND retired.generation_id = reserved.generation_id
+      )
+    ORDER BY proof.proven_at_ms DESC, proof.generation_id DESC
+    LIMIT 1
+)
+SELECT
+    old.generation_id,
+    old.object_key,
+    old.metadata_digest,
+    old.container_digest
+FROM protected
+JOIN profile_generations AS old
+  ON old.tenant_id = protected.tenant_id
+ AND old.profile_id = protected.profile_id
+WHERE old.status = 'VERIFIED'
+  AND old.verification_reference IS NOT NULL
+  AND old.generation_id <> protected.active_generation_id
+  AND old.generation_id <> protected.reserved_generation_id
+  -- Historical WORKING receipts are not permanent keep-grants. The
+  -- current independently certified reserve is protected by the CTE.
+  AND NOT EXISTS (
+      SELECT 1 FROM profile_generation_retirement_intents AS retired
+      WHERE retired.tenant_id = old.tenant_id
+        AND retired.profile_id = old.profile_id
+        AND retired.generation_id = old.generation_id
+  )
+ORDER BY old.created_at_ms ASC, old.generation_id ASC
+LIMIT 1
+"#;
+
+/// One D1-owner guarded tombstone stage, not a physical object DELETE.
+/// The candidate must survive exact recovery until the future effect owner
+/// proves current offline/lease/root/runtime/R2 preconditions again.
+const INSERT_GENERATION_RETIREMENT_INTENT: &str = r#"
+INSERT INTO profile_generation_retirement_intents (
+    tenant_id, profile_id, generation_id, observed_current_generation_id,
+    retained_working_generation_id, expected_profile_version, object_key,
+    metadata_digest, container_digest, approved_runtime_inventory_sha256,
+    admitted_by_actor_id, admitted_by_device_id, coordinator_session_id,
+    coordinator_epoch, admitted_at_ms
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+ON CONFLICT (tenant_id, profile_id, generation_id) DO NOTHING
+RETURNING generation_id
+"#;
+
+/// Exact replay only. A previous tombstone with a different CURRENT, retained
+/// WORKING, runtime, lease, digest or timestamp is NEVER the same operation.
+const LOAD_EXACT_GENERATION_RETIREMENT_INTENT: &str = r#"
+SELECT generation_id FROM profile_generation_retirement_intents
+WHERE tenant_id = ? AND profile_id = ? AND generation_id = ?
+  AND observed_current_generation_id = ? AND retained_working_generation_id = ?
+  AND expected_profile_version = ? AND object_key = ?
+  AND metadata_digest = ? AND container_digest = ?
+  AND approved_runtime_inventory_sha256 = ?
+  AND admitted_by_actor_id = ? AND admitted_by_device_id = ?
+  AND coordinator_session_id = ? AND coordinator_epoch = ?
+  AND admitted_at_ms = ?
+"#;
+
+const LOAD_RETENTION_PROFILE_VERSION: &str = r#"
+SELECT version FROM browser_profiles
+WHERE tenant_id = ? AND profile_id = ? AND status = 'READY'
+  AND active_generation_id = ?
+"#;
+
+const LOAD_PENDING_RETIREMENT: &str = r#"
+SELECT generation_id, object_key, metadata_digest, container_digest
+FROM profile_generation_retirement_intents
+WHERE tenant_id = ? AND profile_id = ? AND deleted_at_ms IS NULL
+  AND generation_id <> ? AND generation_id <> ?
+ORDER BY admitted_at_ms ASC, generation_id ASC
+LIMIT 1
+"#;
+
+const COMPLETE_RETIREMENT_EFFECT: &str = r#"
+UPDATE profile_generation_retirement_intents
+SET deleted_at_ms = ?
+WHERE tenant_id = ? AND profile_id = ? AND generation_id = ?
+  AND object_key = ? AND metadata_digest = ? AND container_digest = ?
+  AND deleted_at_ms IS NULL AND admitted_at_ms <= ?
+RETURNING generation_id
+"#;
+
+const LOAD_COMPLETED_RETIREMENT_EFFECT: &str = r#"
+SELECT generation_id FROM profile_generation_retirement_intents
+WHERE tenant_id = ? AND profile_id = ? AND generation_id = ?
+  AND object_key = ? AND metadata_digest = ? AND container_digest = ?
+  AND deleted_at_ms IS NOT NULL
+"#;
+
+const LOAD_VERIFIED_PREDECESSOR_OF_ACTIVE: &str = r#"
+SELECT
+    base.generation_id,
+    base.object_key,
+    base.metadata_digest,
+    base.container_digest
+FROM browser_profiles AS profile
+JOIN profile_generations AS current
+  ON current.tenant_id = profile.tenant_id
+ AND current.profile_id = profile.profile_id
+ AND current.generation_id = profile.active_generation_id
+JOIN profile_generation_successor_commands AS command
+  ON command.tenant_id = profile.tenant_id
+ AND command.profile_id = profile.profile_id
+ AND command.generation_id = current.generation_id
+JOIN profile_generations AS base
+  ON base.tenant_id = command.tenant_id
+ AND base.profile_id = command.profile_id
+ AND base.generation_id = command.base_generation_id
+WHERE profile.tenant_id = ?
+  AND profile.profile_id = ?
+  AND profile.status = 'READY'
+  AND profile.active_generation_id = ?
+  AND current.status = 'VERIFIED'
+  AND current.verification_reference IS NOT NULL
+  AND base.status = 'VERIFIED'
+  AND base.verification_reference IS NOT NULL
+  AND base.generation_id <> current.generation_id
+"#;
+
+#[derive(Deserialize)]
+struct HistoricalPredecessorRow {
+    generation_id: String,
+    object_key: String,
+    metadata_digest: String,
+    container_digest: String,
+}
 
 const LOAD_SUCCESSOR: &str = r#"
 SELECT
@@ -50,6 +297,66 @@ WHERE command.tenant_id = ?
   AND command.base_generation_id = ?
 "#;
 
+/// One consistent D1 read: original verified base is still selected,
+/// no journal row (including foreign or disputed) exists for this base,
+/// and no generation with this candidate ID was previously registered.
+const LOAD_UNAPPLIED_RETRY_DECISION: &str = r#"
+SELECT EXISTS (
+    SELECT 1 FROM browser_profiles AS profile
+    JOIN profile_generations AS base
+      ON base.tenant_id = profile.tenant_id
+     AND base.profile_id = profile.profile_id
+     AND base.generation_id = profile.active_generation_id
+    WHERE profile.tenant_id = ?
+      AND profile.profile_id = ?
+      AND profile.status = 'READY'
+      AND profile.active_generation_id = ?
+      AND base.status = 'VERIFIED'
+      AND base.verification_reference IS NOT NULL
+      AND NOT EXISTS (
+          SELECT 1 FROM profile_generation_successor_commands AS command
+          WHERE command.tenant_id = profile.tenant_id
+            AND command.profile_id = profile.profile_id
+            AND command.base_generation_id = ?
+      )
+      AND NOT EXISTS (
+          SELECT 1 FROM profile_generations AS candidate
+          WHERE candidate.tenant_id = profile.tenant_id
+            AND candidate.profile_id = profile.profile_id
+            AND candidate.generation_id = ?
+      )
+) AS allowed
+"#;
+
+/// Single D1 read: original N is still verified and selected, no successor
+/// command was applied. No candidate identity is fabricated for lone intent.
+const LOAD_UNSEALED_LOCAL_UNSYNCED_RETRY_DECISION: &str = r#"
+SELECT EXISTS (
+    SELECT 1 FROM browser_profiles AS profile
+    JOIN profile_generations AS base
+      ON base.tenant_id = profile.tenant_id
+     AND base.profile_id = profile.profile_id
+     AND base.generation_id = profile.active_generation_id
+    WHERE profile.tenant_id = ?
+      AND profile.profile_id = ?
+      AND profile.status = 'READY'
+      AND profile.active_generation_id = ?
+      AND base.status = 'VERIFIED'
+      AND base.verification_reference IS NOT NULL
+      AND NOT EXISTS (
+          SELECT 1 FROM profile_generation_successor_commands AS command
+          WHERE command.tenant_id = profile.tenant_id
+            AND command.profile_id = profile.profile_id
+            AND command.base_generation_id = ?
+      )
+) AS allowed
+"#;
+
+#[derive(Deserialize)]
+struct UnappliedRetryDecisionRow {
+    allowed: i64,
+}
+
 const INSERT_INTERACTIVE_SUCCESSOR: &str = r#"
 INSERT INTO profile_generation_successor_commands (
     tenant_id,
@@ -84,17 +391,113 @@ impl D1ProfileGenerationSuccessorCommitJournal {
         Self { database }
     }
 
+    /// The Worker has already proved a live DO lease/fence, exact R2 HEAD,
+    /// CURRENT, and rederived the *original* key from verified BPGC metadata.
+    /// D1 repeats catalog/ACL/device admission in its trigger transaction.
+    /// A lost response may replay the exact same receipt, not a conflicting one.
+    #[allow(clippy::too_many_arguments)]
+    pub async fn record_historical_working_proof(
+        &self,
+        actor: &ActorContext,
+        profile_id: &ProfileId,
+        current: &GenerationId,
+        historical: &GenerationId,
+        descriptor: &GenerationObjectDescriptor,
+        root_key_id: &str,
+        runtime_inventory_sha256: &str,
+        device_id: &DeviceId,
+        session_id: &profile_platform_primitives::SessionId,
+        coordinator_epoch: u64,
+        now: profile_platform_primitives::UnixMillis,
+    ) -> Result<(), GenerationPortError> {
+        if historical == current
+            || descriptor.generation_id() != historical
+            || descriptor.profile_id() != profile_id
+        {
+            return Err(historical_integrity_failure());
+        }
+        let epoch = i64::try_from(coordinator_epoch).map_err(|_| historical_integrity_failure())?;
+        let at = i64::try_from(now.value()).map_err(|_| historical_integrity_failure())?;
+        let fields = (
+            actor.tenant_scope().tenant_id().as_str(),
+            profile_id.as_str(),
+            historical.as_str(),
+            current.as_str(),
+            descriptor.metadata_digest(),
+            descriptor.container_digest(),
+            root_key_id,
+            runtime_inventory_sha256,
+            actor.actor_id().as_str(),
+            device_id.as_str(),
+            session_id.as_str(),
+            epoch,
+        );
+        let inserted = query!(
+            &self.database,
+            INSERT_HISTORICAL_WORKING_PROOF,
+            fields.0,
+            fields.1,
+            fields.2,
+            fields.3,
+            fields.4,
+            fields.5,
+            fields.6,
+            fields.7,
+            fields.8,
+            fields.9,
+            fields.10,
+            fields.11,
+            at,
+        )
+        .map_err(|_| historical_dependency_failure())?
+        .first::<String>(Some("generation_id"))
+        .await;
+        match inserted {
+            Ok(Some(value)) if value == historical.as_str() => Ok(()),
+            Ok(None) | Err(_) => {
+                // Ambiguous database completion: accept ONLY the immutable,
+                // byte-for-byte same receipt; never overwrite a different proof.
+                let existing = query!(
+                    &self.database,
+                    LOAD_HISTORICAL_WORKING_PROOF,
+                    fields.0,
+                    fields.1,
+                    fields.2,
+                    fields.3,
+                    fields.4,
+                    fields.5,
+                    fields.6,
+                    fields.7,
+                    fields.8,
+                    fields.9,
+                    fields.10,
+                    fields.11,
+                )
+                .map_err(|_| historical_dependency_failure())?
+                .first::<String>(Some("generation_id"))
+                .await
+                .map_err(|_| historical_dependency_failure())?;
+                match existing {
+                    Some(value) if value == historical.as_str() => Ok(()),
+                    _ => Err(historical_integrity_failure()),
+                }
+            }
+            _ => Err(historical_integrity_failure()),
+        }
+    }
+
     async fn load(
         &self,
         tenant_id: &TenantId,
-        request: &ProfileGenerationSuccessorCommitRequest,
+        profile_id: &ProfileId,
+        base_generation_id: &GenerationId,
     ) -> Result<Option<SuccessorRow>, ProfileGenerationSuccessorCommitError> {
         query!(
             &self.database,
             LOAD_SUCCESSOR,
             tenant_id.as_str(),
-            request.profile_id().as_str(),
-            request.base_generation_id().as_str(),
+            profile_id.as_str(),
+            base_generation_id.as_str(),
         )
         .map_err(|_| dependency_failure())?
         .first::<SuccessorRow>(None)
@@ -111,7 +514,14 @@ impl D1ProfileGenerationSuccessorCommitJournal {
         validate_request(actor, request)?;
         let token_digest = fencing_token_digest(request.coordinator().fencing_token());
 
-        if let Some(row) = self.load(actor.tenant_scope().tenant_id(), request).await? {
+        if let Some(row) = self
+            .load(
+                actor.tenant_scope().tenant_id(),
+                request.profile_id(),
+                request.base_generation_id(),
+            )
+            .await?
+        {
             return classify_existing(&row, actor, request, &token_digest);
         }
 
@@ -151,7 +561,11 @@ impl D1ProfileGenerationSuccessorCommitJournal {
         match insert {
             Ok(Some(_)) => {
                 let row = self
-                    .load(actor.tenant_scope().tenant_id(), request)
+                    .load(
+                        actor.tenant_scope().tenant_id(),
+                        request.profile_id(),
+                        request.base_generation_id(),
+                    )
                     .await?
                     .ok_or_else(integrity_failure)?;
                 if exact_row(&row, actor, request, &token_digest) && committed_state_is_exact(&row)
@@ -163,13 +577,365 @@ impl D1ProfileGenerationSuccessorCommitJournal {
             }
             Ok(None) => Err(integrity_failure()),
             Err(error) => {
-                if let Some(row) = self.load(actor.tenant_scope().tenant_id(), request).await? {
+                if let Some(row) = self
+                    .load(
+                        actor.tenant_scope().tenant_id(),
+                        request.profile_id(),
+                        request.base_generation_id(),
+                    )
+                    .await?
+                {
                     return classify_existing(&row, actor, request, &token_digest);
                 }
                 Err(classify_insert_failure(&error.to_string()))
             }
         }
     }
+}
+
+impl D1ProfileGenerationSuccessorCommitJournal {
+    /// Read-only, conservative diagnostic candidate. This result intentionally
+    /// cannot authorize an R2 DELETE; a future effect must recheck CURRENT,
+    /// the exact immutable R2 HEAD, old key/runtime, live Coordinator writer
+    /// fence, and unresolved local Save before every deletion.
+    pub async fn load_unproven_prune_review_candidate(
+        &self,
+        scope: &TenantScope,
+        profile_id: &ProfileId,
+        current_generation_id: &GenerationId,
+        approved_runtime_inventory_sha256: &str,
+    ) -> Result<Option<GenerationObjectCatalogReference>, GenerationPortError> {
+        if !is_sha256_hex(approved_runtime_inventory_sha256) {
+            return Err(historical_integrity_failure());
+        }
+        let row = query!(
+            &self.database,
+            LOAD_UNPROVEN_HISTORICAL_PRUNE_REVIEW,
+            scope.tenant_id().as_str(),
+            profile_id.as_str(),
+            current_generation_id.as_str(),
+            approved_runtime_inventory_sha256,
+        )
+        .map_err(|_| historical_dependency_failure())?
+        .first::<HistoricalPredecessorRow>(None)
+        .await
+        .map_err(|_| historical_dependency_failure())?;
+        historical_reference_from_row(row, scope, profile_id, current_generation_id)
+    }
+
+    /// Admit an immutable, non-destructive retirement intent after the
+    /// caller independently checks the same live Coordinator writer fence,
+    /// native local Saved/clean state, old root key, exact release runtime
+    /// and R2 HEAD. This method NEVER deletes R2 or grants deletion.
+    ///
+    /// For a lost response the caller MUST replay the exact same parameters,
+    /// including stable operation timestamp. A different witness is rejected.
+    #[allow(clippy::too_many_arguments)]
+    pub async fn record_guarded_retirement_intent(
+        &self,
+        actor: &ActorContext,
+        current: &GenerationId,
+        retained_working: &GenerationId,
+        candidate: &GenerationObjectCatalogReference,
+        expected_profile_version: u64,
+        approved_runtime_inventory_sha256: &str,
+        device_id: &DeviceId,
+        session_id: &profile_platform_primitives::SessionId,
+        coordinator_epoch: u64,
+        admitted_at: profile_platform_primitives::UnixMillis,
+    ) -> Result<(), GenerationPortError> {
+        let profile_id = candidate.profile_id();
+        let generation_id = candidate.generation_id();
+        if generation_id == current
+            || generation_id == retained_working
+            || current == retained_working
+            || expected_profile_version == 0
+            || coordinator_epoch == 0
+            || candidate.object_key()
+                != canonical_generation_object_key(
+                    actor.tenant_scope().tenant_id(),
+                    profile_id,
+                    generation_id,
+                )
+            || !is_sha256_hex(candidate.metadata_digest())
+            || !is_sha256_hex(candidate.container_digest())
+            || !is_sha256_hex(approved_runtime_inventory_sha256)
+        {
+            return Err(historical_integrity_failure());
+        }
+        let version =
+            i64::try_from(expected_profile_version).map_err(|_| historical_integrity_failure())?;
+        let epoch = i64::try_from(coordinator_epoch).map_err(|_| historical_integrity_failure())?;
+        let at = i64::try_from(admitted_at.value()).map_err(|_| historical_integrity_failure())?;
+        let fields = (
+            actor.tenant_scope().tenant_id().as_str(),
+            profile_id.as_str(),
+            generation_id.as_str(),
+            current.as_str(),
+            retained_working.as_str(),
+            version,
+            candidate.object_key(),
+            candidate.metadata_digest(),
+            candidate.container_digest(),
+            approved_runtime_inventory_sha256,
+            actor.actor_id().as_str(),
+            device_id.as_str(),
+            session_id.as_str(),
+            epoch,
+        );
+        let inserted = query!(
+            &self.database,
+            INSERT_GENERATION_RETIREMENT_INTENT,
+            fields.0,
+            fields.1,
+            fields.2,
+            fields.3,
+            fields.4,
+            fields.5,
+            fields.6,
+            fields.7,
+            fields.8,
+            fields.9,
+            fields.10,
+            fields.11,
+            fields.12,
+            fields.13,
+            at,
+        )
+        .map_err(|_| historical_dependency_failure())?
+        .first::<String>(Some("generation_id"))
+        .await;
+        match inserted {
+            Ok(Some(id)) if id == generation_id.as_str() => Ok(()),
+            Ok(None) | Err(_) => {
+                let existing = query!(
+                    &self.database,
+                    LOAD_EXACT_GENERATION_RETIREMENT_INTENT,
+                    fields.0,
+                    fields.1,
+                    fields.2,
+                    fields.3,
+                    fields.4,
+                    fields.5,
+                    fields.6,
+                    fields.7,
+                    fields.8,
+                    fields.9,
+                    fields.10,
+                    fields.11,
+                    fields.12,
+                    fields.13,
+                    at,
+                )
+                .map_err(|_| historical_dependency_failure())?
+                .first::<String>(Some("generation_id"))
+                .await
+                .map_err(|_| historical_dependency_failure())?;
+                match existing {
+                    Some(id) if id == generation_id.as_str() => Ok(()),
+                    _ => Err(historical_integrity_failure()),
+                }
+            }
+            _ => Err(historical_integrity_failure()),
+        }
+    }
+
+    /// The D1 owner alone loads the last actually browser-proven N-k, as
+    /// read-only retention evidence. It is NOT a fresh cold-probe candidate
+    /// and NEVER grants DELETE without fresh old-key/runtime/CURRENT checks.
+    pub async fn load_certified_working_reserve(
+        &self,
+        scope: &TenantScope,
+        profile_id: &ProfileId,
+        current_generation_id: &GenerationId,
+        approved_runtime_inventory_sha256: &str,
+    ) -> Result<Option<GenerationObjectCatalogReference>, GenerationPortError> {
+        // This is not an eligibility guess from historical generation age.
+        // The caller supplies an exact digest from the current release-owned
+        // allowlist, NEVER a value copied from the untrusted D1 receipt.
+        if !is_sha256_hex(approved_runtime_inventory_sha256) {
+            return Err(historical_integrity_failure());
+        }
+        let row = query!(
+            &self.database,
+            LOAD_CERTIFIED_WORKING_RESERVE,
+            scope.tenant_id().as_str(),
+            profile_id.as_str(),
+            current_generation_id.as_str(),
+            approved_runtime_inventory_sha256,
+        )
+        .map_err(|_| historical_dependency_failure())?
+        .first::<HistoricalPredecessorRow>(None)
+        .await
+        .map_err(|_| historical_dependency_failure())?;
+        historical_reference_from_row(row, scope, profile_id, current_generation_id)
+    }
+
+    /// CURRENT version for a single guarded retirement admission.
+    pub async fn load_retention_profile_version(
+        &self,
+        scope: &TenantScope,
+        profile_id: &ProfileId,
+        current: &GenerationId,
+    ) -> Result<Option<u64>, GenerationPortError> {
+        let version = query!(
+            &self.database,
+            LOAD_RETENTION_PROFILE_VERSION,
+            scope.tenant_id().as_str(),
+            profile_id.as_str(),
+            current.as_str(),
+        )
+        .map_err(|_| historical_dependency_failure())?
+        .first::<i64>(Some("version"))
+        .await
+        .map_err(|_| historical_dependency_failure())?;
+        version
+            .map(|v| u64::try_from(v).map_err(|_| historical_integrity_failure()))
+            .transpose()
+    }
+
+    /// Replay the oldest R2 DELETE that did not reach a durable completion
+    /// receipt. CURRENT and chosen WORKING are excluded.
+    pub async fn load_pending_retirement(
+        &self,
+        scope: &TenantScope,
+        profile_id: &ProfileId,
+        current: &GenerationId,
+        working: &GenerationId,
+    ) -> Result<Option<GenerationObjectCatalogReference>, GenerationPortError> {
+        let row = query!(
+            &self.database,
+            LOAD_PENDING_RETIREMENT,
+            scope.tenant_id().as_str(),
+            profile_id.as_str(),
+            current.as_str(),
+            working.as_str(),
+        )
+        .map_err(|_| historical_dependency_failure())?
+        .first::<HistoricalPredecessorRow>(None)
+        .await
+        .map_err(|_| historical_dependency_failure())?;
+        historical_reference_from_row(row, scope, profile_id, current)
+    }
+
+    /// One-way D1 confirmation after exact R2 HEAD observes absence.
+    pub async fn complete_retirement_effect(
+        &self,
+        scope: &TenantScope,
+        candidate: &GenerationObjectCatalogReference,
+        at: profile_platform_primitives::UnixMillis,
+    ) -> Result<(), GenerationPortError> {
+        let stamp = i64::try_from(at.value()).map_err(|_| historical_integrity_failure())?;
+        let fields = (
+            scope.tenant_id().as_str(),
+            candidate.profile_id().as_str(),
+            candidate.generation_id().as_str(),
+            candidate.object_key(),
+            candidate.metadata_digest(),
+            candidate.container_digest(),
+        );
+        let updated = query!(
+            &self.database,
+            COMPLETE_RETIREMENT_EFFECT,
+            stamp,
+            fields.0,
+            fields.1,
+            fields.2,
+            fields.3,
+            fields.4,
+            fields.5,
+            stamp,
+        )
+        .map_err(|_| historical_dependency_failure())?
+        .first::<String>(Some("generation_id"))
+        .await;
+        match updated {
+            Ok(Some(id)) if id == candidate.generation_id().as_str() => Ok(()),
+            Ok(None) | Err(_) => {
+                let previous = query!(
+                    &self.database,
+                    LOAD_COMPLETED_RETIREMENT_EFFECT,
+                    fields.0,
+                    fields.1,
+                    fields.2,
+                    fields.3,
+                    fields.4,
+                    fields.5,
+                )
+                .map_err(|_| historical_dependency_failure())?
+                .first::<String>(Some("generation_id"))
+                .await
+                .map_err(|_| historical_dependency_failure())?;
+                if previous.as_deref() == Some(candidate.generation_id().as_str()) {
+                    Ok(())
+                } else {
+                    Err(historical_integrity_failure())
+                }
+            }
+            _ => Err(historical_integrity_failure()),
+        }
+    }
+}
+
+impl VerifiedPredecessorObjectReferencePort for D1ProfileGenerationSuccessorCommitJournal {
+    async fn load_verified_predecessor_of_active(
+        &self,
+        scope: &TenantScope,
+        profile_id: &ProfileId,
+        current_generation_id: &GenerationId,
+    ) -> Result<Option<GenerationObjectCatalogReference>, GenerationPortError> {
+        // Maintenance cold-probe selection ALWAYS follows CURRENT's exact
+        // journal predecessor. An older live LKG must not permanently block
+        // probing/promoting a newly saved successor after key/runtime rotation.
+        let row = query!(
+            &self.database,
+            LOAD_VERIFIED_PREDECESSOR_OF_ACTIVE,
+            scope.tenant_id().as_str(),
+            profile_id.as_str(),
+            current_generation_id.as_str(),
+        )
+        .map_err(|_| historical_dependency_failure())?
+        .first::<HistoricalPredecessorRow>(None)
+        .await
+        .map_err(|_| historical_dependency_failure())?;
+        historical_reference_from_row(row, scope, profile_id, current_generation_id)
+    }
+}
+
+fn historical_reference_from_row(
+    row: Option<HistoricalPredecessorRow>,
+    scope: &TenantScope,
+    profile_id: &ProfileId,
+    current_generation_id: &GenerationId,
+) -> Result<Option<GenerationObjectCatalogReference>, GenerationPortError> {
+    let Some(row) = row else {
+        return Ok(None);
+    };
+    let generation_id =
+        GenerationId::parse(row.generation_id).map_err(|_| historical_integrity_failure())?;
+    if generation_id == *current_generation_id
+        || row.object_key
+            != canonical_generation_object_key(scope.tenant_id(), profile_id, &generation_id)
+        || !is_sha256_hex(&row.metadata_digest)
+        || !is_sha256_hex(&row.container_digest)
+    {
+        return Err(historical_integrity_failure());
+    }
+    Ok(Some(GenerationObjectCatalogReference::new(
+        profile_id.clone(),
+        generation_id,
+        row.object_key,
+        row.metadata_digest,
+        row.container_digest,
+    )))
+}
+
+const fn historical_dependency_failure() -> GenerationPortError {
+    GenerationPortError::new(GenerationPortErrorClass::DependencyUnavailable)
+}
+
+const fn historical_integrity_failure() -> GenerationPortError {
+    GenerationPortError::new(GenerationPortErrorClass::IntegrityFailure)
 }
 
 impl ProfileGenerationSuccessorCommitPort for D1ProfileGenerationSuccessorCommitJournal {
@@ -181,6 +947,151 @@ impl ProfileGenerationSuccessorCommitPort for D1ProfileGenerationSuccessorCommit
     {
         self.apply_interactive(actor, request).await
     }
+}
+
+/// Exact read-only reconciliation after an unknown response or Bridge crash.
+///
+/// Positive means the original journal row belongs to the current actor and
+/// device and its immutable object remains the active VERIFIED generation.
+/// Never replays the expired original session/fence or writes D1.
+impl ProfileGenerationSuccessorObservationPort for D1ProfileGenerationSuccessorCommitJournal {
+    async fn exact_successor_is_committed_active(
+        &self,
+        actor: &ActorContext,
+        device_id: &DeviceId,
+        profile_id: &ProfileId,
+        base_generation_id: &GenerationId,
+        object: &GenerationObjectDescriptor,
+    ) -> Result<bool, ProfileGenerationSuccessorCommitError> {
+        if object.profile_id() != profile_id
+            || object.generation_id() == base_generation_id
+            || object.object_key()
+                != format!(
+                    "tenants/{}/profiles/{}/generations/{}.bpgc",
+                    actor.tenant_scope().tenant_id().as_str(),
+                    profile_id.as_str(),
+                    object.generation_id().as_str(),
+                )
+            || object.container_bytes() == 0
+            || !is_sha256_hex(object.metadata_digest())
+            || !is_sha256_hex(object.container_digest())
+        {
+            return Err(integrity_failure());
+        }
+        let Some(row) = self
+            .load(
+                actor.tenant_scope().tenant_id(),
+                profile_id,
+                base_generation_id,
+            )
+            .await?
+        else {
+            return Ok(false);
+        };
+        Ok(observed_successor_is_exact(
+            &row,
+            actor,
+            device_id,
+            profile_id,
+            base_generation_id,
+            object,
+        ))
+    }
+}
+
+impl ProfileGenerationSuccessorRetryDecisionPort for D1ProfileGenerationSuccessorCommitJournal {
+    async fn exact_unapplied_successor_is_retryable(
+        &self,
+        actor: &ActorContext,
+        profile_id: &ProfileId,
+        base_generation_id: &GenerationId,
+        object: &GenerationObjectDescriptor,
+    ) -> Result<bool, ProfileGenerationSuccessorCommitError> {
+        if object.profile_id() != profile_id
+            || object.generation_id() == base_generation_id
+            || object.object_key()
+                != format!(
+                    "tenants/{}/profiles/{}/generations/{}.bpgc",
+                    actor.tenant_scope().tenant_id().as_str(),
+                    profile_id.as_str(),
+                    object.generation_id().as_str(),
+                )
+            || object.container_bytes() == 0
+            || !is_sha256_hex(object.metadata_digest())
+            || !is_sha256_hex(object.container_digest())
+        {
+            return Err(integrity_failure());
+        }
+        let result = query!(
+            &self.database,
+            LOAD_UNAPPLIED_RETRY_DECISION,
+            actor.tenant_scope().tenant_id().as_str(),
+            profile_id.as_str(),
+            base_generation_id.as_str(),
+            base_generation_id.as_str(),
+            object.generation_id().as_str(),
+        )
+        .map_err(|_| dependency_failure())?
+        .first::<UnappliedRetryDecisionRow>(None)
+        .await
+        .map_err(|_| dependency_failure())?
+        .ok_or_else(integrity_failure)?;
+        match result.allowed {
+            0 => Ok(false),
+            1 => Ok(true),
+            _ => Err(integrity_failure()),
+        }
+    }
+
+    async fn unsealed_local_unsynced_is_retryable(
+        &self,
+        actor: &ActorContext,
+        profile_id: &ProfileId,
+        base_generation_id: &GenerationId,
+    ) -> Result<bool, ProfileGenerationSuccessorCommitError> {
+        let row = query!(
+            &self.database,
+            LOAD_UNSEALED_LOCAL_UNSYNCED_RETRY_DECISION,
+            actor.tenant_scope().tenant_id().as_str(),
+            profile_id.as_str(),
+            base_generation_id.as_str(),
+            base_generation_id.as_str(),
+        )
+        .map_err(|_| dependency_failure())?
+        .first::<UnappliedRetryDecisionRow>(None)
+        .await
+        .map_err(|_| dependency_failure())?
+        .ok_or_else(integrity_failure)?;
+        match row.allowed {
+            0 => Ok(false),
+            1 => Ok(true),
+            _ => Err(integrity_failure()),
+        }
+    }
+}
+
+/// Shares the same VERIFIED active pointer proof as idempotent commit, but
+/// checks only immutable journal fields and *current* caller identity.
+/// No persisted original lease token is ever required.
+fn observed_successor_is_exact(
+    row: &SuccessorRow,
+    actor: &ActorContext,
+    device_id: &DeviceId,
+    profile_id: &ProfileId,
+    base_generation_id: &GenerationId,
+    object: &GenerationObjectDescriptor,
+) -> bool {
+    row.authority_kind == "INTERACTIVE_LAUNCH"
+        && row.command_actor_id == actor.actor_id().as_str()
+        && row.device_id == device_id.as_str()
+        && row.profile_id == profile_id.as_str()
+        && row.base_generation_id == base_generation_id.as_str()
+        && row.generation_id == object.generation_id().as_str()
+        && row.object_key == object.object_key()
+        && row.metadata_digest == object.metadata_digest()
+        && row.container_digest == object.container_digest()
+        && i64_matches_u64(row.container_bytes, object.container_bytes())
+        && committed_state_is_exact(row)
 }
 
 #[derive(Deserialize)]
@@ -407,7 +1318,7 @@ const fn dependency_failure() -> ProfileGenerationSuccessorCommitError {
 
 #[cfg(test)]
 mod tests {
-    use super::{is_sha256_hex, validate_request};
+    use super::{SuccessorRow, is_sha256_hex, observed_successor_is_exact, validate_request};
     use application_ports::generation_objects::GenerationObjectDescriptor;
     use application_ports::profile_generation_successor::{
         ProfileGenerationCommitWitness, ProfileGenerationSuccessorCommitRequest,
@@ -416,6 +1327,199 @@ mod tests {
         ActorContext, ActorId, AggregateVersion, CorrelationId, DeviceId, FencingToken,
         GenerationId, ProfileId, SessionId, TenantId, TenantScope, UnixMillis,
     };
+
+    #[test]
+    fn durable_retirement_replay_requires_all_exact_original_fence_fields() {
+        let insert = super::INSERT_GENERATION_RETIREMENT_INTENT;
+        let replay = super::LOAD_EXACT_GENERATION_RETIREMENT_INTENT;
+        assert!(insert.contains("ON CONFLICT (tenant_id, profile_id, generation_id) DO NOTHING"));
+        assert!(insert.contains("RETURNING generation_id"));
+        for field in [
+            "observed_current_generation_id = ?",
+            "retained_working_generation_id = ?",
+            "expected_profile_version = ?",
+            "object_key = ?",
+            "metadata_digest = ?",
+            "container_digest = ?",
+            "approved_runtime_inventory_sha256 = ?",
+            "admitted_by_actor_id = ?",
+            "admitted_by_device_id = ?",
+            "coordinator_session_id = ?",
+            "coordinator_epoch = ?",
+            "admitted_at_ms = ?",
+        ] {
+            assert!(
+                replay.contains(field),
+                "lost retirement replay witness: {field}"
+            );
+        }
+        assert!(!insert.contains("DELETE "));
+        assert!(!replay.contains("DELETE "));
+    }
+
+    #[test]
+    fn prune_review_must_never_be_an_unconditional_delete_capability() {
+        let query = super::LOAD_UNPROVEN_HISTORICAL_PRUNE_REVIEW;
+        assert!(query.contains("profile.status = 'READY'"));
+        assert!(query.contains("profile.active_generation_id = ?"));
+        assert!(query.contains("proof.runtime_inventory_sha256 = ?"));
+        assert!(query.contains("proof.metadata_digest = reserved.metadata_digest"));
+        assert!(query.contains("proof.container_digest = reserved.container_digest"));
+        assert!(query.contains("old.generation_id <> protected.active_generation_id"));
+        assert!(query.contains("old.generation_id <> protected.reserved_generation_id"));
+        assert!(query.contains("NOT EXISTS"));
+        assert!(!query.contains("profile_generation_working_proofs AS past"));
+        assert!(query.contains("profile_generation_retirement_intents AS retired"));
+        assert!(!query.contains("DELETE "));
+        assert!(!query.contains("UPDATE "));
+        assert!(!query.contains("INSERT "));
+    }
+
+    #[test]
+    fn durable_working_read_selects_only_verified_receipts_not_generation_age() {
+        let query = super::LOAD_CERTIFIED_WORKING_RESERVE;
+        assert!(query.contains("profile_generation_working_proofs AS proof"));
+        assert!(query.contains("proof.generation_id"));
+        assert!(query.contains("proof.metadata_digest = reserve.metadata_digest"));
+        assert!(query.contains("proof.container_digest = reserve.container_digest"));
+        assert!(query.contains("proof.runtime_inventory_sha256 = ?"));
+        assert!(query.contains("profile.active_generation_id = ?"));
+        assert!(query.contains("reserve.status = 'VERIFIED'"));
+        assert!(query.contains("reserve.generation_id <> current.generation_id"));
+        assert!(!query.contains("DELETE "));
+        assert!(!query.contains("UPDATE "));
+    }
+
+    #[test]
+    fn only_immediate_active_verified_predecessor_is_discoverable() {
+        let query = super::LOAD_VERIFIED_PREDECESSOR_OF_ACTIVE;
+        assert!(query.contains("profile.active_generation_id = ?"));
+        assert!(query.contains("profile.status = 'READY'"));
+        assert!(query.contains("current.status = 'VERIFIED'"));
+        assert!(query.contains("current.verification_reference IS NOT NULL"));
+        assert!(query.contains("base.status = 'VERIFIED'"));
+        assert!(query.contains("base.verification_reference IS NOT NULL"));
+        assert!(query.contains("command.generation_id = current.generation_id"));
+        assert!(query.contains("base.generation_id = command.base_generation_id"));
+        assert!(!query.contains("ORDER BY"));
+        assert!(!query.contains("DELETE "));
+        assert!(!query.contains("UPDATE "));
+    }
+
+    #[test]
+    fn lone_unsynced_base_read_requires_selected_verified_pointer_and_no_journal() {
+        let sql = super::LOAD_UNSEALED_LOCAL_UNSYNCED_RETRY_DECISION;
+        assert!(sql.contains("profile.active_generation_id = ?"));
+        assert!(sql.contains("profile.status = 'READY'"));
+        assert!(sql.contains("base.status = 'VERIFIED'"));
+        assert!(sql.contains("base.verification_reference IS NOT NULL"));
+        assert!(sql.contains("NOT EXISTS"));
+        assert!(sql.contains("command.base_generation_id = ?"));
+        assert!(!sql.contains("candidate.generation_id"));
+    }
+
+    #[test]
+    fn retry_decision_requires_exact_base_and_unapplied_journal() {
+        let statement = super::LOAD_UNAPPLIED_RETRY_DECISION;
+        assert!(statement.contains("profile.active_generation_id = ?"));
+        assert!(statement.contains("profile.status = 'READY'"));
+        assert!(statement.contains("base.status = 'VERIFIED'"));
+        assert!(statement.contains("base.verification_reference IS NOT NULL"));
+        assert!(statement.contains("profile_generation_successor_commands AS command"));
+        assert!(statement.contains("command.base_generation_id = ?"));
+        assert!(statement.contains("profile_generations AS candidate"));
+        assert!(statement.contains("candidate.generation_id = ?"));
+    }
+
+    #[test]
+    fn read_only_observer_needs_exact_actor_device_descriptor_and_verified_pointer()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let tenant = TenantId::parse("tenant_observer_01")?;
+        let profile = ProfileId::parse("profile_observer_01")?;
+        let base = GenerationId::parse("generation_observer_base_01")?;
+        let successor = GenerationId::parse("generation_observer_next_01")?;
+        let device = DeviceId::parse("device_observer_01")?;
+        let actor = ActorContext::new(
+            TenantScope::new(tenant.clone()),
+            ActorId::parse("actor_observer_01")?,
+            CorrelationId::parse("corr_observer_01")?,
+        );
+        let object = GenerationObjectDescriptor::new(
+            profile.clone(),
+            successor.clone(),
+            format!(
+                "tenants/{}/profiles/{}/generations/{}.bpgc",
+                tenant.as_str(),
+                profile.as_str(),
+                successor.as_str(),
+            ),
+            "a".repeat(64),
+            "b".repeat(64),
+            4096,
+        );
+        let mut row = SuccessorRow {
+            command_actor_id: actor.actor_id().as_str().to_owned(),
+            device_id: device.as_str().to_owned(),
+            authority_kind: "INTERACTIVE_LAUNCH".to_owned(),
+            profile_id: profile.as_str().to_owned(),
+            base_generation_id: base.as_str().to_owned(),
+            generation_id: successor.as_str().to_owned(),
+            object_key: object.object_key().to_owned(),
+            metadata_digest: object.metadata_digest().to_owned(),
+            container_digest: object.container_digest().to_owned(),
+            container_bytes: 4096,
+            expected_profile_version: 7,
+            coordinator_session_id: "session_observer_01".to_owned(),
+            coordinator_fencing_token_digest: "f".repeat(64),
+            coordinator_epoch: 3,
+            coordinator_version: 11,
+            coordinator_sequence: 10,
+            executed_at_ms: 100,
+            active_generation_id: Some(successor.as_str().to_owned()),
+            profile_status: Some("READY".to_owned()),
+            profile_version: Some(8),
+            generation_status: Some("VERIFIED".to_owned()),
+            generation_version: Some(2),
+            generation_object_key: Some(object.object_key().to_owned()),
+            generation_metadata_digest: Some(object.metadata_digest().to_owned()),
+            generation_container_digest: Some(object.container_digest().to_owned()),
+            verification_reference: Some(format!("r2sha256:{}", object.container_digest())),
+        };
+        assert!(observed_successor_is_exact(
+            &row, &actor, &device, &profile, &base, &object,
+        ));
+        assert!(!observed_successor_is_exact(
+            &row,
+            &actor,
+            &DeviceId::parse("device_foreign_observer_01")?,
+            &profile,
+            &base,
+            &object,
+        ));
+        let foreign = ActorContext::new(
+            TenantScope::new(tenant),
+            ActorId::parse("actor_foreign_observer_01")?,
+            CorrelationId::parse("corr_foreign_observer_01")?,
+        );
+        assert!(!observed_successor_is_exact(
+            &row, &foreign, &device, &profile, &base, &object,
+        ));
+        row.container_digest = "c".repeat(64);
+        assert!(!observed_successor_is_exact(
+            &row, &actor, &device, &profile, &base, &object,
+        ));
+        row.container_digest = object.container_digest().to_owned();
+        row.profile_status = Some("IN_USE".to_owned());
+        assert!(!observed_successor_is_exact(
+            &row, &actor, &device, &profile, &base, &object,
+        ));
+        row.profile_status = Some("READY".to_owned());
+        row.generation_status = Some("QUARANTINED".to_owned());
+        assert!(!observed_successor_is_exact(
+            &row, &actor, &device, &profile, &base, &object,
+        ));
+        Ok(())
+    }
 
     #[test]
     fn request_requires_exact_successor_and_coordinator_shape()

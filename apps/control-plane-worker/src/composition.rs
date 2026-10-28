@@ -41,11 +41,13 @@ use cloudflare_adapters::d1_notification_operations::D1NotificationOperationsRep
 use cloudflare_adapters::d1_notifications::D1NotificationRepository;
 use cloudflare_adapters::d1_profile_application::D1ProfileApplicationBundle;
 use cloudflare_adapters::d1_profile_generation_application::D1ProfileGenerationApplicationRepository;
+use cloudflare_adapters::d1_profile_generation_successor::D1ProfileGenerationSuccessorCommitJournal;
 use cloudflare_adapters::d1_query::D1QueryRepository;
 use cloudflare_adapters::generation_keyring::CloudflareGenerationRootKeyring;
 use cloudflare_adapters::microsoft_graph_authorization::D1MicrosoftGraphAuthorization;
 use cloudflare_adapters::r2_generation_download_capability::R2GenerationDownloadCapabilitySigner;
 use cloudflare_adapters::r2_generation_objects::R2GenerationObjects;
+use cloudflare_adapters::r2_generation_retention::R2GenerationRetention;
 use cloudflare_adapters::r2_generation_upload_capability::{
     R2GenerationUploadCapabilitySigner, R2SigV4Credentials,
 };
@@ -270,6 +272,10 @@ pub fn generation_object_verifier(env: &Env) -> Result<R2GenerationObjects> {
     Ok(R2GenerationObjects::new(env.bucket(R2_PROFILES_BINDING)?))
 }
 
+pub fn generation_object_retention(env: &Env) -> Result<R2GenerationRetention> {
+    Ok(R2GenerationRetention::new(env.bucket(R2_PROFILES_BINDING)?))
+}
+
 pub fn generation_root_keyring(env: &Env) -> Result<CloudflareGenerationRootKeyring> {
     CloudflareGenerationRootKeyring::from_env(env, GENERATION_ROOT_KEYRING_BINDING)
         .map_err(|_| Error::RustError("generation root-key keyring unavailable".to_owned()))
@@ -321,6 +327,15 @@ pub fn coordinator_ingress_application(env: &Env) -> CloudflareCoordinatorIngres
 #[must_use]
 pub fn device_generation_commit(env: &Env) -> CloudflareDeviceGenerationCommitPort<'_> {
     CloudflareDeviceGenerationCommitPort::new(env, PROFILE_COORDINATOR_BINDING)
+}
+
+/// D1 journal is the sole read-only truth owner for crash successor observation.
+pub fn profile_generation_successor_observer(
+    env: &Env,
+) -> Result<D1ProfileGenerationSuccessorCommitJournal> {
+    Ok(D1ProfileGenerationSuccessorCommitJournal::new(
+        env.d1(D1_CATALOG_BINDING)?,
+    ))
 }
 
 #[must_use]

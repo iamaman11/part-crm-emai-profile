@@ -31,6 +31,15 @@ jobs:
           EXPECTED_SOURCE_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
         run: python -c "import os, subprocess; actual = subprocess.check_output(['git', 'rev-parse', 'HEAD'], text=True).strip(); expected = os.environ['EXPECTED_SOURCE_SHA']; assert actual == expected, f'expected {expected}, got {actual}'"
 
+      # OS-isolated Cargo cache; this job still checks and tests exact source.
+      - name: Restore Bridge host Rust compilation cache
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2, immutable
+        with:
+          shared-key: bridge-host-ops-v1
+          workspaces: |
+            . -> target
+            platform/windows-device-key -> target
+
       - name: Show pinned toolchain
         run: rustup show active-toolchain
 
@@ -56,6 +65,15 @@ jobs:
         env:
           EXPECTED_SOURCE_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
         run: python -c "import os, subprocess; actual = subprocess.check_output(['git', 'rev-parse', 'HEAD'], text=True).strip(); expected = os.environ['EXPECTED_SOURCE_SHA']; assert actual == expected, f'expected {expected}, got {actual}'"
+
+      # OS-isolated Cargo cache; this job still checks and tests exact source.
+      - name: Restore Bridge host Rust compilation cache
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2, immutable
+        with:
+          shared-key: bridge-host-ops-v1
+          workspaces: |
+            . -> target
+            platform/windows-device-key -> target
 
       - name: Show pinned toolchain
         shell: pwsh

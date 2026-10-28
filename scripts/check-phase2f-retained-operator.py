@@ -216,7 +216,17 @@ def self_test(root: Path) -> list[str]:
     except OSError as error:
         return [f"could not read Phase 2F retained-operator source: {error}"]
 
-    fixture = operator.replace(OPEN_PENDING_GUARD, "self.active.is_some()", 1)
+    # Target the canonical single-Open owner, not the first occurrence
+    # anywhere in the file: ancillary read-only maintenance operations also
+    # (correctly) reject an active/retained writer before claiming authority.
+    open_body = function_body(operator, SINGLE_OPEN_BODY)
+    if not open_body or OPEN_PENDING_GUARD not in open_body:
+        return ["retained-operator canonical pending-ownership guard is missing"]
+    fixture = operator.replace(
+        open_body,
+        open_body.replace(OPEN_PENDING_GUARD, "self.active.is_some()", 1),
+        1,
+    )
     rejected = failures_for_sources(fixture, unit_test, acceptance_test, synthetic)
     if not any("pending dirty ownership" in failure or OPEN_PENDING_GUARD in failure for failure in rejected):
         return ["retained-operator premature second-ownership fixture unexpectedly passed"]

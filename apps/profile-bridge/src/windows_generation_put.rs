@@ -1,15 +1,17 @@
 #![cfg(windows)]
 #![forbid(unsafe_code)]
 
+use crate::generation_object_spool::VerifiedGenerationObjectFile;
 use crate::shipping_generation_save::{
-    SignedGenerationObjectPutPort, SignedGenerationUploadCapability,
+    SignedGenerationObjectPutPort, SignedGenerationObjectStreamPutPort,
+    SignedGenerationUploadCapability,
 };
 use bridge_domain::BridgePortError;
-use encrypted_generation_domain::MAX_GENERATION_CONTAINER_BYTES;
+use encrypted_generation_domain::{MAX_GENERATION_CONTAINER_BYTES, MAX_STREAM_CONTAINER_BYTES};
 use std::collections::BTreeSet;
 use std::env;
 use std::fs;
-use std::io::Write;
+use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output, Stdio};
 
@@ -53,10 +55,45 @@ impl SignedGenerationObjectPutPort for WindowsSignedGenerationObjectPut {
         if container.is_empty() || container.len() > MAX_GENERATION_CONTAINER_BYTES {
             return Err(BridgePortError::InvalidResponse);
         }
+        let mut reader = container;
+        self.put_bounded_source(capability, &mut reader, container.len() as u64)
+    }
+}
+
+impl SignedGenerationObjectStreamPutPort for WindowsSignedGenerationObjectPut {
+    fn put_verified_stream(
+        &mut self,
+        capability: &SignedGenerationUploadCapability,
+        object: &mut VerifiedGenerationObjectFile,
+    ) -> Result<(), Self::Error> {
+        object
+            .recheck_and_rewind()
+            .map_err(|_| BridgePortError::InvalidResponse)?;
+        let expected = object.expected_bytes();
+        let result = self.put_bounded_source(capability, object.reader(), expected);
+        // Always re-read the exact open handle after a network effect.
+        // A file mutation while uploading forbids returning success/commit.
+        object
+            .recheck_and_rewind()
+            .map_err(|_| BridgePortError::InvalidResponse)?;
+        result
+    }
+}
+
+impl WindowsSignedGenerationObjectPut {
+    fn put_bounded_source<R: Read>(
+        &mut self,
+        capability: &SignedGenerationUploadCapability,
+        source: &mut R,
+        expected_bytes: u64,
+    ) -> Result<(), BridgePortError> {
+        if expected_bytes == 0 || expected_bytes > MAX_STREAM_CONTAINER_BYTES {
+            return Err(BridgePortError::InvalidResponse);
+        }
         let signed_url = capability
             .url()
             .map_err(|_| BridgePortError::InvalidResponse)?;
-        if !valid_signed_r2_put_url(signed_url) {
+        if !valid_signed_r2_url(signed_url) {
             return Err(BridgePortError::InvalidResponse);
         }
         let headers = capability
@@ -109,12 +146,31 @@ impl SignedGenerationObjectPutPort for WindowsSignedGenerationObjectPut {
         inherit_windows_system_root(&mut command);
 
         let mut child = command.spawn().map_err(|_| BridgePortError::Unavailable)?;
-        child
-            .stdin
-            .take()
-            .ok_or(BridgePortError::Unavailable)?
-            .write_all(container)
-            .map_err(|_| BridgePortError::Unavailable)?;
+        // Preserve bounded RAM for 512 MiB spools. A short read, extra
+        // trailing byte, or changed source is NOT a successful PUT.
+        let result = (|| -> Result<(), BridgePortError> {
+            let mut stdin = child.stdin.take().ok_or(BridgePortError::Unavailable)?;
+            let copied = std::io::copy(&mut (&mut *source).take(expected_bytes), &mut stdin)
+                .map_err(|_| BridgePortError::Unavailable)?;
+            if copied != expected_bytes {
+                return Err(BridgePortError::InvalidResponse);
+            }
+            drop(stdin); // curl needs EOF before writing its HTTP status.
+            let mut trailing = [0_u8; 1];
+            if source
+                .read(&mut trailing)
+                .map_err(|_| BridgePortError::Unavailable)?
+                != 0
+            {
+                return Err(BridgePortError::InvalidResponse);
+            }
+            Ok(())
+        })();
+        if let Err(error) = result {
+            let _ = child.kill();
+            let _ = child.wait();
+            return Err(error);
+        }
         let output = child
             .wait_with_output()
             .map_err(|_| BridgePortError::Unavailable)?;
@@ -153,7 +209,7 @@ fn decode_curl_http_output(output: Output) -> Result<(u16, Vec<u8>), BridgePortE
     Ok((status, output.stdout[..marker].to_vec()))
 }
 
-fn valid_signed_r2_put_url(value: &str) -> bool {
+pub(crate) fn valid_signed_r2_url(value: &str) -> bool {
     if value.is_empty()
         || value.len() > MAX_SIGNED_GENERATION_URL_BYTES
         || value
@@ -215,14 +271,14 @@ fn valid_header_value(value: &str) -> bool {
             .any(|byte| byte == b'\r' || byte == b'\n' || byte == 0)
 }
 
-fn system_curl_executable() -> Result<PathBuf, BridgePortError> {
+pub(crate) fn system_curl_executable() -> Result<PathBuf, BridgePortError> {
     let system_root = env::var_os("SystemRoot").ok_or(BridgePortError::Unavailable)?;
     let curl_executable = PathBuf::from(system_root).join("System32").join("curl.exe");
     validate_regular_absolute_file(&curl_executable)?;
     Ok(curl_executable)
 }
 
-fn inherit_windows_system_root(command: &mut Command) {
+pub(crate) fn inherit_windows_system_root(command: &mut Command) {
     for key in ["SystemRoot", "WINDIR"] {
         if let Some(value) = env::var_os(key) {
             command.env(key, value);
@@ -243,12 +299,12 @@ fn validate_regular_absolute_file(path: &Path) -> Result<(), BridgePortError> {
 
 #[cfg(test)]
 mod tests {
-    use super::{valid_header_name, valid_header_value, valid_signed_r2_put_url};
+    use super::{valid_header_name, valid_header_value, valid_signed_r2_url};
 
     #[test]
     fn signed_put_url_requires_direct_canonical_r2_authority() {
         let good = "https://0123456789abcdef0123456789abcdef.r2.cloudflarestorage.com/profile-generations/tenants/tenant_01/profiles/profile_01/generations/generation_01.bpgc?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=access%2F20260830%2Fauto%2Fs3%2Faws4_request&X-Amz-Date=20260830T120000Z&X-Amz-Expires=300&X-Amz-SignedHeaders=content-type%3Bhost&X-Amz-Signature=abc";
-        assert!(valid_signed_r2_put_url(good));
+        assert!(valid_signed_r2_url(good));
         for bad in [
             good.replacen("https://", "http://", 1),
             good.replacen(".r2.cloudflarestorage.com", ".example.com", 1),
@@ -260,7 +316,7 @@ mod tests {
                 1,
             ),
         ] {
-            assert!(!valid_signed_r2_put_url(&bad));
+            assert!(!valid_signed_r2_url(&bad));
         }
     }
 

@@ -318,3 +318,43 @@ pub trait ProfileGenerationSuccessorCommitPort {
         >,
     >;
 }
+
+/// Pure D1 nonapplication proof. Caller MUST first prove current actor/device
+/// ACL and a fresh exclusive coordinator lease. A positive observation is
+/// not a PUT capability: upload/commit must recheck the new fence and CAS.
+pub trait ProfileGenerationSuccessorRetryDecisionPort {
+    fn exact_unapplied_successor_is_retryable(
+        &self,
+        actor: &ActorContext,
+        profile_id: &ProfileId,
+        base_generation_id: &GenerationId,
+        object: &GenerationObjectDescriptor,
+    ) -> impl Future<Output = Result<bool, ProfileGenerationSuccessorCommitError>>;
+
+    /// Pre-sealing readiness for the same verified original N; no N+1 object
+    /// or candidate exists yet. Caller already proved current ACL and fence.
+    fn unsealed_local_unsynced_is_retryable(
+        &self,
+        actor: &ActorContext,
+        profile_id: &ProfileId,
+        base_generation_id: &GenerationId,
+    ) -> impl Future<Output = Result<bool, ProfileGenerationSuccessorCommitError>>;
+}
+
+/// Read-only reconciliation of an exact, previously attempted interactive save.
+///
+/// This capability cannot sign an upload, mutate a Profile, or extend a lease.
+/// The caller authenticates the *current* actor/device and checks current
+/// Profile Operate permissions before asking the D1 journal if this immutable
+/// descriptor was already committed and is still the active VERIFIED pointer.
+/// An expired original fencing token is neither requested nor resurrected.
+pub trait ProfileGenerationSuccessorObservationPort {
+    fn exact_successor_is_committed_active(
+        &self,
+        actor: &ActorContext,
+        device_id: &DeviceId,
+        profile_id: &ProfileId,
+        base_generation_id: &GenerationId,
+        object: &GenerationObjectDescriptor,
+    ) -> impl Future<Output = Result<bool, ProfileGenerationSuccessorCommitError>>;
+}

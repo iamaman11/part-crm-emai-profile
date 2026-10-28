@@ -1,3 +1,4 @@
+use crate::browser_execution::{BrowserLaunchBlocker, persist_committed_successor_binding};
 #[cfg(any(test, feature = "synthetic-test-bin"))]
 use crate::browser_mail_query::BrowserMailExecutionProof;
 use crate::dirty_generation::PreparedDirtyGeneration;
@@ -8,8 +9,8 @@ use crate::dirty_generation_finalize::{
     DirtyGenerationCommitClientPort, publish_verify_and_commit_dirty_generation,
 };
 use crate::local_profile::{
-    BridgeWorkspaceLock, GenerationWorkspace, LocalGenerationRecord, LocalGenerationState,
-    LocalProfileError, MaterializationRoot,
+    BridgeWorkspaceLock, GenerationInventory, GenerationWorkspace, LocalGenerationRecord,
+    LocalGenerationState, LocalProfileError, MaterializationRoot,
 };
 use crate::shipping_generation_save::CommittedGenerationSuccessor;
 use application_ports::ProfileCoordinatorPort;
@@ -23,11 +24,26 @@ use profile_platform_primitives::{GenerationId, UnixMillis};
 use session_domain::ProfileLease;
 use std::fmt;
 
-#[derive(Debug)]
 pub struct RetainedDirtyClose {
     lease: ProfileLease,
     workspace_lock: Option<BridgeWorkspaceLock>,
     base: LocalGenerationRecord,
+    // In-process exact retry authority. It is deliberately not a new durable
+    // state store: after process loss a separate authenticated reconciliation
+    // is required before the on-disk candidate can be trusted or discarded.
+    pending_prepared: Option<PreparedDirtyGeneration>,
+}
+
+impl fmt::Debug for RetainedDirtyClose {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("RetainedDirtyClose")
+            .field("lease", &self.lease)
+            .field("workspace_lock_held", &self.workspace_lock.is_some())
+            .field("base", &self.base)
+            .field("has_pending_prepared", &self.pending_prepared.is_some())
+            .finish()
+    }
 }
 
 impl RetainedDirtyClose {
@@ -45,6 +61,7 @@ impl RetainedDirtyClose {
             lease,
             workspace_lock: Some(workspace_lock),
             base,
+            pending_prepared: None,
         })
     }
 
@@ -61,6 +78,35 @@ impl RetainedDirtyClose {
     #[must_use]
     pub const fn holds_workspace_lock(&self) -> bool {
         self.workspace_lock.is_some()
+    }
+
+    #[must_use]
+    pub(crate) fn prepared_successor(&self) -> Option<&PreparedDirtyGeneration> {
+        self.pending_prepared.as_ref()
+    }
+
+    pub(crate) fn remember_prepared_successor(
+        &mut self,
+        prepared: PreparedDirtyGeneration,
+    ) -> Result<(), LocalProfileError> {
+        let metadata = prepared.sealed().metadata();
+        if self.pending_prepared.is_some()
+            || self.workspace_lock.is_none()
+            || self.base.state() != LocalGenerationState::DirtyLocal
+            || !self.base.is_locked()
+            || metadata.tenant_id() != self.lease.tenant_id()
+            || metadata.profile_id() != self.lease.profile_id()
+            || metadata.base_generation_id() != Some(self.base.generation_id())
+            || prepared.candidate_workspace().generation_id() != metadata.generation_id()
+        {
+            return Err(LocalProfileError::InvalidTransition);
+        }
+        self.pending_prepared = Some(prepared);
+        Ok(())
+    }
+
+    pub(crate) fn take_prepared_successor(&mut self) -> Option<PreparedDirtyGeneration> {
+        self.pending_prepared.take()
     }
 
     pub fn open_base_workspace(
@@ -86,12 +132,12 @@ impl RetainedDirtyClose {
     ///
     /// The backend commit is already authoritative when this method is entered. Therefore the old
     /// base is made superseded before candidate validation and is never restored. A changed or
-    /// missing candidate is removed from its canonical N+1 path when possible so the next ordinary
-    /// P2 launch must rematerialize the server-selected N+1. Workspace/coordinator release are
-    /// attempted independently; failure of either is reported but never rolls the backend back.
+    /// missing candidate is never fabricated as ready, but any retained bytes remain in place for
+    /// exact owned recovery; ordinary P2 launch cannot reuse it without exact binding/inventory.
+    /// Workspace/coordinator release are attempted independently and never roll the backend back.
     pub fn complete_committed_successor<P>(
         &mut self,
-        root: &MaterializationRoot,
+        _root: &MaterializationRoot,
         prepared: &PreparedDirtyGeneration,
         committed: &CommittedGenerationSuccessor,
         coordinator: &mut P,
@@ -108,6 +154,42 @@ impl RetainedDirtyClose {
             return Err(CommittedDirtyCloseError::InvalidRetainedOwnership);
         }
 
+        self.complete_committed_streamed_successor(
+            prepared.candidate_workspace(),
+            prepared.candidate_inventory(),
+            committed,
+            coordinator,
+            now,
+        )
+    }
+
+    /// The same local completion owner accepts an independently validated
+    /// file-backed BPAT descriptor without allocating a sealed generation.
+    /// It never promotes local readiness unless N+1's original native
+    /// inventory still matches the exactly committed ciphertext.
+    pub(crate) fn complete_committed_streamed_successor<P>(
+        &mut self,
+        candidate: &GenerationWorkspace,
+        expected_inventory: &GenerationInventory,
+        committed: &CommittedGenerationSuccessor,
+        coordinator: &mut P,
+        now: UnixMillis,
+    ) -> Result<DirtyCloseCompletion, CommittedDirtyCloseError>
+    where
+        P: ProfileCoordinatorPort,
+    {
+        if self.workspace_lock.is_none()
+            || self.base.state() != LocalGenerationState::DirtyLocal
+            || !self.base.is_locked()
+            || candidate.generation_id() != committed.generation_id()
+            || candidate.tenant_id() != self.lease.tenant_id()
+            || candidate.profile_id() != self.lease.profile_id()
+            || candidate.generation_id() == self.base.generation_id()
+            || committed.container_bytes() == 0
+        {
+            return Err(CommittedDirtyCloseError::InvalidRetainedOwnership);
+        }
+
         let transition_at = if now < self.base.last_activity_at() {
             self.base.last_activity_at()
         } else {
@@ -117,20 +199,42 @@ impl RetainedDirtyClose {
             .mark_superseded(transition_at)
             .map_err(CommittedDirtyCloseError::Local)?;
 
-        let local_outcome = match prepared.candidate_workspace().inventory() {
-            Ok(inventory) if inventory == *prepared.candidate_inventory() => {
-                DirtyCloseLocalOutcome::CandidateAccepted(LocalGenerationRecord::new(
-                    committed.generation_id().clone(),
-                    inventory.total_bytes(),
-                    transition_at,
-                ))
+        let local_outcome = match candidate.inventory() {
+            Ok(inventory) if inventory == *expected_inventory => {
+                // This is the same exact candidate whose immutable container was accepted by
+                // the backend. A committed cloud generation is not locally ready until the
+                // existing next-launch binding owner can read its exact identity/inventory.
+                match persist_committed_successor_binding(
+                    candidate,
+                    self.lease.tenant_id(),
+                    self.lease.profile_id(),
+                    committed.generation_id(),
+                    committed.container_digest(),
+                ) {
+                    Ok(()) => {
+                        DirtyCloseLocalOutcome::CandidateAccepted(LocalGenerationRecord::new(
+                            committed.generation_id().clone(),
+                            inventory.total_bytes(),
+                            transition_at,
+                        ))
+                    }
+                    Err(reason) => DirtyCloseLocalOutcome::MaterializationBindingBlocked {
+                        generation_id: committed.generation_id().clone(),
+                        reason,
+                    },
+                }
             }
-            Ok(_) | Err(_) => rematerialization_outcome(
-                root,
-                self.lease.tenant_id(),
-                self.lease.profile_id(),
-                committed.generation_id(),
-            ),
+            // The authoritative commit cannot undo post-snapshot browser writes. Removing
+            // N+1 here would silently destroy those retained bytes. Preserve the exact
+            // workspace for owned reconciliation, but never publish local launch readiness.
+            Ok(_) => DirtyCloseLocalOutcome::MaterializationBindingBlocked {
+                generation_id: committed.generation_id().clone(),
+                reason: BrowserLaunchBlocker::RecoveryRequired,
+            },
+            Err(error) => DirtyCloseLocalOutcome::MaterializationBindingBlocked {
+                generation_id: committed.generation_id().clone(),
+                reason: BrowserLaunchBlocker::LocalProfile(error),
+            },
         };
 
         let physical_workspace_lock_released = self
@@ -234,23 +338,6 @@ fn committed_matches_retained(
         && prepared.candidate_workspace().profile_id() == metadata.profile_id()
 }
 
-fn rematerialization_outcome(
-    root: &MaterializationRoot,
-    tenant_id: &profile_platform_primitives::TenantId,
-    profile_id: &profile_platform_primitives::ProfileId,
-    generation_id: &GenerationId,
-) -> DirtyCloseLocalOutcome {
-    match root.reject_generation_for_rematerialization(tenant_id, profile_id, generation_id) {
-        Ok(()) | Err(LocalProfileError::Io(std::io::ErrorKind::NotFound)) => {
-            DirtyCloseLocalOutcome::RematerializeRequired(generation_id.clone())
-        }
-        Err(error) => DirtyCloseLocalOutcome::RematerializationBlocked {
-            generation_id: generation_id.clone(),
-            error,
-        },
-    }
-}
-
 #[cfg(any(test, feature = "synthetic-test-bin"))]
 fn same_lease(left: &ProfileLease, right: &ProfileLease) -> bool {
     left.tenant_id() == right.tenant_id()
@@ -265,6 +352,12 @@ fn same_lease(left: &ProfileLease, right: &ProfileLease) -> bool {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum DirtyCloseLocalOutcome {
     CandidateAccepted(LocalGenerationRecord),
+    /// Cloud commit succeeded, but the existing local readiness contract did not.
+    /// Keep both retained base and candidate bytes for owned recovery, never claim Saved.
+    MaterializationBindingBlocked {
+        generation_id: GenerationId,
+        reason: BrowserLaunchBlocker,
+    },
     RematerializeRequired(GenerationId),
     RematerializationBlocked {
         generation_id: GenerationId,

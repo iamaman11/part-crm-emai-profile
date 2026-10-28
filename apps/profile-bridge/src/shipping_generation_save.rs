@@ -2,9 +2,8 @@ use crate::dirty_generation::{
     DirtyGenerationError, GenerationSealingMaterialPort, PreparedDirtyGeneration,
     prepare_dirty_generation_candidate,
 };
-use crate::local_profile::{
-    GenerationWorkspace, LocalGenerationRecord, LocalProfileError, MaterializationRoot,
-};
+use crate::generation_object_spool::VerifiedGenerationObjectFile;
+use crate::local_profile::{GenerationWorkspace, LocalGenerationRecord, MaterializationRoot};
 use profile_platform_primitives::{GenerationId, ProfileId, TenantId};
 use session_domain::ProfileLease;
 use sha2::{Digest, Sha256};
@@ -130,6 +129,20 @@ pub trait SignedGenerationObjectPutPort {
     ) -> Result<(), Self::Error>;
 }
 
+/// Additive file-only R2 transport contract. Does not change the existing
+/// in-memory P3 upload. A caller must first durably publish and revalidate
+/// its original sealed checkpoint and obtain a fresh signed R2 capability.
+/// The adapter must stream exactly the authenticated spool bytes and refuse
+/// success if they changed before/after transfer. D1 verification + CAS
+/// commit remains owned by the existing successor control plane.
+pub trait SignedGenerationObjectStreamPutPort: SignedGenerationObjectPutPort {
+    fn put_verified_stream(
+        &mut self,
+        capability: &SignedGenerationUploadCapability,
+        object: &mut VerifiedGenerationObjectFile,
+    ) -> Result<(), Self::Error>;
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct CommittedGenerationSuccessor {
     generation_id: GenerationId,
@@ -169,6 +182,34 @@ impl CommittedGenerationSuccessor {
     #[must_use]
     pub const fn outcome(&self) -> GenerationSuccessorCommitOutcome {
         self.outcome
+    }
+
+    /// Construct only after the existing Worker accepted the exact atomic D1
+    /// commit response. The immutable descriptor comes from the verified BPAT.
+    #[cfg(any(windows, test))]
+    pub(crate) fn confirmed_streamed(
+        generation_id: &str,
+        object_key: &str,
+        metadata_digest: &str,
+        container_digest: &str,
+        container_bytes: u64,
+        outcome: GenerationSuccessorCommitOutcome,
+    ) -> Result<Self, ()> {
+        if object_key.is_empty()
+            || metadata_digest.len() != 64
+            || container_digest.len() != 64
+            || container_bytes == 0
+        {
+            return Err(());
+        }
+        Ok(Self {
+            generation_id: GenerationId::parse(generation_id).map_err(|_| ())?,
+            object_key: object_key.to_owned(),
+            metadata_digest: metadata_digest.to_owned(),
+            container_digest: container_digest.to_owned(),
+            container_bytes,
+            outcome,
+        })
     }
 }
 
@@ -224,25 +265,36 @@ where
     if lease.tenant_id() != tenant_id || lease.profile_id() != profile_id {
         return Err(ShippingGenerationSaveError::InvalidRetainedAuthority);
     }
-    let candidate_generation_id = successor_generation_id_for_lease(lease)
-        .map_err(|_| ShippingGenerationSaveError::CandidateIdentity)?;
+    // A durable LOCAL_UNSYNCED marker is the canonical attempt identity
+    // on the shipping close AND on renewed-lease recovery. Test-only paths
+    // lacking any pending evidence retain the original deterministic lease ID.
+    // Corrupt/staged evidence never triggers a silent fallback to another N+1.
+    let candidate_generation_id =
+        match crate::shipping_save_attempt::original_local_unsynced_successor(
+            root,
+            source_workspace,
+            lease,
+        )
+        .map_err(|_| ShippingGenerationSaveError::CandidateIdentity)?
+        {
+            Some(generation_id) => generation_id,
+            None => successor_generation_id_for_lease(lease)
+                .map_err(|_| ShippingGenerationSaveError::CandidateIdentity)?,
+        };
     if base_record.generation_id() == &candidate_generation_id {
         return Err(ShippingGenerationSaveError::InvalidRetainedAuthority);
     }
 
-    match root.reject_generation_for_rematerialization(
-        tenant_id,
-        profile_id,
-        &candidate_generation_id,
-    ) {
-        Ok(()) | Err(LocalProfileError::Io(std::io::ErrorKind::NotFound)) => {}
-        Err(error) => {
-            return Err(ShippingGenerationSaveError::Prepare(
-                DirtyGenerationError::Local(error),
-            ));
-        }
-    }
-
+    // The same deterministic candidate can survive an interrupted upload or a
+    // committed cloud successor whose HTTP reply was lost. Never delete or
+    // rematerialize its local bytes merely because the current process is
+    // retrying. Recovery must reconcile the original attempt with the
+    // authoritative server record before it may reuse this generation ID.
+    //
+    // RecoveryClone::create fails closed with TargetAlreadyExists if those
+    // bytes already exist, including an invalid/incomplete generation marker.
+    // This deliberately preserves the unresolved candidate until a durable
+    // exact-attempt resume path can prove what is safe to publish.
     prepare_dirty_generation_candidate(
         base_record,
         source_workspace,
@@ -576,6 +628,143 @@ mod tests {
     }
 
     #[test]
+    fn initial_close_and_crash_recovery_use_the_same_exact_successor()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let fixture = Fixture::new("original-equals-recovery")?;
+        let source = fixture.source_workspace()?;
+        crate::shipping_save_attempt::persist_local_unsynced_intent(
+            &fixture.root,
+            &source,
+            &fixture.lease,
+        )?;
+        let renewed = ProfileLease::issue(
+            fixture.tenant.clone(),
+            fixture.profile.clone(),
+            SessionId::parse("session_following_power_cut")?,
+            fixture.lease.device_id().clone(),
+            fixture.lease.epoch() + 1,
+            FencingToken::parse("fence_following_power_cut")?,
+        )?;
+        let expected = crate::shipping_save_attempt::deterministic_lone_unsynced_successor(
+            &fixture.root,
+            &fixture.tenant,
+            &fixture.profile,
+            &fixture.base,
+            &renewed,
+        )?
+        .ok_or("missing candidate")?;
+        let mut control = Control {
+            events: Rc::new(RefCell::new(Vec::new())),
+            verified: false,
+            commit: GenerationSuccessorCommitOutcome::Activated,
+        };
+        let prepared = prepare_retained_generation_successor(
+            &fixture.record,
+            &source,
+            &fixture.root,
+            &fixture.tenant,
+            &fixture.profile,
+            &fixture.lease,
+            &mut control,
+        )?;
+        assert_eq!(prepared.candidate_workspace().generation_id(), &expected);
+        assert_eq!(
+            crate::shipping_save_attempt::deterministic_lone_unsynced_successor(
+                &fixture.root,
+                &fixture.tenant,
+                &fixture.profile,
+                &fixture.base,
+                &renewed,
+            )?,
+            Some(expected),
+        );
+        assert_eq!(std::fs::read(source.path().join("prefs.js"))?, b"save");
+        Ok(())
+    }
+
+    #[test]
+    fn changed_native_source_after_close_cannot_choose_another_generation()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let fixture = Fixture::new("changed-source")?;
+        let source = fixture.source_workspace()?;
+        crate::shipping_save_attempt::persist_local_unsynced_intent(
+            &fixture.root,
+            &source,
+            &fixture.lease,
+        )?;
+        std::fs::write(source.path().join("prefs.js"), b"native-file-mutated")?;
+        let mut control = Control {
+            events: Rc::new(RefCell::new(Vec::new())),
+            verified: false,
+            commit: GenerationSuccessorCommitOutcome::Activated,
+        };
+        assert!(matches!(
+            prepare_retained_generation_successor(
+                &fixture.record,
+                &source,
+                &fixture.root,
+                &fixture.tenant,
+                &fixture.profile,
+                &fixture.lease,
+                &mut control,
+            ),
+            Err(ShippingGenerationSaveError::CandidateIdentity),
+        ));
+        assert_eq!(
+            std::fs::read(source.path().join("prefs.js"))?,
+            b"native-file-mutated"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn torn_scoped_sibling_blocks_new_candidate_and_preserves_working_bytes()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let fixture = Fixture::new("torn-sibling")?;
+        let source = fixture.source_workspace()?;
+        crate::shipping_save_attempt::persist_local_unsynced_intent(
+            &fixture.root,
+            &source,
+            &fixture.lease,
+        )?;
+        let marker = std::fs::read_dir(fixture.root.path())?
+            .filter_map(Result::ok)
+            .find_map(|entry| {
+                let name = entry.file_name().into_string().ok()?;
+                name.ends_with("-local-unsynced-v1.intent").then_some(name)
+            })
+            .ok_or("missing marker")?;
+        let scope = marker
+            .strip_suffix("-local-unsynced-v1.intent")
+            .ok_or("unscoped marker")?;
+        let pending = fixture
+            .root
+            .path()
+            .join(format!("{scope}.pending-unverified"));
+        std::fs::write(&pending, b"interrupted save")?;
+        let mut control = Control {
+            events: Rc::new(RefCell::new(Vec::new())),
+            verified: false,
+            commit: GenerationSuccessorCommitOutcome::Activated,
+        };
+        assert!(matches!(
+            prepare_retained_generation_successor(
+                &fixture.record,
+                &source,
+                &fixture.root,
+                &fixture.tenant,
+                &fixture.profile,
+                &fixture.lease,
+                &mut control,
+            ),
+            Err(ShippingGenerationSaveError::CandidateIdentity),
+        ));
+        assert!(pending.exists());
+        assert_eq!(std::fs::read(source.path().join("prefs.js"))?, b"save");
+        Ok(())
+    }
+
+    #[test]
     fn signed_upload_capability_redacts_debug_and_preserves_canonical_utf8()
     -> Result<(), Box<dyn std::error::Error>> {
         let capability = SignedGenerationUploadCapability::new(
@@ -592,7 +781,7 @@ mod tests {
     }
 
     #[test]
-    fn retained_retry_rebuilds_only_the_exact_deterministic_candidate()
+    fn retained_retry_preserves_existing_candidate_pending_exact_reconciliation()
     -> Result<(), Box<dyn std::error::Error>> {
         let fixture = Fixture::new("retry")?;
         let events = Rc::new(RefCell::new(Vec::new()));
@@ -612,12 +801,13 @@ mod tests {
             &mut control,
         )?;
         let candidate_generation_id = first.sealed().metadata().generation_id().clone();
-        std::fs::write(
-            first.candidate_workspace().path().join("retry-residue"),
-            b"stale-precommit-candidate",
-        )?;
+        let user_data = first.candidate_workspace().path().join("user_data");
+        std::fs::create_dir(&user_data)?;
+        let irreplaceable = user_data.join("site-storage.sqlite-wal");
+        std::fs::write(&irreplaceable, b"last-uncommitted-browser-writes")?;
+        let original_inventory = first.candidate_workspace().inventory()?;
 
-        let second = prepare_retained_generation_successor(
+        let retry = prepare_retained_generation_successor(
             &fixture.record,
             &source,
             &fixture.root,
@@ -625,22 +815,28 @@ mod tests {
             &fixture.profile,
             &fixture.lease,
             &mut control,
-        )?;
+        );
 
+        assert!(matches!(
+            retry,
+            Err(ShippingGenerationSaveError::Prepare(
+                DirtyGenerationError::Local(LocalProfileError::TargetAlreadyExists)
+            ))
+        ));
         assert_eq!(
-            second.sealed().metadata().generation_id(),
+            first.sealed().metadata().generation_id(),
             &candidate_generation_id
         );
-        assert!(
-            !second
-                .candidate_workspace()
-                .path()
-                .join("retry-residue")
-                .exists()
-        );
         assert_eq!(
-            second.candidate_workspace().inventory()?,
-            *second.candidate_inventory()
+            std::fs::read(&irreplaceable)?,
+            b"last-uncommitted-browser-writes"
+        );
+        assert_eq!(first.candidate_workspace().inventory()?, original_inventory);
+        assert!(
+            fixture
+                .root
+                .open_generation(&fixture.tenant, &fixture.profile, &candidate_generation_id,)
+                .is_ok()
         );
         Ok(())
     }
@@ -683,11 +879,64 @@ mod tests {
         assert!(matches!(
             retry,
             Err(ShippingGenerationSaveError::Prepare(
-                DirtyGenerationError::Local(LocalProfileError::LockBusy)
+                DirtyGenerationError::Local(LocalProfileError::TargetAlreadyExists)
             ))
         ));
 
+        assert!(first.candidate_workspace().path().exists());
         lock.release()?;
+        Ok(())
+    }
+
+    #[test]
+    fn existing_candidate_with_torn_marker_cannot_be_rewritten_during_retry()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let fixture = Fixture::new("retry-torn-marker")?;
+        let events = Rc::new(RefCell::new(Vec::new()));
+        let mut control = Control {
+            events,
+            verified: false,
+            commit: GenerationSuccessorCommitOutcome::Activated,
+        };
+        let source = fixture.source_workspace()?;
+        let first = prepare_retained_generation_successor(
+            &fixture.record,
+            &source,
+            &fixture.root,
+            &fixture.tenant,
+            &fixture.profile,
+            &fixture.lease,
+            &mut control,
+        )?;
+        let candidate = first.candidate_workspace().path();
+        let recovery = candidate.join("user_data");
+        std::fs::create_dir(&recovery)?;
+        std::fs::write(
+            recovery.join("cookies.sqlite"),
+            b"retained-unknown-cookie-bytes",
+        )?;
+        std::fs::remove_file(candidate.join(".profile-generation"))?;
+
+        let retry = prepare_retained_generation_successor(
+            &fixture.record,
+            &source,
+            &fixture.root,
+            &fixture.tenant,
+            &fixture.profile,
+            &fixture.lease,
+            &mut control,
+        );
+        assert!(matches!(
+            retry,
+            Err(ShippingGenerationSaveError::Prepare(
+                DirtyGenerationError::Local(LocalProfileError::TargetAlreadyExists)
+            ))
+        ));
+        assert_eq!(
+            std::fs::read(recovery.join("cookies.sqlite"))?,
+            b"retained-unknown-cookie-bytes"
+        );
+        assert!(!candidate.join(".profile-generation").exists());
         Ok(())
     }
 

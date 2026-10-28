@@ -4,6 +4,261 @@
 
 use crate::device_pairing::DevicePairingBootstrapError;
 use crate::shipping_composition::ShippingCompositionError;
+#[cfg(any(windows, test))]
+use crate::shipping_control_plane::ShippingControlPlaneError;
+#[cfg(any(windows, test))]
+use crate::shipping_generation_successor_control::RestartExactCommitObservation;
+
+/// Ephemeral, lossless-enough operator evidence for a short user/support
+/// status. Each field belongs to its original owner; no derived phase is
+/// persisted or allowed to authorize Open, upload, commit, or deletion.
+#[cfg(any(windows, test))]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct ReadOnlyProfileDiagnosis {
+    local: &'static str,
+    writer: &'static str,
+    checkpoint: &'static str,
+    cloud: &'static str,
+    runtime: &'static str,
+    lkg: &'static str,
+    state: &'static str,
+    next_safe_step: &'static str,
+    cause: &'static str,
+}
+
+#[cfg(any(windows, test))]
+impl ReadOnlyProfileDiagnosis {
+    /// No information about CURRENT remote authority follows merely from
+    /// holding the native operator's previous lease or a local file lock.
+    #[must_use]
+    pub(crate) fn from_operator(facts: crate::operator_flow::OperatorDiagnosticFacts) -> Self {
+        use crate::local_profile::LocalGenerationState;
+        let local = match (facts.active_local, facts.retained_local) {
+            (_, Some(LocalGenerationState::DirtyLocal)) => "DIRTY_BYTES_RETAINED",
+            (
+                _,
+                Some(LocalGenerationState::RecoveryRequired | LocalGenerationState::Quarantined),
+            ) => "RECOVERY_REQUIRED",
+            (_, Some(_)) => "RETAINED_STATE_UNPROVEN",
+            (Some(LocalGenerationState::InUse), None) => "IN_USE_OBSERVED",
+            (
+                Some(LocalGenerationState::RecoveryRequired | LocalGenerationState::Quarantined),
+                None,
+            ) => "RECOVERY_REQUIRED",
+            (Some(_), None) => "LOCAL_STATE_OBSERVED",
+            (None, None) => "UNKNOWN",
+        };
+        let writer = if facts.retained_local.is_some() {
+            "HISTORICAL_LEASE_REPROOF_REQUIRED"
+        } else if facts.active_local.is_some() {
+            "LOCAL_OWNER_OBSERVED_SERVER_FRESHNESS_UNKNOWN"
+        } else {
+            "UNKNOWN"
+        };
+        let checkpoint = if facts.candidate_prepared {
+            "PREPARED_NOT_DURABILITY_PROOF"
+        } else {
+            "UNKNOWN"
+        };
+        let runtime = if facts.active_local.is_some() {
+            "SESSION_OWNED_BROWSER_WORKING_UNPROVEN"
+        } else if facts.retained_local.is_some() {
+            "CLOSED_OR_RECOVERY_BROWSER_WORKING_UNPROVEN"
+        } else {
+            "UNKNOWN"
+        };
+        Self {
+            local,
+            writer,
+            checkpoint,
+            cloud: "UNKNOWN",
+            runtime,
+            lkg: "UNKNOWN",
+            state: if facts.cleanup_blocked {
+                "RECOVERY_REQUIRED"
+            } else if facts.retained_local.is_some() {
+                "LOCAL_BYTES_RETAINED"
+            } else {
+                "UNKNOWN"
+            },
+            next_safe_step: if facts.cleanup_blocked {
+                "OWNED_RECOVERY_ONLY"
+            } else if facts.retained_local.is_some() {
+                "REQUIRE_FRESH_SERVER_DECISION"
+            } else {
+                "CHECK_PROFILE_OPERATIONS"
+            },
+            cause: "NONE_PROVEN",
+        }
+    }
+
+    /// Called ONLY after controlled Close persisted its exact LOCAL_UNSYNCED
+    /// intent. The returned close result is the witness, not this projection.
+    #[must_use]
+    pub(crate) fn after_durable_local_close(
+        facts: crate::operator_flow::OperatorDiagnosticFacts,
+    ) -> Self {
+        let mut diagnosis = Self::from_operator(facts);
+        if diagnosis.local == "DIRTY_BYTES_RETAINED" && !facts.cleanup_blocked {
+            diagnosis.state = "LOCAL_UNSYNCED";
+            diagnosis.checkpoint = "DURABLE_LOCAL_INTENT_NOT_SEALED_PROOF";
+            diagnosis.cloud = "NOT_CONFIRMED";
+        }
+        diagnosis
+    }
+
+    /// The actual completed Save owner is the *only* positive CLOUD_SAVED
+    /// witness. A server commit without locally ready/released+retired exact
+    /// checkpoint MUST remain COMMITTED_LOCAL_RECOVERY, never Saved.
+    #[must_use]
+    pub(crate) fn after_save(
+        facts: crate::operator_flow::OperatorDiagnosticFacts,
+        result: &Result<
+            crate::operator_flow::OperatorGenerationSaveCompletion,
+            crate::operator_flow::OperatorFlowError,
+        >,
+    ) -> Self {
+        use crate::operator_flow::OperatorFlowError;
+        let mut diagnosis = Self::from_operator(facts);
+        match result {
+            Ok(completion) if completion.is_saved() && !facts.cleanup_blocked => {
+                diagnosis.local = "COMMITTED_LOCAL_READY";
+                diagnosis.writer = "OWNED_LAYERS_RELEASED";
+                diagnosis.checkpoint = "EXACT_RETIRED";
+                diagnosis.cloud = "COMMITTED_EXACT";
+                diagnosis.state = "CLOUD_SAVED";
+                diagnosis.next_safe_step = "NORMAL_NEXT_OPEN";
+            }
+            Ok(_) => {
+                diagnosis.cloud = "COMMITTED_EXACT";
+                diagnosis.state = "COMMITTED_LOCAL_RECOVERY";
+                diagnosis.next_safe_step = "OWNED_LOCAL_COMPLETION";
+            }
+            Err(OperatorFlowError::GenerationSave { reason }) => {
+                diagnosis.cause = reason.code();
+                if reason.allows_bounded_cloud_reconcile() {
+                    diagnosis.cloud = "EFFECT_UNKNOWN";
+                    diagnosis.state = "CLOUD_OUTCOME_UNCONFIRMED";
+                    diagnosis.next_safe_step = "FRESH_AUTHORIZED_EXACT_RECONCILIATION";
+                } else {
+                    diagnosis.cloud = if matches!(
+                        *reason,
+                        crate::operator_flow::GenerationSaveFailureReason::ControlRejected
+                    ) {
+                        "CURRENT_REQUEST_REJECTED"
+                    } else {
+                        "NOT_CONFIRMED"
+                    };
+                    diagnosis.state = "BLOCKED_LOCAL_BYTES_RETAINED_OR_UNKNOWN";
+                    diagnosis.next_safe_step = "PRESERVE_BYTES_CHECK_CAUSE";
+                }
+            }
+            Err(OperatorFlowError::Stage(_)) => {
+                diagnosis.cloud = "UNKNOWN";
+                diagnosis.state = "BLOCKED_CAUSE_UNRESOLVED";
+                diagnosis.next_safe_step = "PRESERVE_BYTES_CHECK_CAUSE";
+                diagnosis.cause = "BRIDGE_STAGE_FAILURE_CAUSE_UNRESOLVED";
+            }
+            Err(_) => {
+                diagnosis.state = "RECOVERY_REQUIRED";
+                diagnosis.next_safe_step = "OWNED_RECOVERY_ONLY";
+            }
+        }
+        diagnosis
+    }
+
+    /// Allowlisted values only. No IDs, paths, profile content, HTTP payloads,
+    /// signed URLs, tokens or keys. Neither logs nor UI grant an action.
+    #[must_use]
+    pub(crate) fn redacted_record(self) -> String {
+        format!(
+            "P3_OWNER_DIAG={};LOCAL={};WRITER={};CHECKPOINT={};CLOUD={};RUNTIME={};LKG={};CAUSE={};NEXT_SAFE_STEP={}",
+            self.state,
+            self.local,
+            self.writer,
+            self.checkpoint,
+            self.cloud,
+            self.runtime,
+            self.lkg,
+            self.cause,
+            self.next_safe_step
+        )
+    }
+
+    #[cfg(test)]
+    #[must_use]
+    pub(crate) const fn state(self) -> &'static str {
+        self.state
+    }
+}
+
+/// Read-only projection of existing exact checkpoint / authoritative observe
+/// facts. Never persists a parallel profile state, creates an authorization,
+/// changes a file, or permits a network write.
+#[cfg(any(windows, test))]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum PendingSaveReadOnlyDiagnosis {
+    ServerActiveExactLocalUnresolved,
+    ServerNotActiveExactRetryUnresolved,
+    CanonicalCheckpointNotFound,
+    LocalUnsyncedAwaitingServerDecision,
+    UnknownPreserveBytes,
+}
+
+#[cfg(any(windows, test))]
+impl PendingSaveReadOnlyDiagnosis {
+    /// Read-only, locally validated offline close; never a retry grant.
+    pub(crate) const fn local_unsynced() -> Self {
+        Self::LocalUnsyncedAwaitingServerDecision
+    }
+
+    pub(crate) fn from_observation(
+        observed: Result<RestartExactCommitObservation, ShippingControlPlaneError>,
+    ) -> Self {
+        match observed {
+            Ok(RestartExactCommitObservation::ActiveExact) => {
+                Self::ServerActiveExactLocalUnresolved
+            }
+            Ok(RestartExactCommitObservation::NotActiveExact) => {
+                Self::ServerNotActiveExactRetryUnresolved
+            }
+            Ok(RestartExactCommitObservation::NoCanonicalCheckpoint) => {
+                Self::CanonicalCheckpointNotFound
+            }
+            Err(_) => Self::UnknownPreserveBytes,
+        }
+    }
+
+    #[must_use]
+    pub(crate) const fn code(self) -> &'static str {
+        match self {
+            Self::ServerActiveExactLocalUnresolved => {
+                "P3_RECOVERY_OBSERVATION=ACTIVE_EXACT;LOCAL_READINESS=UNRESOLVED"
+            }
+            Self::ServerNotActiveExactRetryUnresolved => {
+                "P3_RECOVERY_OBSERVATION=NOT_ACTIVE_EXACT;RETRY_AUTHORITY=UNRESOLVED"
+            }
+            Self::CanonicalCheckpointNotFound => "P3_RECOVERY_OBSERVATION=NO_CANONICAL_CHECKPOINT",
+            Self::LocalUnsyncedAwaitingServerDecision => {
+                "P3_RECOVERY=LOCAL_UNSYNCED_VERIFIED;CLOUD_SAVE=NOT_CONFIRMED"
+            }
+            Self::UnknownPreserveBytes => "P3_RECOVERY_OBSERVATION=UNKNOWN;BYTES_RETAINED",
+        }
+    }
+
+    /// Safe diagnostic recommendation, NEVER an executable transition or
+    /// grant. Existing Bridge / Coordinator / D1 owners must still prove it.
+    #[must_use]
+    pub(crate) const fn next_safe_step(self) -> &'static str {
+        match self {
+            Self::ServerActiveExactLocalUnresolved => "VERIFY_OWNED_LOCAL_COMPLETION",
+            Self::ServerNotActiveExactRetryUnresolved => "REQUIRE_FRESH_SERVER_RETRY_DECISION",
+            Self::CanonicalCheckpointNotFound => "RECHECK_PENDING_LOCAL_EVIDENCE",
+            Self::LocalUnsyncedAwaitingServerDecision => "REQUIRE_FRESH_SERVER_RETRY_DECISION",
+            Self::UnknownPreserveBytes => "RETRY_READ_ONLY_OBSERVATION",
+        }
+    }
+}
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum UserDiagnostic {
@@ -87,6 +342,9 @@ impl UserDiagnostic {
                 },
                 ShippingCompositionError::Clock => "BRIDGE_CLOCK_UNAVAILABLE",
                 ShippingCompositionError::ControlPlane => "BRIDGE_SESSION_NOT_AUTHORIZED",
+                ShippingCompositionError::HeartbeatAuthorityUncertain => {
+                    "BRIDGE_HEARTBEAT_RECOVERY_REQUIRED"
+                }
                 ShippingCompositionError::DeliveryHealth => "BRIDGE_RUNTIME_NOT_READY",
                 ShippingCompositionError::DeliveryHandoff => "BRIDGE_UPDATE_INTERRUPTED",
                 ShippingCompositionError::FirstInstallation(error) => {
@@ -181,6 +439,9 @@ impl UserDiagnostic {
             }
             Self::Launch(Launch::ControlPlane) => {
                 "The profile session could not be authorized. Return to the application and check your access and the profile's current session."
+            }
+            Self::Launch(Launch::HeartbeatAuthorityUncertain) => {
+                "Connection to the session coordinator could not be confirmed. The browser was closed and its local changes were preserved, but cloud save has not been confirmed. Restore connectivity and review this profile's recovery status; do not delete or replace its files."
             }
             Self::Launch(Launch::DeliveryHealth) => {
                 "The installed browser components have not passed their readiness check. Return to computer setup in the application. The profile has not been opened."
@@ -286,6 +547,25 @@ impl UserDiagnostic {
                 crate::operator_flow::OperatorFlowError::AuthoritativeGeneration {
                     reason:
                         crate::authoritative_generation::AuthoritativeGenerationMaterializationError::ControlPlane(
+                            crate::generation_reopen::GenerationReopenControlError::ServiceTemporarilyUnavailable,
+                        )
+                        | crate::authoritative_generation::AuthoritativeGenerationMaterializationError::ControlPlaneBeforeLocalUse(
+                            crate::generation_reopen::GenerationReopenControlError::ServiceTemporarilyUnavailable,
+                        )
+                        | crate::authoritative_generation::AuthoritativeGenerationMaterializationError::ReadBeforeLocalUse(
+                            crate::authoritative_generation::AuthoritativeGenerationPreWriteError::OpeningControl(
+                                crate::generation_reopen::GenerationReopenControlError::ServiceTemporarilyUnavailable,
+                            ),
+                        ),
+                    ..
+                },
+            )) => {
+                "The profile service is temporarily unavailable while reading the verified generation. Keep existing local files and retry the normal authorized Open after service recovery. This is not proof of revoked access or corrupt profile data."
+            }
+            Self::Launch(Launch::Operator(
+                crate::operator_flow::OperatorFlowError::AuthoritativeGeneration {
+                    reason:
+                        crate::authoritative_generation::AuthoritativeGenerationMaterializationError::ControlPlane(
                             crate::generation_reopen::GenerationReopenControlError::HttpStatus,
                         )
                         | crate::authoritative_generation::AuthoritativeGenerationMaterializationError::ControlPlaneBeforeLocalUse(
@@ -320,6 +600,50 @@ impl UserDiagnostic {
             )) => {
                 "The profile generation response could not be verified. The profile was not opened; return to Profile Operations and preserve existing files."
             }
+            Self::Launch(Launch::Operator(
+                crate::operator_flow::OperatorFlowError::GenerationSave { reason },
+            )) => match reason {
+                crate::operator_flow::GenerationSaveFailureReason::ControlTransport
+                | crate::operator_flow::GenerationSaveFailureReason::ControlEffectUncertain
+                | crate::operator_flow::GenerationSaveFailureReason::UploadOutcomeUncertain
+                | crate::operator_flow::GenerationSaveFailureReason::VerificationUnproven => {
+                    "The cloud save outcome is not confirmed. Original local profile bytes and the exact save attempt must be retained. Restore connectivity and use the authorized recovery path; never start a new save or delete files to resolve an uncertain reply."
+                }
+                crate::operator_flow::GenerationSaveFailureReason::ControlRejected => {
+                    "The server rejected this save request. Check Profile Operations for current access and session authority. This is not evidence of a network outage or cloud success. Keep the local profile and pending save bytes."
+                }
+                crate::operator_flow::GenerationSaveFailureReason::SnapshotTooLarge => {
+                    "The local browser profile exceeds this installed save implementation's size limit. Changes remain local, not cloud-saved. Update Profile Bridge when supported; do not delete cookies or profile files to reduce the size."
+                }
+                crate::operator_flow::GenerationSaveFailureReason::LocalIntentWrite
+                | crate::operator_flow::GenerationSaveFailureReason::LocalSource
+                | crate::operator_flow::GenerationSaveFailureReason::LocalPreparation
+                | crate::operator_flow::GenerationSaveFailureReason::CheckpointWrite
+                | crate::operator_flow::GenerationSaveFailureReason::CheckpointRead
+                | crate::operator_flow::GenerationSaveFailureReason::CheckpointRetirement => {
+                    "Windows could not durably complete the local save evidence or cleanup. Cloud completion is not established by this error. Check disk availability and access from Profile Operations; preserve the original profile and all recovery files."
+                }
+                crate::operator_flow::GenerationSaveFailureReason::NativeSourceChanged
+                | crate::operator_flow::GenerationSaveFailureReason::CheckpointIntegrity
+                | crate::operator_flow::GenerationSaveFailureReason::CandidateIdentity
+                | crate::operator_flow::GenerationSaveFailureReason::DescriptorMismatch => {
+                    "The save identity, original browser bytes or encrypted checkpoint did not match expected evidence. Save was blocked to avoid overwriting user data. Use the supported recovery path; do not delete, rename or repair profile files manually."
+                }
+                crate::operator_flow::GenerationSaveFailureReason::SealingMaterial
+                | crate::operator_flow::GenerationSaveFailureReason::Encryption => {
+                    "The profile could not be safely encrypted for cloud save. Original browser data is retained; the cloud save is not confirmed. Check the connected computer and recovery status without resetting device keys."
+                }
+                crate::operator_flow::GenerationSaveFailureReason::ControlInvalidResponse
+                | crate::operator_flow::GenerationSaveFailureReason::ControlClock
+                | crate::operator_flow::GenerationSaveFailureReason::OwnerState => {
+                    "The save could not establish trustworthy operation or server-response evidence. Existing data is retained; no successful cloud save is claimed. Review Profile Operations before retrying."
+                }
+            },
+            Self::Launch(Launch::Operator(
+                crate::operator_flow::OperatorFlowError::FreshAuthorizedOpenRequired,
+            )) => {
+                "The previous local changes were committed, but this one-time launch selected the older browser generation and cannot open the newer one. Return to Profile Operations and choose Open again to request a fresh authorization. Do not reuse the old link or delete local profile files."
+            }
             Self::Launch(
                 Launch::Operator(_) | Launch::ActiveSessionMissing | Launch::CloseObservation(_),
             ) => {
@@ -349,6 +673,8 @@ const fn operator_code(error: crate::operator_flow::OperatorFlowError) -> &'stat
     match error {
         Error::Busy => "BRIDGE_PROFILE_BUSY",
         Error::CleanupRequired => "BRIDGE_CLEANUP_REQUIRED",
+        Error::GenerationSave { reason } => reason.code(),
+        Error::FreshAuthorizedOpenRequired => "BRIDGE_FRESH_AUTHORIZED_OPEN_REQUIRED",
         Error::AuthoritativeGeneration {
             reason: crate::authoritative_generation::AuthoritativeGenerationMaterializationError::IncompleteLocalEvidence,
             ..
@@ -408,6 +734,21 @@ const fn operator_code(error: crate::operator_flow::OperatorFlowError) -> &'stat
                 ),
             ..
         } => "BRIDGE_SERVICE_UNREACHABLE",
+        Error::AuthoritativeGeneration {
+            reason:
+                crate::authoritative_generation::AuthoritativeGenerationMaterializationError::ControlPlane(
+                    crate::generation_reopen::GenerationReopenControlError::ServiceTemporarilyUnavailable,
+                )
+                | crate::authoritative_generation::AuthoritativeGenerationMaterializationError::ControlPlaneBeforeLocalUse(
+                    crate::generation_reopen::GenerationReopenControlError::ServiceTemporarilyUnavailable,
+                )
+                | crate::authoritative_generation::AuthoritativeGenerationMaterializationError::ReadBeforeLocalUse(
+                    crate::authoritative_generation::AuthoritativeGenerationPreWriteError::OpeningControl(
+                        crate::generation_reopen::GenerationReopenControlError::ServiceTemporarilyUnavailable,
+                    ),
+                ),
+            ..
+        } => "BRIDGE_SERVICE_TEMPORARILY_UNAVAILABLE",
         Error::AuthoritativeGeneration {
             reason:
                 crate::authoritative_generation::AuthoritativeGenerationMaterializationError::ControlPlane(
@@ -502,6 +843,59 @@ mod tests {
     use super::*;
 
     #[test]
+    fn verified_offline_intent_diagnosis_never_claims_cloud_saved() {
+        let status = PendingSaveReadOnlyDiagnosis::local_unsynced();
+        assert_eq!(
+            status.code(),
+            "P3_RECOVERY=LOCAL_UNSYNCED_VERIFIED;CLOUD_SAVE=NOT_CONFIRMED"
+        );
+        assert_eq!(
+            status.next_safe_step(),
+            "REQUIRE_FRESH_SERVER_RETRY_DECISION"
+        );
+        assert!(!status.code().contains("CLOUD_SAVED"));
+    }
+
+    #[test]
+    fn pending_save_observation_is_only_read_only_evidence_and_never_retry_authority() {
+        let cases = [
+            (
+                Ok(RestartExactCommitObservation::ActiveExact),
+                "P3_RECOVERY_OBSERVATION=ACTIVE_EXACT;LOCAL_READINESS=UNRESOLVED",
+                "VERIFY_OWNED_LOCAL_COMPLETION",
+            ),
+            (
+                Ok(RestartExactCommitObservation::NotActiveExact),
+                "P3_RECOVERY_OBSERVATION=NOT_ACTIVE_EXACT;RETRY_AUTHORITY=UNRESOLVED",
+                "REQUIRE_FRESH_SERVER_RETRY_DECISION",
+            ),
+            (
+                Ok(RestartExactCommitObservation::NoCanonicalCheckpoint),
+                "P3_RECOVERY_OBSERVATION=NO_CANONICAL_CHECKPOINT",
+                "RECHECK_PENDING_LOCAL_EVIDENCE",
+            ),
+            (
+                Err(ShippingControlPlaneError::HttpServerUncertain),
+                "P3_RECOVERY_OBSERVATION=UNKNOWN;BYTES_RETAINED",
+                "RETRY_READ_ONLY_OBSERVATION",
+            ),
+            (
+                Err(ShippingControlPlaneError::HttpStatus),
+                "P3_RECOVERY_OBSERVATION=UNKNOWN;BYTES_RETAINED",
+                "RETRY_READ_ONLY_OBSERVATION",
+            ),
+        ];
+        for (observed, expected_code, expected_step) in cases {
+            let diagnostic = PendingSaveReadOnlyDiagnosis::from_observation(observed);
+            assert_eq!(diagnostic.code(), expected_code);
+            assert_eq!(diagnostic.next_safe_step(), expected_step);
+            assert!(!diagnostic.next_safe_step().contains("UPLOAD"));
+            assert!(!diagnostic.next_safe_step().contains("COMMIT"));
+            assert!(!diagnostic.next_safe_step().contains("CLOUD_SAVED"));
+        }
+    }
+
+    #[test]
     fn incomplete_cache_error_keeps_owner_diagnostic_code() {
         use crate::operator_flow::{CleanupFailures, OperatorFlowError};
         let error = OperatorFlowError::AuthoritativeGeneration {
@@ -557,6 +951,18 @@ mod tests {
                     crate::generation_reopen::GenerationReopenControlError::HttpStatus,
                 ),
                 "BRIDGE_GENERATION_REQUEST_REJECTED",
+            ),
+            (
+                Reason::ControlPlane(
+                    crate::generation_reopen::GenerationReopenControlError::ServiceTemporarilyUnavailable,
+                ),
+                "BRIDGE_SERVICE_TEMPORARILY_UNAVAILABLE",
+            ),
+            (
+                Reason::ControlPlaneBeforeLocalUse(
+                    crate::generation_reopen::GenerationReopenControlError::ServiceTemporarilyUnavailable,
+                ),
+                "BRIDGE_SERVICE_TEMPORARILY_UNAVAILABLE",
             ),
             (
                 Reason::ControlPlane(
@@ -638,6 +1044,200 @@ mod tests {
         assert_ne!(setup.code(), saved.code());
         assert!(saved.message().contains("was saved"));
         assert!(saved.message().contains("readiness has not been confirmed"));
+    }
+
+    #[test]
+    fn profile_owner_projection_never_turns_local_or_prepared_into_cloud_saved() {
+        use crate::local_profile::LocalGenerationState;
+        use crate::operator_flow::{
+            GenerationSaveFailureReason as Reason, OperatorDiagnosticFacts, OperatorFlowError,
+        };
+        let facts = OperatorDiagnosticFacts {
+            active_local: None,
+            retained_local: Some(LocalGenerationState::DirtyLocal),
+            candidate_prepared: true,
+            cleanup_blocked: false,
+        };
+        let base = ReadOnlyProfileDiagnosis::from_operator(facts);
+        assert_eq!(base.state(), "LOCAL_BYTES_RETAINED");
+        let b = base.redacted_record();
+        assert!(b.contains("CLOUD=UNKNOWN"));
+        assert!(b.contains("LKG=UNKNOWN"));
+        assert!(b.contains("CHECKPOINT=PREPARED_NOT_DURABILITY_PROOF"));
+        assert!(b.len() <= 512);
+        assert!(b.contains("HISTORICAL_LEASE_REPROOF_REQUIRED"));
+        assert!(!b.contains("CLOUD_SAVED"));
+        let closed = ReadOnlyProfileDiagnosis::after_durable_local_close(facts);
+        assert_eq!(closed.state(), "LOCAL_UNSYNCED");
+        assert!(closed.redacted_record().contains("CLOUD=NOT_CONFIRMED"));
+        let network = ReadOnlyProfileDiagnosis::after_save(
+            facts,
+            &Err(OperatorFlowError::GenerationSave {
+                reason: Reason::UploadOutcomeUncertain,
+            }),
+        );
+        assert_eq!(network.state(), "CLOUD_OUTCOME_UNCONFIRMED");
+        assert!(network.redacted_record().contains("CLOUD=EFFECT_UNKNOWN"));
+        assert!(
+            network
+                .redacted_record()
+                .contains("FRESH_AUTHORIZED_EXACT_RECONCILIATION")
+        );
+        let denied = ReadOnlyProfileDiagnosis::after_save(
+            facts,
+            &Err(OperatorFlowError::GenerationSave {
+                reason: Reason::ControlRejected,
+            }),
+        );
+        assert!(
+            denied
+                .redacted_record()
+                .contains("CLOUD=CURRENT_REQUEST_REJECTED")
+        );
+        assert!(!denied.redacted_record().contains("EFFECT_UNKNOWN"));
+        let corrupt = ReadOnlyProfileDiagnosis::after_save(
+            facts,
+            &Err(OperatorFlowError::GenerationSave {
+                reason: Reason::CheckpointIntegrity,
+            }),
+        );
+        assert!(
+            corrupt
+                .redacted_record()
+                .contains("PRESERVE_BYTES_CHECK_CAUSE")
+        );
+        assert!(
+            !corrupt
+                .redacted_record()
+                .contains("FRESH_AUTHORIZED_EXACT_RECONCILIATION")
+        );
+    }
+
+    #[test]
+    fn profile_owner_projection_keeps_unknown_and_cleanup_conservative() {
+        use crate::local_profile::LocalGenerationState;
+        use crate::operator_flow::{
+            OperatorDiagnosticFacts, OperatorFailureStage, OperatorFlowError,
+        };
+        let missing = OperatorDiagnosticFacts {
+            active_local: None,
+            retained_local: None,
+            candidate_prepared: false,
+            cleanup_blocked: false,
+        };
+        assert_eq!(
+            ReadOnlyProfileDiagnosis::from_operator(missing).state(),
+            "UNKNOWN"
+        );
+        let failed = ReadOnlyProfileDiagnosis::after_save(
+            missing,
+            &Err(OperatorFlowError::Stage(
+                OperatorFailureStage::GenerationSave,
+            )),
+        );
+        assert_eq!(failed.state(), "BLOCKED_CAUSE_UNRESOLVED");
+        assert!(failed.redacted_record().contains("LOCAL=UNKNOWN"));
+        assert!(failed.redacted_record().contains("LKG=UNKNOWN"));
+        let cleanup = OperatorDiagnosticFacts {
+            active_local: Some(LocalGenerationState::RecoveryRequired),
+            retained_local: None,
+            candidate_prepared: false,
+            cleanup_blocked: true,
+        };
+        let result = ReadOnlyProfileDiagnosis::from_operator(cleanup);
+        assert_eq!(result.state(), "RECOVERY_REQUIRED");
+        assert!(result.redacted_record().contains("OWNED_RECOVERY_ONLY"));
+        assert!(!result.redacted_record().contains("CLOUD_SAVED"));
+    }
+
+    #[test]
+    fn save_owner_causes_survive_projection_without_raw_server_or_browser_data() {
+        use crate::operator_flow::{GenerationSaveFailureReason as Reason, OperatorFlowError};
+        let cases = [
+            (
+                Reason::ControlTransport,
+                "BRIDGE_SAVE_CONTROL_TRANSPORT_UNKNOWN",
+            ),
+            (
+                Reason::ControlEffectUncertain,
+                "BRIDGE_SAVE_CONTROL_EFFECT_UNCERTAIN",
+            ),
+            (Reason::ControlRejected, "BRIDGE_SAVE_CONTROL_REJECTED"),
+            (
+                Reason::UploadOutcomeUncertain,
+                "BRIDGE_SAVE_UPLOAD_OUTCOME_UNCERTAIN",
+            ),
+            (
+                Reason::CheckpointIntegrity,
+                "BRIDGE_SAVE_CHECKPOINT_INTEGRITY_FAILED",
+            ),
+            (Reason::LocalIntentWrite, "BRIDGE_SAVE_LOCAL_INTENT_FAILED"),
+            (Reason::CheckpointRead, "BRIDGE_SAVE_CHECKPOINT_READ_FAILED"),
+            (Reason::SnapshotTooLarge, "BRIDGE_SAVE_SNAPSHOT_TOO_LARGE"),
+            (
+                Reason::NativeSourceChanged,
+                "BRIDGE_SAVE_NATIVE_SOURCE_CHANGED",
+            ),
+            (
+                Reason::SealingMaterial,
+                "BRIDGE_SAVE_SEALING_MATERIAL_UNAVAILABLE",
+            ),
+            (
+                Reason::VerificationUnproven,
+                "BRIDGE_SAVE_SERVER_VERIFY_NOT_PROVEN",
+            ),
+        ];
+        for (reason, code) in cases {
+            let owned = OperatorFlowError::GenerationSave { reason };
+            assert_eq!(
+                owned.stage(),
+                Some(crate::operator_flow::OperatorFailureStage::GenerationSave)
+            );
+            let diagnostic = UserDiagnostic::Launch(ShippingCompositionError::Operator(owned));
+            assert_eq!(diagnostic.code(), code);
+            assert!(!diagnostic.message().contains("http"));
+            assert!(!diagnostic.message().contains("signed_url"));
+            assert!(!diagnostic.message().contains("tenant_id"));
+            assert!(!diagnostic.message().contains("password"));
+            assert!(!diagnostic.message().contains("Saved in the cloud"));
+        }
+        let rejection = UserDiagnostic::Launch(ShippingCompositionError::Operator(
+            OperatorFlowError::GenerationSave {
+                reason: Reason::ControlRejected,
+            },
+        ));
+        assert!(rejection.message().contains("server rejected"));
+        assert!(
+            rejection
+                .message()
+                .contains("not evidence of a network outage")
+        );
+        let uncertain = UserDiagnostic::Launch(ShippingCompositionError::Operator(
+            OperatorFlowError::GenerationSave {
+                reason: Reason::UploadOutcomeUncertain,
+            },
+        ));
+        assert!(uncertain.message().contains("not confirmed"));
+        assert!(uncertain.message().contains("exact save attempt"));
+        let old = UserDiagnostic::Launch(ShippingCompositionError::Operator(
+            OperatorFlowError::Stage(crate::operator_flow::OperatorFailureStage::GenerationSave),
+        ));
+        assert_eq!(old.code(), "BRIDGE_GENERATION_SAVE_FAILED");
+    }
+
+    #[test]
+    fn committed_newer_generation_requires_fresh_claim_not_a_fake_saved_or_generic_failure() {
+        let outcome = crate::operator_flow::OperatorFlowError::FreshAuthorizedOpenRequired;
+        let diagnostic = UserDiagnostic::Launch(ShippingCompositionError::Operator(outcome));
+        assert_eq!(diagnostic.code(), "BRIDGE_FRESH_AUTHORIZED_OPEN_REQUIRED");
+        assert_eq!(
+            outcome.stage(),
+            Some(crate::operator_flow::OperatorFailureStage::GenerationSave)
+        );
+        assert!(diagnostic.message().contains("committed"));
+        assert!(diagnostic.message().contains("fresh authorization"));
+        assert!(diagnostic.message().contains("Do not reuse"));
+        assert!(!diagnostic.message().contains("saved failed"));
     }
 
     #[test]

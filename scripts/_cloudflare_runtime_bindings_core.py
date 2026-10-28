@@ -58,6 +58,10 @@ SOURCE_CONSTANTS = {
         "apps/control-plane-worker/src/composition.rs",
         "GENERATION_ROOT_KEYRING_BINDING",
     ),
+    "approved_generation_runtimes": (
+        "apps/control-plane-worker/src/profile_generation_successor_ingress.rs",
+        "PROFILE_GENERATION_APPROVED_RUNTIME_INVENTORIES_VAR",
+    ),
     "profile_launch_claim_key": (
         "apps/control-plane-worker/src/profiles/profile_launch_composition.rs",
         "PROFILE_LAUNCH_CLAIM_KEY",
@@ -316,6 +320,7 @@ def validate_config(
         source["canonical_environment"],
         source["capability_profile_id"],
         source["capability_profile_digest"],
+        source["approved_generation_runtimes"],
     }
     expected_core_secrets = {
         source["contact_keyring"],

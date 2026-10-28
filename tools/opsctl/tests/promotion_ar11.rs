@@ -622,7 +622,10 @@ fn real_d1_verdict_survives_release_projection_and_terminal_promotion()
         )?;
         for (revision, expected) in [
             ("0034_device_application_authority.sql", false),
-            ("0036_profile_generation_initialization.sql", true),
+            ("0036_profile_generation_initialization.sql", false),
+            ("0037_generation_streaming_container_limit.sql", false),
+            ("0038_profile_generation_working_proof.sql", false),
+            ("0039_profile_generation_retirement_guard.sql", true),
         ] {
             let count = sources
                 .iter()
@@ -724,20 +727,41 @@ print(json.dumps({'evidence': adapter['build'](release_id, native, None, None), 
                     "RUNTIME_SCHEMA_MIGRATION_REQUIRED"
                 );
                 assert_eq!(composed["outcome"]["owner_diagnostic"], native);
-                assert_eq!(
-                    native["planned_migrations"],
+                let missing = if revision == "0034_device_application_authority.sql" {
                     json!([
                         "0035_pas2_payload_fingerprint_contract.sql",
-                        "0036_profile_generation_initialization.sql"
+                        "0036_profile_generation_initialization.sql",
+                        "0037_generation_streaming_container_limit.sql",
+                        "0038_profile_generation_working_proof.sql",
+                        "0039_profile_generation_retirement_guard.sql"
                     ])
-                );
+                } else if revision == "0036_profile_generation_initialization.sql" {
+                    json!([
+                        "0037_generation_streaming_container_limit.sql",
+                        "0038_profile_generation_working_proof.sql",
+                        "0039_profile_generation_retirement_guard.sql"
+                    ])
+                } else if revision == "0037_generation_streaming_container_limit.sql" {
+                    json!([
+                        "0038_profile_generation_working_proof.sql",
+                        "0039_profile_generation_retirement_guard.sql"
+                    ])
+                } else {
+                    json!(["0039_profile_generation_retirement_guard.sql"])
+                };
+                assert_eq!(native["planned_migrations"], missing);
+                let behind_contract = revision == "0034_device_application_authority.sql";
                 assert_eq!(
                     native["planned_migration_contracts"][0]["rollout_order"],
-                    "SEPARATE_CONTRACT_RELEASE"
+                    if behind_contract {
+                        "SEPARATE_CONTRACT_RELEASE"
+                    } else {
+                        "MIGRATE_BEFORE_CODE"
+                    }
                 );
                 assert_eq!(
                     native["planned_migration_contracts"][0]["destructive"],
-                    true
+                    behind_contract
                 );
             }
             assert_eq!(composed["outcome"]["provider_mutation_executed"], false);

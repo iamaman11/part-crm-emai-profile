@@ -4,7 +4,7 @@ use crate::{
     open_generation_expected, seal_generation,
 };
 use profile_platform_primitives::{GenerationId, UnixMillis};
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
 use zeroize::Zeroizing;
 
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
@@ -396,29 +396,19 @@ impl CloudGenerationRepository {
 
     pub fn plan_orphans(
         &self,
-        created_before_or_at: UnixMillis,
+        _created_before_or_at: UnixMillis,
     ) -> Result<OrphanPlan, EncryptedGenerationError> {
-        let protected = [
-            self.pointer.current_generation_id.as_ref(),
-            self.pointer.rollback_generation_id.as_ref(),
-        ]
-        .into_iter()
-        .flatten()
-        .cloned()
-        .collect::<BTreeSet<_>>();
-        let mut generation_ids = Vec::new();
-        let mut reclaimable_bytes = 0_u64;
-        for (generation_id, record) in &self.records {
-            if record.created_at <= created_before_or_at && !protected.contains(generation_id) {
-                reclaimable_bytes = reclaimable_bytes
-                    .checked_add(self.objects.object_bytes(&record.object_key)?)
-                    .ok_or(EncryptedGenerationError::PlaintextTooLarge)?;
-                generation_ids.push(generation_id.clone());
-            }
-        }
+        // Synthetic lifecycle metadata cannot certify a WORKING generation:
+        // VERIFIED proves AEAD/descriptor integrity, not usable cookies,
+        // native SQLite/WAL or retained historical root-key availability.
+        // Merely being older than CURRENT or absent from the rollback pointer
+        // is never R2 deletion permission. The live D1/R2 owner does not yet
+        // issue a durable independent-browser viability certificate or an
+        // atomic no-in-flight-save prune disposition, so fail closed.
+        // Do not turn this planner into an R2 delete capability.
         Ok(OrphanPlan {
-            generation_ids,
-            reclaimable_bytes,
+            generation_ids: Vec::new(),
+            reclaimable_bytes: 0,
         })
     }
 

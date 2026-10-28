@@ -2,6 +2,7 @@ use crate::local_profile::{
     GenerationInventory, GenerationWorkspace, LocalProfileError, MaterializationRoot,
 };
 use profile_platform_primitives::{GenerationId, ProfileId, TenantId};
+use sha2::{Digest, Sha256};
 use std::collections::HashSet;
 use std::fmt;
 use std::fs::{self, File, OpenOptions};
@@ -11,6 +12,15 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 pub(crate) const WORKSPACE_SNAPSHOT_MAGIC: &[u8; 8] = b"BPGW0001";
 pub(crate) const MAX_WORKSPACE_SNAPSHOT_BYTES: usize = 67_108_864;
+/// Maximum native Firefox bytes, separate from snapshot's framing overhead.
+#[allow(dead_code)] // K2 shipping integration is still gated.
+pub(crate) const MAX_STREAM_NATIVE_PROFILE_BYTES: u64 = 536_870_912; // 512 MiB
+/// The same encrypted-generation-domain bound applies to BPGW0001 encoded
+/// bytes, so no successful snapshot can later fail encryption from a smaller
+/// policy limit. Legacy Vec API remains capped at 64 MiB.
+#[allow(dead_code)] // K2 shipping integration is still gated.
+pub(crate) const MAX_STREAM_WORKSPACE_SNAPSHOT_BYTES: u64 =
+    encrypted_generation_domain::MAX_STREAM_PLAINTEXT_BYTES;
 const MAX_SNAPSHOT_FILES: usize = 100_000;
 const MAX_RELATIVE_PATH_BYTES: usize = 512;
 const STAGING_ATTEMPTS: usize = 32;
@@ -49,6 +59,295 @@ impl From<LocalProfileError> for GenerationSnapshotError {
     fn from(error: LocalProfileError) -> Self {
         Self::Local(error)
     }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[allow(dead_code)] // K2 production streaming adapter is not yet active.
+pub(crate) struct StreamedWorkspaceSnapshot {
+    pub(crate) plaintext_bytes: u64,
+    pub(crate) plaintext_digest: [u8; 32],
+}
+
+/// Canonical BPGW0001, but no complete Firefox file or profile is held in
+/// memory. Writes to an UNPUBLISHED output: caller must fsync/no-replace
+/// and publish only after success and exact source inventory revalidation.
+#[allow(dead_code)] // K2 production streaming adapter is not yet active.
+pub(crate) fn encode_workspace_snapshot_streaming(
+    workspace: &GenerationWorkspace,
+    expected_inventory: &GenerationInventory,
+    output: &mut impl Write,
+) -> Result<StreamedWorkspaceSnapshot, GenerationSnapshotError> {
+    // Check *native* size and the exact BPGW0001 wire size before writing
+    // a single byte to the unpublished spool. Metadata overhead from many
+    // tiny Firefox files must not disqualify an otherwise valid 512 MiB
+    // native profile, nor can a huge inventory fill disk before rejection.
+    let expected_length = encoded_stream_snapshot_size(expected_inventory)?;
+    let count = u32::try_from(expected_inventory.entries().len())
+        .map_err(|_| GenerationSnapshotError::SnapshotTooLarge)?;
+    let mut length = 0_u64;
+    let mut digest = Sha256::new();
+    write_stream_piece(output, &mut digest, &mut length, WORKSPACE_SNAPSHOT_MAGIC)?;
+    write_stream_piece(output, &mut digest, &mut length, &count.to_be_bytes())?;
+    let mut previous: Option<&str> = None;
+    let mut seen = HashSet::new();
+    let mut buffer = [0_u8; 65_536];
+    for entry in expected_inventory.entries() {
+        let relative = entry.relative_path();
+        validate_windows_relative_path(relative)?;
+        if previous.is_some_and(|p| p >= relative) || !seen.insert(relative.to_lowercase()) {
+            return Err(GenerationSnapshotError::UnsafePath);
+        }
+        previous = Some(relative);
+        let name = relative.as_bytes();
+        let name_length =
+            u16::try_from(name.len()).map_err(|_| GenerationSnapshotError::SnapshotTooLarge)?;
+        write_stream_piece(output, &mut digest, &mut length, &name_length.to_be_bytes())?;
+        write_stream_piece(output, &mut digest, &mut length, name)?;
+        write_stream_piece(
+            output,
+            &mut digest,
+            &mut length,
+            &entry.bytes().to_be_bytes(),
+        )?;
+        let full = workspace.path().join(relative);
+        let metadata = fs::symlink_metadata(&full).map_err(LocalProfileError::from)?;
+        if metadata.file_type().is_symlink()
+            || !metadata.is_file()
+            || metadata.len() != entry.bytes()
+        {
+            return Err(GenerationSnapshotError::SourceChanged);
+        }
+        let mut file = File::open(&full).map_err(LocalProfileError::from)?;
+        let mut remaining = entry.bytes();
+        while remaining > 0 {
+            let take = usize::try_from(remaining.min(buffer.len() as u64))
+                .map_err(|_| GenerationSnapshotError::SnapshotTooLarge)?;
+            file.read_exact(&mut buffer[..take])
+                .map_err(LocalProfileError::from)?;
+            write_stream_piece(output, &mut digest, &mut length, &buffer[..take])?;
+            remaining -= take as u64;
+        }
+    }
+    if workspace
+        .inventory()
+        .map_err(GenerationSnapshotError::Local)?
+        != *expected_inventory
+    {
+        return Err(GenerationSnapshotError::SourceChanged);
+    }
+    if length != expected_length {
+        return Err(GenerationSnapshotError::SourceChanged);
+    }
+    Ok(StreamedWorkspaceSnapshot {
+        plaintext_bytes: length,
+        plaintext_digest: digest.finalize().into(),
+    })
+}
+
+/// Preflight against the same canonical BPGW0001 layout used by the actual
+/// stream. This avoids writing any staging bytes for oversized input while
+/// retaining 64 KiB bounded file reads for accepted profiles.
+#[allow(dead_code)] // K2 production streaming adapter is still gated.
+fn encoded_stream_snapshot_size(
+    inventory: &GenerationInventory,
+) -> Result<u64, GenerationSnapshotError> {
+    if inventory.entries().len() > MAX_SNAPSHOT_FILES
+        || inventory.total_bytes() > MAX_STREAM_NATIVE_PROFILE_BYTES
+    {
+        return Err(GenerationSnapshotError::SnapshotTooLarge);
+    }
+    let mut size = 12_u64; // BPGW0001 + u32 file count
+    for entry in inventory.entries() {
+        let path_len = entry.relative_path().len();
+        if path_len == 0 || path_len > MAX_RELATIVE_PATH_BYTES {
+            return Err(GenerationSnapshotError::UnsafePath);
+        }
+        // 2 bytes path length + path + 8 bytes file length + exact content.
+        size = size
+            .checked_add(2 + path_len as u64 + 8)
+            .and_then(|value| value.checked_add(entry.bytes()))
+            .ok_or(GenerationSnapshotError::SnapshotTooLarge)?;
+        if size > MAX_STREAM_WORKSPACE_SNAPSHOT_BYTES {
+            return Err(GenerationSnapshotError::SnapshotTooLarge);
+        }
+    }
+    Ok(size)
+}
+
+/// On-demand canonical BPGW0001 reader over the ORIGINAL closed Firefox
+/// files. No plaintext disk spool and no generation-sized in-memory buffer.
+/// Construct a fresh reader for the metadata digest pass and the exact seal
+/// pass; the sealing owner must hold the original device writer lock.
+#[allow(dead_code)] // Activated only with the K2 shipping cutover.
+pub(crate) struct WorkspaceSnapshotReader<'a> {
+    workspace: &'a GenerationWorkspace,
+    inventory: &'a GenerationInventory,
+    expected_bytes: u64,
+    emitted_bytes: u64,
+    pending: Vec<u8>,
+    pending_offset: usize,
+    next_entry: usize,
+    current_file: Option<File>,
+    remaining_file_bytes: u64,
+    verified_eof: bool,
+}
+
+#[allow(dead_code)] // The legacy 64 MiB shipping path has not switched yet.
+impl<'a> WorkspaceSnapshotReader<'a> {
+    pub(crate) fn new(
+        workspace: &'a GenerationWorkspace,
+        inventory: &'a GenerationInventory,
+    ) -> Result<Self, GenerationSnapshotError> {
+        let expected_bytes = encoded_stream_snapshot_size(inventory)?;
+        let mut previous: Option<&str> = None;
+        let mut seen = HashSet::new();
+        for entry in inventory.entries() {
+            let relative = entry.relative_path();
+            validate_windows_relative_path(relative)?;
+            if previous.is_some_and(|p| p >= relative) || !seen.insert(relative.to_lowercase()) {
+                return Err(GenerationSnapshotError::UnsafePath);
+            }
+            previous = Some(relative);
+        }
+        let mut pending = Vec::with_capacity(12);
+        pending.extend_from_slice(WORKSPACE_SNAPSHOT_MAGIC);
+        let entries = u32::try_from(inventory.entries().len())
+            .map_err(|_| GenerationSnapshotError::SnapshotTooLarge)?;
+        pending.extend_from_slice(&entries.to_be_bytes());
+        Ok(Self {
+            workspace,
+            inventory,
+            expected_bytes,
+            emitted_bytes: 0,
+            pending,
+            pending_offset: 0,
+            next_entry: 0,
+            current_file: None,
+            remaining_file_bytes: 0,
+            verified_eof: false,
+        })
+    }
+
+    #[must_use]
+    pub(crate) const fn expected_bytes(&self) -> u64 {
+        self.expected_bytes
+    }
+
+    fn advance_written(&mut self, count: usize) -> std::io::Result<()> {
+        self.emitted_bytes = self
+            .emitted_bytes
+            .checked_add(count as u64)
+            .ok_or_else(snapshot_reader_changed)?;
+        if self.emitted_bytes > self.expected_bytes {
+            return Err(snapshot_reader_changed());
+        }
+        Ok(())
+    }
+}
+
+impl Read for WorkspaceSnapshotReader<'_> {
+    fn read(&mut self, output: &mut [u8]) -> std::io::Result<usize> {
+        if output.is_empty() {
+            return Ok(0);
+        }
+        loop {
+            if self.pending_offset < self.pending.len() {
+                let available = self.pending.len() - self.pending_offset;
+                let count = available.min(output.len());
+                output[..count].copy_from_slice(
+                    &self.pending[self.pending_offset..self.pending_offset + count],
+                );
+                self.pending_offset += count;
+                self.advance_written(count)?;
+                return Ok(count);
+            }
+            self.pending.clear();
+            self.pending_offset = 0;
+
+            if let Some(file) = self.current_file.as_mut() {
+                if self.remaining_file_bytes != 0 {
+                    let allowed =
+                        usize::try_from(self.remaining_file_bytes.min(output.len() as u64))
+                            .map_err(|_| snapshot_reader_changed())?;
+                    let count = file.read(&mut output[..allowed])?;
+                    if count == 0 {
+                        return Err(snapshot_reader_changed());
+                    }
+                    self.remaining_file_bytes -= count as u64;
+                    self.advance_written(count)?;
+                    return Ok(count);
+                }
+                self.current_file = None;
+            }
+
+            if let Some(entry) = self.inventory.entries().get(self.next_entry) {
+                self.next_entry += 1;
+                let relative = entry.relative_path();
+                // The relative path has been checked before any bytes are
+                // exposed. Refuse a changed/symlink target on both passes.
+                let path = self.workspace.path().join(relative);
+                let metadata = fs::symlink_metadata(&path)?;
+                if metadata.file_type().is_symlink()
+                    || !metadata.is_file()
+                    || metadata.len() != entry.bytes()
+                {
+                    return Err(snapshot_reader_changed());
+                }
+                let file = File::open(&path)?;
+                if !file.metadata()?.is_file() || file.metadata()?.len() != entry.bytes() {
+                    return Err(snapshot_reader_changed());
+                }
+                self.current_file = Some(file);
+                self.remaining_file_bytes = entry.bytes();
+                let name = relative.as_bytes();
+                let name_len = u16::try_from(name.len()).map_err(|_| snapshot_reader_changed())?;
+                self.pending.extend_from_slice(&name_len.to_be_bytes());
+                self.pending.extend_from_slice(name);
+                self.pending.extend_from_slice(&entry.bytes().to_be_bytes());
+                continue;
+            }
+
+            if !self.verified_eof {
+                // Checking only the first inventory would miss mutation
+                // between the metadata pass and ciphertext sealing pass.
+                let current = self
+                    .workspace
+                    .inventory()
+                    .map_err(|_| snapshot_reader_changed())?;
+                if current != *self.inventory || self.emitted_bytes != self.expected_bytes {
+                    return Err(snapshot_reader_changed());
+                }
+                self.verified_eof = true;
+            }
+            return Ok(0);
+        }
+    }
+}
+
+fn snapshot_reader_changed() -> std::io::Error {
+    std::io::Error::new(
+        std::io::ErrorKind::InvalidData,
+        "Firefox snapshot source changed during streaming",
+    )
+}
+
+#[allow(dead_code)]
+fn write_stream_piece(
+    output: &mut impl Write,
+    digest: &mut Sha256,
+    length: &mut u64,
+    piece: &[u8],
+) -> Result<(), GenerationSnapshotError> {
+    let next = length
+        .checked_add(piece.len() as u64)
+        .ok_or(GenerationSnapshotError::SnapshotTooLarge)?;
+    if next > MAX_STREAM_WORKSPACE_SNAPSHOT_BYTES {
+        return Err(GenerationSnapshotError::SnapshotTooLarge);
+    }
+    output.write_all(piece).map_err(LocalProfileError::from)?;
+    digest.update(piece);
+    *length = next;
+    Ok(())
 }
 
 pub(crate) fn encode_workspace_snapshot(
@@ -105,6 +404,235 @@ pub(crate) fn encode_workspace_snapshot(
         return Err(GenerationSnapshotError::SourceChanged);
     }
     Ok(output)
+}
+
+#[derive(Clone)]
+struct StreamedSnapshotFile {
+    relative_path: String,
+    bytes: u64,
+    digest: [u8; 32],
+}
+
+/// Reopen BPGW0001 from a VERIFIED DECRYPTED spool (never directly from an
+/// unauthenticated R2 stream). The caller passes the digest/length established
+/// by the authenticated BPGC0001 metadata. No generation path is made visible
+/// until all filenames, all content, strict EOF, SHA-256, and staged disk
+/// rereads agree. Never overwrite a current N or any previous LKG.
+#[allow(dead_code)] // K2 shipping download interface is still Vec-based.
+pub(crate) fn materialize_workspace_snapshot_streaming_with_pre_publish(
+    root: &MaterializationRoot,
+    tenant_id: &TenantId,
+    profile_id: &ProfileId,
+    generation_id: &GenerationId,
+    source: &mut impl Read,
+    expected: StreamedWorkspaceSnapshot,
+    mut before_publish: impl FnMut(&GenerationWorkspace) -> Result<(), GenerationSnapshotError>,
+) -> Result<GenerationWorkspace, GenerationSnapshotError> {
+    if expected.plaintext_bytes > MAX_STREAM_WORKSPACE_SNAPSHOT_BYTES {
+        return Err(GenerationSnapshotError::SnapshotTooLarge);
+    }
+    match root.open_generation(tenant_id, profile_id, generation_id) {
+        Ok(_) => return Err(GenerationSnapshotError::TargetAlreadyExists),
+        Err(LocalProfileError::Io(std::io::ErrorKind::NotFound)) => {}
+        Err(error) => return Err(GenerationSnapshotError::Local(error)),
+    }
+    let staged = create_staging_workspace(root, tenant_id, profile_id)?;
+    let staging_path = staged.path().to_path_buf();
+    let result = materialize_stream_into_staging(
+        root,
+        staged,
+        &staging_path,
+        tenant_id,
+        profile_id,
+        generation_id,
+        source,
+        expected,
+        &mut before_publish,
+    );
+    if result.is_err() {
+        remove_owned_staging(&staging_path);
+    }
+    result
+}
+
+#[allow(clippy::too_many_arguments)]
+fn materialize_stream_into_staging(
+    root: &MaterializationRoot,
+    staging: GenerationWorkspace,
+    staging_path: &Path,
+    tenant: &TenantId,
+    profile: &ProfileId,
+    generation: &GenerationId,
+    source: &mut impl Read,
+    expected: StreamedWorkspaceSnapshot,
+    before_publish: &mut impl FnMut(&GenerationWorkspace) -> Result<(), GenerationSnapshotError>,
+) -> Result<GenerationWorkspace, GenerationSnapshotError> {
+    let mut total = 0_u64;
+    let mut hash = Sha256::new();
+    let mut magic = [0_u8; 8];
+    read_stream_piece(source, &mut hash, &mut total, &mut magic)?;
+    if &magic != WORKSPACE_SNAPSHOT_MAGIC {
+        return Err(GenerationSnapshotError::InvalidFormat);
+    }
+    let mut count_bytes = [0_u8; 4];
+    read_stream_piece(source, &mut hash, &mut total, &mut count_bytes)?;
+    let count = u32::from_be_bytes(count_bytes) as usize;
+    if count > MAX_SNAPSHOT_FILES {
+        return Err(GenerationSnapshotError::SnapshotTooLarge);
+    }
+    let mut entries = Vec::with_capacity(count);
+    let mut native_total = 0_u64;
+    let mut seen = HashSet::new();
+    let mut buffer = [0_u8; 65_536];
+    let mut previous = String::new();
+    for _ in 0..count {
+        let mut length = [0_u8; 2];
+        read_stream_piece(source, &mut hash, &mut total, &mut length)?;
+        let path_len = u16::from_be_bytes(length) as usize;
+        if path_len == 0 || path_len > MAX_RELATIVE_PATH_BYTES {
+            return Err(GenerationSnapshotError::UnsafePath);
+        }
+        let mut path = vec![0_u8; path_len];
+        read_stream_piece(source, &mut hash, &mut total, &mut path)?;
+        let relative = String::from_utf8(path).map_err(|_| GenerationSnapshotError::UnsafePath)?;
+        validate_windows_relative_path(&relative)?;
+        if (!previous.is_empty() && previous.as_str() >= relative.as_str())
+            || !seen.insert(relative.to_lowercase())
+        {
+            return Err(GenerationSnapshotError::UnsafePath);
+        }
+        previous.clone_from(&relative);
+        let mut content_len = [0_u8; 8];
+        read_stream_piece(source, &mut hash, &mut total, &mut content_len)?;
+        let bytes = u64::from_be_bytes(content_len);
+        native_total = native_total
+            .checked_add(bytes)
+            .ok_or(GenerationSnapshotError::SnapshotTooLarge)?;
+        if native_total > MAX_STREAM_NATIVE_PROFILE_BYTES {
+            return Err(GenerationSnapshotError::SnapshotTooLarge);
+        }
+        if total
+            .checked_add(bytes)
+            .is_none_or(|sum| sum > expected.plaintext_bytes)
+        {
+            return Err(GenerationSnapshotError::SnapshotTooLarge);
+        }
+        let target = staging_path.join(&relative);
+        let parent = target.parent().ok_or(GenerationSnapshotError::UnsafePath)?;
+        ensure_descendant_directories(staging_path, parent)?;
+        let mut file = OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&target)
+            .map_err(LocalProfileError::from)?;
+        let mut remaining = bytes;
+        let mut file_hash = Sha256::new();
+        while remaining > 0 {
+            let count = usize::try_from(remaining.min(buffer.len() as u64))
+                .map_err(|_| GenerationSnapshotError::SnapshotTooLarge)?;
+            read_stream_piece(source, &mut hash, &mut total, &mut buffer[..count])?;
+            file.write_all(&buffer[..count])
+                .map_err(LocalProfileError::from)?;
+            file_hash.update(&buffer[..count]);
+            remaining -= count as u64;
+        }
+        file.sync_all().map_err(LocalProfileError::from)?;
+        entries.push(StreamedSnapshotFile {
+            relative_path: relative,
+            bytes,
+            digest: file_hash.finalize().into(),
+        });
+    }
+    let mut eof = [0_u8; 1];
+    if source.read(&mut eof).map_err(LocalProfileError::from)? != 0
+        || total != expected.plaintext_bytes
+        || <[u8; 32]>::from(hash.finalize()) != expected.plaintext_digest
+    {
+        return Err(GenerationSnapshotError::InvalidFormat);
+    }
+    verify_streamed_workspace(&staging, &entries)?;
+    before_publish(&staging)?;
+
+    // Identical no-replace atomic publish boundary to the in-memory reader.
+    let final_path = root
+        .prepare_generation_path(tenant, profile, generation)
+        .map_err(|error| match error {
+            LocalProfileError::TargetAlreadyExists => GenerationSnapshotError::TargetAlreadyExists,
+            error => GenerationSnapshotError::Local(error),
+        })?;
+    if fs::symlink_metadata(&final_path).is_ok() {
+        return Err(GenerationSnapshotError::TargetAlreadyExists);
+    }
+    fs::rename(staging_path, &final_path).map_err(LocalProfileError::from)?;
+    drop(staging);
+    let workspace = root
+        .open_generation(tenant, profile, generation)
+        .map_err(GenerationSnapshotError::Local)?;
+    verify_streamed_workspace(&workspace, &entries)?;
+    Ok(workspace)
+}
+
+fn verify_streamed_workspace(
+    workspace: &GenerationWorkspace,
+    entries: &[StreamedSnapshotFile],
+) -> Result<(), GenerationSnapshotError> {
+    let inventory = workspace
+        .inventory()
+        .map_err(GenerationSnapshotError::Local)?;
+    if inventory.entries().len() != entries.len() {
+        return Err(GenerationSnapshotError::SourceChanged);
+    }
+    let mut buffer = [0_u8; 65_536];
+    for (actual, original) in inventory.entries().iter().zip(entries) {
+        if actual.relative_path() != original.relative_path || actual.bytes() != original.bytes {
+            return Err(GenerationSnapshotError::SourceChanged);
+        }
+        let path = workspace.path().join(&original.relative_path);
+        let metadata = fs::symlink_metadata(&path).map_err(LocalProfileError::from)?;
+        if metadata.file_type().is_symlink()
+            || !metadata.is_file()
+            || metadata.len() != original.bytes
+        {
+            return Err(GenerationSnapshotError::SourceChanged);
+        }
+        let mut file = File::open(&path).map_err(LocalProfileError::from)?;
+        let mut digest = Sha256::new();
+        loop {
+            let count = file.read(&mut buffer).map_err(LocalProfileError::from)?;
+            if count == 0 {
+                break;
+            }
+            digest.update(&buffer[..count]);
+        }
+        if <[u8; 32]>::from(digest.finalize()) != original.digest {
+            return Err(GenerationSnapshotError::SourceChanged);
+        }
+    }
+    Ok(())
+}
+
+fn read_stream_piece(
+    source: &mut impl Read,
+    hash: &mut Sha256,
+    total: &mut u64,
+    buffer: &mut [u8],
+) -> Result<(), GenerationSnapshotError> {
+    let next = total
+        .checked_add(buffer.len() as u64)
+        .ok_or(GenerationSnapshotError::SnapshotTooLarge)?;
+    if next > MAX_STREAM_WORKSPACE_SNAPSHOT_BYTES {
+        return Err(GenerationSnapshotError::SnapshotTooLarge);
+    }
+    source.read_exact(buffer).map_err(|error| {
+        if error.kind() == std::io::ErrorKind::UnexpectedEof {
+            GenerationSnapshotError::InvalidFormat
+        } else {
+            GenerationSnapshotError::Local(error.into())
+        }
+    })?;
+    hash.update(buffer);
+    *total = next;
+    Ok(())
 }
 
 #[cfg(test)]
@@ -466,12 +994,15 @@ fn checked_extend(output: &mut Vec<u8>, bytes: &[u8]) -> Result<(), GenerationSn
 #[cfg(test)]
 mod tests {
     use super::{
-        GenerationSnapshotError, WORKSPACE_SNAPSHOT_MAGIC, encode_workspace_snapshot,
-        materialize_workspace_snapshot, materialize_workspace_snapshot_with_pre_publish,
-        parse_workspace_snapshot,
+        GenerationSnapshotError, StreamedWorkspaceSnapshot, WORKSPACE_SNAPSHOT_MAGIC,
+        WorkspaceSnapshotReader, encode_workspace_snapshot, encode_workspace_snapshot_streaming,
+        encoded_stream_snapshot_size, materialize_workspace_snapshot,
+        materialize_workspace_snapshot_streaming_with_pre_publish,
+        materialize_workspace_snapshot_with_pre_publish, parse_workspace_snapshot,
     };
     use crate::local_profile::MaterializationRoot;
     use profile_platform_primitives::{GenerationId, ProfileId, TenantId};
+    use sha2::Digest;
     use std::fs;
     use std::path::PathBuf;
     use std::sync::atomic::{AtomicU64, Ordering};
@@ -519,6 +1050,595 @@ mod tests {
     }
 
     #[test]
+    fn full_512_mib_firefox_native_profile_fits_maximum_canonical_framing() {
+        let raw = 536_870_912_u64;
+        let max_file_count = 100_000_u64;
+        let max_path_bytes = 512_u64;
+        let encoded = 12 + raw + max_file_count * (2 + max_path_bytes + 8);
+        assert_eq!(super::MAX_STREAM_NATIVE_PROFILE_BYTES, raw);
+        assert_eq!(
+            super::MAX_STREAM_WORKSPACE_SNAPSHOT_BYTES,
+            encrypted_generation_domain::MAX_STREAM_PLAINTEXT_BYTES,
+        );
+        assert!(
+            encoded <= super::MAX_STREAM_WORKSPACE_SNAPSHOT_BYTES,
+            "512 MiB native profiles must not be rejected solely due to BPGW metadata",
+        );
+    }
+
+    #[test]
+    fn direct_two_pass_snapshot_reader_seals_original_firefox_without_plaintext_spool()
+    -> Result<(), Box<dyn std::error::Error>> {
+        use encrypted_generation_domain::{
+            GenerationDek, GenerationIdentity, GenerationMetadata, KeyId, NoncePrefix,
+            open_generation_streaming, seal_generation_streaming,
+        };
+        use std::io::Read;
+        let fixture = Fixture::new()?;
+        let result = (|| {
+            let base = GenerationId::parse("generation_direct_streaming_reader")?;
+            let next = GenerationId::parse("generation_direct_streaming_successor")?;
+            let source =
+                fixture
+                    .root
+                    .create_generation(&fixture.tenant_id, &fixture.profile_id, &base)?;
+            fs::write(source.path().join("prefs.js"), b"user_pref('local', true);")?;
+            let directory = source.path().join("user_data");
+            fs::create_dir_all(&directory)?;
+            fs::write(directory.join("cookies.sqlite-wal"), vec![0x37; 177_013])?;
+            fs::write(directory.join("empty.sqlite"), b"")?;
+            let inventory = source.inventory()?;
+            let canonical = encode_workspace_snapshot(&source, &inventory)?;
+            let mut digest_reader = WorkspaceSnapshotReader::new(&source, &inventory)?;
+            assert_eq!(digest_reader.expected_bytes(), canonical.len() as u64);
+            let key = GenerationDek::new(KeyId::parse("direct_streaming_reader_key")?, [0x7e; 32]);
+            let metadata = GenerationMetadata::for_reader(
+                GenerationIdentity::new(
+                    fixture.tenant_id.clone(),
+                    fixture.profile_id.clone(),
+                    next,
+                    Some(base),
+                ),
+                key.key_id().clone(),
+                NoncePrefix::new([0x54; 16]),
+                65_536,
+                &mut digest_reader,
+            )?;
+            let mut seal_reader = WorkspaceSnapshotReader::new(&source, &inventory)?;
+            let mut encrypted = Vec::new();
+            let report =
+                seal_generation_streaming(&metadata, &key, &mut seal_reader, &mut encrypted)?;
+            assert_eq!(report.container_bytes(), encrypted.len() as u64);
+            let mut decrypted = Vec::new();
+            let opened =
+                open_generation_streaming(&mut encrypted.as_slice(), &key, &mut decrypted)?;
+            assert_eq!(report, opened);
+            assert_eq!(decrypted, canonical);
+            let mut eof = [0_u8; 4];
+            assert_eq!(seal_reader.read(&mut eof)?, 0);
+            assert_eq!(source.inventory()?, inventory);
+            Ok::<(), Box<dyn std::error::Error>>(())
+        })();
+        fixture.cleanup();
+        result
+    }
+
+    #[test]
+    fn native_mutation_between_streaming_passes_fails_closed_without_new_generation()
+    -> Result<(), Box<dyn std::error::Error>> {
+        use encrypted_generation_domain::{
+            GenerationDek, GenerationIdentity, GenerationMetadata, KeyId, NoncePrefix,
+            seal_generation_streaming,
+        };
+        let fixture = Fixture::new()?;
+        let result = (|| {
+            let base = GenerationId::parse("generation_direct_changed_base")?;
+            let next = GenerationId::parse("generation_direct_changed_next")?;
+            let source =
+                fixture
+                    .root
+                    .create_generation(&fixture.tenant_id, &fixture.profile_id, &base)?;
+            let native = source.path().join("prefs.js");
+            fs::write(&native, b"original Firefox native bytes")?;
+            let before = source.inventory()?;
+            let key = GenerationDek::new(KeyId::parse("direct_streaming_changed_key")?, [0x5c; 32]);
+            let mut digest_reader = WorkspaceSnapshotReader::new(&source, &before)?;
+            let metadata = GenerationMetadata::for_reader(
+                GenerationIdentity::new(
+                    fixture.tenant_id.clone(),
+                    fixture.profile_id.clone(),
+                    next.clone(),
+                    Some(base),
+                ),
+                key.key_id().clone(),
+                NoncePrefix::new([0x32; 16]),
+                65_536,
+                &mut digest_reader,
+            )?;
+            fs::write(&native, b"modified Firefox native bytes")?;
+            let mut seal_reader = WorkspaceSnapshotReader::new(&source, &before)?;
+            let mut unpublishable_ciphertext = Vec::new();
+            assert!(
+                seal_generation_streaming(
+                    &metadata,
+                    &key,
+                    &mut seal_reader,
+                    &mut unpublishable_ciphertext,
+                )
+                .is_err()
+            );
+            assert_eq!(fs::read(&native)?, b"modified Firefox native bytes");
+            assert!(
+                fixture
+                    .root
+                    .open_generation(&fixture.tenant_id, &fixture.profile_id, &next,)
+                    .is_err()
+            );
+            Ok::<(), Box<dyn std::error::Error>>(())
+        })();
+        fixture.cleanup();
+        result
+    }
+
+    #[test]
+    fn streamed_snapshot_is_byte_identical_and_digest_identical_to_legacy()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let fixture = Fixture::new()?;
+        let result = (|| {
+            let generation = GenerationId::parse("generation_streaming_snapshot")?;
+            let source = fixture.root.create_generation(
+                &fixture.tenant_id,
+                &fixture.profile_id,
+                &generation,
+            )?;
+            fs::write(source.path().join("prefs.js"), b"user_pref('a', true);")?;
+            let directory = source.path().join("user_data");
+            fs::create_dir_all(&directory)?;
+            fs::write(directory.join("cookies.sqlite-wal"), vec![0x8a; 180_093])?;
+            let inventory = source.inventory()?;
+            let legacy = encode_workspace_snapshot(&source, &inventory)?;
+            let mut output = Vec::new();
+            let report = encode_workspace_snapshot_streaming(&source, &inventory, &mut output)?;
+            assert_eq!(
+                encoded_stream_snapshot_size(&inventory)?,
+                output.len() as u64
+            );
+            assert_eq!(legacy, output);
+            assert_eq!(report.plaintext_bytes, output.len() as u64);
+            let expected: [u8; 32] = sha2::Sha256::digest(&legacy).into();
+            assert_eq!(report.plaintext_digest, expected);
+            Ok::<(), Box<dyn std::error::Error>>(())
+        })();
+        fixture.cleanup();
+        result
+    }
+
+    #[test]
+    fn workspace_snapshot_and_bpgc_container_round_trip_using_only_file_spools()
+    -> Result<(), Box<dyn std::error::Error>> {
+        use encrypted_generation_domain::{
+            GenerationDek, GenerationIdentity, GenerationMetadata, KeyId, NoncePrefix,
+            open_generation_streaming, seal_generation_streaming,
+        };
+        use std::io::{Read, Seek, SeekFrom};
+        let fixture = Fixture::new()?;
+        let result = (|| {
+            let base = GenerationId::parse("generation_streamed_snapshot_base")?;
+            let next = GenerationId::parse("generation_streamed_snapshot_next")?;
+            let source =
+                fixture
+                    .root
+                    .create_generation(&fixture.tenant_id, &fixture.profile_id, &base)?;
+            fs::write(source.path().join("prefs.js"), b"immutable Firefox prefs")?;
+            let directory = source.path().join("user_data");
+            fs::create_dir_all(&directory)?;
+            fs::write(directory.join("cookies.sqlite-wal"), vec![0x4a; 3_700_016])?;
+            let inventory = source.inventory()?;
+            let snapshot_path = fixture.root.path().join("k2-snapshot-test.bin");
+            let container_path = fixture.root.path().join("k2-container-test.bin");
+            let reopened_path = fixture.root.path().join("k2-reopened-test.bin");
+            let mut snapshot = fs::OpenOptions::new()
+                .create_new(true)
+                .write(true)
+                .read(true)
+                .open(&snapshot_path)?;
+            let report = encode_workspace_snapshot_streaming(&source, &inventory, &mut snapshot)?;
+            snapshot.sync_all()?;
+            snapshot.seek(SeekFrom::Start(0))?;
+            let identity = GenerationIdentity::new(
+                fixture.tenant_id.clone(),
+                fixture.profile_id.clone(),
+                next,
+                Some(base),
+            );
+            let key = GenerationDek::new(KeyId::parse("streaming-snapshot-key")?, [0x21; 32]);
+            let nonce = NoncePrefix::new([0x2a; 16]);
+            let metadata = GenerationMetadata::for_reader(
+                identity,
+                key.key_id().clone(),
+                nonce,
+                65_536,
+                &mut snapshot,
+            )?;
+            assert_eq!(report.plaintext_bytes, metadata.plaintext_bytes());
+            assert_eq!(report.plaintext_digest, metadata.plaintext_digest().bytes(),);
+            snapshot.seek(SeekFrom::Start(0))?;
+            let mut container = fs::OpenOptions::new()
+                .create_new(true)
+                .write(true)
+                .read(true)
+                .open(&container_path)?;
+            let sealed = seal_generation_streaming(&metadata, &key, &mut snapshot, &mut container)?;
+            container.sync_all()?;
+            container.seek(SeekFrom::Start(0))?;
+            let mut reopened = fs::OpenOptions::new()
+                .create_new(true)
+                .write(true)
+                .read(true)
+                .open(&reopened_path)?;
+            let opened = open_generation_streaming(&mut container, &key, &mut reopened)?;
+            reopened.sync_all()?;
+            assert_eq!(opened, sealed);
+            assert_eq!(reopened.metadata()?.len(), snapshot.metadata()?.len());
+            reopened.seek(SeekFrom::Start(0))?;
+            snapshot.seek(SeekFrom::Start(0))?;
+            let mut expected = [0_u8; 65_536];
+            let mut actual = [0_u8; 65_536];
+            loop {
+                let count = snapshot.read(&mut expected)?;
+                if count == 0 {
+                    assert_eq!(reopened.read(&mut actual)?, 0);
+                    break;
+                }
+                reopened.read_exact(&mut actual[..count])?;
+                assert_eq!(&expected[..count], &actual[..count]);
+            }
+            assert_eq!(source.inventory()?, inventory);
+            reopened.seek(SeekFrom::Start(0))?;
+            let restored = materialize_workspace_snapshot_streaming_with_pre_publish(
+                &fixture.root,
+                &fixture.tenant_id,
+                &fixture.profile_id,
+                opened.metadata().generation_id(),
+                &mut reopened,
+                StreamedWorkspaceSnapshot {
+                    plaintext_bytes: opened.metadata().plaintext_bytes(),
+                    plaintext_digest: opened.metadata().plaintext_digest().bytes(),
+                },
+                |_| Ok(()),
+            )?;
+            assert_eq!(restored.inventory()?, inventory);
+            assert_eq!(
+                fs::read(restored.path().join("user_data/cookies.sqlite-wal"))?,
+                vec![0x4a; 3_700_016],
+            );
+            Ok::<(), Box<dyn std::error::Error>>(())
+        })();
+        fixture.cleanup();
+        result
+    }
+
+    // Expensive cross-platform acceptance exercise. Run explicitly on CI machines
+    // with enough disk (it writes >= 1 GiB of actual encrypted and decrypted bytes).
+    // This is FILE streaming proof, not a claim of signed R2/D1 or a Firefox launch.
+    #[test]
+    #[ignore = "K2 large file acceptance: run explicitly with --ignored"]
+    fn k2_full_256_and_512_mib_file_streaming_encrypt_cold_restore()
+    -> Result<(), Box<dyn std::error::Error>> {
+        use encrypted_generation_domain::{
+            GenerationDek, GenerationIdentity, GenerationMetadata, KeyId, NoncePrefix,
+            open_generation_streaming, seal_generation_streaming,
+        };
+        use std::io::{Seek, SeekFrom, Write};
+        use std::time::Instant;
+
+        for target_mib in [256_u64, 512] {
+            let fixture = Fixture::new()?;
+            let started = Instant::now();
+            let result = (|| {
+                let base = GenerationId::parse("generation_large_file_original")?;
+                let next = GenerationId::parse("generation_large_file_cold_reopen")?;
+                let source = fixture.root.create_generation(
+                    &fixture.tenant_id,
+                    &fixture.profile_id,
+                    &base,
+                )?;
+                // Include the browser-managed native paths and a large opaque
+                // storage payload. set_len intentionally avoids a 512 MiB Vec.
+                let user_data = source.path().join("user_data");
+                fs::create_dir_all(user_data.join("storage/default"))?;
+                fs::write(source.path().join("prefs.js"), b"user_pref('K2', true);")?;
+                fs::write(
+                    source.path().join("camoufox-config.json"),
+                    b"{\"browser\":\"camoufox\"}",
+                )?;
+                fs::write(user_data.join("cookies.sqlite-wal"), vec![0x57; 65_537])?;
+                fs::write(
+                    user_data.join("storage/default/indexeddb.sqlite"),
+                    vec![0x49; 131_075],
+                )?;
+                let small = source.inventory()?.total_bytes();
+                let target = target_mib * 1_048_576;
+                assert!(small < target);
+                let native = user_data.join("storage/default/large-content.bin");
+                let mut payload = fs::OpenOptions::new()
+                    .create_new(true)
+                    .write(true)
+                    .open(&native)?;
+                let payload_len = target - small;
+                payload.set_len(payload_len)?;
+                payload.seek(SeekFrom::Start(0))?;
+                payload.write_all(b"FIREFOX-K2-BEGIN")?;
+                payload.seek(SeekFrom::Start(payload_len - 16))?;
+                payload.write_all(b"FIREFOX-K2-FINAL")?;
+                payload.sync_all()?;
+                drop(payload);
+                let inventory = source.inventory()?;
+                assert_eq!(inventory.total_bytes(), target);
+                let key =
+                    GenerationDek::new(KeyId::parse("k2_large_file_roundtrip_key")?, [0x73; 32]);
+                let mut prehash = WorkspaceSnapshotReader::new(&source, &inventory)?;
+                let metadata = GenerationMetadata::for_reader(
+                    GenerationIdentity::new(
+                        fixture.tenant_id.clone(),
+                        fixture.profile_id.clone(),
+                        next.clone(),
+                        Some(base),
+                    ),
+                    key.key_id().clone(),
+                    NoncePrefix::new([0x63; 16]),
+                    65_536,
+                    &mut prehash,
+                )?;
+                let sealed_path = fixture.root.path().join("k2-sealed.bpgc");
+                let mut ciphertext = fs::OpenOptions::new()
+                    .create_new(true)
+                    .read(true)
+                    .write(true)
+                    .open(&sealed_path)?;
+                let mut seal_reader = WorkspaceSnapshotReader::new(&source, &inventory)?;
+                let sealed =
+                    seal_generation_streaming(&metadata, &key, &mut seal_reader, &mut ciphertext)?;
+                ciphertext.sync_all()?;
+                assert_eq!(ciphertext.metadata()?.len(), sealed.container_bytes());
+                assert_eq!(source.inventory()?, inventory);
+                // Cold path consumes the immutable file as a Read stream,
+                // never copies its contents into a generation-sized Vec.
+                ciphertext.seek(SeekFrom::Start(0))?;
+                let mut plaintext = fs::OpenOptions::new()
+                    .create_new(true)
+                    .read(true)
+                    .write(true)
+                    .open(fixture.root.path().join("k2-cold-plaintext.bpgw"))?;
+                let opened = open_generation_streaming(&mut ciphertext, &key, &mut plaintext)?;
+                plaintext.sync_all()?;
+                assert_eq!(opened, sealed);
+                assert_eq!(plaintext.metadata()?.len(), metadata.plaintext_bytes());
+                plaintext.seek(SeekFrom::Start(0))?;
+                let restored = materialize_workspace_snapshot_streaming_with_pre_publish(
+                    &fixture.root,
+                    &fixture.tenant_id,
+                    &fixture.profile_id,
+                    &next,
+                    &mut plaintext,
+                    StreamedWorkspaceSnapshot {
+                        plaintext_bytes: opened.metadata().plaintext_bytes(),
+                        plaintext_digest: opened.metadata().plaintext_digest().bytes(),
+                    },
+                    |_| Ok(()),
+                )?;
+                assert_eq!(restored.inventory()?, inventory);
+                for path in [
+                    "prefs.js",
+                    "camoufox-config.json",
+                    "user_data/cookies.sqlite-wal",
+                    "user_data/storage/default/indexeddb.sqlite",
+                ] {
+                    assert_eq!(
+                        fs::read(restored.path().join(path))?,
+                        fs::read(source.path().join(path))?,
+                        "native file changed after cold restore: {path}",
+                    );
+                }
+                let mut restored_large = fs::File::open(
+                    restored
+                        .path()
+                        .join("user_data/storage/default/large-content.bin"),
+                )?;
+                use std::io::Read;
+                let mut head = [0_u8; 16];
+                restored_large.read_exact(&mut head)?;
+                assert_eq!(&head[..16], b"FIREFOX-K2-BEGIN");
+                restored_large.seek(SeekFrom::Start(payload_len - 16))?;
+                restored_large.read_exact(&mut head)?;
+                assert_eq!(&head[..16], b"FIREFOX-K2-FINAL");
+                assert_eq!(restored_large.metadata()?.len(), payload_len);
+                eprintln!(
+                    "K2_DISK_STREAM size_mib={target_mib} native_bytes={target} plaintext_bytes={} ciphertext_bytes={} seconds={} file_spools=2",
+                    metadata.plaintext_bytes(),
+                    sealed.container_bytes(),
+                    started.elapsed().as_secs(),
+                );
+                Ok::<(), Box<dyn std::error::Error>>(())
+            })();
+            fixture.cleanup();
+            result?;
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn streamed_materializer_refuses_trailing_corrupt_and_unsafe_native_restore()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let fixture = Fixture::new()?;
+        let result = (|| {
+            let next = GenerationId::parse("generation_streamed_unpublished_unsafe")?;
+            let valid = raw_snapshot(&[
+                ("prefs.js", b"good"),
+                ("user_data/cookies.sqlite-wal", b"wal"),
+            ]);
+            let proof = StreamedWorkspaceSnapshot {
+                plaintext_bytes: valid.len() as u64,
+                plaintext_digest: sha2::Sha256::digest(&valid).into(),
+            };
+            let materialized = materialize_workspace_snapshot_streaming_with_pre_publish(
+                &fixture.root,
+                &fixture.tenant_id,
+                &fixture.profile_id,
+                &next,
+                &mut valid.as_slice(),
+                proof,
+                |_| Ok(()),
+            )?;
+            assert_eq!(fs::read(materialized.path().join("prefs.js"))?, b"good");
+            assert_eq!(
+                fs::read(materialized.path().join("user_data/cookies.sqlite-wal"))?,
+                b"wal",
+            );
+            assert_eq!(
+                materialize_workspace_snapshot_streaming_with_pre_publish(
+                    &fixture.root,
+                    &fixture.tenant_id,
+                    &fixture.profile_id,
+                    &next,
+                    &mut valid.as_slice(),
+                    proof,
+                    |_| Ok(()),
+                )
+                .err(),
+                Some(GenerationSnapshotError::TargetAlreadyExists),
+            );
+            let next = GenerationId::parse("generation_streamed_restore_trailing")?;
+            let mut invalid = valid.clone();
+            invalid.push(0x91);
+            assert!(
+                materialize_workspace_snapshot_streaming_with_pre_publish(
+                    &fixture.root,
+                    &fixture.tenant_id,
+                    &fixture.profile_id,
+                    &next,
+                    &mut invalid.as_slice(),
+                    proof,
+                    |_| Ok(()),
+                )
+                .is_err()
+            );
+            assert!(
+                fixture
+                    .root
+                    .open_generation(&fixture.tenant_id, &fixture.profile_id, &next,)
+                    .is_err()
+            );
+            let next = GenerationId::parse("generation_streamed_restore_escape")?;
+            let unsafe_source = raw_snapshot(&[("../prefs.js", b"escape")]);
+            let unsafe_proof = StreamedWorkspaceSnapshot {
+                plaintext_bytes: unsafe_source.len() as u64,
+                plaintext_digest: sha2::Sha256::digest(&unsafe_source).into(),
+            };
+            assert!(
+                materialize_workspace_snapshot_streaming_with_pre_publish(
+                    &fixture.root,
+                    &fixture.tenant_id,
+                    &fixture.profile_id,
+                    &next,
+                    &mut unsafe_source.as_slice(),
+                    unsafe_proof,
+                    |_| Ok(()),
+                )
+                .is_err()
+            );
+            assert!(
+                fixture
+                    .root
+                    .open_generation(&fixture.tenant_id, &fixture.profile_id, &next,)
+                    .is_err()
+            );
+            Ok::<(), Box<dyn std::error::Error>>(())
+        })();
+        fixture.cleanup();
+        result
+    }
+    #[test]
+    fn stream_restore_pre_publish_failure_never_exposes_generation_and_is_retryable()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let fixture = Fixture::new()?;
+        let result = (|| {
+            let generation = GenerationId::parse("generation_unpublished_stream_crash")?;
+            let snapshot = raw_snapshot(&[("prefs.js", b"retained-firefox")]);
+            let expected = StreamedWorkspaceSnapshot {
+                plaintext_bytes: snapshot.len() as u64,
+                plaintext_digest: sha2::Sha256::digest(&snapshot).into(),
+            };
+            assert_eq!(
+                materialize_workspace_snapshot_streaming_with_pre_publish(
+                    &fixture.root,
+                    &fixture.tenant_id,
+                    &fixture.profile_id,
+                    &generation,
+                    &mut snapshot.as_slice(),
+                    expected,
+                    |_| Err(GenerationSnapshotError::PrePublish),
+                )
+                .err(),
+                Some(GenerationSnapshotError::PrePublish),
+            );
+            assert!(
+                fixture
+                    .root
+                    .open_generation(&fixture.tenant_id, &fixture.profile_id, &generation,)
+                    .is_err()
+            );
+            let recovered = materialize_workspace_snapshot_streaming_with_pre_publish(
+                &fixture.root,
+                &fixture.tenant_id,
+                &fixture.profile_id,
+                &generation,
+                &mut snapshot.as_slice(),
+                expected,
+                |_| Ok(()),
+            )?;
+            assert_eq!(
+                fs::read(recovered.path().join("prefs.js"))?,
+                b"retained-firefox",
+            );
+            Ok::<(), Box<dyn std::error::Error>>(())
+        })();
+        fixture.cleanup();
+        result
+    }
+
+    #[test]
+    fn streamed_snapshot_preserves_native_bytes_on_changed_file_and_failed_sink()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let fixture = Fixture::new()?;
+        let result = (|| {
+            let generation = GenerationId::parse("generation_streaming_bounded_failure")?;
+            let source = fixture.root.create_generation(
+                &fixture.tenant_id,
+                &fixture.profile_id,
+                &generation,
+            )?;
+            let native = source.path().join("prefs.js");
+            fs::write(&native, b"first-native-close")?;
+            let previous = source.inventory()?;
+            fs::write(&native, b"changed-after-close")?;
+            assert!(
+                encode_workspace_snapshot_streaming(&source, &previous, &mut Vec::new(),).is_err()
+            );
+            let current = source.inventory()?;
+            let mut tiny = [0_u8; 4];
+            let mut no_space = std::io::Cursor::new(&mut tiny[..]);
+            assert!(
+                encode_workspace_snapshot_streaming(&source, &current, &mut no_space,).is_err()
+            );
+            assert_eq!(fs::read(&native)?, b"changed-after-close");
+            Ok::<(), Box<dyn std::error::Error>>(())
+        })();
+        fixture.cleanup();
+        result
+    }
+
+    #[test]
     fn canonical_snapshot_round_trips_into_exact_authoritative_generation()
     -> Result<(), Box<dyn std::error::Error>> {
         let fixture = Fixture::new()?;
@@ -529,8 +1649,35 @@ mod tests {
                 .root
                 .create_generation(&fixture.tenant_id, &fixture.profile_id, &source_id)?;
         fs::create_dir_all(source.path().join("storage/default"))?;
+        fs::create_dir_all(source.path().join("user_data/storage/default"))?;
         fs::write(source.path().join("prefs.js"), b"prefs")?;
         fs::write(source.path().join("storage/default/state.bin"), b"state")?;
+        // Full N and LKG snapshots must carry both the pinned Camoufox identity
+        // and the actual Firefox database/WAL state. A lock artifact is not data.
+        fs::write(
+            source.path().join("camoufox-config.json"),
+            b"stable-fingerprint",
+        )?;
+        fs::write(
+            source.path().join(".profile-browser-identity-v1"),
+            b"stable-identity-manifest",
+        )?;
+        fs::write(
+            source.path().join("user_data/cookies.sqlite"),
+            b"cookies-db",
+        )?;
+        fs::write(
+            source.path().join("user_data/cookies.sqlite-wal"),
+            b"cookies-wal",
+        )?;
+        fs::write(
+            source.path().join("user_data/storage/default/indexeddb"),
+            b"indexed-db",
+        )?;
+        fs::write(
+            source.path().join("user_data/parent.lock"),
+            b"stale-os-lock",
+        )?;
         let inventory = source.inventory()?;
         let snapshot = encode_workspace_snapshot(&source, &inventory)?;
         let target = materialize_workspace_snapshot(
@@ -546,6 +1693,22 @@ mod tests {
             fs::read(target.path().join("storage/default/state.bin"))?,
             b"state"
         );
+        for (relative, expected) in [
+            ("camoufox-config.json", b"stable-fingerprint".as_slice()),
+            (
+                ".profile-browser-identity-v1",
+                b"stable-identity-manifest".as_slice(),
+            ),
+            ("user_data/cookies.sqlite", b"cookies-db".as_slice()),
+            ("user_data/cookies.sqlite-wal", b"cookies-wal".as_slice()),
+            (
+                "user_data/storage/default/indexeddb",
+                b"indexed-db".as_slice(),
+            ),
+        ] {
+            assert_eq!(fs::read(target.path().join(relative))?, expected);
+        }
+        assert!(!target.path().join("user_data/parent.lock").exists());
         fixture.cleanup();
         Ok(())
     }

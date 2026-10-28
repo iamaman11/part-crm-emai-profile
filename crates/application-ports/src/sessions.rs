@@ -28,8 +28,26 @@ pub trait ProfileCoordinatorPort {
     fn close_confirmed_save(&mut self, lease: &ProfileLease) -> Result<(), Self::Error> {
         self.close_lease(lease)
     }
+
+    /// A separate *read-only historical browser probe* may cleanly release
+    /// CURRENT ownership only after the original native current remained
+    /// quiescent, an isolated browser passed independent live observation,
+    /// the historical R2/current authority was revalidated after stopping,
+    /// and BOTH local locks were released. No ordinary failure/revocation
+    /// may invoke this path. Other coordinators default to Uncertain.
+    fn close_verified_historical_probe(&mut self, lease: &ProfileLease) -> Result<(), Self::Error> {
+        self.close_lease(lease)
+    }
 }
 
 pub trait ProfileCoordinatorRuntimePort: ProfileCoordinatorPort {
     fn heartbeat_lease(&mut self, lease: &ProfileLease) -> Result<(), Self::Error>;
+
+    /// Narrow transport uncertainty, NOT a new lease, heartbeat success or
+    /// evidence that the coordinator has not revoked this session. Only the
+    /// concrete coordinator can classify its transport result. Default stays
+    /// fail-closed for every other implementation.
+    fn heartbeat_transport_uncertain(&self, _error: &Self::Error) -> bool {
+        false
+    }
 }
