@@ -1352,7 +1352,10 @@ mod tests {
         let secret_body = MachineHttpResponse::new(409, b"SECRET=presigned-url".to_vec());
         assert_eq!(safe_machine_problem_code(&secret_body, &request_id), None);
         let oversized_body = MachineHttpResponse::new(409, vec![b'X'; 2049]);
-        assert_eq!(safe_machine_problem_code(&oversized_body, &request_id), None);
+        assert_eq!(
+            safe_machine_problem_code(&oversized_body, &request_id),
+            None
+        );
         Ok(())
     }
 
