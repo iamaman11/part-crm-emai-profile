@@ -501,16 +501,29 @@ class Harness:
             "catalog-current-empty-baseline", "catalog", self.catalog_sources(projection)
         )
         baseline = case / "baseline.sql"
-        self.run(["python", "scripts/cloudflare-d1-bootstrap.py", "build", "--output", str(baseline)])
-        self.wrangler("d1", "execute", binding, "--local", "--config", self.relative(config),
-                      "--persist-to", self.relative(state), "--file", self.relative(baseline),
-                      "--experimental-provision=false", "--experimental-auto-create=false")
+        chunk_directory = case / "baseline-chunks"
+        self.run(["python", "scripts/cloudflare-d1-bootstrap.py", "build", "--output", str(baseline),
+                  "--chunk-directory", str(chunk_directory)])
+        self.run(["python", "scripts/cloudflare-d1-bootstrap.py", "verify", "--file", str(baseline),
+                  "--chunk-directory", str(chunk_directory)])
+        # Every file is a deterministic, statement-complete slice of the same
+        # signed canonical baseline. The provider must never receive a SQL
+        # request that exceeds its per-statement/payload safety limit.
+        parts = sorted(chunk_directory.glob("part-*.sql"))
+        if not parts:
+            raise HarnessError("CURRENT canonical empty bootstrap produced no execution parts")
+        for part in parts:
+            self.wrangler("d1", "execute", binding, "--local", "--config", self.relative(config),
+                          "--persist-to", self.relative(state), "--file", self.relative(part),
+                          "--experimental-provision=false", "--experimental-auto-create=false")
         ledger = self.execute(binding, config, state, "SELECT id,name FROM d1_migrations ORDER BY id")
         if self.ledger_names(ledger) != expected:
             raise HarnessError("CURRENT baseline did not create the exact canonical D1 ledger")
         before = self.execute(binding, config, state, "SELECT type,name,tbl_name,sql FROM sqlite_master ORDER BY type,name")
+        # The first canonical part contains the empty-target guard; a replay
+        # must fail before touching a SINGLE already established D1 row.
         self.wrangler("d1", "execute", binding, "--local", "--config", self.relative(config),
-                      "--persist-to", self.relative(state), "--file", self.relative(baseline),
+                      "--persist-to", self.relative(state), "--file", self.relative(parts[0]),
                       "--experimental-provision=false", "--experimental-auto-create=false", expect_success=False)
         after = self.execute(binding, config, state, "SELECT type,name,tbl_name,sql FROM sqlite_master ORDER BY type,name")
         if before[0]["results"] != after[0]["results"]:

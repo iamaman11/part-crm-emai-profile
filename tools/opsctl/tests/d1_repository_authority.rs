@@ -262,7 +262,8 @@ fn deployed_runtime_prefix_is_context_only_and_retains_all_migration_gates()
             SUCCESSOR_CONTRACT_REVISION,
             INITIAL_GENERATION_REVISION,
             STREAMING_GENERATION_REVISION,
-            WORKING_PROOF_REVISION
+            WORKING_PROOF_REVISION,
+            RETIREMENT_GUARD_REVISION
         ])
     );
     assert_eq!(
