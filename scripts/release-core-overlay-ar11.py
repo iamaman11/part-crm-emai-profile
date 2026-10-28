@@ -74,14 +74,17 @@ def bounded(value: Any, label: str) -> str:
     return value
 
 
-def verified_runtime_inventory(release_set_path: Path, archive_path: Path) -> str:
-    """Use the exact verified Release Set's packaged runtime, never a caller fingerprint."""
+def verified_runtime_inventory(
+    release_set_path: Path, archive_path: Path, expected_release_set_id: str | None = None,
+) -> str:
+    """Read the exact verified immutable Release Set runtime, never a caller fingerprint."""
+    expected_release_set_id = expected_release_set_id or os.environ.get("RELEASE_SET_ID")
     release = load(release_set_path, "accepted Release Set")
     release_id = release.get("release_set_id")
     if (
         release.get("schema_version") != 3
         or not isinstance(release_id, str)
-        or release_id != os.environ.get("RELEASE_SET_ID")
+        or release_id != expected_release_set_id
         or RELEASE_SET_V3_RE.fullmatch(release_id) is None
     ):
         fail("runtime inventory is not bound to the exact accepted Release Set")
@@ -158,7 +161,10 @@ def verified_runtime_inventory(release_set_path: Path, archive_path: Path) -> st
     return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
 
 
-def control_manifest(document: dict[str, Any], environment: str, *, runtime_digest: str | None = None) -> dict[str, str]:
+def control_manifest(
+    document: dict[str, Any], environment: str, *,
+    runtime_digest: str | None = None, previous_runtime_digest: str | None = None,
+) -> dict[str, str]:
     if environment != "staging":
         fail("AR-11 Core overlay adapter is staging-only; production execution is forbidden")
     if "control_plane" in document:
@@ -178,12 +184,15 @@ def control_manifest(document: dict[str, Any], environment: str, *, runtime_dige
     if not isinstance(owner, str) or len(owner) > 254 or any(ord(ch) < 32 or ord(ch) == 127 for ch in owner):
         fail("control_plane.initial_owner_email must be a bounded single-line string")
     result["initial_owner_email"] = owner
-    # Environment secrets own provider identities, not runtime trust. A missing
-    # historical pin is supplied by the accepted immutable runtime Release Set.
-    # Explicit pin lists remain valid only if they include the exact shipped runtime.
-    allowed = candidate.get("approved_runtime_inventories", runtime_digest)
+    # Only the two cryptographically identified Release Set runtime inventories
+    # can be trusted during a staged predecessor -> successor transition.
+    pinned = [runtime_digest] if runtime_digest is not None else []
+    if previous_runtime_digest is not None and previous_runtime_digest != runtime_digest:
+        pinned.append(previous_runtime_digest)
+    expected = ",".join(pinned) if pinned else None
+    allowed = candidate.get("approved_runtime_inventories", expected)
     if not isinstance(allowed, str):
-        fail("runtime trust requires the verified release inventory or a protected pin")
+        fail("runtime trust requires verified immutable Release Set inventories")
     result["approved_runtime_inventories"] = bounded(allowed, "control_plane.approved_runtime_inventories")
     for field in (
         "worker_name",
@@ -204,7 +213,11 @@ def control_manifest(document: dict[str, Any], environment: str, *, runtime_dige
         fail("control_plane.approved_runtime_inventories must be one or two exact lowercase SHA-256s")
     if "," in allowed and allowed.split(",")[0] == allowed.split(",")[1]:
         fail("control_plane.approved_runtime_inventories must not duplicate a runtime")
-    if runtime_digest is not None and runtime_digest not in allowed.split(","):
+    if previous_runtime_digest is not None:
+        if runtime_digest is None or set(allowed.split(",")) != set(pinned):
+            fail("protected runtime policy differs from the two verified Release Set inventories")
+        result["approved_runtime_inventories"] = expected
+    elif runtime_digest is not None and runtime_digest not in allowed.split(","):
         fail("protected runtime policy excludes the exact accepted runtime Release Set")
     issuer = urlparse(result["access_issuer"])
     if (
@@ -264,13 +277,26 @@ def render(
     deploy_manifest: Path,
     runtime_release_set: Path,
     runtime_archive: Path,
+    previous_runtime_release_set: Path | None = None,
+    previous_runtime_archive: Path | None = None,
+    expected_previous_release_set_id: str | None = None,
     environment: str,
     output: Path,
 ) -> None:
     config = load(source_config, "immutable release Wrangler config")
+    previous_args = (previous_runtime_release_set, previous_runtime_archive, expected_previous_release_set_id)
+    if any(item is not None for item in previous_args) and not all(item is not None for item in previous_args):
+        fail("known-good runtime identity, Release Set and archive must be supplied together")
+    if expected_previous_release_set_id == os.environ.get("RELEASE_SET_ID"):
+        fail("known-good runtime must refer to a different immutable Release Set")
+    previous_digest = (
+        verified_runtime_inventory(previous_runtime_release_set, previous_runtime_archive, expected_previous_release_set_id)
+        if all(item is not None for item in previous_args) else None
+    )
     manifest = control_manifest(
         load(deploy_manifest, "deploy manifest"), environment,
         runtime_digest=verified_runtime_inventory(runtime_release_set, runtime_archive),
+        previous_runtime_digest=previous_digest,
     )
     envs = config.get("env")
     if not isinstance(envs, dict) or set(envs) != {"staging", "production"}:
@@ -431,11 +457,36 @@ def self_test() -> None:
                 "release_id": runtime_release_id,
             }},
         }), encoding="utf-8")
+        previous_release_id = "release-set-v3-sha256-" + "7" * 64
+        previous_component_id = "runtime-bundle-v3-sha256-" + "8" * 64
+        previous_document = {
+            "schema_version": 3, "kind": "CAMOUFOX_WINDOWS_RUNTIME_COMPONENT",
+            "release_id": previous_component_id,
+            "files": {"files": [{"path": "browser/camoufox.exe", "size_bytes": 5, "sha256": "f" * 64}]},
+        }
+        previous_bytes = json.dumps(previous_document, separators=(",", ":")).encode()
+        previous_archive = root / "previous-runtime.tar"
+        with tarfile.open(previous_archive, "w") as archive:
+            member = tarfile.TarInfo("runtime-manifest.json")
+            member.size = len(previous_bytes)
+            archive.addfile(member, io.BytesIO(previous_bytes))
+        previous_release_set = root / "previous-release-set.json"
+        previous_release_set.write_text(json.dumps({
+            "schema_version": 3, "release_set_id": previous_release_id,
+            "components": {"runtime_bundle": {
+                "component_id": "runtime_bundle", "artifact_path": "components/runtime-bundle.tar",
+                "component_manifest_sha256": hashlib.sha256(previous_bytes).hexdigest(),
+                "release_id": previous_component_id,
+            }},
+        }), encoding="utf-8")
         manifest_path = root / "manifest.json"
         previous = os.environ.get("RELEASE_SET_ID")
         os.environ["RELEASE_SET_ID"] = release_set_id
         try:
             expected_pin = verified_runtime_inventory(runtime_release_set, runtime_archive)
+            old_pin = verified_runtime_inventory(previous_release_set, previous_archive, previous_release_id)
+            if old_pin == expected_pin:
+                fail("runtime compatibility fixture did not produce two distinct inventories")
             if expected_pin != hashlib.sha256(
                 (json.dumps([{"length": 3, "path": "browser/camoufox.exe", "sha256": "c" * 64}],
                             separators=(",", ":")) + "\n").encode()
@@ -451,21 +502,58 @@ def self_test() -> None:
                 render(source_config=Path(__file__).resolve().parents[1] / "deploy/cloudflare/wrangler.jsonc",
                        release_root=root, deploy_manifest=manifest_path,
                        runtime_release_set=runtime_release_set, runtime_archive=runtime_archive,
+                       previous_runtime_release_set=previous_release_set,
+                       previous_runtime_archive=previous_archive,
+                       expected_previous_release_set_id=previous_release_id,
                        environment="staging", output=output)
                 observed = json.loads(output.read_text(encoding="utf-8"))
                 if observed["env"]["staging"]["vars"]["INITIAL_OWNER_EMAIL"] != (contact or ""):
                     fail("initial owner configuration was lost during canonical Core rendering")
-                if observed["env"]["staging"]["vars"]["PROFILE_GENERATION_APPROVED_RUNTIME_INVENTORIES"] != expected_pin:
-                    fail("staging WORKING runtime pin was lost during the canonical no-rebuild Core rendering")
+                if observed["env"]["staging"]["vars"]["PROFILE_GENERATION_APPROVED_RUNTIME_INVENTORIES"] != expected_pin + "," + old_pin:
+                    fail("staging WORKING two-release runtime policy was lost during no-rebuild Core rendering")
                 if set(observed["env"]) != {"staging"} or "build" in observed:
                     fail("setup configuration expanded the promotion target/build scope")
-            mismatched = dict(manifest, approved_runtime_inventories="b" * 64)
+            mismatched = dict(manifest, approved_runtime_inventories=expected_pin)
             try:
-                control_manifest({"control_plane": mismatched}, "staging", runtime_digest=expected_pin)
+                control_manifest(
+                    {"control_plane": mismatched}, "staging",
+                    runtime_digest=expected_pin, previous_runtime_digest=old_pin,
+                )
             except OverlayError:
                 pass
             else:
-                fail("protected runtime policy excluding the shipped runtime passed")
+                fail("protected runtime policy excluding the verified previous runtime passed")
+            mismatched["approved_runtime_inventories"] = expected_pin + "," + "b" * 64
+            try:
+                control_manifest(
+                    {"control_plane": mismatched}, "staging",
+                    runtime_digest=expected_pin, previous_runtime_digest=old_pin,
+                )
+            except OverlayError:
+                pass
+            else:
+                fail("unverified third-party runtime pin unexpectedly passed")
+            permitted = dict(manifest, approved_runtime_inventories=old_pin + "," + expected_pin)
+            if control_manifest(
+                {"control_plane": permitted}, "staging",
+                runtime_digest=expected_pin, previous_runtime_digest=old_pin,
+            )["approved_runtime_inventories"] != expected_pin + "," + old_pin:
+                fail("valid two-release policy is not canonical")
+            try:
+                verified_runtime_inventory(previous_release_set, previous_archive, release_set_id)
+            except OverlayError:
+                pass
+            else:
+                fail("known-good release identity substitution unexpectedly passed")
+            previous_release_set.write_text(previous_release_set.read_text().replace(
+                hashlib.sha256(previous_bytes).hexdigest(), "0" * 64,
+            ), encoding="utf-8")
+            try:
+                verified_runtime_inventory(previous_release_set, previous_archive, previous_release_id)
+            except OverlayError:
+                pass
+            else:
+                fail("tampered known-good runtime manifest identity passed")
             runtime_release_set.write_text(runtime_release_set.read_text().replace(
                 hashlib.sha256(runtime_bytes).hexdigest(), "f" * 64
             ), encoding="utf-8")
@@ -492,6 +580,9 @@ def main() -> int:
     parser.add_argument("--deploy-manifest", type=Path)
     parser.add_argument("--runtime-release-set", type=Path)
     parser.add_argument("--runtime-archive", type=Path)
+    parser.add_argument("--previous-runtime-release-set", type=Path)
+    parser.add_argument("--previous-runtime-archive", type=Path)
+    parser.add_argument("--expected-previous-release-set-id")
     parser.add_argument("--environment", default="staging")
     parser.add_argument("--output", type=Path)
     parser.add_argument("--self-test", action="store_true")
@@ -515,6 +606,9 @@ def main() -> int:
             deploy_manifest=args.deploy_manifest,
             runtime_release_set=args.runtime_release_set,
             runtime_archive=args.runtime_archive,
+            previous_runtime_release_set=args.previous_runtime_release_set,
+            previous_runtime_archive=args.previous_runtime_archive,
+            expected_previous_release_set_id=args.expected_previous_release_set_id,
             environment=args.environment,
             output=args.output,
         )
