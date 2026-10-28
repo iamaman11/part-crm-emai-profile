@@ -88,6 +88,21 @@ fn confirmed_save_trigger<E>(observation: Result<bool, E>) -> Result<ConfirmedSa
 /// recovery was proved committed and its unused Coordinator lease was
 /// released cleanly. The existing machine authority issues a fresh claim;
 /// no stale claim replay, hidden local grant, background daemon or loop.
+// A rejected or malformed *read-only* D1 retry decision can never be
+// retried on the strength of the old writer fence. Only an uncertain
+// transport/408/429/5xx may be re-observed while the original lease is live.
+#[cfg(any(windows, test))]
+fn retryable_reconnect_observation(
+    error: crate::shipping_generation_successor_control::RestartExactLocalCompletionError,
+) -> bool {
+    use crate::shipping_control_plane::ShippingControlPlaneError as Http;
+    use crate::shipping_generation_successor_control::RestartExactLocalCompletionError as Restart;
+    matches!(
+        error,
+        Restart::ControlPlane(Http::Transport | Http::HttpServerUncertain)
+    )
+}
+
 #[cfg(any(windows, test))]
 fn open_with_one_fresh_claim<Open, NewClaim>(
     original: &ClaimUri,
@@ -188,7 +203,7 @@ mod windows {
     use super::{
         ConfirmedSaveTrigger, ShippingCompositionError, ShippingDeliveryCommand,
         confirmed_save_trigger, open_with_one_fresh_claim,
-        retire_historical_probe_only_after_proof,
+        retire_historical_probe_only_after_proof, retryable_reconnect_observation,
     };
     use crate::camouhost_process::{
         ManagedCamouhostConfig, ManagedCamouhostProcess, RuntimeBindingSlot, RuntimeDisplayMode,
@@ -889,8 +904,19 @@ mod windows {
                                 Ok(false) => {
                                     return Err(ShippingCompositionError::CommittedRecoveryRequired);
                                 }
-                                Err(crate::shipping_generation_successor_control::RestartExactLocalCompletionError::ControlPlane(_)) => continue,
-                                Err(_) => {
+                                Err(error) if retryable_reconnect_observation(error) => {
+                                    // No D1-positive decision was observed. Wait
+                                    // only within the confirmed writer deadline.
+                                    continue;
+                                }
+                                Err(error) => {
+                                    // Definitive 401/403/404, malformed response,
+                                    // clock or changed local evidence are NOT
+                                    // transient network failures. Preserve N+1.
+                                    eprintln!(
+                                        "P3_RECOVERY={};NEXT_SAFE_STEP=PRESERVE_LOCAL_BYTES",
+                                        error.code()
+                                    );
                                     return Err(ShippingCompositionError::CommittedRecoveryRequired);
                                 }
                             }
@@ -1250,6 +1276,7 @@ mod tests {
     use super::{
         ConfirmedSaveTrigger, ShippingCompositionError, confirmed_save_trigger,
         open_with_one_fresh_claim, retire_historical_probe_only_after_proof,
+        retryable_reconnect_observation,
     };
     #[cfg(not(windows))]
     use super::{ShippingDeliveryCommand, run_claim, run_delivery_command};
@@ -1400,6 +1427,33 @@ mod tests {
         );
         assert_eq!(calls.get(), 5);
         Ok(())
+    }
+
+    #[test]
+    fn reconnect_observation_never_spins_on_acl_denial_or_invalid_authority() {
+        use crate::shipping_control_plane::ShippingControlPlaneError as Http;
+        use crate::shipping_generation_successor_control::RestartExactLocalCompletionError as Restart;
+
+        for retryable in [Http::Transport, Http::HttpServerUncertain] {
+            assert!(
+                retryable_reconnect_observation(Restart::ControlPlane(retryable)),
+                "only temporary network uncertainty can continue the same Save"
+            );
+        }
+        for terminal in [Http::HttpStatus, Http::InvalidResponse, Http::Clock] {
+            assert!(
+                !retryable_reconnect_observation(Restart::ControlPlane(terminal)),
+                "explicit rejection or bad authority is never a retry grant"
+            );
+        }
+        for local in [
+            Restart::LocalEvidenceChanged,
+            Restart::WriterOrLockUnresolved,
+            Restart::BindingOrRetirementFailed,
+            Restart::UploadOrCommitUncertain,
+        ] {
+            assert!(!retryable_reconnect_observation(local));
+        }
     }
 
     #[test]
