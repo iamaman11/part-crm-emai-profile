@@ -230,32 +230,28 @@ impl StoredCoordinatorDocument {
         })
     }
 
-    pub fn replay(&self) -> Result<ProfileCoordinatorState, CoordinatorAdapterError> {
-        let tenant_id = TenantId::parse(self.tenant_id.clone())?;
-        let profile_id = ProfileId::parse(self.profile_id.clone())?;
+    fn restore_base(&self) -> Result<ProfileCoordinatorState, CoordinatorAdapterError> {
+        let tenant = TenantId::parse(self.tenant_id.clone())?;
+        let profile = ProfileId::parse(self.profile_id.clone())?;
         let config = CoordinatorConfig::new(
             self.idle_timeout_ms,
             self.hard_timeout_ms,
             self.drain_timeout_ms,
         )?;
-        let mut state = self.checkpoint.clone().map_or_else(
-            || {
-                Ok(ProfileCoordinatorState::new(
-                    tenant_id.clone(),
-                    profile_id.clone(),
-                    config,
-                ))
-            },
-            |stored| {
-                ProfileCoordinatorState::restore_checkpoint(
-                    tenant_id.clone(),
-                    profile_id.clone(),
-                    config,
-                    stored.into_domain()?,
-                )
-                .map_err(CoordinatorAdapterError::from)
-            },
-        )?;
+        match self.checkpoint.clone() {
+            Some(stored) => ProfileCoordinatorState::restore_checkpoint(
+                tenant,
+                profile,
+                config,
+                stored.into_domain()?,
+            )
+            .map_err(CoordinatorAdapterError::from),
+            None => Ok(ProfileCoordinatorState::new(tenant, profile, config)),
+        }
+    }
+
+    pub fn replay(&self) -> Result<ProfileCoordinatorState, CoordinatorAdapterError> {
+        let mut state = self.restore_base()?;
         for envelope in &self.journal {
             state.apply(envelope.to_domain()?)?;
         }
@@ -267,34 +263,7 @@ impl StoredCoordinatorDocument {
         if count == 0 {
             return Ok(());
         }
-        let mut anchor = self.checkpoint.clone().map_or_else(
-            || {
-                let config = CoordinatorConfig::new(
-                    self.idle_timeout_ms,
-                    self.hard_timeout_ms,
-                    self.drain_timeout_ms,
-                )?;
-                Ok(ProfileCoordinatorState::new(
-                    TenantId::parse(self.tenant_id.clone())?,
-                    ProfileId::parse(self.profile_id.clone())?,
-                    config,
-                ))
-            },
-            |stored| {
-                let config = CoordinatorConfig::new(
-                    self.idle_timeout_ms,
-                    self.hard_timeout_ms,
-                    self.drain_timeout_ms,
-                )?;
-                ProfileCoordinatorState::restore_checkpoint(
-                    TenantId::parse(self.tenant_id.clone())?,
-                    ProfileId::parse(self.profile_id.clone())?,
-                    config,
-                    stored.into_domain()?,
-                )
-                .map_err(CoordinatorAdapterError::from)
-            },
-        )?;
+        let mut anchor = self.restore_base()?;
         let mut last_claim = self.checkpoint.as_ref().and_then(|p| p.last_claim.clone());
         for envelope in self.journal.iter().take(count) {
             anchor.apply(envelope.to_domain()?)?;
