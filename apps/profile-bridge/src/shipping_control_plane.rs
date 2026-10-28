@@ -1680,10 +1680,10 @@ mod tests {
         std::thread::scope(|scope| {
             let a = scope.spawn(|| first.heartbeat_lease(&lease));
             let b = scope.spawn(|| second.heartbeat_lease(&lease));
-            assert_eq!(a.join().expect("first renewal thread"), Ok(()));
-            assert_eq!(b.join().expect("second renewal thread"), Ok(()));
+            assert!(matches!(a.join(), Ok(Ok(()))));
+            assert!(matches!(b.join(), Ok(Ok(()))));
         });
-        let locked = shared.inner.lock().expect("coordinator lock");
+        let locked = shared.inner.lock().map_err(|_| "coordinator lock poisoned")?;
         assert_eq!(locked.transport.requests.len(), 2);
         let requests: Vec<CoordinatorCommandRequestDto> = locked
             .transport
