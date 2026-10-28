@@ -1486,7 +1486,8 @@ mod tests {
     use super::{
         ControlPlaneCoordinator, ControlPlaneEnrollment, ControlPlaneLeaseTiming,
         CoordinatorCursor, MAX_SEALING_MATERIAL_RESPONSE_BYTES, MachineHttpMethod, MachineHttpPort,
-        MachineHttpResponse, ShippingControlPlaneError, lease_timing, safe_machine_problem_code,
+        MachineHttpResponse, SharedControlPlaneCoordinator, ShippingControlPlaneError,
+        lease_timing, safe_machine_problem_code,
         valid_signed_r2_get_url, validate_active_projection, validate_snapshot,
     };
     use crate::dirty_generation::GenerationSealingMaterialPort;
@@ -1605,6 +1606,101 @@ mod tests {
             ));
             self.responses.pop_front().ok_or(())
         }
+    }
+
+    #[test]
+    fn concurrent_scoped_renewals_serialize_on_one_cursor()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let tenant = TenantId::parse("tenant_shared_heartbeat_01")?;
+        let profile = ProfileId::parse("profile_shared_heartbeat_01")?;
+        let device = DeviceId::parse("device_shared_heartbeat_01")?;
+        let session = SessionId::parse("session_shared_heartbeat_01")?;
+        let fence = FencingToken::parse("fence_shared_heartbeat_01")?;
+        let lease = ProfileLease::issue(
+            tenant.clone(),
+            profile.clone(),
+            session.clone(),
+            device.clone(),
+            7,
+            fence.clone(),
+        )?;
+        let accepted = |sequence: u64| -> Result<_, serde_json::Error> {
+            let response = CoordinatorResponseDto {
+                outcome: CoordinatorOutcomeDto::HeartbeatAccepted,
+                version: sequence + 1,
+                sequence,
+                replayed: false,
+                fencing_token: Some(fence.as_str().to_owned()),
+                epoch: Some(7),
+                projection: CoordinatorProjectionDto {
+                    tenant_id: tenant.as_str().to_owned(),
+                    profile_id: profile.as_str().to_owned(),
+                    status: CoordinatorStatusDto::Active,
+                    version: sequence + 1,
+                    sequence,
+                    next_epoch: 8,
+                    active_session_id: Some(session.as_str().to_owned()),
+                    active_device_id: Some(device.as_str().to_owned()),
+                    active_epoch: Some(7),
+                    idle_expires_at_ms: Some(60_000 + sequence),
+                    hard_expires_at_ms: Some(900_000 + sequence),
+                    drain_deadline_ms: None,
+                    pending_launch_intent_id: None,
+                    pending_intent_expires_at_ms: None,
+                },
+            };
+            Ok(MachineHttpResponse::new(200, serde_json::to_vec(&response)?))
+        };
+        let shared = SharedControlPlaneCoordinator::new(ControlPlaneCoordinator {
+            transport: SealingMachineHttp {
+                responses: VecDeque::from([accepted(14)?, accepted(15)?]),
+                requests: Vec::new(),
+            },
+            cursor: Some(CoordinatorCursor {
+                tenant_id: tenant,
+                profile_id: profile,
+                device_id: device,
+                session_id: session,
+                epoch: 7,
+                fencing_token: fence,
+                version: 14,
+                sequence: 13,
+                timing: ControlPlaneLeaseTiming {
+                    idle_expires_at_ms: 30_000,
+                    hard_expires_at_ms: 900_000,
+                },
+                pending_heartbeat: None,
+            }),
+        });
+        let mut first = shared.clone();
+        let mut second = shared.clone();
+        std::thread::scope(|scope| {
+            let a = scope.spawn(|| first.heartbeat_lease(&lease));
+            let b = scope.spawn(|| second.heartbeat_lease(&lease));
+            assert_eq!(a.join().expect("first renewal thread"), Ok(()));
+            assert_eq!(b.join().expect("second renewal thread"), Ok(()));
+        });
+        let locked = shared.inner.lock().expect("coordinator lock");
+        assert_eq!(locked.transport.requests.len(), 2);
+        let requests: Vec<CoordinatorCommandRequestDto> = locked
+            .transport
+            .requests
+            .iter()
+            .map(|(_, _, body)| serde_json::from_slice(body))
+            .collect::<Result<_, _>>()?;
+        assert_eq!(requests[0].sequence, 14);
+        assert_eq!(requests[1].sequence, 15);
+        assert_ne!(requests[0].idempotency_key, requests[1].idempotency_key);
+        assert!(matches!(
+            requests[0].command,
+            CoordinatorCommandDto::RenewLease { .. }
+        ));
+        assert!(matches!(
+            requests[1].command,
+            CoordinatorCommandDto::RenewLease { .. }
+        ));
+        assert_eq!(shared.runtime_timing()?.hard_expires_at_ms(), 900_015);
+        Ok(())
     }
 
     #[derive(Default)]
