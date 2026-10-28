@@ -100,6 +100,11 @@ pub enum CoordinatorCommandInput {
         epoch: u64,
         fencing_token: FencingToken,
     },
+    RenewLease {
+        session_id: SessionId,
+        epoch: u64,
+        fencing_token: FencingToken,
+    },
     Release {
         session_id: SessionId,
         epoch: u64,
@@ -235,6 +240,16 @@ fn build_envelope<P: CoordinatorIngressApplicationPort, C: CoordinatorIngressClo
             epoch,
             fencing_token,
         } => CoordinatorCommand::Heartbeat {
+            session_id,
+            epoch,
+            fencing_token,
+            now,
+        },
+        CoordinatorCommandInput::RenewLease {
+            session_id,
+            epoch,
+            fencing_token,
+        } => CoordinatorCommand::RenewLease {
             session_id,
             epoch,
             fencing_token,
