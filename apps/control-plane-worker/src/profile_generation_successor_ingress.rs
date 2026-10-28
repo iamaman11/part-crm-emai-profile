@@ -1968,31 +1968,45 @@ mod tests {
     }
 
     #[test]
-    fn automatic_r2_prune_is_limited_to_explicit_disposable_staging_profile(
-    ) -> Result<(), Box<dyn std::error::Error>> {
+    fn automatic_r2_prune_is_limited_to_explicit_disposable_staging_profile()
+    -> Result<(), Box<dyn std::error::Error>> {
         let selected = ProfileId::parse("k2_canary_01".to_owned())?;
         let args = |environment, tenant, profile| {
             staging_r2_prune_canary_scope(
-                environment, tenant, profile, "tenant_canary_01", &selected,
+                environment,
+                tenant,
+                profile,
+                "tenant_canary_01",
+                &selected,
             )
         };
         assert!(!args(None, None, None));
         assert!(!args(Some("staging"), None, Some("k2_canary_01")));
         assert!(!args(Some("staging"), Some("tenant_canary_01"), None));
         assert!(!args(
-            Some("production"), Some("tenant_canary_01"), Some("k2_canary_01")
+            Some("production"),
+            Some("tenant_canary_01"),
+            Some("k2_canary_01")
         ));
         assert!(!args(
-            Some("staging"), Some("tenant_other"), Some("k2_canary_01")
+            Some("staging"),
+            Some("tenant_other"),
+            Some("k2_canary_01")
         ));
         assert!(!args(
-            Some("staging"), Some("tenant_canary_01"), Some("profile_other")
+            Some("staging"),
+            Some("tenant_canary_01"),
+            Some("profile_other")
         ));
         assert!(!args(
-            Some("staging"), Some("tenant_canary_01"), Some("k2_canary_01 ")
+            Some("staging"),
+            Some("tenant_canary_01"),
+            Some("k2_canary_01 ")
         ));
         assert!(args(
-            Some("staging"), Some("tenant_canary_01"), Some("k2_canary_01")
+            Some("staging"),
+            Some("tenant_canary_01"),
+            Some("k2_canary_01")
         ));
         let ordinary = ProfileId::parse("profile_ordinary_01".to_owned())?;
         assert!(!staging_r2_prune_canary_scope(
