@@ -74,6 +74,12 @@ pub enum CoordinatorCommandDto {
         epoch: u64,
         fencing_token: String,
     },
+    /// New durable command; legacy heartbeat meaning is unchanged.
+    RenewLease {
+        session_id: String,
+        epoch: u64,
+        fencing_token: String,
+    },
     Release {
         session_id: String,
         epoch: u64,
