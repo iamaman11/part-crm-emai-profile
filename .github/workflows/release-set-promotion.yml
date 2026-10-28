@@ -228,6 +228,8 @@ jobs:
             --source-config "$control_root/deploy/cloudflare/wrangler.jsonc" \
             --release-root "$control_root" \
             --deploy-manifest "$RUNNER_TEMP/deploy-manifest.json" \
+            --runtime-release-set "$release_root/release-set.json" \
+            --runtime-archive "$release_root/components/runtime-bundle.tar" \
             --environment staging \
             --output "$RUNNER_TEMP/wrangler.staging.json"
           {
@@ -952,6 +954,8 @@ jobs:
           python scripts/release-core-overlay-ar11.py \
             --source-config "$CONTROL_RELEASE_ROOT/deploy/cloudflare/wrangler.jsonc" \
             --release-root "$CONTROL_RELEASE_ROOT" --deploy-manifest "$RUNNER_TEMP/deploy-manifest.json" \
+            --runtime-release-set "$RUNNER_TEMP/mutation-release-set/release-set.json" \
+            --runtime-archive "$RUNNER_TEMP/mutation-release-set/components/runtime-bundle.tar" \
             --environment staging --output "$RUNNER_TEMP/wrangler.staging.json"
           echo "DEPLOY_MANIFEST=$RUNNER_TEMP/deploy-manifest.json" >> "$GITHUB_ENV"
           echo "WRANGLER_CONFIG=$RUNNER_TEMP/wrangler.staging.json" >> "$GITHUB_ENV"
@@ -1179,7 +1183,7 @@ jobs:
           test -n "$manifest"
           umask 077
           printf '%s' "$CLOUDFLARE_DEPLOY_MANIFEST_JSON" > "$RUNNER_TEMP/deploy-manifest.json"
-          python scripts/release-core-overlay-ar11.py --source-config "$(dirname "$manifest")/deploy/cloudflare/wrangler.jsonc" --release-root "$(dirname "$manifest")" --deploy-manifest "$RUNNER_TEMP/deploy-manifest.json" --environment staging --output "$RUNNER_TEMP/wrangler.staging.json"
+          python scripts/release-core-overlay-ar11.py --source-config "$(dirname "$manifest")/deploy/cloudflare/wrangler.jsonc" --release-root "$(dirname "$manifest")" --deploy-manifest "$RUNNER_TEMP/deploy-manifest.json" --runtime-release-set "$release_root/release-set.json" --runtime-archive "$release_root/components/runtime-bundle.tar" --environment staging --output "$RUNNER_TEMP/wrangler.staging.json"
           echo "DEPLOY_MANIFEST=$RUNNER_TEMP/deploy-manifest.json" >> "$GITHUB_ENV"
           echo "WRANGLER_CONFIG=$RUNNER_TEMP/wrangler.staging.json" >> "$GITHUB_ENV"
 
