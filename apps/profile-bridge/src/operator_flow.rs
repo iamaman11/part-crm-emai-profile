@@ -3126,15 +3126,17 @@ mod tests {
             &fixture.profile_id,
             &fixture.generation_id,
         )?;
-        let wal = workspace.path().join("user_data").join("cookies.sqlite-wal");
+        let wal = workspace
+            .path()
+            .join("user_data")
+            .join("cookies.sqlite-wal");
         fs::create_dir_all(wal.parent().ok_or("missing WAL parent")?)?;
         let original_wal = b"native-firefox-eight-hour-logical-WAL-unchanged";
         fs::write(&wal, original_wal)?;
 
         let intervals = EIGHT_HOURS_MS / HEARTBEAT_INTERVAL_MS;
         for interval in 1..=intervals {
-            let simulated_now =
-                UnixMillis::new(start + interval * HEARTBEAT_INTERVAL_MS);
+            let simulated_now = UnixMillis::new(start + interval * HEARTBEAT_INTERVAL_MS);
             if interval == 72 || interval == 600 {
                 // A failed transport heartbeat is not a revoked lease or
                 // a signal to destroy native SQLite/WAL. Reconfirm the
@@ -3145,10 +3147,7 @@ mod tests {
                     owner.heartbeat(simulated_now),
                     Err(OperatorFlowError::HeartbeatTransportUncertain)
                 );
-                assert_eq!(
-                    owner.active_session_id(),
-                    Some(fixture.lease.session_id())
-                );
+                assert_eq!(owner.active_session_id(), Some(fixture.lease.session_id()));
                 owner.coordinator.heartbeat_fail = false;
                 owner.coordinator.heartbeat_transport_uncertain = false;
             }

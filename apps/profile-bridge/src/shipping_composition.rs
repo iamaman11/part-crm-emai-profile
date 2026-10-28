@@ -902,7 +902,9 @@ mod windows {
                             ) {
                                 Ok(true) => {}
                                 Ok(false) => {
-                                    return Err(ShippingCompositionError::CommittedRecoveryRequired);
+                                    return Err(
+                                        ShippingCompositionError::CommittedRecoveryRequired,
+                                    );
                                 }
                                 Err(error) if retryable_reconnect_observation(error) => {
                                     // No D1-positive decision was observed. Wait
@@ -917,7 +919,9 @@ mod windows {
                                         "P3_RECOVERY={};NEXT_SAFE_STEP=PRESERVE_LOCAL_BYTES",
                                         error.code()
                                     );
-                                    return Err(ShippingCompositionError::CommittedRecoveryRequired);
+                                    return Err(
+                                        ShippingCompositionError::CommittedRecoveryRequired,
+                                    );
                                 }
                             }
                             let timing = operator
