@@ -3119,7 +3119,9 @@ mod tests {
         const HEARTBEAT_INTERVAL_MS: u64 = 30_000;
         let fixture = Fixture::new()?;
         let mut owner = operator(&fixture, FakeCamouhost::default())?;
-        let start = 10_000_u64;
+        // The fake enrollment claim expires at 1_000 ms. Advance the
+        // logical clock only after the initial authorised Open.
+        let start = 10_u64;
         owner.open(&fixture.claim_uri, &fixture.root, UnixMillis::new(start))?;
         let workspace = fixture.root.open_generation(
             fixture.actor.tenant_scope().tenant_id(),
