@@ -280,23 +280,55 @@ def render(
     previous_runtime_release_set: Path | None = None,
     previous_runtime_archive: Path | None = None,
     expected_previous_release_set_id: str | None = None,
+    ready_policy_evidence: Path | None = None,
     environment: str,
     output: Path,
 ) -> None:
     config = load(source_config, "immutable release Wrangler config")
     previous_args = (previous_runtime_release_set, previous_runtime_archive, expected_previous_release_set_id)
     if any(item is not None for item in previous_args) and not all(item is not None for item in previous_args):
-        fail("known-good runtime identity, Release Set and archive must be supplied together")
+        if ready_policy_evidence is None or expected_previous_release_set_id is None or any(
+            item is not None for item in previous_args[:2]
+        ):
+            fail("known-good runtime source must be an exact release trio or sealed READY evidence")
+    if ready_policy_evidence is not None and any(item is not None for item in previous_args[:2]):
+        fail("sealed READY evidence and known-good runtime materialization are mutually exclusive")
     if expected_previous_release_set_id == os.environ.get("RELEASE_SET_ID"):
         fail("known-good runtime must refer to a different immutable Release Set")
-    previous_digest = (
-        verified_runtime_inventory(previous_runtime_release_set, previous_runtime_archive, expected_previous_release_set_id)
-        if all(item is not None for item in previous_args) else None
-    )
+    current_digest = verified_runtime_inventory(runtime_release_set, runtime_archive)
+    previous_digest = None
+    if all(item is not None for item in previous_args):
+        previous_digest = verified_runtime_inventory(
+            previous_runtime_release_set, previous_runtime_archive, expected_previous_release_set_id,
+        )
+    if ready_policy_evidence is not None:
+        if expected_previous_release_set_id is None:
+            fail("sealed READY evidence requires the exact expected previous Release Set")
+        if ready_policy_evidence.is_symlink() or not ready_policy_evidence.is_file():
+            fail("sealed READY runtime policy evidence must be a regular file")
+        raw = ready_policy_evidence.read_bytes()
+        sealed_sha = os.environ.get("READY_EVIDENCE_SHA256", "")
+        if SHA256_RE.fullmatch(sealed_sha) is None or hashlib.sha256(raw).hexdigest() != sealed_sha:
+            fail("READY runtime policy evidence is not bound to the one-shot authorization")
+        evidence = load(ready_policy_evidence, "sealed READY runtime policy")
+        policy = evidence.get("approved_runtime_inventories")
+        if (
+            evidence.get("kind") != "AR11_READY_TO_MUTATE"
+            or evidence.get("ready") is not True
+            or evidence.get("source_sha") != os.environ.get("GITHUB_SHA")
+            or evidence.get("release_set_id") != os.environ.get("RELEASE_SET_ID")
+            or evidence.get("expected_current_release_set_id") != expected_previous_release_set_id
+            or not isinstance(policy, str)
+            or APPROVED_RUNTIME_INVENTORIES_RE.fullmatch(policy) is None
+            or not policy.startswith(current_digest)
+            or policy.split(",")[0] != current_digest
+            or evidence.get("runtime_policy_sha256") != hashlib.sha256(policy.encode("utf-8")).hexdigest()
+        ):
+            fail("sealed READY policy differs from exact approved source or target runtime")
+        previous_digest = policy.split(",")[-1]
     manifest = control_manifest(
         load(deploy_manifest, "deploy manifest"), environment,
-        runtime_digest=verified_runtime_inventory(runtime_release_set, runtime_archive),
-        previous_runtime_digest=previous_digest,
+        runtime_digest=current_digest, previous_runtime_digest=previous_digest,
     )
     envs = config.get("env")
     if not isinstance(envs, dict) or set(envs) != {"staging", "production"}:
@@ -583,6 +615,7 @@ def main() -> int:
     parser.add_argument("--previous-runtime-release-set", type=Path)
     parser.add_argument("--previous-runtime-archive", type=Path)
     parser.add_argument("--expected-previous-release-set-id")
+    parser.add_argument("--ready-policy-evidence", type=Path)
     parser.add_argument("--environment", default="staging")
     parser.add_argument("--output", type=Path)
     parser.add_argument("--self-test", action="store_true")
@@ -609,6 +642,7 @@ def main() -> int:
             previous_runtime_release_set=args.previous_runtime_release_set,
             previous_runtime_archive=args.previous_runtime_archive,
             expected_previous_release_set_id=args.expected_previous_release_set_id,
+            ready_policy_evidence=args.ready_policy_evidence,
             environment=args.environment,
             output=args.output,
         )
