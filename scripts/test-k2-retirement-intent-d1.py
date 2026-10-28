@@ -133,14 +133,6 @@ def previous_browser_proven_lkg_can_be_retired() -> None:
         )
         conn.execute(
             """
-            UPDATE device_authorizations SET status='REVOKED',
-                revoked_at_ms=135, updated_at_ms=135
-            WHERE tenant_id=? AND profile_id=? AND generation_id=? AND device_id=?
-            """,
-            (FX["TENANT"], FX["PROFILE"], FX["BASE"], FX["DEVICE"]),
-        )
-        conn.execute(
-            """
             INSERT INTO device_authorizations (
                 tenant_id, device_id, profile_id, generation_id, version,
                 status, evidence_reference, authorized_by_actor_id,
@@ -151,6 +143,61 @@ def previous_browser_proven_lkg_can_be_retired() -> None:
             (FX["TENANT"], FX["DEVICE"], FX["PROFILE"], FX["WINNER"],
              FX["OWNER"], FX["OWNER"]),
         )
+        conn.commit()
+
+        # Exercise the PRODUCTION D1 authorization-owner query against an
+        # old-generation grant after successive real successor transactions.
+        grant_source = (ROOT / "crates/cloudflare-adapters/src/d1_device_authorization.rs").read_text(
+            encoding="utf-8"
+        )
+        grant_sql = re.search(
+            r'const RELEASE_UNUSED_HISTORICAL_GRANTS: &str = r#"(.*?)"#;',
+            grant_source, re.DOTALL,
+        )
+        assert grant_sql is not None
+        release = grant_sql.group(1)
+        release_args = (
+            FX["TENANT"], FX["PROFILE"], FX["WINNER"], FX["OWNER"],
+            140, FX["CANDIDATE"], "e" * 64,
+        )
+        def old_grant_status() -> str:
+            return conn.execute(
+                "SELECT status FROM device_authorizations "
+                "WHERE tenant_id=? AND profile_id=? AND device_id=? AND generation_id=?",
+                (FX["TENANT"], FX["PROFILE"], FX["DEVICE"], FX["BASE"]),
+            ).fetchone()[0]
+
+        assert old_grant_status() == "ACTIVE"
+        conn.execute(release, (*release_args[:6], "f" * 64))
+        assert old_grant_status() == "ACTIVE", "wrong runtime cannot revoke grants"
+
+        # Pending device jobs keep their grant and R2 recovery object even
+        # after the D1 CURRENT and WORKING pointers advance.
+        conn.execute(
+            """
+            INSERT INTO device_jobs (
+                tenant_id, job_id, device_id, profile_id, generation_id,
+                aggregate_version, status, attempt, max_attempts, last_fence,
+                current_claim_id, claim_fence, claimed_at_ms,
+                claim_heartbeat_at_ms, claim_lease_expires_at_ms,
+                retry_at_ms, updated_at_ms
+            ) VALUES (?, 'job_k2_retention_hold_01', ?, ?, ?, 1,
+                      'PENDING_DEVICE', 0, 3, 0, NULL, NULL, NULL,
+                      NULL, NULL, NULL, 135)
+            """,
+            (FX["TENANT"], FX["DEVICE"], FX["PROFILE"], FX["BASE"]),
+        )
+        conn.execute(release, release_args)
+        assert old_grant_status() == "ACTIVE", "unfinished device job lost cloud authority"
+        conn.execute("DELETE FROM device_jobs WHERE job_id='job_k2_retention_hold_01'")
+        conn.execute(release, release_args)
+        assert old_grant_status() == "REVOKED", "obsolete idle grant was not released"
+        for protected in (FX["CANDIDATE"], FX["WINNER"]):
+            assert conn.execute(
+                "SELECT status FROM device_authorizations "
+                "WHERE tenant_id=? AND profile_id=? AND device_id=? AND generation_id=?",
+                (FX["TENANT"], FX["PROFILE"], FX["DEVICE"], protected),
+            ).fetchone()[0] == "ACTIVE", "CURRENT/WORKING authorization was changed"
         conn.commit()
 
         source = (ROOT / "crates/cloudflare-adapters/src/d1_profile_generation_successor.rs").read_text(
@@ -191,7 +238,7 @@ def previous_browser_proven_lkg_can_be_retired() -> None:
         ).fetchone()
         assert retained is not None and retained["generation_id"] == FX["CANDIDATE"]
         assert conn.execute("PRAGMA foreign_key_check").fetchall() == []
-        print("K2 former WORKING reserve retires after newer browser-proven LKG PASS")
+        print("K2 obsolete grants released only without unfinished jobs; newer LKG protected PASS")
     finally:
         conn.close()
 

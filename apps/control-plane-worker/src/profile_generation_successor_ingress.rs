@@ -964,6 +964,22 @@ async fn retire_one_old_generation(
         return Ok(());
     };
 
+    // The D1 authorization owner releases only stale CLOUD grants with
+    // no unfinished device job. This lets normal repeated Save converge to
+    // CURRENT + one WORKING reserve without discarding any local user_data.
+    device_job_authorization(env)
+        .map_err(|_| ())?
+        .release_unused_historical_grants(
+            actor,
+            profile_id,
+            current,
+            working.generation_id(),
+            runtime_inventory,
+            server_now(),
+        )
+        .await
+        .map_err(|_| ())?;
+
     let pending = journal
         .load_pending_retirement(scope, profile_id, current, working.generation_id())
         .await

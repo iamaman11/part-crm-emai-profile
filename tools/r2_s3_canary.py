@@ -179,27 +179,59 @@ def main() -> int:
     client = R2S3Client(credentials)
     run_id = uuid.uuid4().hex
     key = f"canary/{run_id}.bin"
+    protected_key = f"canary/{run_id}.keep"
     payload = secrets.token_bytes(4096)
+    protected_payload = secrets.token_bytes(4096)
     digest = hashlib.sha256(payload).hexdigest()
-    deleted = False
+
+    def exists_exact(object_key: str) -> bool:
+        try:
+            client.request("HEAD", object_key)
+            return True
+        except RuntimeError as error:
+            if str(error).startswith("R2 S3 HEAD failed with HTTP 404:"):
+                return False
+            raise
 
     try:
+        # The only objects ever mutated have this invocation's random canary
+        # prefix; there is no production generation key or list-based delete.
         client.request("PUT", key, body=payload)
+        client.request("PUT", protected_key, body=protected_payload)
         listing = client.request(
             "GET",
             query={"list-type": "2", "prefix": f"canary/{run_id}"},
         )
-        listed = any(
-            element.text == key
+        listed = {
+            element.text
             for element in ET.fromstring(listing).iter()
             if element.tag.rsplit("}", 1)[-1] == "Key"
-        )
+        }
         restored = client.request("GET", key)
-        restored_digest = hashlib.sha256(restored).hexdigest()
-        if not listed or restored_digest != digest:
-            raise RuntimeError("R2 canary verification failed")
+        if (
+            listed != {key, protected_key}
+            or hashlib.sha256(restored).hexdigest() != digest
+            or not exists_exact(key)
+            or not exists_exact(protected_key)
+        ):
+            raise RuntimeError("R2 exact HEAD/GET canary verification failed")
+
         client.request("DELETE", key)
-        deleted = True
+        if exists_exact(key):
+            raise RuntimeError("R2 canary still exists after exact DELETE")
+        # Repeat DELETE exactly as after a lost successful response. It must
+        # leave the adjacent, independently verified object untouched.
+        client.request("DELETE", key)
+        if (
+            exists_exact(key)
+            or not exists_exact(protected_key)
+            or client.request("GET", protected_key) != protected_payload
+        ):
+            raise RuntimeError("R2 retry affected the wrong canary object")
+
+        client.request("DELETE", protected_key)
+        if exists_exact(protected_key):
+            raise RuntimeError("R2 protected canary cleanup failed")
         print(
             json.dumps(
                 {
@@ -208,16 +240,21 @@ def main() -> int:
                     "bytes": len(payload),
                     "sha256_verified": True,
                     "list_verified": True,
+                    "head_verified": True,
                     "deleted": True,
+                    "delete_retry_verified": True,
+                    "other_object_preserved": True,
                 },
                 separators=(",", ":"),
             )
         )
         return 0
     finally:
-        if not deleted:
+        # Cleanup is limited to the two freshly generated disposable keys,
+        # including on verification failure. Never delete by prefix.
+        for disposable in (key, protected_key):
             try:
-                client.request("DELETE", key)
+                client.request("DELETE", disposable)
             except Exception:
                 pass
 
