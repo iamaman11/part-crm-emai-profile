@@ -1287,7 +1287,7 @@ fn report_save_control_refusal(
 ) {
     let problem = safe_machine_problem_code(response, correlation_id).unwrap_or("unclassified");
     eprintln!(
-        "BRIDGE_SAVE_CONTROL_HTTP=\x7b};HTTP_STATUS=\x7b};PROBLEM_CODE=\x7b};CORRELATION=\x7b};NEXT_SAFE_STEP=PRESERVE_LOCAL_BYTES",
+        "BRIDGE_SAVE_CONTROL_HTTP={};HTTP_STATUS={};PROBLEM_CODE={};CORRELATION={};NEXT_SAFE_STEP=PRESERVE_LOCAL_BYTES",
         save_control_operation(path),
         response.status(),
         problem,
@@ -1482,7 +1482,6 @@ mod tests {
             assert!(!label.contains('/'));
         }
     }
-
 
     #[derive(Default)]
     struct Transport {
