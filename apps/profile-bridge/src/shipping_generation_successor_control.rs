@@ -9,7 +9,8 @@ use crate::local_profile::MaterializationRoot;
 #[cfg(any(windows, test))]
 use crate::local_profile::{BridgeWorkspaceLock, LocalGenerationRecord, LocalProfileError};
 use crate::shipping_control_plane::{
-    MachineHttpMethod, MachineHttpPort, ShippingControlPlaneError,
+    MachineHttpMethod, MachineHttpPort, MachineHttpResponse, ShippingControlPlaneError,
+    safe_machine_problem_code,
 };
 #[cfg(any(windows, test))]
 use crate::shipping_generation_save::{
@@ -884,6 +885,11 @@ where
         .map_err(RestartExactLocalCompletionError::ControlPlane)?
         != BridgeGenerationSuccessorRetryVerdict::NotAppliedRetryable
     {
+        // This is a valid HTTP 2xx with a DENIED D1 decision, not a
+        // transport outage or an upload/commit failure. Retain N+1.
+        eprintln!(
+            "BRIDGE_SAVE_CONTROL_DECISION=RETRY_BLOCKED;NEXT_SAFE_STEP=PRESERVE_LOCAL_BYTES"
+        );
         return Ok(None);
     }
     let request = BridgeProfileGenerationSuccessorRequest::new(
@@ -1254,6 +1260,41 @@ fn successor_request<S>(
     ))
 }
 
+/// Only fixed route names appear in support logs; never print a tenant,
+/// profile, token, capability URL, R2 key, or untrusted HTTP response body.
+fn save_control_operation(path: &str) -> &'static str {
+    if path.ends_with("/generation-successor/upload-capability") {
+        "UPLOAD_CAPABILITY"
+    } else if path.ends_with("/generation-successor/commit") {
+        "COMMIT"
+    } else if path.ends_with("/generation-successor/local-unsynced/retry-decision") {
+        "LOCAL_UNSYNCED_RETRY_DECISION"
+    } else if path.ends_with("/generation-successor/retry-decision") {
+        "RETRY_DECISION"
+    } else {
+        "UNCLASSIFIED"
+    }
+}
+
+/// The full RFC7807 payload is untrusted and may contain sensitive material.
+/// Reuse the existing bounded/allowlisted machine decoder, bound to the
+/// correlation issued for this exact request. Logs are evidence only and
+/// never change authorization, retry, or reconciliation decisions.
+fn report_save_control_refusal(
+    path: &str,
+    correlation_id: &CorrelationId,
+    response: &MachineHttpResponse,
+) {
+    let problem = safe_machine_problem_code(response, correlation_id).unwrap_or("unclassified");
+    eprintln!(
+        "BRIDGE_SAVE_CONTROL_HTTP=\x7b};HTTP_STATUS=\x7b};PROBLEM_CODE=\x7b};CORRELATION=\x7b};NEXT_SAFE_STEP=PRESERVE_LOCAL_BYTES",
+        save_control_operation(path),
+        response.status(),
+        problem,
+        correlation_id.as_str()
+    );
+}
+
 fn post_json<T, S, B>(
     transport: &mut T,
     path: &str,
@@ -1276,6 +1317,9 @@ where
         .map_err(|_| control_error(ShippingControlPlaneError::Transport));
     encoded.fill(0);
     let response = response?;
+    if !(200..300).contains(&response.status()) {
+        report_save_control_refusal(path, &correlation_id, &response);
+    }
     if matches!(response.status(), 408 | 429) || (500..=599).contains(&response.status()) {
         // Commit or capability effects may be ambiguous. Preserve exact
         // persisted attempt identity; never treat this as authority to retry
@@ -1417,6 +1461,28 @@ mod tests {
     use std::sync::atomic::{AtomicU64, Ordering};
 
     static FIXTURE_SEQUENCE: AtomicU64 = AtomicU64::new(1);
+
+    #[test]
+    fn save_http_diagnostics_never_include_tenant_profile_or_untrusted_route() {
+        use super::save_control_operation;
+        let base = "/bridge/v1/tenants/private_tenant/profiles/private_profile";
+        for (suffix, expected) in [
+            ("/generation-successor/upload-capability", "UPLOAD_CAPABILITY"),
+            ("/generation-successor/commit", "COMMIT"),
+            ("/generation-successor/retry-decision", "RETRY_DECISION"),
+            (
+                "/generation-successor/local-unsynced/retry-decision",
+                "LOCAL_UNSYNCED_RETRY_DECISION",
+            ),
+            ("/generation-successor/unrecognized", "UNCLASSIFIED"),
+        ] {
+            let label = save_control_operation(&format!("{base}{suffix}"));
+            assert_eq!(label, expected);
+            assert!(!label.contains("private"));
+            assert!(!label.contains('/'));
+        }
+    }
+
 
     #[derive(Default)]
     struct Transport {
