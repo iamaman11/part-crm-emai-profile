@@ -509,6 +509,17 @@ fn stored_command(command: &CoordinatorCommand) -> StoredCoordinatorCommand {
             fencing_token: fencing_token.as_str().to_owned(),
             now_ms: now.value(),
         },
+        CoordinatorCommand::RenewLease {
+            session_id,
+            epoch,
+            fencing_token,
+            now,
+        } => StoredCoordinatorCommand::RenewLease {
+            session_id: session_id.as_str().to_owned(),
+            epoch: *epoch,
+            fencing_token: fencing_token.as_str().to_owned(),
+            now_ms: now.value(),
+        },
         CoordinatorCommand::Release {
             session_id,
             epoch,
