@@ -1683,7 +1683,10 @@ mod tests {
             assert!(matches!(a.join(), Ok(Ok(()))));
             assert!(matches!(b.join(), Ok(Ok(()))));
         });
-        let locked = shared.inner.lock().map_err(|_| "coordinator lock poisoned")?;
+        let locked = shared
+            .inner
+            .lock()
+            .map_err(|_| "coordinator lock poisoned")?;
         assert_eq!(locked.transport.requests.len(), 2);
         let requests: Vec<CoordinatorCommandRequestDto> = locked
             .transport
