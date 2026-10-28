@@ -192,6 +192,15 @@ pub enum CoordinatorCommand {
         fencing_token: FencingToken,
         now: UnixMillis,
     },
+    /// Distinct journal command: unlike legacy Heartbeat, an authenticated
+    /// renewal advances the rolling hard deadline. Old events replay exactly
+    /// as written, without silently changing historical transition semantics.
+    RenewLease {
+        session_id: SessionId,
+        epoch: u64,
+        fencing_token: FencingToken,
+        now: UnixMillis,
+    },
     Release {
         session_id: SessionId,
         epoch: u64,
@@ -217,6 +226,7 @@ impl CoordinatorCommand {
             Self::IssueLaunchIntent { now, .. }
             | Self::Claim { now, .. }
             | Self::Heartbeat { now, .. }
+            | Self::RenewLease { now, .. }
             | Self::Release { now, .. }
             | Self::BeginDrain { now }
             | Self::Tick { now }
@@ -498,7 +508,13 @@ impl ProfileCoordinatorState {
                 epoch,
                 fencing_token,
                 now,
-            } => self.heartbeat(session_id, *epoch, fencing_token, *now),
+            } => self.heartbeat(session_id, *epoch, fencing_token, *now, false),
+            CoordinatorCommand::RenewLease {
+                session_id,
+                epoch,
+                fencing_token,
+                now,
+            } => self.heartbeat(session_id, *epoch, fencing_token, *now, true),
             CoordinatorCommand::Release {
                 session_id,
                 epoch,
@@ -604,6 +620,7 @@ impl ProfileCoordinatorState {
         epoch: u64,
         fencing_token: &FencingToken,
         now: UnixMillis,
+        renew_hard: bool,
     ) -> Result<CoordinatorOutcome, CoordinatorError> {
         if !matches!(
             self.status,
@@ -625,19 +642,21 @@ impl ProfileCoordinatorState {
             return Ok(outcome);
         }
 
-        // Only an accepted heartbeat can extend the hard deadline. This is a
-        // rolling dead-man's switch, not a 15-minute limit on an actively used
-        // browser. Idle/hard expiry is checked above *before* either renewal.
-        // Authentication, current profile access and the exact fence are
-        // enforced by the existing Coordinator ingress and this state machine.
         let proposed_idle = add_millis(now, self.config.idle_timeout_ms)?;
-        let proposed_hard = add_millis(now, self.config.hard_timeout_ms)?;
+        // Old Heartbeat journal events have an immutable hard deadline.
+        // Only a NEW, exact-fenced RenewLease event advances it, allowing
+        // existing DO journals to replay deterministically after upgrades.
+        let proposed_hard = renew_hard
+            .then(|| add_millis(now, self.config.hard_timeout_ms))
+            .transpose()?;
         let lease = self
             .active_lease
             .as_mut()
             .ok_or(CoordinatorError::NoActiveLease)?;
         lease.last_heartbeat_at = now;
-        lease.hard_expires_at = proposed_hard;
+        if let Some(hard) = proposed_hard {
+            lease.hard_expires_at = hard;
+        }
         lease.idle_expires_at = proposed_idle.min(lease.hard_expires_at);
         Ok(CoordinatorOutcome::HeartbeatAccepted {
             idle_expires_at: lease.idle_expires_at,
@@ -1165,7 +1184,7 @@ mod tests {
     }
 
     #[test]
-    fn accepted_heartbeats_extend_hard_deadline_beyond_original_session_limit()
+    fn explicit_renewals_extend_hard_deadline_beyond_original_session_limit()
     -> Result<(), Box<dyn std::error::Error>> {
         let mut state = coordinator_with_config(CoordinatorConfig::new(100, 100, 20)?)?;
         issue(&mut state, 1, 1, 10)?;
@@ -1177,7 +1196,7 @@ mod tests {
                 &format!("idem_heartbeat_roll_{sequence}_01JCOORDINATOR"),
                 sequence,
                 sequence,
-                CoordinatorCommand::Heartbeat {
+                CoordinatorCommand::RenewLease {
                     session_id: SessionId::parse("session_01JCOORDINATOR")?,
                     epoch: 1,
                     fencing_token: FencingToken::parse("fence_01JCOORDINATOR")?,
@@ -1196,6 +1215,36 @@ mod tests {
             );
         }
         assert_eq!(state.status(), CoordinatorStatus::Active);
+        Ok(())
+    }
+
+    #[test]
+    fn legacy_heartbeat_preserves_original_hard_deadline()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let mut state = coordinator_with_config(CoordinatorConfig::new(100, 100, 20)?)?;
+        issue(&mut state, 1, 1, 10)?;
+        claim(&mut state, 2, 2, 11, "fence_01JCOORDINATOR")?;
+        let old = state.apply(envelope(
+            "idem_old_heartbeat_01JCOORDINATOR",
+            3,
+            3,
+            CoordinatorCommand::Heartbeat {
+                session_id: SessionId::parse("session_01JCOORDINATOR")?,
+                epoch: 1,
+                fencing_token: FencingToken::parse("fence_01JCOORDINATOR")?,
+                now: UnixMillis::new(105),
+            },
+        )?)?;
+        assert_eq!(
+            old.outcome(),
+            &CoordinatorOutcome::HeartbeatAccepted {
+                idle_expires_at: UnixMillis::new(111)
+            }
+        );
+        assert_eq!(
+            state.active_lease().map(|lease| lease.hard_expires_at()),
+            Some(UnixMillis::new(111))
+        );
         Ok(())
     }
 
