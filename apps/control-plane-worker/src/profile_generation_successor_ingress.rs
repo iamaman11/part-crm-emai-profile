@@ -70,13 +70,20 @@ const PROFILE_GENERATION_APPROVED_RUNTIME_INVENTORIES_VAR: &str =
 /// configuration; never grants a Production DELETE.
 const PROFILE_GENERATION_R2_PRUNE_CANARY_PROFILE_VAR: &str =
     "PROFILE_GENERATION_R2_PRUNE_CANARY_PROFILE";
+const PROFILE_GENERATION_R2_PRUNE_CANARY_TENANT_VAR: &str =
+    "PROFILE_GENERATION_R2_PRUNE_CANARY_TENANT";
 
 fn staging_r2_prune_canary_scope(
     environment: Option<&str>,
+    canary_tenant: Option<&str>,
     canary_profile: Option<&str>,
+    actual_tenant: &str,
     profile_id: &ProfileId,
 ) -> bool {
-    environment == Some("staging") && canary_profile == Some(profile_id.as_str())
+    environment == Some("staging")
+        && profile_id.as_str().starts_with("k2_canary_")
+        && canary_tenant == Some(actual_tenant)
+        && canary_profile == Some(profile_id.as_str())
 }
 
 /// No best-effort prefix matching, unknown versions, arbitrary lists or
@@ -943,10 +950,16 @@ async fn dispatch_working_proof(
         .var(PROFILE_GENERATION_R2_PRUNE_CANARY_PROFILE_VAR)
         .ok()
         .map(|v| v.to_string());
+    let canary_tenant = env
+        .var(PROFILE_GENERATION_R2_PRUNE_CANARY_TENANT_VAR)
+        .ok()
+        .map(|v| v.to_string());
     if role == identity_access_domain::MembershipRole::TenantOwner
         && staging_r2_prune_canary_scope(
             environment.as_deref(),
+            canary_tenant.as_deref(),
             canary_profile.as_deref(),
+            actor.tenant_scope().tenant_id().as_str(),
             profile_id,
         )
         && retire_one_old_generation(
@@ -1955,30 +1968,41 @@ mod tests {
     }
 
     #[test]
-    fn automatic_r2_prune_is_limited_to_explicit_disposable_staging_profile() {
-        let selected = ProfileId::parse("profile_canary_01".to_owned()).unwrap();
-        assert!(!staging_r2_prune_canary_scope(None, None, &selected));
-        assert!(!staging_r2_prune_canary_scope(Some("staging"), None, &selected));
-        assert!(!staging_r2_prune_canary_scope(
-            Some("production"),
-            Some("profile_canary_01"),
-            &selected
+    fn automatic_r2_prune_is_limited_to_explicit_disposable_staging_profile(
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        let selected = ProfileId::parse("k2_canary_01".to_owned())?;
+        let args = |environment, tenant, profile| {
+            staging_r2_prune_canary_scope(
+                environment, tenant, profile, "tenant_canary_01", &selected,
+            )
+        };
+        assert!(!args(None, None, None));
+        assert!(!args(Some("staging"), None, Some("k2_canary_01")));
+        assert!(!args(Some("staging"), Some("tenant_canary_01"), None));
+        assert!(!args(
+            Some("production"), Some("tenant_canary_01"), Some("k2_canary_01")
         ));
+        assert!(!args(
+            Some("staging"), Some("tenant_other"), Some("k2_canary_01")
+        ));
+        assert!(!args(
+            Some("staging"), Some("tenant_canary_01"), Some("profile_other")
+        ));
+        assert!(!args(
+            Some("staging"), Some("tenant_canary_01"), Some("k2_canary_01 ")
+        ));
+        assert!(args(
+            Some("staging"), Some("tenant_canary_01"), Some("k2_canary_01")
+        ));
+        let ordinary = ProfileId::parse("profile_ordinary_01".to_owned())?;
         assert!(!staging_r2_prune_canary_scope(
             Some("staging"),
-            Some("profile_other"),
-            &selected
+            Some("tenant_canary_01"),
+            Some("profile_ordinary_01"),
+            "tenant_canary_01",
+            &ordinary,
         ));
-        assert!(!staging_r2_prune_canary_scope(
-            Some("staging"),
-            Some("profile_canary_01 "),
-            &selected
-        ));
-        assert!(staging_r2_prune_canary_scope(
-            Some("staging"),
-            Some("profile_canary_01"),
-            &selected
-        ));
+        Ok(())
     }
 
     #[test]
