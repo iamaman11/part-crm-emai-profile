@@ -234,16 +234,16 @@ mod windows {
     use crate::windows_generation_get::WindowsSignedGenerationObjectGet;
     use crate::windows_generation_put::WindowsSignedGenerationObjectPut;
     use crate::windows_native::WindowsDeviceIdentity;
-    use bridge_domain::ClaimUri;
     use application_ports::ProfileCoordinatorRuntimePort;
+    use bridge_domain::ClaimUri;
     use profile_platform_primitives::UnixMillis;
     use session_domain::ProfileLease;
-    use std::sync::atomic::{AtomicBool, Ordering};
-    use std::sync::{Arc, mpsc};
     use std::env;
     use std::fs;
     use std::os::windows::fs::MetadataExt;
     use std::path::PathBuf;
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::{Arc, mpsc};
     use std::thread;
     use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
@@ -283,17 +283,18 @@ mod windows {
                     receiver.recv_timeout(Duration::from_millis(SAVE_HEARTBEAT_PERIOD_MS)),
                     Err(mpsc::RecvTimeoutError::Timeout)
                 ) {
-                    let current = match (coordinator.runtime_timing(), now()) {
-                        (Ok(timing), Ok(observed_at)) if safe_reconnect_writer_window(
-                            timing.idle_expires_at_ms(),
-                            timing.hard_expires_at_ms(),
-                            observed_at,
-                        ) => observed_at,
+                    match (coordinator.runtime_timing(), now()) {
+                        (Ok(timing), Ok(observed_at))
+                            if safe_reconnect_writer_window(
+                                timing.idle_expires_at_ms(),
+                                timing.hard_expires_at_ms(),
+                                observed_at,
+                            ) => {}
                         _ => {
                             observed.store(false, Ordering::Release);
                             return;
                         }
-                    };
+                    }
                     // Only a server-accepted heartbeat renews the cursor.
                     // Uncertain or rejected replies never become permission
                     // for subsequent cloud effects: the existing DO/D1 fence
@@ -305,7 +306,6 @@ mod windows {
                         );
                         return;
                     }
-                    let _ = current;
                 }
             });
             Self {
@@ -630,7 +630,8 @@ mod windows {
             .map_err(|_| ShippingCompositionError::Configuration)?;
 
         let enrollment = ControlPlaneEnrollment::new(transport.clone());
-        let coordinator = SharedControlPlaneCoordinator::new(ControlPlaneCoordinator::new(transport));
+        let coordinator =
+            SharedControlPlaneCoordinator::new(ControlPlaneCoordinator::new(transport));
         let materialization_root =
             MaterializationRoot::open_or_create(&config.materialization_root)
                 .map_err(|_| ShippingCompositionError::Configuration)?;
@@ -894,10 +895,8 @@ mod windows {
                     .retained_save_lease()
                     .cloned()
                     .ok_or(ShippingCompositionError::ActiveSessionMissing)?;
-                let save_heartbeat = RetainedSaveHeartbeat::start(
-                    operator.coordinator().clone(),
-                    retained,
-                );
+                let save_heartbeat =
+                    RetainedSaveHeartbeat::start(operator.coordinator().clone(), retained);
                 let initial = operator.save_retained_successor_streaming(
                     &materialization_root,
                     save_transport.clone(),
@@ -909,7 +908,9 @@ mod windows {
                     ReadOnlyProfileDiagnosis::after_save(operator.diagnostic_facts(), &initial)
                         .redacted_record()
                 );
-                if !save_heartbeat.is_healthy() && !initial.as_ref().is_ok_and(|done| done.is_saved()) {
+                if !save_heartbeat.is_healthy()
+                    && !initial.as_ref().is_ok_and(|done| done.is_saved())
+                {
                     return Err(ShippingCompositionError::HeartbeatAuthorityUncertain);
                 }
                 match initial {
