@@ -1699,6 +1699,7 @@ mod tests {
             requests[1].command,
             CoordinatorCommandDto::RenewLease { .. }
         ));
+        drop(locked);
         assert_eq!(shared.runtime_timing()?.hard_expires_at_ms(), 900_015);
         Ok(())
     }
