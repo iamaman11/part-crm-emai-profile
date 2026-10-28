@@ -887,9 +887,7 @@ where
     {
         // This is a valid HTTP 2xx with a DENIED D1 decision, not a
         // transport outage or an upload/commit failure. Retain N+1.
-        eprintln!(
-            "BRIDGE_SAVE_CONTROL_DECISION=RETRY_BLOCKED;NEXT_SAFE_STEP=PRESERVE_LOCAL_BYTES"
-        );
+        eprintln!("BRIDGE_SAVE_CONTROL_DECISION=RETRY_BLOCKED;NEXT_SAFE_STEP=PRESERVE_LOCAL_BYTES");
         return Ok(None);
     }
     let request = BridgeProfileGenerationSuccessorRequest::new(
@@ -1467,7 +1465,10 @@ mod tests {
         use super::save_control_operation;
         let base = "/bridge/v1/tenants/private_tenant/profiles/private_profile";
         for (suffix, expected) in [
-            ("/generation-successor/upload-capability", "UPLOAD_CAPABILITY"),
+            (
+                "/generation-successor/upload-capability",
+                "UPLOAD_CAPABILITY",
+            ),
             ("/generation-successor/commit", "COMMIT"),
             ("/generation-successor/retry-decision", "RETRY_DECISION"),
             (
