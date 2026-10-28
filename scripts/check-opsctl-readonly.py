@@ -458,9 +458,9 @@ def validate_d1_projection(payload: dict[str, Any]) -> None:
         fail("Catalog live successor migration root drifted")
     if catalog.get("migration_lineage") != "catalog-successor-v2":
         fail("Catalog successor lineage identity drifted")
-    if catalog.get("current_repository_revision") != "0038_profile_generation_working_proof.sql":
+    if catalog.get("current_repository_revision") != "0039_profile_generation_retirement_guard.sql":
         fail("Catalog successor current repository revision drifted")
-    if catalog.get("migration_count") != 38 or catalog.get("post_epoch_migration_count") != 12:
+    if catalog.get("migration_count") != 39 or catalog.get("post_epoch_migration_count") != 13:
         fail("Catalog successor migration cardinality drifted")
     legacy = catalog.get("legacy_history")
     if legacy != {
@@ -483,11 +483,11 @@ def validate_d1_projection(payload: dict[str, Any]) -> None:
     if not isinstance(catalog_contract, dict):
         fail("Catalog successor release contract is missing")
     if (
-        catalog_contract.get("target_schema_revision") != "0038_profile_generation_working_proof.sql"
-        or catalog_contract.get("supported_schema_min") != "0038_profile_generation_working_proof.sql"
-        or catalog_contract.get("supported_schema_max") != "0038_profile_generation_working_proof.sql"
+        catalog_contract.get("target_schema_revision") != "0039_profile_generation_retirement_guard.sql"
+        or catalog_contract.get("supported_schema_min") != "0039_profile_generation_retirement_guard.sql"
+        or catalog_contract.get("supported_schema_max") != "0039_profile_generation_retirement_guard.sql"
     ):
-        fail("Catalog successor exact working-proof0038 release window drifted")
+        fail("Catalog successor exact retirement0039 release window drifted")
 
 
 def validate(root: Path = ROOT) -> None:

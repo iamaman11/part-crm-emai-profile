@@ -14,6 +14,7 @@ ROOT = Path(__file__).resolve().parents[1]
 FIXTURE = ROOT / "scripts/test-device-generation-commit-d1.py"
 STREAM = ROOT / "migrations/d1-successor-v2/0037_generation_streaming_container_limit.sql"
 WORKING = ROOT / "migrations/d1-successor-v2/0038_profile_generation_working_proof.sql"
+RETIREMENT = ROOT / "migrations/d1-successor-v2/0039_profile_generation_retirement_guard.sql"
 
 
 def insert(conn: sqlite3.Connection, fx: dict, **changes: object) -> None:
@@ -57,6 +58,7 @@ def main() -> int:
     try:
         conn.executescript(STREAM.read_text(encoding="utf-8"))
         conn.executescript(WORKING.read_text(encoding="utf-8"))
+        conn.executescript(RETIREMENT.read_text(encoding="utf-8"))
         assert not conn.execute("SELECT 1 FROM profile_generation_working_proofs").fetchone()
         rejected(conn, fx)  # no committed CURRENT N+1 yet
         fx["insert_device_commit"](conn, fx["command_values"]())

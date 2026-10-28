@@ -53,7 +53,9 @@ jobs:
         run: python scripts/test-k2-generation-stream-limit-d1.py
 
       - name: Prove K2 append-only historical WORKING evidence cannot authorize prune
-        run: python scripts/test-k2-working-proof-d1.py
+        run: |
+          python scripts/test-k2-working-proof-d1.py
+          python scripts/test-k2-retirement-intent-d1.py
 
       - name: Execute all opsctl D1 commands as real CLI processes
         run: |

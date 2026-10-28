@@ -138,6 +138,12 @@ WHERE old.status = 'VERIFIED'
   -- Never select a previously demonstrated real-browser reserve for
   -- deletion while its original root key/runtime may be the only fallback.
   AND NOT EXISTS (
+      SELECT 1 FROM profile_generation_retirement_intents AS retired
+      WHERE retired.tenant_id = old.tenant_id
+        AND retired.profile_id = old.profile_id
+        AND retired.generation_id = old.generation_id
+  )
+  AND NOT EXISTS (
       SELECT 1 FROM profile_generation_working_proofs AS past
       WHERE past.tenant_id = old.tenant_id
         AND past.profile_id = old.profile_id
@@ -1047,6 +1053,7 @@ mod tests {
         assert!(query.contains("old.generation_id <> protected.reserved_generation_id"));
         assert!(query.contains("NOT EXISTS"));
         assert!(query.contains("profile_generation_working_proofs AS past"));
+        assert!(query.contains("profile_generation_retirement_intents AS retired"));
         assert!(!query.contains("DELETE "));
         assert!(!query.contains("UPDATE "));
         assert!(!query.contains("INSERT "));
