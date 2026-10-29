@@ -94,8 +94,9 @@ impl BridgeWorkspaceLock {
 /// materialization root and that no new writer can be admitted while activation is decided.
 ///
 /// `File::try_lock` is OS-backed (`LockFileEx` on Windows) and the exclusive lock is released when
-/// this handle is closed, including process termination. Existing per-generation lockfiles are also
-/// checked after exclusivity is acquired so unresolved predecessor/cleanup evidence fails closed.
+/// this handle is closed, including process termination. On Windows, a retained Bridge
+/// marker is *not* a live writer: native Firefox handles are checked separately
+/// without deleting or recovering any generation. Unknown native locks fail closed.
 #[derive(Debug)]
 pub struct DeliveryActivationGuard {
     _exclusive: File,
@@ -145,6 +146,46 @@ fn open_root_marker(root: &Path) -> Result<File, LocalProfileError> {
 
 fn bridge_writer_lock_present(root: &Path, depth: usize) -> Result<bool, LocalProfileError> {
     if depth == GENERATION_DEPTH_FROM_ROOT {
+        #[cfg(windows)]
+        {
+            // This marker is durable *recovery evidence*, not a kernel lock. A
+            // crashed Bridge may leave it alongside the only unsynced N+1.
+            // Root exclusivity already excludes live cooperative Bridge writers.
+            // Keep the marker, its epoch, and every pending browser byte intact.
+            match fs::symlink_metadata(root.join(BRIDGE_LOCK_FILE)) {
+                Ok(metadata) if metadata.file_type().is_symlink() => {
+                    return Err(LocalProfileError::SymbolicLinkRejected);
+                }
+                Ok(metadata) if !metadata.is_file() => {
+                    return Err(LocalProfileError::SpecialFileRejected);
+                }
+                Ok(_) => {}
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+                Err(error) => return Err(error.into()),
+            }
+
+            let user_data = root.join("user_data");
+            match fs::symlink_metadata(&user_data) {
+                Ok(metadata) if metadata.file_type().is_symlink() => {
+                    return Err(LocalProfileError::SymbolicLinkRejected);
+                }
+                Ok(metadata) if !metadata.is_dir() => {
+                    return Err(LocalProfileError::SpecialFileRejected);
+                }
+                Ok(_) => {}
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+                Err(error) => return Err(error.into()),
+            }
+
+            // An orphaned live Firefox can outlast Bridge. Reuse the native
+            // handle-based probe; unknown/unreadable locks block activation.
+            return Ok(!matches!(
+                crate::browser_execution::browser_writer_locks_absent_at(root),
+                Ok(true)
+            ));
+        }
+
+        #[cfg(not(windows))]
         return match fs::symlink_metadata(root.join(BRIDGE_LOCK_FILE)) {
             Ok(_) => Ok(true),
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(false),
@@ -263,6 +304,7 @@ mod tests {
         Ok(())
     }
 
+    #[cfg(not(windows))]
     #[test]
     fn unresolved_per_generation_writer_evidence_blocks_activation()
     -> Result<(), Box<dyn std::error::Error>> {
@@ -276,6 +318,66 @@ mod tests {
             DeliveryActivationGuard::acquire(&root),
             Err(LocalProfileError::LockBusy)
         ));
+        Ok(())
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn retained_marker_and_pending_save_allow_upgrade_without_modifying_local_data()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let (_test_root, root, workspace, device) = fixture("pending-save-install")?;
+        let marker = workspace.path().join(BRIDGE_LOCK_FILE);
+        let content = format!(
+            "profile-platform-bridge-lock-v1\\n{}\\n5\\n",
+            device.as_str()
+        );
+        fs::write(&marker, content.as_bytes())?;
+        let browser_data = workspace.path().join("user_data");
+        fs::create_dir(&browser_data)?;
+        let parent_lock = browser_data.join("parent.lock");
+        let wal = browser_data.join("cookies.sqlite-wal");
+        let pending = workspace.path().join("unsynced-successor.bin");
+        fs::write(&parent_lock, b"stale-native-parent-lock")?;
+        fs::write(&wal, b"original-uncheckpointed-wal")?;
+        fs::write(&pending, b"encrypted-original-n-plus-one")?;
+
+        // Neither a valid old Bridge marker nor an inert Firefox parent.lock
+        // is a live writer; admission must not repair/delete/rename the data.
+        let guard = DeliveryActivationGuard::acquire(&root)?;
+        assert!(guard.confirms_quiescence());
+        assert!(matches!(
+            BridgeWorkspaceLock::acquire(&workspace, &device, 6),
+            Err(LocalProfileError::LockBusy)
+        ));
+        assert_eq!(fs::read(&marker)?, content.as_bytes());
+        assert_eq!(fs::read(&parent_lock)?, b"stale-native-parent-lock");
+        assert_eq!(fs::read(&wal)?, b"original-uncheckpointed-wal");
+        assert_eq!(fs::read(&pending)?, b"encrypted-original-n-plus-one");
+        drop(guard);
+        Ok(())
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn live_native_firefox_handle_blocks_upgrade_even_without_a_bridge_writer()
+    -> Result<(), Box<dyn std::error::Error>> {
+        use std::os::windows::fs::OpenOptionsExt;
+        let (_test_root, root, workspace, _device) = fixture("orphan-firefox")?;
+        let browser_data = workspace.path().join("user_data");
+        fs::create_dir(&browser_data)?;
+        let lock = browser_data.join("parent.lock");
+        fs::write(&lock, b"native-writer")?;
+        let browser_handle = fs::OpenOptions::new()
+            .read(true)
+            .share_mode(0)
+            .open(&lock)?;
+        assert!(matches!(
+            DeliveryActivationGuard::acquire(&root),
+            Err(LocalProfileError::LockBusy)
+        ));
+        drop(browser_handle);
+        assert!(DeliveryActivationGuard::acquire(&root)?.confirms_quiescence());
+        assert_eq!(fs::read(&lock)?, b"native-writer");
         Ok(())
     }
 
