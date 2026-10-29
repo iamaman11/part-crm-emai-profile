@@ -470,7 +470,9 @@ mod tests {
             "duration_ms": 100,
             "private_url": "https://private.invalid/?token=secret",
         });
-        fs::write(directory.join("event-0000000000000001-forged.json"), serde_json::to_vec(&malicious).expect("fixture")).expect("fixture");
+        let timestamp = malicious["time_unix_ms"].as_u64().expect("fixture timestamp");
+        let name = format!("event-{timestamp:016x}-00000001-0000000000000000.json");
+        fs::write(directory.join(name), serde_json::to_vec(&malicious).expect("fixture")).expect("fixture");
         let report = report_at(&root);
         assert!(!report.contains("private.invalid"));
         assert!(!report.contains("CLOUD_SAVE_CONFIRMED"));
