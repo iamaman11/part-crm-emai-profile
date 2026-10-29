@@ -2,6 +2,8 @@
 //!
 //! Static text only: raw errors, URLs, claims, keys, responses and local paths cannot enter this API.
 
+pub mod report;
+
 use crate::device_pairing::DevicePairingBootstrapError;
 use crate::shipping_composition::ShippingCompositionError;
 #[cfg(any(windows, test))]
