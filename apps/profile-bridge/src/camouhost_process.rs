@@ -1261,7 +1261,9 @@ mod tests {
             Some("camouhost_failure phase=launch category=timeout")
         );
         assert_eq!(
-            allowlisted_camouhost_diagnostic(b"camouhost_failure phase=launch category=timeout\r\n"),
+            allowlisted_camouhost_diagnostic(
+                b"camouhost_failure phase=launch category=timeout\r\n"
+            ),
             Some("camouhost_failure phase=launch category=timeout")
         );
         assert_eq!(
