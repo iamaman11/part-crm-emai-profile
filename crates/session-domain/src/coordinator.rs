@@ -224,6 +224,15 @@ pub enum CoordinatorCommand {
         now: UnixMillis,
         expires_at: UnixMillis,
     },
+    /// Atomic uncertain -> same-device launch after checked original
+    /// Claim provenance in the Durable Object adapter.
+    RecoverAndIssueLaunchIntent {
+        launch_intent_id: LaunchIntentId,
+        actor_id: ActorId,
+        device_id: DeviceId,
+        now: UnixMillis,
+        expires_at: UnixMillis,
+    },
     Claim {
         launch_intent_id: LaunchIntentId,
         actor_id: ActorId,
@@ -270,6 +279,7 @@ impl CoordinatorCommand {
     pub const fn observed_at(&self) -> UnixMillis {
         match self {
             Self::IssueLaunchIntent { now, .. }
+            | Self::RecoverAndIssueLaunchIntent { now, .. }
             | Self::Claim { now, .. }
             | Self::Heartbeat { now, .. }
             | Self::RenewLease { now, .. }
@@ -608,6 +618,19 @@ impl ProfileCoordinatorState {
                 now,
                 expires_at,
             } => self.issue_launch_intent(launch_intent_id, actor_id, device_id, *now, *expires_at),
+            CoordinatorCommand::RecoverAndIssueLaunchIntent {
+                launch_intent_id,
+                actor_id,
+                device_id,
+                now,
+                expires_at,
+            } => self.recover_and_issue_launch_intent(
+                launch_intent_id,
+                actor_id,
+                device_id,
+                *now,
+                *expires_at,
+            ),
             CoordinatorCommand::Claim {
                 launch_intent_id,
                 actor_id,
@@ -732,6 +755,38 @@ impl ProfileCoordinatorState {
         self.active_lease = Some(lease.clone());
         self.drain_deadline = None;
         Ok(CoordinatorOutcome::LeaseClaimed { lease })
+    }
+
+    fn recover_and_issue_launch_intent(
+        &mut self,
+        launch_intent_id: &LaunchIntentId,
+        actor_id: &ActorId,
+        device_id: &DeviceId,
+        now: UnixMillis,
+        expires_at: UnixMillis,
+    ) -> Result<CoordinatorOutcome, CoordinatorError> {
+        if self.status != CoordinatorStatus::Uncertain
+            || self.active_lease.is_some()
+            || self.pending_intent.is_some()
+        {
+            return Err(CoordinatorError::CoordinatorUnavailable);
+        }
+        if expires_at <= now {
+            return Err(CoordinatorError::InvalidIntentExpiry);
+        }
+        // This single state transition is persisted atomically in the DO.
+        // The adapter proves historical Claim ownership before calling apply.
+        self.pending_intent = Some(PendingLaunchIntent {
+            launch_intent_id: launch_intent_id.clone(),
+            actor_id: actor_id.clone(),
+            device_id: device_id.clone(),
+            expires_at,
+        });
+        self.status = CoordinatorStatus::Idle;
+        self.drain_deadline = None;
+        Ok(CoordinatorOutcome::LaunchIntentIssued {
+            launch_intent_id: launch_intent_id.clone(),
+        })
     }
 
     fn heartbeat(
