@@ -20,7 +20,7 @@ import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from types import ModuleType
-from typing import BinaryIO, Iterator
+from typing import BinaryIO, Callable, Iterator
 from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -44,6 +44,9 @@ observed.send();
 class ObservationServer(ThreadingHTTPServer):
     def __init__(self) -> None:
         self.observations: queue.Queue[tuple[bool, bool]] = queue.Queue()
+        # Record ALL HTTP requests to this controlled origin, including document,
+        # favicon, CSS and fetch loads, not just the persistence beacon.
+        self.requests: queue.Queue[str] = queue.Queue()
         super().__init__(("127.0.0.1", 0), Handler)
 
 
@@ -54,6 +57,7 @@ class Handler(BaseHTTPRequestHandler):
         return
 
     def do_GET(self) -> None:  # noqa: N802 - BaseHTTPRequestHandler contract
+        self.server.requests.put(self.path)
         if self.path.startswith("/observed?"):
             query = self.path.split("?", 1)[1]
             values = dict(part.split("=", 1) for part in query.split("&"))
@@ -182,18 +186,33 @@ def materialize(root: Path) -> dict[str, str]:
     return report
 
 
-def exchange(process: subprocess.Popen[str], frame: str) -> str:
+def exchange(process: subprocess.Popen[str], frame: str, seconds: int = 120) -> str:
     assert process.stdin is not None
     assert process.stdout is not None
+    response: queue.Queue[str] = queue.Queue(maxsize=1)
+
+    def read_one() -> None:
+        try:
+            response.put(process.stdout.readline().rstrip("\n"))
+        except (OSError, ValueError):
+            response.put("")
+
+    threading.Thread(target=read_one, daemon=True).start()
     process.stdin.write(frame + "\n")
     process.stdin.flush()
-    response = process.stdout.readline().rstrip("\n")
-    if not response:
-        stderr = ""
-        if process.stderr is not None:
-            stderr = process.stderr.read()[-2000:]
-        raise AssertionError(f"Camouhost produced no response for {frame!r}: {stderr}")
-    return response
+    try:
+        result = response.get(timeout=seconds)
+    except queue.Empty as error:
+        raise AssertionError(
+            f"Camouhost IPC {frame.partition('|')[0]} timed out after {seconds}s; "
+            f"process_alive={process.poll() is None}"
+        ) from error
+    if not result:
+        raise AssertionError(
+            f"Camouhost produced no response for {frame.partition('|')[0]}; "
+            f"process_alive={process.poll() is None}"
+        )
+    return result
 
 
 def observe_browser_visible_wire(process: subprocess.Popen[str]) -> None:
@@ -245,15 +264,18 @@ def prove_managed_environment_projection(runtime: ModuleType) -> None:
         assert runtime.browser_environment() == expected
 
 
-def run_cold_launch(root: Path, report: dict[str, str], url: str) -> None:
+def run_cold_launch(
+    root: Path, report: dict[str, str], url: str, on_ready: Callable[[], None] | None = None
+) -> None:
     # A file avoids a full stderr pipe blocking runtime-owned browser cleanup. Read only
     # a bounded tail after process exit; do not block on stderr while the child is alive.
     with tempfile.TemporaryFile() as diagnostics:
-        run_cold_launch_observed(root, report, url, diagnostics)
+        run_cold_launch_observed(root, report, url, diagnostics, on_ready)
 
 
 def run_cold_launch_observed(
-    root: Path, report: dict[str, str], url: str, diagnostics: BinaryIO
+    root: Path, report: dict[str, str], url: str, diagnostics: BinaryIO,
+    on_ready: Callable[[], None] | None = None,
 ) -> None:
     process = subprocess.Popen(
         [sys.executable, str(CAMOUHOST)],
@@ -270,7 +292,12 @@ def run_cold_launch_observed(
     try:
         assert exchange(process, f"hello|{IPC_VERSION}") == f"hello_ack|{IPC_VERSION}"
         assert exchange(process, f"launch|{SESSION}") == f"ready|{SESSION}"
-        complete_pre_navigation_protocol(process, url)
+        if on_ready is not None:
+            on_ready()
+        observe_browser_visible_wire(process)
+        if on_ready is not None:
+            on_ready()  # Also require isolation after the browser-visible probe.
+        admit_navigation(process, url)
         assert exchange(process, f"close|{SESSION}") == f"closed|{SESSION}|true"
         returncode = process.wait(timeout=60)
         if returncode != 0:
@@ -296,8 +323,11 @@ def run_cold_launch_observed(
                     process.wait(timeout=30)
                 except (OSError, subprocess.TimeoutExpired):
                     cleanup = "forced_kill_failed"
-        for pipe in (process.stdin, process.stdout):
-            if pipe is not None:
+        # An IPC timeout may leave a daemon reader blocked in readline() when
+        # Firefox inherited stdout. Closing that TextIOWrapper from this thread
+        # can itself hang; the failing test exits after its bounded teardown.
+        for pipe in (process.stdin,):
+            if pipe is not None and not pipe.closed:
                 try:
                     pipe.close()
                 except OSError:
@@ -355,30 +385,33 @@ def expect_prelaunch_identity_rejection(root: Path, report: dict[str, str]) -> N
 def expect_probe_digest_non_authoritative(root: Path, report: dict[str, str]) -> None:
     env = base_env(root, report)
     env["CAMOUHOST_EXPECTED_PROBE_SHA256"] = "0" * 64
-    process = subprocess.Popen(
-        [sys.executable, str(CAMOUHOST)],
-        cwd=ROOT,
-        env=env,
-        stdin=subprocess.PIPE,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        text=True,
-        bufsize=1,
-    )
-    try:
-        assert exchange(process, f"hello|{IPC_VERSION}") == f"hello_ack|{IPC_VERSION}"
-        assert exchange(process, f"launch|{SESSION}") == f"ready|{SESSION}"
-        complete_pre_navigation_protocol(process, None)
-        assert exchange(process, f"close|{SESSION}") == f"closed|{SESSION}|true"
-        if process.wait(timeout=60) != 0:
-            stderr = process.stderr.read()[-2000:] if process.stderr is not None else ""
-            raise AssertionError(
-                "aggregate probe evidence unexpectedly became an admission veto: " + stderr
-            )
-    finally:
-        if process.poll() is None:
-            process.kill()
-            process.wait(timeout=30)
+    with tempfile.TemporaryFile() as diagnostics:
+        process = subprocess.Popen(
+            [sys.executable, str(CAMOUHOST)],
+            cwd=ROOT,
+            env=env,
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            stderr=diagnostics,
+            text=True,
+            bufsize=1,
+        )
+        try:
+            assert exchange(process, f"hello|{IPC_VERSION}") == f"hello_ack|{IPC_VERSION}"
+            assert exchange(process, f"launch|{SESSION}") == f"ready|{SESSION}"
+            complete_pre_navigation_protocol(process, None)
+            assert exchange(process, f"close|{SESSION}") == f"closed|{SESSION}|true"
+            if process.wait(timeout=60) != 0:
+                diagnostics.seek(0, os.SEEK_END)
+                diagnostics.seek(max(0, diagnostics.tell() - 2000))
+                stderr = diagnostics.read().decode("utf-8", errors="replace")
+                raise AssertionError(
+                    "aggregate probe evidence unexpectedly became an admission veto: " + stderr
+                )
+        finally:
+            if process.poll() is None:
+                process.kill()
+                process.wait(timeout=30)
 
 
 def main() -> int:
@@ -407,13 +440,47 @@ def main() -> int:
                 )
 
             assert_clean_launch_lock_state(first_root)
-            run_cold_launch(first_root, first, url)
+            # The prior browser has exited. Prove its requests are completely
+            # consumed before attributing any new observation to restored tabs.
+            # Drain all requests from the completed first browser (including
+            # /favicon etc). A clean queue marks the boundary for restore traffic.
+            previous_requests = []
+            while not server.requests.empty():
+                previous_requests.append(server.requests.get_nowait())
+            if not any(path == "/" for path in previous_requests):
+                raise AssertionError("first browser never requested the test document")
+            if not server.observations.empty():
+                raise AssertionError("prior browser left unconsumed persistence beacons")
+            # Restore a *previously browsed* tab on the next cold launch. The
+            # test copy retains Firefox's own session setting and files.
+            with (first_root / "user_data" / "user.js").open(
+                "a", encoding="utf-8", newline="\n"
+            ) as prefs:
+                prefs.write('\nuser_pref("browser.startup.page", 3);\n')
+
+            def require_no_early_network() -> None:
+                pending = []
+                while not server.requests.empty():
+                    pending.append(server.requests.get_nowait())
+                if pending or not server.requests.empty() or not server.observations.empty():
+                    raise AssertionError(
+                        "restored tab requested the loopback origin before navigation admission; "
+                        f"paths={pending[:8]!r}; "
+                        f"persistence_beacon={not server.observations.empty()}"
+                    )
+
+            run_cold_launch(first_root, first, url, require_no_early_network)
             observed_second = server.observations.get(timeout=15)
             if observed_second != (True, True):
                 raise AssertionError(
                     "durable cookie/localStorage did not survive clean cold relaunch: "
                     f"{observed_second}"
                 )
+            # A restored foreground tab may reload after admission alongside
+            # the explicit navigation; neither may contaminate another profile.
+            while not server.observations.empty():
+                if server.observations.get_nowait() != (True, True):
+                    raise AssertionError("restored tab lost its persisted origin state")
 
             assert_clean_launch_lock_state(first_root)
             run_cold_launch(second_root, second, url)

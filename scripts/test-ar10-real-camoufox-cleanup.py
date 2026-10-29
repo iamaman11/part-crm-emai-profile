@@ -17,6 +17,7 @@ import importlib.util
 import io
 import json
 import os
+import queue
 import subprocess
 import sys
 import tempfile
@@ -194,31 +195,76 @@ def start_runtime(
     camouhost: Path,
     env: dict[str, str],
 ) -> subprocess.Popen[str]:
-    return subprocess.Popen(
-        [str(python), str(camouhost)],
-        env=env,
-        stdin=subprocess.PIPE,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        text=True,
-        bufsize=1,
-    )
+    # Firefox grandchildren can retain stderr across Camouhost teardown.
+    # A file prevents both pipe backpressure and an unbounded stderr.read().
+    diagnostics = tempfile.TemporaryFile(mode="w+t", encoding="utf-8")
+    try:
+        process = subprocess.Popen(
+            [str(python), str(camouhost)],
+            env=env,
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            stderr=diagnostics,
+            text=True,
+            bufsize=1,
+        )
+    except BaseException:
+        diagnostics.close()
+        raise
+    process.stderr = diagnostics
+    return process
 
 
-def exchange(process: subprocess.Popen[str], frame: str) -> str:
+def exchange(process: subprocess.Popen[str], frame: str, seconds: int = 120) -> str:
     assert process.stdin is not None
     assert process.stdout is not None
+    response: queue.Queue[str] = queue.Queue(maxsize=1)
+
+    def read_one() -> None:
+        try:
+            response.put(process.stdout.readline().rstrip("\n"))
+        except (OSError, ValueError):
+            response.put("")
+
+    threading.Thread(target=read_one, daemon=True).start()
     process.stdin.write(frame + "\n")
     process.stdin.flush()
-    response = process.stdout.readline().rstrip("\n")
-    if not response:
-        stderr = process.stderr.read()[-3000:] if process.stderr is not None else ""
-        raise AssertionError(f"Camouhost produced no response for {frame!r}: {stderr}")
-    return response
+    try:
+        result = response.get(timeout=seconds)
+    except queue.Empty as error:
+        # Log only the command name, never a URL or profile-bearing IPC payload.
+        command = frame.partition("|")[0]
+        raise AssertionError(
+            f"Camouhost IPC {command} timed out after {seconds}s; "
+            f"process_alive={process.poll() is None}; stderr_tail={stderr_tail(process)!r}"
+        ) from error
+    if not result:
+        raise AssertionError(
+            f"Camouhost produced no IPC response for {frame.partition('|')[0]}: "
+            f"{stderr_tail(process)!r}"
+        )
+    return result
 
 
 def stderr_tail(process: subprocess.Popen[str]) -> str:
-    return process.stderr.read()[-3000:] if process.stderr is not None else ""
+    if process.stderr is None:
+        return ""
+    process.stderr.seek(0, os.SEEK_END)
+    last = process.stderr.tell()
+    process.stderr.seek(max(0, last - 3000))
+    return process.stderr.read()[-3000:]
+
+
+def stop_runtime(process: subprocess.Popen[str]) -> None:
+    if process.poll() is None:
+        process.kill()
+        process.wait(timeout=30)
+    for stream in (process.stdin, process.stderr):
+        if stream is not None and not stream.closed:
+            stream.close()
+    # Do not close stdout here: on a timeout its daemon reader may still be
+    # blocked in readline() on an inherited Firefox pipe. The test exits on
+    # that failure, and closing a TextIOWrapper from another thread may hang.
 
 
 def assert_writer_quiescent(runtime: ModuleType, root: Path, label: str) -> None:
@@ -250,9 +296,7 @@ def prove_protocol_failure_cleanup(
                 f"post-launch protocol failure returned rc={returncode}: {stderr_tail(process)}"
             )
     finally:
-        if process.poll() is None:
-            process.kill()
-            process.wait(timeout=30)
+        stop_runtime(process)
     assert_writer_quiescent(runtime, root, "post-launch protocol failure")
 
 
@@ -280,10 +324,188 @@ def prove_immediate_relaunch_after_cleanup(
                 f"post-launch EOF returned rc={returncode}: {stderr_tail(process)}"
             )
     finally:
-        if process.poll() is None:
-            process.kill()
-            process.wait(timeout=30)
+        stop_runtime(process)
     assert_writer_quiescent(runtime, root, "post-launch EOF")
+
+
+def prove_session_restore_startup(
+    python: Path,
+    camouhost: Path,
+    env: dict[str, str],
+    runtime: ModuleType,
+    root: Path,
+) -> None:
+    """Real disposable Firefox profile: session restore must not deadlock IPC Ready.
+
+    This checks the native pref rather than mocking Camoufox or disabling Firefox
+    session restore. Only the temporary test generation is modified.
+    """
+    prefs = root / "user_data" / "user.js"
+    with prefs.open("a", encoding="utf-8", newline="\n") as stream:
+        stream.write('\nuser_pref("browser.startup.page", 3);\n')
+    process = start_runtime(python, camouhost, env)
+
+    try:
+        assert exchange(process, f"hello|{IPC_VERSION}", 15) == f"hello_ack|{IPC_VERSION}"
+        assert exchange(process, f"launch|{SESSION}", 45) == f"ready|{SESSION}"
+        assert exchange(process, f"observe_browser_visible|{SESSION}", 30).startswith(
+            f"browser_visible|{SESSION}|"
+        ), "session restore has no browser-visible identity witness"
+        assert exchange(process, f"admit_navigation|{SESSION}|", 30) == (
+            f"navigation_admitted|{SESSION}"
+        )
+        assert exchange(process, f"close|{SESSION}", 45) == f"closed|{SESSION}|true"
+        assert process.wait(timeout=30) == 0
+    finally:
+        stop_runtime(process)
+    assert 'user_pref("browser.startup.page", 3);' in prefs.read_text(encoding="utf-8")
+    assert_writer_quiescent(runtime, root, "Firefox session restore startup")
+
+
+
+def prove_preexisting_tabs_restored(
+    python: Path,
+    camouhost: Path,
+    runtime_lock: Path,
+    headless: str,
+    root: Path,
+) -> None:
+    """End-to-end native Firefox sessionstore -> Playwright tracked tabs, isolated profile.
+
+    Use the packaged browser Python on Windows, not the CI host Python. This proof
+    deliberately does not share or inspect any real customer Firefox files.
+    """
+    print("native_restore_proof stage=materialize", flush=True)
+    materialize(python, camouhost, runtime_lock, headless, root)
+
+    class Handler(BaseHTTPRequestHandler):
+        def do_GET(self) -> None:  # noqa: N802
+            page = b"<!doctype html><title>Disposable Firefox sessionstore proof</title>"
+            self.send_response(200)
+            self.send_header("Content-Type", "text/html; charset=utf-8")
+            self.send_header("Content-Length", str(len(page)))
+            self.end_headers()
+            self.wfile.write(page)
+
+        def log_message(self, _format: str, *_args: object) -> None:
+            pass
+
+    server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+    worker = threading.Thread(target=server.serve_forever, daemon=True)
+    worker.start()
+    proof = r"""
+import contextlib
+import importlib.util
+import json
+import os
+import sys
+import time
+from pathlib import Path
+from camoufox.sync_api import Camoufox
+from playwright.sync_api import TimeoutError as PlaywrightTimeoutError
+
+camouhost, lockfile, root, origin = map(str, sys.argv[1:5])
+spec = importlib.util.spec_from_file_location("camouhost_restore_session_proof", camouhost)
+runtime = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(runtime)
+root = Path(root)
+lock = json.loads(Path(lockfile).read_text(encoding="utf-8"))
+config = json.loads((root / "camoufox-config.json").read_text(encoding="utf-8"))
+prefs = root / "user_data" / "user.js"
+with prefs.open("a", encoding="utf-8", newline="\n") as stream:
+    stream.write('\nuser_pref("browser.startup.page", 3);\n')
+urls = [origin + "/prior-first", origin + "/prior-second"]
+
+def enter():
+    manager = Camoufox(**runtime.camoufox_kwargs(lock, root, config))
+    with contextlib.redirect_stdout(sys.stderr):
+        context = manager.__enter__()
+    context.set_offline(True)
+    return manager, context
+
+manager, context = enter()
+try:
+    context.set_offline(False)
+    first = context.pages[0] if context.pages else context.new_page()
+    first.goto(urls[0], wait_until="domcontentloaded", timeout=15000)
+    first.evaluate("localStorage.setItem('restore-proof', 'retained')")
+    second = context.new_page()
+    second.goto(urls[1], wait_until="domcontentloaded", timeout=15000)
+    assert first.url == urls[0] and second.url == urls[1]
+finally:
+    runtime.close_context(manager, context, root)
+
+manager, context = enter()
+try:
+    # Firefox SessionStore restores windows asynchronously on Windows. Wait
+    # for the existing native pages; never synthesize pages on the second launch.
+    deadline = time.monotonic() + 20
+    while True:
+        present = {page.url: page for page in context.pages}
+        missing = set(urls) - set(present)
+        if not missing:
+            break
+        if time.monotonic() >= deadline:
+            raise AssertionError(
+                "previously open Firefox tabs absent from Playwright context; "
+                f"missing={sorted(missing)!r}; "
+                f"observed={sorted(page.url for page in context.pages)!r}"
+            )
+        try:
+            context.wait_for_event("page", timeout=500)
+        except PlaywrightTimeoutError:
+            pass
+    retained = present[urls[0]].evaluate("localStorage.getItem('restore-proof')")
+    if retained != "retained":
+        raise AssertionError("restored tab lost persistent origin state")
+    witness = runtime.install_controlled_close_observation(context)
+    assert not runtime.controlled_close_candidate(witness)
+    present[urls[0]].close()
+    assert not runtime.controlled_close_candidate(witness), (
+        "closing one restored tab falsely acknowledged complete user close"
+    )
+    # The other previously restored tab remains live and managed.
+    assert not present[urls[1]].is_closed()
+finally:
+    runtime.close_context(manager, context, root)
+print("two previous Firefox tabs restored and tracked; partial close not complete", flush=True)
+"""
+    try:
+        env = runtime_env(runtime_lock, headless)
+        print("native_restore_proof stage=two_launches", flush=True)
+        # Firefox grandchildren may inherit stdout/stderr after the Python child
+        # exits. Capture to files, not pipes: communicate() would wait forever for
+        # inherited pipe writers and obscure the actual restore failure.
+        with tempfile.TemporaryFile(mode="w+t", encoding="utf-8") as output, \
+                tempfile.TemporaryFile(mode="w+t", encoding="utf-8") as diagnostics:
+            child = subprocess.Popen(
+                [str(python), "-c", proof, str(camouhost), str(runtime_lock),
+                 str(root), f"http://127.0.0.1:{server.server_port}"],
+                env=env, stdin=subprocess.DEVNULL, stdout=output, stderr=diagnostics,
+            )
+            try:
+                result = child.wait(timeout=150)
+            except subprocess.TimeoutExpired as error:
+                child.kill()
+                child.wait(timeout=15)
+                raise AssertionError(
+                    "native session-restoration child exceeded bounded lifecycle"
+                ) from error
+            output.seek(0)
+            diagnostics.seek(0, os.SEEK_END)
+            diagnostics.seek(max(0, diagnostics.tell() - 2400))
+            tail = diagnostics.read()
+            if result != 0 or "two previous Firefox tabs restored and tracked" not in output.read():
+                raise AssertionError(
+                    "real native Firefox tab restoration not proven: "
+                    f"rc={result} diagnostic_tail={tail!r}"
+                )
+        assert_writer_quiescent(load_runtime(camouhost), root, "restored tabs")
+        print("native_restore_proof stage=passed", flush=True)
+    finally:
+        server.shutdown()
+        server.server_close()
+        worker.join(timeout=5)
 
 
 def prove_external_windows_gui_close(
@@ -408,16 +630,35 @@ def prove_external_windows_gui_close(
         server.shutdown()
         server.server_close()
         server_thread.join(timeout=5)
-        if process.poll() is None:
-            process.kill()
-            process.wait(timeout=30)
+        stop_runtime(process)
     if not normal_close_proved:
         raise AssertionError("external GUI close was never observed")
     assert_writer_quiescent(runtime, root, "external native WM_CLOSE")
 
 
+def prove_ipc_timeout_contract() -> None:
+    """A silent child must fail quickly without a pipe-read deadlock."""
+    with tempfile.TemporaryFile(mode="w+t", encoding="utf-8") as diagnostics:
+        process = subprocess.Popen(
+            [sys.executable, "-u", "-c", "import time; time.sleep(30)"],
+            stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=diagnostics,
+            text=True,
+        )
+        process.stderr = diagnostics
+        try:
+            try:
+                exchange(process, "hello|silent", seconds=1)
+            except AssertionError as error:
+                assert "IPC hello timed out after 1s" in str(error)
+            else:
+                raise AssertionError("silent Camouhost child escaped IPC timeout")
+        finally:
+            stop_runtime(process)
+
+
 def prove_failure_observation_contract() -> None:
     """Cheap fault injection for the same runtime/proof owners used below with real browsers."""
+    prove_ipc_timeout_contract()
     source_root = Path(__file__).resolve().parents[1]
     runtime = load_runtime(source_root / "runtime/camouhost/real.py")
     prove_controlled_close_dispatch_contract(runtime)
@@ -526,7 +767,7 @@ sys.exit(5)
 
     with patch.object(proof, "base_env", return_value=os.environ.copy()), \
             patch.object(proof.subprocess, "Popen", side_effect=start_child), \
-            patch.object(proof, "complete_pre_navigation_protocol", side_effect=primary):
+            patch.object(proof, "observe_browser_visible_wire", side_effect=primary):
         try:
             proof.run_cold_launch(source_root, {}, "http://127.0.0.1/")
         except AssertionError as observed:
@@ -588,11 +829,15 @@ def main() -> int:
 
         prove_protocol_failure_cleanup(python, camouhost, env, runtime, root)
         prove_immediate_relaunch_after_cleanup(python, camouhost, env, runtime, root)
+        prove_session_restore_startup(python, camouhost, env, runtime, root)
+        prove_preexisting_tabs_restored(
+            python, camouhost, runtime_lock, args.headless, Path(temporary) / "restore-tabs"
+        )
         if os.name == "nt" and args.headless == "false":
             prove_external_windows_gui_close(python, camouhost, env, runtime, root)
 
     print(
-        "AR-10 real Camoufox post-launch cleanup, immediate relaunch and external Windows GUI-close evidence passed."
+        "AR-10 real Camoufox post-launch cleanup, Firefox native prior-tabs restore and close, immediate relaunch and GUI-close evidence passed."
     )
     return 0
 
