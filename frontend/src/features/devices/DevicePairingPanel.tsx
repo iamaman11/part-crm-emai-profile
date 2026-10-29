@@ -2,6 +2,7 @@ import { useMemo, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { useTenant } from '../../app/TenantContext';
 import { StatusMessage } from '../../shared/ui/StatusMessage';
+import { invokeProfileBridgeDiagnostics } from '../../shared/bridgeDiagnostics';
 import {
   authorizeDevicePairing,
   getAuthenticatedDevicePairingSession,
@@ -115,6 +116,8 @@ function InstallBridge({ tenantId }: { tenantId: string }) {
       <p>Set up a new computer or update an existing installation. Setup keeps your connection and profile data.</p>
       {installer.data ? <a href={installer.data.downloadUrl}>Install or update for Windows</a> : null}
       <p>The first release has no verified Windows publisher. Windows may warn or block installation.</p>
+      <p>Copy the installed Windows Bridge's local, redacted diagnostic report. Nothing is uploaded.</p>
+      <button type="button" onClick={invokeProfileBridgeDiagnostics}>Скопировать диагностику</button>
       <StatusMessage state={installer.error ?? (installer.isPending ? 'Loading Windows installer…' : null)} />
       {installer.error ? <button type="button" onClick={() => void installer.refetch()}>Try loading installer again</button> : null}
     </section>

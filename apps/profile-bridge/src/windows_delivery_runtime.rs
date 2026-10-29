@@ -26,6 +26,7 @@ const FILE_ATTRIBUTE_REPARSE_POINT: u32 = 0x0400;
 #[derive(Debug)]
 pub struct ActiveWindowsDeliveryRuntime {
     runtime_root: PathBuf,
+    verified_sequence: u64,
     bundles: DeliveryBoundRuntimeBundleSelection,
     pending_health: Option<PendingWindowsDeliveryHealthConfirmation>,
 }
@@ -78,6 +79,7 @@ impl ActiveWindowsDeliveryRuntime {
         .map_err(|_| WindowsDeliveryRuntimeError::RuntimeIdentity)?;
         Ok(Self {
             runtime_root,
+            verified_sequence: active.sequence,
             bundles,
             pending_health,
         })
@@ -86,6 +88,13 @@ impl ActiveWindowsDeliveryRuntime {
     #[must_use]
     pub fn runtime_root(&self) -> &Path {
         &self.runtime_root
+    }
+
+    /// Already validated by the existing exact delivery/active-runtime owner.
+    /// A diagnostics consumer may observe it but may not re-open delivery state.
+    #[must_use]
+    pub(crate) fn observed_release_identity(&self) -> (u64, &str) {
+        (self.verified_sequence, &self.bundles.expected_release_id)
     }
 
     #[must_use]

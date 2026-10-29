@@ -64,6 +64,16 @@ mod windows {
             Err(_) => return Err(NativeInstallerError::Filesystem),
         }
         .map_err(NativeInstallerError::StateStore)?;
+        // The canonical delivery store exists only now. Installation observations
+        // may start here; a rejected/corrupt store is never modified for diagnosis.
+        crate::user_diagnostics::report::record_at(
+            root,
+            crate::user_diagnostics::report::Stage::InstallPrepare,
+            crate::user_diagnostics::report::Outcome::Started,
+            crate::user_diagnostics::report::Cloud::Unknown,
+            crate::user_diagnostics::report::Cause::None,
+            0,
+        );
         let downloads = DeliveryDownloadRoot::open_or_create(root.join("downloads"))
             .map_err(|_| NativeInstallerError::Filesystem)?;
         let staging = DeliveryStagingRoot::open_or_create(root.join("releases"))

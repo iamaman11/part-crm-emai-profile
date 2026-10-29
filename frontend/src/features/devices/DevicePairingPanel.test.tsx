@@ -9,6 +9,11 @@ import {
   getDeviceInstaller,
 } from './api';
 import { DevicePairingPanel } from './DevicePairingPanel';
+import { invokeProfileBridgeDiagnostics } from '../../shared/bridgeDiagnostics';
+
+vi.mock('../../shared/bridgeDiagnostics', () => ({
+  invokeProfileBridgeDiagnostics: vi.fn(),
+}));
 
 vi.mock('./api', () => ({
   authorizeDevicePairing: vi.fn(),
@@ -69,6 +74,13 @@ describe('DevicePairingPanel', () => {
     expect(link.getAttribute('href')).toContain(`release-set-v3-sha256-${'a'.repeat(64)}/ProfileBridgeSetup.exe`);
     expect(screen.queryByText('Device registration confirmed')).toBeNull();
     expect(mockedGetDeviceRegistration).not.toHaveBeenCalled();
+  });
+
+  it('exposes the exact local diagnostics command without credentials or remote upload', async () => {
+    renderPanel();
+    const button = await screen.findByRole('button', { name: 'Скопировать диагностику' });
+    fireEvent.click(button);
+    expect(vi.mocked(invokeProfileBridgeDiagnostics)).toHaveBeenCalledTimes(1);
   });
 
   it('offers retry without an installer link when metadata is unavailable', async () => {

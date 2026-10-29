@@ -26,6 +26,29 @@ pub fn show_error_unless_redirected(
     }
 }
 
+/// Copy a bounded, already redacted native report. This never reads the clipboard.
+pub fn copy_redacted_report(report: &str) -> bool {
+    if report.is_empty() || report.len() > 20_480 || report.contains('\0') {
+        return false;
+    }
+    #[cfg(windows)]
+    {
+        windows::copy_redacted_report(report)
+    }
+    #[cfg(not(windows))]
+    {
+        false
+    }
+}
+
+/// Inform the user after a successful native report copy.
+pub fn show_report_copied() {
+    #[cfg(windows)]
+    {
+        windows::show_report_copied();
+    }
+}
+
 #[cfg(any(windows, test))]
 fn redirected_file_type(file_type: u32) -> bool {
     // FILE_TYPE_REMOTE is an obsolete modifier, not a distinct destination type.

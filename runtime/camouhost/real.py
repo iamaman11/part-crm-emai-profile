@@ -846,6 +846,22 @@ def touch_runtime_preferences(config: dict[str, Any]) -> dict[str, int]:
     }
 
 
+def accessibility_preferences(platform_name: str) -> dict[str, int]:
+    """Keep standard OS accessibility available; no remote debugging, no page inspection."""
+    return {"accessibility.force_disabled": 0} if platform_name == "nt" else {}
+
+
+def report_live_page_count(context: Any) -> None:
+    """Best-effort count only. Observed Playwright pages are not a restored-tab proof."""
+    try:
+        pages = len(context.pages)
+        if 0 <= pages <= 512:
+            print(f"camouhost_pages count={pages}", file=sys.stderr, flush=True)
+    except Exception:
+        # Diagnostics must never fail or change the browser's navigation outcome.
+        return
+
+
 def camoufox_kwargs(
     lock: dict[str, Any],
     root: Path,
@@ -867,6 +883,9 @@ def camoufox_kwargs(
             "privacy.baselineFingerprintingProtection": False,
             "webgl.disabled": False,
             "webgl.enable-webgl2": enabled_webgl2,
+            # Keep native Windows accessibility APIs available to standard GUI automation.
+            # This does not enable remote debugging or inspect page content.
+            **accessibility_preferences(os.name),
             # Firefox offline mode can allow localhost by default. Block it
             # before restored pages load; admission later releases offline mode.
             "network.disable-localhost-when-offline": True,
@@ -1345,6 +1364,8 @@ def run_ipc() -> int:
                     emit("error|runtime")
                     return 5
                 navigation_admitted = True
+                # Observes numbers only, never restored-tab identity or page content.
+                report_live_page_count(context)
                 emit(f"navigation_admitted|{active_session}")
                 continue
 

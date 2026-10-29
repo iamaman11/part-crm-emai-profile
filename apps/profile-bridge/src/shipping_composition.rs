@@ -223,6 +223,7 @@ mod windows {
         resume_exact_successor_under_fresh_lease, resume_lone_local_unsynced_under_fresh_lease,
     };
     use crate::shipping_preflight::ShippingBrowserLaunchPreflight;
+    use crate::user_diagnostics::report::{self, Cause, Cloud, Outcome, Stage};
     use crate::user_diagnostics::{PendingSaveReadOnlyDiagnosis, ReadOnlyProfileDiagnosis};
     use crate::windows_delivery_handoff::{
         DeliveryHandoffCoordinator, DeliveryHandoffRestartDisposition,
@@ -629,6 +630,8 @@ mod windows {
             eprintln!("BRIDGE_DELIVERY_RUNTIME_FAILURE={error:?}");
             ShippingCompositionError::DeliveryRecoveryRequired
         })?;
+        let (release_sequence, runtime_id) = active_delivery.observed_release_identity();
+        report::record_runtime_identity(release_sequence, runtime_id);
         let pending_health = active_delivery.pending_health_confirmation();
         let runtime_root = active_delivery.runtime_root().to_path_buf();
         let runtime_bundles = active_delivery.into_bundle_selection();
@@ -682,6 +685,14 @@ mod windows {
             camouhost,
         );
         let opened_at = now()?;
+        let open_started = std::time::Instant::now();
+        report::record_current(
+            Stage::GenerationSelection,
+            Outcome::Started,
+            Cloud::Unknown,
+            Cause::None,
+            0,
+        );
         let mut pending_health = pending_health;
         let mut started_health = None;
         let mut prelaunch_keepalive = None;
@@ -879,6 +890,15 @@ mod windows {
             let _ = operator.abort(abort_at);
             return Err(ShippingCompositionError::DeliveryHealth);
         }
+        report::record_current(
+            Stage::BrowserReady,
+            Outcome::Observed,
+            Cloud::Unknown,
+            Cause::None,
+            u64::try_from(open_started.elapsed().as_millis())
+                .unwrap_or(u64::MAX)
+                .min(86_400_000),
+        );
 
         let mut next_heartbeat_deadline = next_heartbeat_at(
             operator
@@ -928,6 +948,13 @@ mod windows {
                     )
                     .redacted_record()
                 );
+                report::record_current(
+                    Stage::LocalUnsynced,
+                    Outcome::Unconfirmed,
+                    Cloud::NotConfirmed,
+                    Cause::None,
+                    0,
+                );
                 // An unknown heartbeat response is not an acknowledged fence.
                 // Retain the closed local working profile; do not attempt an
                 // upload/commit using a possibly revoked writer session.
@@ -944,11 +971,45 @@ mod windows {
                     .ok_or(ShippingCompositionError::ActiveSessionMissing)?;
                 let save_heartbeat =
                     RetainedSaveHeartbeat::start(operator.coordinator().clone(), retained);
+                report::record_current(
+                    Stage::CloudSaveAttempt,
+                    Outcome::Started,
+                    Cloud::NotConfirmed,
+                    Cause::None,
+                    0,
+                );
+                let save_started = std::time::Instant::now();
                 let initial = operator.save_retained_successor_streaming(
                     &materialization_root,
                     save_transport.clone(),
                     &mut generation_uploader,
                     now()?,
+                );
+                let confirmed = initial.as_ref().is_ok_and(|done| done.is_saved());
+                report::record_current(
+                    if confirmed {
+                        Stage::CloudSaveConfirmed
+                    } else {
+                        Stage::CloudSaveAttempt
+                    },
+                    if confirmed {
+                        Outcome::Succeeded
+                    } else {
+                        Outcome::Unconfirmed
+                    },
+                    if confirmed {
+                        Cloud::CommittedExact
+                    } else {
+                        Cloud::NotConfirmed
+                    },
+                    if confirmed {
+                        Cause::None
+                    } else {
+                        Cause::CloudSaveFailed
+                    },
+                    u64::try_from(save_started.elapsed().as_millis())
+                        .unwrap_or(u64::MAX)
+                        .min(86_400_000),
                 );
                 eprintln!(
                     "{}",
@@ -1076,11 +1137,45 @@ mod windows {
                             ) {
                                 break;
                             }
+                            report::record_current(
+                                Stage::CloudSaveAttempt,
+                                Outcome::Started,
+                                Cloud::NotConfirmed,
+                                Cause::None,
+                                0,
+                            );
+                            let retry_started = std::time::Instant::now();
                             let attempt = operator.save_retained_successor_streaming(
                                 &materialization_root,
                                 save_transport.clone(),
                                 &mut generation_uploader,
                                 now()?,
+                            );
+                            let confirmed = attempt.as_ref().is_ok_and(|done| done.is_saved());
+                            report::record_current(
+                                if confirmed {
+                                    Stage::CloudSaveConfirmed
+                                } else {
+                                    Stage::CloudSaveAttempt
+                                },
+                                if confirmed {
+                                    Outcome::Succeeded
+                                } else {
+                                    Outcome::Unconfirmed
+                                },
+                                if confirmed {
+                                    Cloud::CommittedExact
+                                } else {
+                                    Cloud::NotConfirmed
+                                },
+                                if confirmed {
+                                    Cause::None
+                                } else {
+                                    Cause::CloudSaveFailed
+                                },
+                                u64::try_from(retry_started.elapsed().as_millis())
+                                    .unwrap_or(u64::MAX)
+                                    .min(86_400_000),
                             );
                             eprintln!(
                                 "{}",

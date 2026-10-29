@@ -1,6 +1,7 @@
 import { useQuery } from '@tanstack/react-query';
 import { StatusMessage } from '../../shared/ui/StatusMessage';
 import { getBindingProbe, getHealth } from './api';
+import { invokeProfileBridgeDiagnostics } from '../../shared/bridgeDiagnostics';
 
 export function SettingsWorkspace() {
   const health = useQuery({
@@ -21,6 +22,16 @@ export function SettingsWorkspace() {
           Only concrete repository-owned diagnostics are exposed here. Credentials, secret handles,
           provider tokens and raw environment values are deliberately absent.
         </p>
+      </section>
+      <section className="panel" aria-label="Windows Profile Bridge diagnostics">
+        <h3>Windows Profile Bridge</h3>
+        <p>
+          The installed Bridge can copy a small, locally retained report of recent operations.
+          The report contains only bounded status codes, stages and timings; it does not include
+          profile contents, visited pages, credentials or raw errors. Nothing is uploaded.
+          This button starts the installed Windows application; it cannot inspect another device.
+        </p>
+        <button type="button" onClick={invokeProfileBridgeDiagnostics}>Скопировать диагностику</button>
       </section>
       <section className="workspace-grid">
         <article className="panel">

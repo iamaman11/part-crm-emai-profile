@@ -636,6 +636,23 @@ impl DeliveryAssetFetcher for WindowsReleaseAssetFetcher {
             // Static categories only. Never print the URL, raw PowerShell error,
             // proxy configuration, local path or any profile content.
             emit_install_failure(asset_name, error.category());
+            // The canonical download owner knows the typed network failure.
+            // Persist a safe observation at the already-owned installation root.
+            if let Some(root) = destination
+                .parent()
+                .and_then(Path::parent)
+                .filter(|downloads| {
+                    downloads
+                        .file_name()
+                        .is_some_and(|name| name == "downloads")
+                })
+                .and_then(Path::parent)
+            {
+                crate::user_diagnostics::report::record_download_failure(
+                    root,
+                    error.diagnostic_cause(),
+                );
+            }
         }
         outcome
     }
@@ -854,6 +871,24 @@ pub enum WindowsReleaseAssetFetcherError {
 
 #[cfg(windows)]
 impl WindowsReleaseAssetFetcherError {
+    const fn diagnostic_cause(self) -> crate::user_diagnostics::report::Cause {
+        use crate::user_diagnostics::report::Cause;
+        match self {
+            Self::Dns => Cause::DownloadDns,
+            Self::Connect => Cause::DownloadConnect,
+            Self::Tls => Cause::DownloadTls,
+            Self::Http => Cause::DownloadHttp,
+            Self::Timeout => Cause::DownloadTimeout,
+            Self::Stalled => Cause::DownloadStalled,
+            Self::Size => Cause::DownloadSize,
+            Self::Disk | Self::ScratchIo => Cause::DownloadDisk,
+            Self::InsecureRedirect => Cause::DownloadRedirect,
+            Self::Process | Self::PlatformUnavailable | Self::InvalidRequest => {
+                Cause::DownloadProcess
+            }
+        }
+    }
+
     const fn category(self) -> &'static str {
         match self {
             Self::InvalidRequest => "INVALID_REQUEST",

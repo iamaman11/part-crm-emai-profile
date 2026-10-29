@@ -72,3 +72,28 @@ stray["webGl2:supportedExtensions"] = ["spoof"]
 refused(stray)
 
 print("Camouhost exact GPU capability contract: enabled / disabled / partial / mismatched PASS")
+
+
+# The diagnostic projection must not touch browser page content or change
+# runtime outcomes when visibility observations fail. Source uses only integers.
+import contextlib
+import io
+from types import SimpleNamespace
+
+assert module.accessibility_preferences("nt") == {"accessibility.force_disabled": 0}
+assert module.accessibility_preferences("posix") == {}
+
+
+class UnavailablePages:
+    @property
+    def pages(self):
+        raise RuntimeError("https://private.invalid/?token=do-not-log")
+
+
+capture = io.StringIO()
+with contextlib.redirect_stderr(capture):
+    module.report_live_page_count(SimpleNamespace(pages=[object(), object(), object()]))
+    module.report_live_page_count(SimpleNamespace(pages=[object()] * 513))
+    module.report_live_page_count(UnavailablePages())
+assert capture.getvalue() == "camouhost_pages count=3\n"
+assert "private.invalid" not in capture.getvalue()

@@ -724,6 +724,7 @@ def prove_failure_observation_contract() -> None:
                 "camouhost_stage phase=startup step=begin",
                 "camouhost_stage phase=startup step=ready",
                 "camouhost_stage phase=launch step=ready",
+                "camouhost_pages count=1",
             ]
             close.assert_called_once()
             continue
