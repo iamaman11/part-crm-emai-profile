@@ -630,6 +630,8 @@ mod windows {
             eprintln!("BRIDGE_DELIVERY_RUNTIME_FAILURE={error:?}");
             ShippingCompositionError::DeliveryRecoveryRequired
         })?;
+        let (release_sequence, runtime_id) = active_delivery.observed_release_identity();
+        report::record_runtime_identity(release_sequence, runtime_id);
         let pending_health = active_delivery.pending_health_confirmation();
         let runtime_root = active_delivery.runtime_root().to_path_buf();
         let runtime_bundles = active_delivery.into_bundle_selection();
