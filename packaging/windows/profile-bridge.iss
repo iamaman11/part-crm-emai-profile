@@ -82,6 +82,12 @@ en.DownloadCached=Using previously verified local archive.
 ru.DownloadCached=Используется ранее проверенный локальный архив.
 en.DownloadComplete=Archive verified. Preparing browser components.
 ru.DownloadComplete=Архив проверен. Подготовка компонентов браузера.
+en.AdmissionVerified=Signed release admission verified.
+ru.AdmissionVerified=Подпись и допуск релиза проверены.
+en.UnpackVerify=Unpacking components and verifying installed files.
+ru.UnpackVerify=Распаковка компонентов и проверка установленных файлов.
+en.StagedReady=Verified components staged for safe activation.
+ru.StagedReady=Проверенные компоненты подготовлены к безопасной активации.
 
 [Code]
 const
@@ -89,6 +95,7 @@ const
   DownloadProgressPrefix = 'PROFILE_BRIDGE_DOWNLOAD_PROGRESS_V1=';
   DownloadStagePrefix = 'PROFILE_BRIDGE_DOWNLOAD_STAGE_V1=';
   DownloadFailurePrefix = 'PROFILE_BRIDGE_DOWNLOAD_FAILURE_V1=';
+  InstallStagePrefix = 'PROFILE_BRIDGE_INSTALL_STAGE_V1=';
 var
   BridgeOutputError: Boolean;
   BridgeLastLine: String;
@@ -207,6 +214,18 @@ begin
   if Description <> '' then InstallerProgress.SetText(Asset, Description);
 end;
 
+procedure DisplayInstallStage(const Line: String);
+var
+  Description: String;
+begin
+  if Length(Line) > 40 then exit;
+  Description := '';
+  if Line = 'ADMISSION_VERIFIED' then Description := CustomMessage('AdmissionVerified')
+  else if Line = 'UNPACK_VERIFY' then Description := CustomMessage('UnpackVerify')
+  else if Line = 'STAGED' then Description := CustomMessage('StagedReady');
+  if Description <> '' then InstallerProgress.SetText(Description, '');
+end;
+
 procedure CaptureDownloadFailure(const Line: String);
 var
   Tail, Asset, Category: String;
@@ -256,6 +275,10 @@ begin
   end;
   if not Error and (Pos(DownloadStagePrefix, S) = 1) then begin
     DisplayDownloadStage(Copy(S, Length(DownloadStagePrefix) + 1, Length(S)));
+    exit;
+  end;
+  if not Error and (Pos(InstallStagePrefix, S) = 1) then begin
+    DisplayInstallStage(Copy(S, Length(InstallStagePrefix) + 1, Length(S)));
     exit;
   end;
   if not Error and (Pos(DownloadFailurePrefix, S) = 1) then begin
