@@ -273,6 +273,52 @@ fn runtime_identity(root: &Path) -> Option<String> {
     }
 }
 
+/// A diagnostic recommendation is text only, never an executable retry grant.
+fn next_safe_step(record: &Observation) -> &'static str {
+    match (record.stage, record.outcome, record.cloud) {
+        (Stage::LocalUnsynced, _, _) => "PRESERVE_LOCAL_WAIT_FOR_OWNED_RECOVERY",
+        (Stage::CloudSaveConfirmed, Outcome::Succeeded, Cloud::CommittedExact) => {
+            "NORMAL_NEXT_OPEN"
+        }
+        (Stage::CloudSaveAttempt, _, Cloud::NotConfirmed) => {
+            "CLOUD_NOT_CONFIRMED_PRESERVE_LOCAL"
+        }
+        (Stage::InstallPrepare | Stage::InstallVerified | Stage::InstallActivate, Outcome::Failed, _) => {
+            "RETRY_INSTALLER_AFTER_CHECK"
+        }
+        (Stage::BrowserPreflight | Stage::CamouhostLaunch, Outcome::Failed, _) => {
+            "RETRY_THROUGH_OWNED_OPEN"
+        }
+        (Stage::OpenRequested, Outcome::Failed, _) => "RECHECK_OWNED_RECOVERY",
+        _ => "NO_RECOMMENDATION",
+    }
+}
+
+fn local_confirmation(record: &Observation) -> &'static str {
+    match (record.stage, record.outcome, record.cloud) {
+        (Stage::LocalUnsynced, Outcome::Unconfirmed, Cloud::NotConfirmed) => {
+            "LOCAL_UNSYNCED_RETAINED"
+        }
+        (Stage::CloudSaveConfirmed, Outcome::Succeeded, Cloud::CommittedExact) => {
+            "EXACT_SAVED_BY_OWNER"
+        }
+        _ => "NOT_OBSERVED",
+    }
+}
+
+fn installed_sequence(root: &Path) -> Option<u64> {
+    #[cfg(windows)]
+    {
+        let store = crate::windows_delivery_store::DeliveryStateStore::open(root.join("state")).ok()?;
+        store.state().active().map(|identity| identity.sequence)
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = root;
+        None
+    }
+}
+
 /// Read-only, strictly reconstructed from admitted typed observations. No profile data is read.
 #[must_use]
 pub fn report_current() -> String {
@@ -285,11 +331,16 @@ pub fn report_current() -> String {
 #[must_use]
 pub fn report_at(root: &Path) -> String {
     let runtime = runtime_identity(root).unwrap_or_else(|| "NOT_OBSERVED".to_owned());
-    let mut report = format!("PROFILE_BRIDGE_DIAGNOSTICS_V1\nBRIDGE_VERSION={}\nRUNTIME_IDENTITY={}\nREPORT_AUTHORITY=LOCAL_OBSERVATIONS_ONLY\n", env!("CARGO_PKG_VERSION"), runtime);
+    let release_sequence = installed_sequence(root).map_or_else(|| "NOT_OBSERVED".to_owned(), |n| n.to_string());
+    let mut report = format!(
+        "PROFILE_BRIDGE_DIAGNOSTICS_V1\nBRIDGE_VERSION={}\nINSTALLED_RELEASE_SEQUENCE={}\nRUNTIME_IDENTITY={}\nREPORT_AUTHORITY=LOCAL_OBSERVATIONS_ONLY\n",
+        env!("CARGO_PKG_VERSION"), release_sequence, runtime,
+    );
     for record in observations(root) {
         let line = format!(
-            "TIME_MS={};OP={};STAGE={:?};OUTCOME={:?};CLOUD={:?};CAUSE={:?};DURATION_MS={}\n",
-            record.time_unix_ms, record.operation_id, record.stage, record.outcome, record.cloud, record.cause, record.duration_ms
+            "TIME_MS={};OP={};STAGE={:?};OUTCOME={:?};CLOUD={:?};CAUSE={:?};DURATION_MS={};LOCAL={};NEXT_SAFE_STEP={}\n",
+            record.time_unix_ms, record.operation_id, record.stage, record.outcome, record.cloud, record.cause, record.duration_ms,
+            local_confirmation(&record), next_safe_step(&record)
         );
         if report.len() + line.len() > MAX_REPORT_BYTES { break; }
         report.push_str(&line);
