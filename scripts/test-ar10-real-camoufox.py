@@ -186,18 +186,33 @@ def materialize(root: Path) -> dict[str, str]:
     return report
 
 
-def exchange(process: subprocess.Popen[str], frame: str) -> str:
+def exchange(process: subprocess.Popen[str], frame: str, seconds: int = 120) -> str:
     assert process.stdin is not None
     assert process.stdout is not None
+    response: queue.Queue[str] = queue.Queue(maxsize=1)
+
+    def read_one() -> None:
+        try:
+            response.put(process.stdout.readline().rstrip("\n"))
+        except (OSError, ValueError):
+            response.put("")
+
+    threading.Thread(target=read_one, daemon=True).start()
     process.stdin.write(frame + "\n")
     process.stdin.flush()
-    response = process.stdout.readline().rstrip("\n")
-    if not response:
-        stderr = ""
-        if process.stderr is not None:
-            stderr = process.stderr.read()[-2000:]
-        raise AssertionError(f"Camouhost produced no response for {frame!r}: {stderr}")
-    return response
+    try:
+        result = response.get(timeout=seconds)
+    except queue.Empty as error:
+        raise AssertionError(
+            f"Camouhost IPC {frame.partition('|')[0]} timed out after {seconds}s; "
+            f"process_alive={process.poll() is None}"
+        ) from error
+    if not result:
+        raise AssertionError(
+            f"Camouhost produced no response for {frame.partition('|')[0]}; "
+            f"process_alive={process.poll() is None}"
+        )
+    return result
 
 
 def observe_browser_visible_wire(process: subprocess.Popen[str]) -> None:
@@ -308,8 +323,11 @@ def run_cold_launch_observed(
                     process.wait(timeout=30)
                 except (OSError, subprocess.TimeoutExpired):
                     cleanup = "forced_kill_failed"
-        for pipe in (process.stdin, process.stdout):
-            if pipe is not None:
+        # An IPC timeout may leave a daemon reader blocked in readline() when
+        # Firefox inherited stdout. Closing that TextIOWrapper from this thread
+        # can itself hang; the failing test exits after its bounded teardown.
+        for pipe in (process.stdin,):
+            if pipe is not None and not pipe.closed:
                 try:
                     pipe.close()
                 except OSError:
@@ -367,30 +385,33 @@ def expect_prelaunch_identity_rejection(root: Path, report: dict[str, str]) -> N
 def expect_probe_digest_non_authoritative(root: Path, report: dict[str, str]) -> None:
     env = base_env(root, report)
     env["CAMOUHOST_EXPECTED_PROBE_SHA256"] = "0" * 64
-    process = subprocess.Popen(
-        [sys.executable, str(CAMOUHOST)],
-        cwd=ROOT,
-        env=env,
-        stdin=subprocess.PIPE,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        text=True,
-        bufsize=1,
-    )
-    try:
-        assert exchange(process, f"hello|{IPC_VERSION}") == f"hello_ack|{IPC_VERSION}"
-        assert exchange(process, f"launch|{SESSION}") == f"ready|{SESSION}"
-        complete_pre_navigation_protocol(process, None)
-        assert exchange(process, f"close|{SESSION}") == f"closed|{SESSION}|true"
-        if process.wait(timeout=60) != 0:
-            stderr = process.stderr.read()[-2000:] if process.stderr is not None else ""
-            raise AssertionError(
-                "aggregate probe evidence unexpectedly became an admission veto: " + stderr
-            )
-    finally:
-        if process.poll() is None:
-            process.kill()
-            process.wait(timeout=30)
+    with tempfile.TemporaryFile() as diagnostics:
+        process = subprocess.Popen(
+            [sys.executable, str(CAMOUHOST)],
+            cwd=ROOT,
+            env=env,
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            stderr=diagnostics,
+            text=True,
+            bufsize=1,
+        )
+        try:
+            assert exchange(process, f"hello|{IPC_VERSION}") == f"hello_ack|{IPC_VERSION}"
+            assert exchange(process, f"launch|{SESSION}") == f"ready|{SESSION}"
+            complete_pre_navigation_protocol(process, None)
+            assert exchange(process, f"close|{SESSION}") == f"closed|{SESSION}|true"
+            if process.wait(timeout=60) != 0:
+                diagnostics.seek(0, os.SEEK_END)
+                diagnostics.seek(max(0, diagnostics.tell() - 2000))
+                stderr = diagnostics.read().decode("utf-8", errors="replace")
+                raise AssertionError(
+                    "aggregate probe evidence unexpectedly became an admission veto: " + stderr
+                )
+        finally:
+            if process.poll() is None:
+                process.kill()
+                process.wait(timeout=30)
 
 
 def main() -> int:
