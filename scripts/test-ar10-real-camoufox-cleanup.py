@@ -350,6 +350,125 @@ def prove_session_restore_startup(
     assert_writer_quiescent(runtime, root, "Firefox session restore startup")
 
 
+
+def prove_preexisting_tabs_restored(
+    python: Path,
+    camouhost: Path,
+    runtime_lock: Path,
+    headless: str,
+    root: Path,
+) -> None:
+    """End-to-end native Firefox sessionstore -> Playwright tracked tabs, isolated profile.
+
+    Use the packaged browser Python on Windows, not the CI host Python. This proof
+    deliberately does not share or inspect any real customer Firefox files.
+    """
+    materialize(python, camouhost, runtime_lock, headless, root)
+
+    class Handler(BaseHTTPRequestHandler):
+        def do_GET(self) -> None:  # noqa: N802
+            page = b"<!doctype html><title>Disposable Firefox sessionstore proof</title>"
+            self.send_response(200)
+            self.send_header("Content-Type", "text/html; charset=utf-8")
+            self.send_header("Content-Length", str(len(page)))
+            self.end_headers()
+            self.wfile.write(page)
+
+        def log_message(self, _format: str, *_args: object) -> None:
+            pass
+
+    server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+    worker = threading.Thread(target=server.serve_forever, daemon=True)
+    worker.start()
+    proof = r"""
+import contextlib
+import importlib.util
+import json
+import os
+import sys
+from pathlib import Path
+from camoufox.sync_api import Camoufox
+
+camouhost, lockfile, root, origin = map(str, sys.argv[1:5])
+spec = importlib.util.spec_from_file_location("camouhost_restore_session_proof", camouhost)
+runtime = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(runtime)
+root = Path(root)
+lock = json.loads(Path(lockfile).read_text(encoding="utf-8"))
+config = json.loads((root / "camoufox-config.json").read_text(encoding="utf-8"))
+prefs = root / "user_data" / "user.js"
+with prefs.open("a", encoding="utf-8", newline="\n") as stream:
+    stream.write('\nuser_pref("browser.startup.page", 3);\n')
+urls = [origin + "/prior-first", origin + "/prior-second"]
+
+def enter():
+    manager = Camoufox(**runtime.camoufox_kwargs(lock, root, config))
+    with contextlib.redirect_stdout(sys.stderr):
+        context = manager.__enter__()
+    context.set_offline(True)
+    return manager, context
+
+manager, context = enter()
+try:
+    context.set_offline(False)
+    first = context.pages[0] if context.pages else context.new_page()
+    first.goto(urls[0], wait_until="domcontentloaded", timeout=15000)
+    first.evaluate("localStorage.setItem('restore-proof', 'retained')")
+    second = context.new_page()
+    second.goto(urls[1], wait_until="domcontentloaded", timeout=15000)
+    assert first.url == urls[0] and second.url == urls[1]
+finally:
+    runtime.close_context(manager, context, root)
+
+manager, context = enter()
+try:
+    # Observe native, previously existing pages rather than creating new ones.
+    # Do not admit network until the restored targets are inspectable.
+    present = {page.url: page for page in context.pages}
+    missing = set(urls) - set(present)
+    if missing:
+        raise AssertionError("previously open Firefox tabs absent from Playwright context")
+    retained = present[urls[0]].evaluate("localStorage.getItem('restore-proof')")
+    if retained != "retained":
+        raise AssertionError("restored tab lost persistent origin state")
+    witness = runtime.install_controlled_close_observation(context)
+    assert not runtime.controlled_close_candidate(witness)
+    present[urls[0]].close()
+    assert not runtime.controlled_close_candidate(witness), (
+        "closing one restored tab falsely acknowledged complete user close"
+    )
+    # The other previously restored tab remains live and managed.
+    assert not present[urls[1]].is_closed()
+finally:
+    runtime.close_context(manager, context, root)
+print("two previous Firefox tabs restored and tracked; partial close not complete", flush=True)
+"""
+    try:
+        env = runtime_env(runtime_lock, headless)
+        completed = subprocess.run(
+            [str(python), "-c", proof, str(camouhost), str(runtime_lock),
+             str(root), f"http://127.0.0.1:{server.server_port}"],
+            env=env,
+            text=True,
+            capture_output=True,
+            timeout=150,
+            check=False,
+        )
+        if completed.returncode != 0 or (
+            "two previous Firefox tabs restored and tracked" not in completed.stdout
+        ):
+            # stderr is bounded for the runner only, not production diagnostics.
+            raise AssertionError(
+                "real native Firefox tab restoration not proven: "
+                f"rc={completed.returncode} diagnostic_tail={completed.stderr[-2400:]!r}"
+            )
+        assert_writer_quiescent(load_runtime(camouhost), root, "restored tabs")
+    finally:
+        server.shutdown()
+        server.server_close()
+        worker.join(timeout=5)
+
+
 def prove_external_windows_gui_close(
     python: Path,
     camouhost: Path,
@@ -653,11 +772,14 @@ def main() -> int:
         prove_protocol_failure_cleanup(python, camouhost, env, runtime, root)
         prove_immediate_relaunch_after_cleanup(python, camouhost, env, runtime, root)
         prove_session_restore_startup(python, camouhost, env, runtime, root)
+        prove_preexisting_tabs_restored(
+            python, camouhost, runtime_lock, args.headless, Path(temporary) / "restore-tabs"
+        )
         if os.name == "nt" and args.headless == "false":
             prove_external_windows_gui_close(python, camouhost, env, runtime, root)
 
     print(
-        "AR-10 real Camoufox post-launch cleanup, Firefox session restore launch, immediate relaunch and GUI-close evidence passed."
+        "AR-10 real Camoufox post-launch cleanup, Firefox native prior-tabs restore and close, immediate relaunch and GUI-close evidence passed."
     )
     return 0
 
