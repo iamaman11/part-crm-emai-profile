@@ -546,6 +546,14 @@ impl ProfileCoordinatorState {
     }
 
     #[must_use]
+    /// An expired recovery intent remains exclusive until the same original
+    /// actor/device obtains a new Claim. The adapter checks historical Claim
+    /// provenance for every IssueLaunchIntent while this fence is set.
+    #[must_use]
+    pub const fn recovery_claim_pending(&self) -> bool {
+        self.recovery_claim_pending
+    }
+
     pub const fn pending_intent(&self) -> Option<&PendingLaunchIntent> {
         self.pending_intent.as_ref()
     }
@@ -691,10 +699,7 @@ impl ProfileCoordinatorState {
         if expires_at <= now {
             return Err(CoordinatorError::InvalidIntentExpiry);
         }
-        if self.active_lease.is_some()
-            || self.status != CoordinatorStatus::Idle
-            || self.recovery_claim_pending
-        {
+        if self.active_lease.is_some() || self.status != CoordinatorStatus::Idle {
             return Err(CoordinatorError::CoordinatorUnavailable);
         }
         if self
