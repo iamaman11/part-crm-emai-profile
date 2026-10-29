@@ -59,7 +59,20 @@ pub(super) fn copy_redacted_report(report: &str) -> bool {
     // GlobalAlloc is freed on every failure before ownership transfers to SetClipboardData.
     // No secret/raw user bytes can enter: the caller supplies a typed redacted report.
     unsafe {
-        if OpenClipboard(ptr::null_mut()) == 0 {
+        // OpenClipboard(NULL) followed by EmptyClipboard() leaves no clipboard
+        // owner, so SetClipboardData can fail. Own a private, never shown
+        // system-class window for this one synchronous copy operation.
+        let window_class: Vec<u16> = "STATIC".encode_utf16().chain([0]).collect();
+        let owner = CreateWindowExW(
+            0, window_class.as_ptr(), ptr::null(), 0,
+            0, 0, 0, 0, ptr::null_mut(), ptr::null_mut(),
+            ptr::null_mut(), ptr::null(),
+        );
+        if owner.is_null() {
+            return false;
+        }
+        if OpenClipboard(owner) == 0 {
+            let _ = DestroyWindow(owner);
             return false;
         }
         let success = if EmptyClipboard() == 0 {
@@ -91,6 +104,7 @@ pub(super) fn copy_redacted_report(report: &str) -> bool {
             }
         };
         let _ = CloseClipboard();
+        let _ = DestroyWindow(owner);
         success
     }
 }
@@ -109,6 +123,16 @@ pub(super) fn show_report_copied() {
 
 #[link(name = "user32")]
 unsafe extern "system" {
+    fn CreateWindowExW(
+        ex_style: u32,
+        class_name: *const u16,
+        window_name: *const u16,
+        style: u32,
+        x: i32, y: i32, width: i32, height: i32,
+        parent: *mut c_void, menu: *mut c_void,
+        instance: *mut c_void, parameter: *const c_void,
+    ) -> *mut c_void;
+    fn DestroyWindow(window: *mut c_void) -> i32;
     fn OpenClipboard(owner: *mut c_void) -> i32;
     fn EmptyClipboard() -> i32;
     fn CloseClipboard() -> i32;
