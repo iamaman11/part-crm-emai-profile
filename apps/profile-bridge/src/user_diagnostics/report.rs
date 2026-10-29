@@ -627,6 +627,7 @@ mod tests {
     -> Result<(), Box<dyn std::error::Error>> {
         let root = test_root()?;
         let directory = root.join(DIRECTORY);
+        fs::create_dir(&directory)?;
         // Even a plausible event file cannot smuggle arbitrary fields into a
         // typed diagnostic. Production never deserializes it into owner state.
         let malicious = serde_json::json!({
