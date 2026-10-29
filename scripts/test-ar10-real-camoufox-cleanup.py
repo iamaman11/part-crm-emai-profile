@@ -363,6 +363,7 @@ def prove_preexisting_tabs_restored(
     Use the packaged browser Python on Windows, not the CI host Python. This proof
     deliberately does not share or inspect any real customer Firefox files.
     """
+    print("native_restore_proof stage=materialize", flush=True)
     materialize(python, camouhost, runtime_lock, headless, root)
 
     class Handler(BaseHTTPRequestHandler):
@@ -445,6 +446,7 @@ print("two previous Firefox tabs restored and tracked; partial close not complet
 """
     try:
         env = runtime_env(runtime_lock, headless)
+        print("native_restore_proof stage=two_launches", flush=True)
         # Firefox grandchildren may inherit stdout/stderr after the Python child
         # exits. Capture to files, not pipes: communicate() would wait forever for
         # inherited pipe writers and obscure the actual restore failure.
@@ -473,6 +475,7 @@ print("two previous Firefox tabs restored and tracked; partial close not complet
                     f"rc={result} diagnostic_tail={tail!r}"
                 )
         assert_writer_quiescent(load_runtime(camouhost), root, "restored tabs")
+        print("native_restore_proof stage=passed", flush=True)
     finally:
         server.shutdown()
         server.server_close()
