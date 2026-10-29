@@ -1,6 +1,7 @@
 import { useQuery } from '@tanstack/react-query';
 import { StatusMessage } from '../../shared/ui/StatusMessage';
 import { getBindingProbe, getHealth } from './api';
+import { invokeProfileBridgeDiagnostics } from '../../shared/bridgeDiagnostics';
 
 export function SettingsWorkspace() {
   const health = useQuery({
@@ -30,7 +31,7 @@ export function SettingsWorkspace() {
           profile contents, visited pages, credentials or raw errors. Nothing is uploaded.
           This button starts the installed Windows application; it cannot inspect another device.
         </p>
-        <a href="profilebridge://diagnostics/copy">Скопировать диагностику</a>
+        <button type="button" onClick={invokeProfileBridgeDiagnostics}>Скопировать диагностику</button>
       </section>
       <section className="workspace-grid">
         <article className="panel">
