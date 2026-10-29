@@ -386,7 +386,9 @@ impl UserDiagnostic {
         use DevicePairingBootstrapError as Pairing;
         use ShippingCompositionError as Launch;
         match self {
-            Self::Installation(crate::windows_delivery_install::NativeInstallerError::ActivationGuard) => {
+            Self::Installation(
+                crate::windows_delivery_install::NativeInstallerError::ActivationGuard,
+            ) => {
                 "The browser profile is still in use, or Windows cannot confirm it is idle. Close Profile Bridge and Firefox, then retry the update from the application. The existing installation and unsaved profile data have not been reset. Do not delete lock files."
             }
             Self::Installation(_) => {
