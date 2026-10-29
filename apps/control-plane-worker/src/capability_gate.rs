@@ -381,6 +381,16 @@ mod tests {
             surface.map(RuntimeSurface::activation_unit),
             Some(ActivationUnit::ProfileRuntime)
         );
+        for suffix in [
+            "generation-successor/retry-decision",
+            "generation-successor/local-unsynced/retry-decision",
+        ] {
+            let path = format!("/bridge/v1/tenants/tenant_01/profiles/profile_01/{suffix}");
+            assert_eq!(
+                route_surface(RouteClass::ProfileCoordinatorApi, &path),
+                Some(RuntimeSurface::HttpProfileRuntimeLaunch)
+            );
+        }
         assert_eq!(
             route_surface(
                 RouteClass::ProfileCoordinatorApi,
