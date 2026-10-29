@@ -119,6 +119,16 @@
           },
           {
             "type": "object",
+            "required": ["type", "session_id", "epoch", "fencing_token"],
+            "properties": {
+              "type": {"type": "string", "const": "renew_lease"},
+              "session_id": {"type": "string"},
+              "epoch": {"type": "integer", "minimum": 0},
+              "fencing_token": {"type": "string"}
+            }
+          },
+          {
+            "type": "object",
             "required": ["type", "session_id", "epoch", "fencing_token", "disposition"],
             "properties": {
               "type": {"type": "string", "const": "release"},

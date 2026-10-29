@@ -483,6 +483,19 @@ fn stored_command(command: &CoordinatorCommand) -> StoredCoordinatorCommand {
             now_ms: now.value(),
             expires_at_ms: expires_at.value(),
         },
+        CoordinatorCommand::RecoverAndIssueLaunchIntent {
+            launch_intent_id,
+            actor_id,
+            device_id,
+            now,
+            expires_at,
+        } => StoredCoordinatorCommand::RecoverAndIssueLaunchIntent {
+            launch_intent_id: launch_intent_id.as_str().to_owned(),
+            actor_id: actor_id.as_str().to_owned(),
+            device_id: device_id.as_str().to_owned(),
+            now_ms: now.value(),
+            expires_at_ms: expires_at.value(),
+        },
         CoordinatorCommand::Claim {
             launch_intent_id,
             actor_id,
@@ -504,6 +517,17 @@ fn stored_command(command: &CoordinatorCommand) -> StoredCoordinatorCommand {
             fencing_token,
             now,
         } => StoredCoordinatorCommand::Heartbeat {
+            session_id: session_id.as_str().to_owned(),
+            epoch: *epoch,
+            fencing_token: fencing_token.as_str().to_owned(),
+            now_ms: now.value(),
+        },
+        CoordinatorCommand::RenewLease {
+            session_id,
+            epoch,
+            fencing_token,
+            now,
+        } => StoredCoordinatorCommand::RenewLease {
             session_id: session_id.as_str().to_owned(),
             epoch: *epoch,
             fencing_token: fencing_token.as_str().to_owned(),

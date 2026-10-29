@@ -101,6 +101,21 @@ impl PendingLaunchIntent {
     pub const fn expires_at(&self) -> UnixMillis {
         self.expires_at
     }
+
+    #[must_use]
+    pub const fn restored(
+        launch_intent_id: LaunchIntentId,
+        actor_id: ActorId,
+        device_id: DeviceId,
+        expires_at: UnixMillis,
+    ) -> Self {
+        Self {
+            launch_intent_id,
+            actor_id,
+            device_id,
+            expires_at,
+        }
+    }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -156,6 +171,37 @@ impl CoordinatorLease {
         self.hard_expires_at
     }
 
+    /// Parsed checkpoint data cannot manufacture a valid writer state.
+    #[allow(clippy::too_many_arguments)]
+    pub fn restored(
+        session_id: SessionId,
+        device_id: DeviceId,
+        epoch: u64,
+        fencing_token: FencingToken,
+        claimed_at: UnixMillis,
+        last_heartbeat_at: UnixMillis,
+        idle_expires_at: UnixMillis,
+        hard_expires_at: UnixMillis,
+    ) -> Result<Self, CoordinatorError> {
+        if epoch == 0
+            || last_heartbeat_at < claimed_at
+            || idle_expires_at < last_heartbeat_at
+            || hard_expires_at < idle_expires_at
+        {
+            return Err(CoordinatorError::InvalidCheckpoint);
+        }
+        Ok(Self {
+            session_id,
+            device_id,
+            epoch,
+            fencing_token,
+            claimed_at,
+            last_heartbeat_at,
+            idle_expires_at,
+            hard_expires_at,
+        })
+    }
+
     #[must_use]
     pub fn accepts_writer(
         &self,
@@ -178,6 +224,15 @@ pub enum CoordinatorCommand {
         now: UnixMillis,
         expires_at: UnixMillis,
     },
+    /// Atomic uncertain -> same-device launch after checked original
+    /// Claim provenance in the Durable Object adapter.
+    RecoverAndIssueLaunchIntent {
+        launch_intent_id: LaunchIntentId,
+        actor_id: ActorId,
+        device_id: DeviceId,
+        now: UnixMillis,
+        expires_at: UnixMillis,
+    },
     Claim {
         launch_intent_id: LaunchIntentId,
         actor_id: ActorId,
@@ -187,6 +242,15 @@ pub enum CoordinatorCommand {
         now: UnixMillis,
     },
     Heartbeat {
+        session_id: SessionId,
+        epoch: u64,
+        fencing_token: FencingToken,
+        now: UnixMillis,
+    },
+    /// Distinct journal command: unlike legacy Heartbeat, an authenticated
+    /// renewal advances the rolling hard deadline. Old events replay exactly
+    /// as written, without silently changing historical transition semantics.
+    RenewLease {
         session_id: SessionId,
         epoch: u64,
         fencing_token: FencingToken,
@@ -215,8 +279,10 @@ impl CoordinatorCommand {
     pub const fn observed_at(&self) -> UnixMillis {
         match self {
             Self::IssueLaunchIntent { now, .. }
+            | Self::RecoverAndIssueLaunchIntent { now, .. }
             | Self::Claim { now, .. }
             | Self::Heartbeat { now, .. }
+            | Self::RenewLease { now, .. }
             | Self::Release { now, .. }
             | Self::BeginDrain { now }
             | Self::Tick { now }
@@ -317,6 +383,23 @@ struct CommandReceipt {
     decision: CoordinatorDecision,
 }
 
+/// Durable replay anchor for bounded DO journals. It is owned by the
+/// original coordinator and never constitutes an independent lease authority.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct CoordinatorCheckpoint {
+    pub version: AggregateVersion,
+    pub sequence: u64,
+    pub observed_at: UnixMillis,
+    pub next_epoch: u64,
+    pub status: CoordinatorStatus,
+    pub pending_intent: Option<PendingLaunchIntent>,
+    /// Keep the Idle projection blocked until an exact original-device
+    /// recovery claim succeeds; intent expiry alone is never admission.
+    pub recovery_claim_pending: bool,
+    pub active_lease: Option<CoordinatorLease>,
+    pub drain_deadline: Option<UnixMillis>,
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ProfileCoordinatorState {
     tenant_id: TenantId,
@@ -328,6 +411,7 @@ pub struct ProfileCoordinatorState {
     next_epoch: u64,
     status: CoordinatorStatus,
     pending_intent: Option<PendingLaunchIntent>,
+    recovery_claim_pending: bool,
     active_lease: Option<CoordinatorLease>,
     drain_deadline: Option<UnixMillis>,
     receipts: Vec<CommandReceipt>,
@@ -350,10 +434,75 @@ impl ProfileCoordinatorState {
             next_epoch: 0,
             status: CoordinatorStatus::Idle,
             pending_intent: None,
+            recovery_claim_pending: false,
             active_lease: None,
             drain_deadline: None,
             receipts: Vec::new(),
         }
+    }
+
+    #[must_use]
+    pub fn checkpoint(&self) -> CoordinatorCheckpoint {
+        CoordinatorCheckpoint {
+            version: self.version,
+            sequence: self.last_sequence,
+            observed_at: self.last_observed_at,
+            next_epoch: self.next_epoch,
+            status: self.status,
+            pending_intent: self.pending_intent.clone(),
+            recovery_claim_pending: self.recovery_claim_pending,
+            active_lease: self.active_lease.clone(),
+            drain_deadline: self.drain_deadline,
+        }
+    }
+
+    /// Restore only a validated, canonical replay checkpoint. The trailing
+    /// bounded command journal repopulates recent idempotency receipts.
+    pub fn restore_checkpoint(
+        tenant_id: TenantId,
+        profile_id: ProfileId,
+        config: CoordinatorConfig,
+        snapshot: CoordinatorCheckpoint,
+    ) -> Result<Self, CoordinatorError> {
+        let expected_version = snapshot
+            .sequence
+            .checked_add(1)
+            .ok_or(CoordinatorError::InvalidCheckpoint)?;
+        let has_writer = snapshot.active_lease.is_some();
+        let active_status = matches!(
+            snapshot.status,
+            CoordinatorStatus::Active | CoordinatorStatus::Draining
+        );
+        if snapshot.version.value() != expected_version
+            || has_writer != active_status
+            || snapshot
+                .active_lease
+                .as_ref()
+                .is_some_and(|lease| lease.epoch() > snapshot.next_epoch)
+            || (snapshot.pending_intent.is_some()
+                && (snapshot.status != CoordinatorStatus::Idle || has_writer))
+            || (snapshot.recovery_claim_pending
+                && (snapshot.status != CoordinatorStatus::Idle || has_writer))
+            || (snapshot.drain_deadline.is_some()
+                != (snapshot.status == CoordinatorStatus::Draining))
+        {
+            return Err(CoordinatorError::InvalidCheckpoint);
+        }
+        Ok(Self {
+            tenant_id,
+            profile_id,
+            config,
+            version: snapshot.version,
+            last_sequence: snapshot.sequence,
+            last_observed_at: snapshot.observed_at,
+            next_epoch: snapshot.next_epoch,
+            status: snapshot.status,
+            pending_intent: snapshot.pending_intent,
+            recovery_claim_pending: snapshot.recovery_claim_pending,
+            active_lease: snapshot.active_lease,
+            drain_deadline: snapshot.drain_deadline,
+            receipts: Vec::new(),
+        })
     }
 
     #[must_use]
@@ -394,6 +543,14 @@ impl ProfileCoordinatorState {
     #[must_use]
     pub const fn status(&self) -> CoordinatorStatus {
         self.status
+    }
+
+    /// An expired recovery intent remains exclusive until the same original
+    /// actor/device obtains a new Claim. The adapter checks historical Claim
+    /// provenance for every IssueLaunchIntent while this fence is set.
+    #[must_use]
+    pub const fn recovery_claim_pending(&self) -> bool {
+        self.recovery_claim_pending
     }
 
     #[must_use]
@@ -478,6 +635,19 @@ impl ProfileCoordinatorState {
                 now,
                 expires_at,
             } => self.issue_launch_intent(launch_intent_id, actor_id, device_id, *now, *expires_at),
+            CoordinatorCommand::RecoverAndIssueLaunchIntent {
+                launch_intent_id,
+                actor_id,
+                device_id,
+                now,
+                expires_at,
+            } => self.recover_and_issue_launch_intent(
+                launch_intent_id,
+                actor_id,
+                device_id,
+                *now,
+                *expires_at,
+            ),
             CoordinatorCommand::Claim {
                 launch_intent_id,
                 actor_id,
@@ -498,7 +668,13 @@ impl ProfileCoordinatorState {
                 epoch,
                 fencing_token,
                 now,
-            } => self.heartbeat(session_id, *epoch, fencing_token, *now),
+            } => self.heartbeat(session_id, *epoch, fencing_token, *now, false),
+            CoordinatorCommand::RenewLease {
+                session_id,
+                epoch,
+                fencing_token,
+                now,
+            } => self.heartbeat(session_id, *epoch, fencing_token, *now, true),
             CoordinatorCommand::Release {
                 session_id,
                 epoch,
@@ -592,10 +768,48 @@ impl ProfileCoordinatorState {
         };
         self.next_epoch = epoch;
         self.status = CoordinatorStatus::Active;
+        self.recovery_claim_pending = false;
         self.pending_intent = None;
         self.active_lease = Some(lease.clone());
         self.drain_deadline = None;
         Ok(CoordinatorOutcome::LeaseClaimed { lease })
+    }
+
+    fn recover_and_issue_launch_intent(
+        &mut self,
+        launch_intent_id: &LaunchIntentId,
+        actor_id: &ActorId,
+        device_id: &DeviceId,
+        now: UnixMillis,
+        expires_at: UnixMillis,
+    ) -> Result<CoordinatorOutcome, CoordinatorError> {
+        if !(self.status == CoordinatorStatus::Uncertain
+            || (self.status == CoordinatorStatus::Idle && self.recovery_claim_pending))
+            || self.active_lease.is_some()
+            || self
+                .pending_intent
+                .as_ref()
+                .is_some_and(|intent| intent.expires_at > now)
+        {
+            return Err(CoordinatorError::CoordinatorUnavailable);
+        }
+        if expires_at <= now {
+            return Err(CoordinatorError::InvalidIntentExpiry);
+        }
+        // This single state transition is persisted atomically in the DO.
+        // The adapter proves historical Claim ownership before calling apply.
+        self.pending_intent = Some(PendingLaunchIntent {
+            launch_intent_id: launch_intent_id.clone(),
+            actor_id: actor_id.clone(),
+            device_id: device_id.clone(),
+            expires_at,
+        });
+        self.status = CoordinatorStatus::Idle;
+        self.recovery_claim_pending = true;
+        self.drain_deadline = None;
+        Ok(CoordinatorOutcome::LaunchIntentIssued {
+            launch_intent_id: launch_intent_id.clone(),
+        })
     }
 
     fn heartbeat(
@@ -604,6 +818,7 @@ impl ProfileCoordinatorState {
         epoch: u64,
         fencing_token: &FencingToken,
         now: UnixMillis,
+        renew_hard: bool,
     ) -> Result<CoordinatorOutcome, CoordinatorError> {
         if !matches!(
             self.status,
@@ -626,11 +841,20 @@ impl ProfileCoordinatorState {
         }
 
         let proposed_idle = add_millis(now, self.config.idle_timeout_ms)?;
+        // Old Heartbeat journal events have an immutable hard deadline.
+        // Only a NEW, exact-fenced RenewLease event advances it, allowing
+        // existing DO journals to replay deterministically after upgrades.
+        let proposed_hard = renew_hard
+            .then(|| add_millis(now, self.config.hard_timeout_ms))
+            .transpose()?;
         let lease = self
             .active_lease
             .as_mut()
             .ok_or(CoordinatorError::NoActiveLease)?;
         lease.last_heartbeat_at = now;
+        if let Some(hard) = proposed_hard {
+            lease.hard_expires_at = hard;
+        }
         lease.idle_expires_at = proposed_idle.min(lease.hard_expires_at);
         Ok(CoordinatorOutcome::HeartbeatAccepted {
             idle_expires_at: lease.idle_expires_at,
@@ -732,6 +956,7 @@ impl ProfileCoordinatorState {
             return Err(CoordinatorError::RecoveryNotRequired);
         }
         self.status = CoordinatorStatus::Idle;
+        self.recovery_claim_pending = false;
         self.pending_intent = None;
         self.drain_deadline = None;
         Ok(CoordinatorOutcome::Recovered)
@@ -757,6 +982,7 @@ fn add_millis(value: UnixMillis, delta: u64) -> Result<UnixMillis, CoordinatorEr
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum CoordinatorError {
     InvalidTimeoutConfig,
+    InvalidCheckpoint,
     InvalidSequence,
     SequenceOverflow,
     ExpectedVersionMismatch,
@@ -784,6 +1010,7 @@ impl fmt::Display for CoordinatorError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter.write_str(match self {
             Self::InvalidTimeoutConfig => "coordinator timeout configuration is invalid",
+            Self::InvalidCheckpoint => "coordinator replay checkpoint is invalid",
             Self::InvalidSequence => "coordinator command sequence must be positive",
             Self::SequenceOverflow => "coordinator command sequence overflow",
             Self::ExpectedVersionMismatch => "coordinator expected version mismatch",
@@ -1158,12 +1385,48 @@ mod tests {
     }
 
     #[test]
-    fn hard_ttl_caps_heartbeat_extension() -> Result<(), Box<dyn std::error::Error>> {
+    fn explicit_renewals_extend_hard_deadline_beyond_original_session_limit()
+    -> Result<(), Box<dyn std::error::Error>> {
         let mut state = coordinator_with_config(CoordinatorConfig::new(100, 100, 20)?)?;
         issue(&mut state, 1, 1, 10)?;
         claim(&mut state, 2, 2, 11, "fence_01JCOORDINATOR")?;
-        let heartbeat = state.apply(envelope(
-            "idem_heartbeat_01JCOORDINATOR",
+        // The original hard expiry was 111; a timely heartbeat moves it
+        // forward instead of closing a healthy browser after a fixed span.
+        for (sequence, at) in [(3, 105), (4, 195), (5, 285)] {
+            let heartbeat = state.apply(envelope(
+                &format!("idem_heartbeat_roll_{sequence}_01JCOORDINATOR"),
+                sequence,
+                sequence,
+                CoordinatorCommand::RenewLease {
+                    session_id: SessionId::parse("session_01JCOORDINATOR")?,
+                    epoch: 1,
+                    fencing_token: FencingToken::parse("fence_01JCOORDINATOR")?,
+                    now: UnixMillis::new(at),
+                },
+            )?)?;
+            assert_eq!(
+                heartbeat.outcome(),
+                &CoordinatorOutcome::HeartbeatAccepted {
+                    idle_expires_at: UnixMillis::new(at + 100)
+                }
+            );
+            assert_eq!(
+                state.active_lease().map(|lease| lease.hard_expires_at()),
+                Some(UnixMillis::new(at + 100))
+            );
+        }
+        assert_eq!(state.status(), CoordinatorStatus::Active);
+        Ok(())
+    }
+
+    #[test]
+    fn legacy_heartbeat_preserves_original_hard_deadline() -> Result<(), Box<dyn std::error::Error>>
+    {
+        let mut state = coordinator_with_config(CoordinatorConfig::new(100, 100, 20)?)?;
+        issue(&mut state, 1, 1, 10)?;
+        claim(&mut state, 2, 2, 11, "fence_01JCOORDINATOR")?;
+        let old = state.apply(envelope(
+            "idem_old_heartbeat_01JCOORDINATOR",
             3,
             3,
             CoordinatorCommand::Heartbeat {
@@ -1174,11 +1437,42 @@ mod tests {
             },
         )?)?;
         assert_eq!(
-            heartbeat.outcome(),
+            old.outcome(),
             &CoordinatorOutcome::HeartbeatAccepted {
                 idle_expires_at: UnixMillis::new(111)
             }
         );
+        assert_eq!(
+            state.active_lease().map(|lease| lease.hard_expires_at()),
+            Some(UnixMillis::new(111))
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn expired_heartbeat_never_renews_hard_deadline() -> Result<(), Box<dyn std::error::Error>> {
+        let mut state = coordinator_with_config(CoordinatorConfig::new(100, 100, 20)?)?;
+        issue(&mut state, 1, 1, 10)?;
+        claim(&mut state, 2, 2, 11, "fence_01JCOORDINATOR")?;
+        let late = state.apply(envelope(
+            "idem_heartbeat_too_late_01JCOORDINATOR",
+            3,
+            3,
+            CoordinatorCommand::Heartbeat {
+                session_id: SessionId::parse("session_01JCOORDINATOR")?,
+                epoch: 1,
+                fencing_token: FencingToken::parse("fence_01JCOORDINATOR")?,
+                now: UnixMillis::new(111),
+            },
+        )?)?;
+        assert_eq!(
+            late.outcome(),
+            &CoordinatorOutcome::TimedOut {
+                kind: TimeoutKind::Hard
+            }
+        );
+        assert_eq!(state.status(), CoordinatorStatus::Uncertain);
+        assert!(state.active_lease().is_none());
         Ok(())
     }
 }

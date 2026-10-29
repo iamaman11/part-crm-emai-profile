@@ -215,6 +215,7 @@ mod windows {
     };
     use crate::shipping_control_plane::{
         ControlPlaneCoordinator, ControlPlaneEnrollment, ControlPlaneLeaseTiming,
+        SharedControlPlaneCoordinator, ShippingControlPlaneError,
     };
     use crate::shipping_generation_successor_control::{
         RestartExactCommitObservation, RestartExactLocalCompletion,
@@ -228,17 +229,21 @@ mod windows {
     };
     use crate::windows_delivery_runtime::ActiveWindowsDeliveryRuntime;
     use crate::windows_device_application::{
-        WindowsDeviceApplication, WindowsDeviceApplicationBinding,
+        WindowsApplicationSessionHttp, WindowsDeviceApplication, WindowsDeviceApplicationBinding,
     };
     use crate::windows_generation_get::WindowsSignedGenerationObjectGet;
     use crate::windows_generation_put::WindowsSignedGenerationObjectPut;
     use crate::windows_native::WindowsDeviceIdentity;
+    use application_ports::ProfileCoordinatorRuntimePort;
     use bridge_domain::ClaimUri;
     use profile_platform_primitives::UnixMillis;
+    use session_domain::ProfileLease;
     use std::env;
     use std::fs;
     use std::os::windows::fs::MetadataExt;
     use std::path::PathBuf;
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::{Arc, mpsc};
     use std::thread;
     use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
@@ -253,6 +258,97 @@ mod windows {
     const HEARTBEAT_TRANSPORT_RETRY_MS: u64 = 1_000;
     const SAVE_RECONNECT_PAUSE_MS: u64 = 1_000;
     const SAVE_RECONNECT_AUTHORITY_RESERVE_MS: u64 = 5_000;
+    const SAVE_HEARTBEAT_PERIOD_MS: u64 = 5_000;
+
+    /// A scoped helper for the long, synchronous native-seal/R2-PUT path.
+    /// It shares the operator's actual cursor. There is no additional writer,
+    /// persisted state or independent sequence; dropping the scope joins the
+    /// heartbeat before the Bridge process exits.
+    struct RetainedSaveHeartbeat {
+        stop: mpsc::Sender<()>,
+        thread: Option<thread::JoinHandle<()>>,
+        healthy: Arc<AtomicBool>,
+    }
+
+    impl RetainedSaveHeartbeat {
+        fn start(
+            mut coordinator: SharedControlPlaneCoordinator<WindowsApplicationSessionHttp>,
+            lease: ProfileLease,
+        ) -> Self {
+            let (stop, receiver) = mpsc::channel();
+            let healthy = Arc::new(AtomicBool::new(true));
+            let observed = Arc::clone(&healthy);
+            let thread = thread::spawn(move || {
+                while matches!(
+                    receiver.recv_timeout(Duration::from_millis(SAVE_HEARTBEAT_PERIOD_MS)),
+                    Err(mpsc::RecvTimeoutError::Timeout)
+                ) {
+                    match (coordinator.runtime_timing(), now()) {
+                        (Ok(timing), Ok(observed_at))
+                            if safe_reconnect_writer_window(
+                                timing.idle_expires_at_ms(),
+                                timing.hard_expires_at_ms(),
+                                observed_at,
+                            ) => {}
+                        _ => {
+                            observed.store(false, Ordering::Release);
+                            return;
+                        }
+                    }
+                    // One exact-key retry on transport uncertainty only.
+                    // The shared coordinator retains the same command and
+                    // proves a replay against fresh DO state; no guessed
+                    // authority or second sequence is ever minted.
+                    let acknowledged = match coordinator.heartbeat_lease(&lease) {
+                        Ok(()) => true,
+                        Err(
+                            ShippingControlPlaneError::Transport
+                            | ShippingControlPlaneError::HttpServerUncertain,
+                        ) => {
+                            thread::sleep(Duration::from_millis(HEARTBEAT_TRANSPORT_RETRY_MS));
+                            matches!(
+                                (coordinator.runtime_timing(), now()),
+                                (Ok(timing), Ok(observed_at))
+                                    if safe_reconnect_writer_window(
+                                        timing.idle_expires_at_ms(),
+                                        timing.hard_expires_at_ms(),
+                                        observed_at,
+                                    )
+                            ) && coordinator.heartbeat_lease(&lease).is_ok()
+                        }
+                        Err(_) => false,
+                    };
+                    // Only confirmed authority permits the ongoing Save to
+                    // finish; the original native checkpoint always survives.
+                    if !acknowledged {
+                        observed.store(false, Ordering::Release);
+                        eprintln!(
+                            "P3_SAVE_HEARTBEAT=NOT_CONFIRMED;NEXT_SAFE_STEP=PRESERVE_LOCAL_BYTES"
+                        );
+                        return;
+                    }
+                }
+            });
+            Self {
+                stop,
+                thread: Some(thread),
+                healthy,
+            }
+        }
+
+        fn is_healthy(&self) -> bool {
+            self.healthy.load(Ordering::Acquire)
+        }
+    }
+
+    impl Drop for RetainedSaveHeartbeat {
+        fn drop(&mut self) {
+            let _ = self.stop.send(());
+            if let Some(task) = self.thread.take() {
+                let _ = task.join();
+            }
+        }
+    }
 
     struct ShippingConfig {
         device_application_binding_path: PathBuf,
@@ -555,7 +651,8 @@ mod windows {
             .map_err(|_| ShippingCompositionError::Configuration)?;
 
         let enrollment = ControlPlaneEnrollment::new(transport.clone());
-        let coordinator = ControlPlaneCoordinator::new(transport);
+        let coordinator =
+            SharedControlPlaneCoordinator::new(ControlPlaneCoordinator::new(transport));
         let materialization_root =
             MaterializationRoot::open_or_create(&config.materialization_root)
                 .map_err(|_| ShippingCompositionError::Configuration)?;
@@ -587,12 +684,21 @@ mod windows {
         let opened_at = now()?;
         let mut pending_health = pending_health;
         let mut started_health = None;
-        operator
+        let mut prelaunch_keepalive = None;
+        let opening = operator
             .open_authoritative_with_runtime_health_and_pending_recovery(
                 claim,
                 &materialization_root,
                 &mut generation_downloader,
                 opened_at,
+                (|current, lease| {
+                    // The same original cursor stays alive during exact
+                    // pending N+1 recovery, R2 download and Camoufox startup.
+                    prelaunch_keepalive = Some(RetainedSaveHeartbeat::start(
+                        current.clone(),
+                        lease.clone(),
+                    ));
+                },
                 || {
                     started_health = pending_health
                         .take()
@@ -601,13 +707,15 @@ mod windows {
                         })
                         .transpose()?;
                     Ok(())
-                },
+                }),
                 |live_coordinator, tenant, profile, selected_generation, fresh_lease| {
+                    // The pre-launch keepalive above already spans exact
+                    // recovery and any long R2 PUT. No duplicate thread.
                     // The existing operator already proved fresh CNG/ACL,
                     // tenant/Profile enrollment and exclusive coordinator
                     // writer claim. Only exact ACTIVE_EXACT may repair an
                     // unchanged N+1 binding; never PUT/commit with old fence.
-                    match complete_active_exact_after_restart(
+                    let recovered = match complete_active_exact_after_restart(
                         &materialization_root,
                         tenant,
                         profile,
@@ -744,10 +852,25 @@ mod windows {
                             );
                             PendingSaveRecovery::Blocked
                         }
-                    }
+                    };
+                    recovered
                 },
-            )
-            .map_err(ShippingCompositionError::Operator)?;
+            );
+        // Always finish the heartbeat thread before observing its final
+        // authority result. A slow or failed heartbeat cannot be ignored just
+        // because the browser opened successfully in the foreground.
+        let health = prelaunch_keepalive
+            .as_ref()
+            .map(|guard: &RetainedSaveHeartbeat| Arc::clone(&guard.healthy));
+        drop(prelaunch_keepalive);
+        opening.map_err(ShippingCompositionError::Operator)?;
+        if !health
+            .as_ref()
+            .is_some_and(|confirmed| confirmed.load(Ordering::Acquire))
+        {
+            let _ = operator.abort(now().unwrap_or(opened_at));
+            return Err(ShippingCompositionError::HeartbeatAuthorityUncertain);
+        }
 
         if let Some(confirmation) = started_health
             && confirmation.confirm_after_runtime_ready().is_err()
@@ -811,6 +934,16 @@ mod windows {
                 if heartbeat_retry_used {
                     return Err(ShippingCompositionError::HeartbeatAuthorityUncertain);
                 }
+                // Native sealing makes several full passes; the signed R2 PUT
+                // can block for up to 120 seconds. The browser event loop
+                // cannot heartbeat during either operation. This ONE scoped
+                // keepalive uses the same serialized coordinator cursor.
+                let retained = operator
+                    .retained_save_lease()
+                    .cloned()
+                    .ok_or(ShippingCompositionError::ActiveSessionMissing)?;
+                let save_heartbeat =
+                    RetainedSaveHeartbeat::start(operator.coordinator().clone(), retained);
                 let initial = operator.save_retained_successor_streaming(
                     &materialization_root,
                     save_transport.clone(),
@@ -822,6 +955,11 @@ mod windows {
                     ReadOnlyProfileDiagnosis::after_save(operator.diagnostic_facts(), &initial)
                         .redacted_record()
                 );
+                if !save_heartbeat.is_healthy()
+                    && !initial.as_ref().is_ok_and(|done| done.is_saved())
+                {
+                    return Err(ShippingCompositionError::HeartbeatAuthorityUncertain);
+                }
                 match initial {
                     Ok(completion) if completion.is_saved() => return Ok(()),
                     Ok(_) => return Err(ShippingCompositionError::CommittedRecoveryRequired),
@@ -850,6 +988,9 @@ mod windows {
                         // network effect below re-proves the same writer and
                         // exact D1 nonapplication before reusing N+1.
                         loop {
+                            if !save_heartbeat.is_healthy() {
+                                return Err(ShippingCompositionError::HeartbeatAuthorityUncertain);
+                            }
                             let timing = operator
                                 .coordinator()
                                 .runtime_timing()

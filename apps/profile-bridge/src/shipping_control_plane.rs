@@ -513,7 +513,7 @@ where
                 idempotency_key: next_idempotency_key()?.as_str().to_owned(),
                 sequence,
                 expected_version: cursor.version,
-                command: CoordinatorCommandDto::Heartbeat {
+                command: CoordinatorCommandDto::RenewLease {
                     session_id: cursor.session_id.as_str().to_owned(),
                     epoch: cursor.epoch,
                     fencing_token: cursor.fencing_token.as_str().to_owned(),
@@ -866,6 +866,206 @@ where
     }
 }
 
+/// Session-scoped synchronized access to the ONE coordinator cursor. The
+/// shipping close path may run a heartbeat while native encryption or R2 PUT
+/// blocks the foreground thread. All command sequence/idempotency updates,
+/// including release, still pass through this single coordinator instance.
+/// This is not a second lease, coordinator, or persisted recovery state.
+#[cfg(any(windows, test))]
+pub struct SharedControlPlaneCoordinator<T> {
+    inner: std::sync::Arc<std::sync::Mutex<ControlPlaneCoordinator<T>>>,
+}
+
+#[cfg(any(windows, test))]
+impl<T> Clone for SharedControlPlaneCoordinator<T> {
+    fn clone(&self) -> Self {
+        Self {
+            inner: std::sync::Arc::clone(&self.inner),
+        }
+    }
+}
+
+#[cfg(any(windows, test))]
+impl<T> SharedControlPlaneCoordinator<T> {
+    #[must_use]
+    pub fn new(inner: ControlPlaneCoordinator<T>) -> Self {
+        Self {
+            inner: std::sync::Arc::new(std::sync::Mutex::new(inner)),
+        }
+    }
+}
+
+#[cfg(any(windows, test))]
+impl<T: MachineHttpPort> SharedControlPlaneCoordinator<T> {
+    pub fn runtime_timing(&self) -> Result<ControlPlaneLeaseTiming, ShippingControlPlaneError> {
+        self.inner
+            .lock()
+            .map_err(|_| ShippingControlPlaneError::InvalidResponse)?
+            .runtime_timing()
+    }
+}
+
+#[cfg(any(windows, test))]
+impl<T: MachineHttpPort> ProfileCoordinatorPort for SharedControlPlaneCoordinator<T> {
+    type Error = ShippingControlPlaneError;
+
+    fn claim_launch_intent(
+        &mut self,
+        actor: &ActorContext,
+        profile_id: &ProfileId,
+        device_id: &DeviceId,
+        launch_intent_id: &LaunchIntentId,
+    ) -> Result<ProfileLease, Self::Error> {
+        self.inner
+            .lock()
+            .map_err(|_| Self::Error::InvalidResponse)?
+            .claim_launch_intent(actor, profile_id, device_id, launch_intent_id)
+    }
+
+    fn close_lease(&mut self, lease: &ProfileLease) -> Result<(), Self::Error> {
+        self.inner
+            .lock()
+            .map_err(|_| Self::Error::InvalidResponse)?
+            .close_lease(lease)
+    }
+
+    fn close_without_browser_use(&mut self, lease: &ProfileLease) -> Result<(), Self::Error> {
+        self.inner
+            .lock()
+            .map_err(|_| Self::Error::InvalidResponse)?
+            .close_without_browser_use(lease)
+    }
+
+    fn close_confirmed_save(&mut self, lease: &ProfileLease) -> Result<(), Self::Error> {
+        self.inner
+            .lock()
+            .map_err(|_| Self::Error::InvalidResponse)?
+            .close_confirmed_save(lease)
+    }
+
+    fn close_verified_historical_probe(&mut self, lease: &ProfileLease) -> Result<(), Self::Error> {
+        self.inner
+            .lock()
+            .map_err(|_| Self::Error::InvalidResponse)?
+            .close_verified_historical_probe(lease)
+    }
+}
+
+#[cfg(any(windows, test))]
+impl<T: MachineHttpPort> ProfileCoordinatorRuntimePort for SharedControlPlaneCoordinator<T> {
+    fn heartbeat_lease(&mut self, lease: &ProfileLease) -> Result<(), Self::Error> {
+        self.inner
+            .lock()
+            .map_err(|_| Self::Error::InvalidResponse)?
+            .heartbeat_lease(lease)
+    }
+
+    fn heartbeat_transport_uncertain(&self, error: &Self::Error) -> bool {
+        matches!(
+            error,
+            ShippingControlPlaneError::Transport | ShippingControlPlaneError::HttpServerUncertain
+        )
+    }
+}
+
+#[cfg(any(windows, test))]
+impl<T: MachineHttpPort> GenerationSealingMaterialPort for SharedControlPlaneCoordinator<T> {
+    type Error = ShippingControlPlaneError;
+
+    fn material_for(
+        &mut self,
+        tenant_id: &TenantId,
+        profile_id: &ProfileId,
+        base_generation_id: &GenerationId,
+        generation_id: &GenerationId,
+        plaintext_digest: [u8; 32],
+    ) -> Result<GenerationSealingMaterial, Self::Error> {
+        self.inner
+            .lock()
+            .map_err(|_| Self::Error::InvalidResponse)?
+            .material_for(
+                tenant_id,
+                profile_id,
+                base_generation_id,
+                generation_id,
+                plaintext_digest,
+            )
+    }
+}
+
+#[cfg(any(windows, test))]
+impl<T: MachineHttpPort> GenerationReopenControlPort for SharedControlPlaneCoordinator<T> {
+    type Error = ShippingControlPlaneError;
+
+    fn download_capability(
+        &mut self,
+        tenant_id: &TenantId,
+        profile_id: &ProfileId,
+    ) -> Result<GenerationDownloadCapability, Self::Error> {
+        self.inner
+            .lock()
+            .map_err(|_| Self::Error::InvalidResponse)?
+            .download_capability(tenant_id, profile_id)
+    }
+
+    fn opening_material(
+        &mut self,
+        tenant_id: &TenantId,
+        profile_id: &ProfileId,
+        metadata_prelude: &[u8],
+    ) -> Result<GenerationDek, Self::Error> {
+        self.inner
+            .lock()
+            .map_err(|_| Self::Error::InvalidResponse)?
+            .opening_material(tenant_id, profile_id, metadata_prelude)
+    }
+
+    fn verified_predecessor_capability(
+        &mut self,
+        tenant_id: &TenantId,
+        profile_id: &ProfileId,
+    ) -> Result<Option<GenerationDownloadCapability>, Self::Error> {
+        self.inner
+            .lock()
+            .map_err(|_| Self::Error::InvalidResponse)?
+            .verified_predecessor_capability(tenant_id, profile_id)
+    }
+
+    fn verified_predecessor_opening_material(
+        &mut self,
+        tenant_id: &TenantId,
+        profile_id: &ProfileId,
+        metadata_prelude: &[u8],
+    ) -> Result<Option<GenerationDek>, Self::Error> {
+        self.inner
+            .lock()
+            .map_err(|_| Self::Error::InvalidResponse)?
+            .verified_predecessor_opening_material(tenant_id, profile_id, metadata_prelude)
+    }
+
+    fn certify_verified_predecessor_working(
+        &mut self,
+        tenant_id: &TenantId,
+        profile_id: &ProfileId,
+        current: &GenerationId,
+        historical: &GenerationId,
+        opening_prelude: &[u8],
+        runtime_inventory_sha256: &str,
+    ) -> Result<bool, Self::Error> {
+        self.inner
+            .lock()
+            .map_err(|_| Self::Error::InvalidResponse)?
+            .certify_verified_predecessor_working(
+                tenant_id,
+                profile_id,
+                current,
+                historical,
+                opening_prelude,
+                runtime_inventory_sha256,
+            )
+    }
+}
+
 struct SecretDek([u8; 32]);
 
 impl Drop for SecretDek {
@@ -892,7 +1092,7 @@ fn decode_sealing_material_response(
 
 /// Only a bounded, recognized problem code matching this request is safe for installed
 /// diagnostic logs. Never emit an opaque server body, signed URL, or unvalidated text.
-fn safe_reopen_problem_code(
+pub(crate) fn safe_machine_problem_code(
     response: &MachineHttpResponse,
     request_correlation_id: &CorrelationId,
 ) -> Option<&'static str> {
@@ -939,7 +1139,7 @@ fn decode_reopen_download_capability_response(
 ) -> Result<BridgeGenerationDownloadCapabilityResponse, ShippingControlPlaneError> {
     if !(200..=299).contains(&response.status()) {
         let code =
-            safe_reopen_problem_code(&response, request_correlation_id).unwrap_or("unclassified");
+            safe_machine_problem_code(&response, request_correlation_id).unwrap_or("unclassified");
         // Safe witness for the operator's existing terminal stream only. The body (potential
         // secrets/URLs/untrusted text) is never logged, and still zeroized before returning.
         eprintln!(
@@ -1286,8 +1486,9 @@ mod tests {
     use super::{
         ControlPlaneCoordinator, ControlPlaneEnrollment, ControlPlaneLeaseTiming,
         CoordinatorCursor, MAX_SEALING_MATERIAL_RESPONSE_BYTES, MachineHttpMethod, MachineHttpPort,
-        MachineHttpResponse, ShippingControlPlaneError, lease_timing, safe_reopen_problem_code,
-        valid_signed_r2_get_url, validate_active_projection, validate_snapshot,
+        MachineHttpResponse, SharedControlPlaneCoordinator, ShippingControlPlaneError,
+        lease_timing, safe_machine_problem_code, valid_signed_r2_get_url,
+        validate_active_projection, validate_snapshot,
     };
     use crate::dirty_generation::GenerationSealingMaterialPort;
     use crate::generation_reopen::GenerationReopenControlPort;
@@ -1329,7 +1530,7 @@ mod tests {
         })?;
         let response = MachineHttpResponse::new(409, known.clone());
         assert_eq!(
-            safe_reopen_problem_code(&response, &request_id),
+            safe_machine_problem_code(&response, &request_id),
             Some("lease_conflict")
         );
         // The existing generation-reopen owner also emits a precise generation conflict.
@@ -1342,17 +1543,20 @@ mod tests {
                 correlation_id: request_id.as_str().to_owned(),
             })?;
         assert_eq!(
-            safe_reopen_problem_code(&MachineHttpResponse::new(409, not_verified), &request_id),
+            safe_machine_problem_code(&MachineHttpResponse::new(409, not_verified), &request_id),
             Some("generation_not_verified")
         );
         let wrong_status = MachineHttpResponse::new(403, known);
-        assert_eq!(safe_reopen_problem_code(&wrong_status, &request_id), None);
+        assert_eq!(safe_machine_problem_code(&wrong_status, &request_id), None);
         let foreign = CorrelationId::parse("corr_other_reopen_refusal_01")?;
-        assert_eq!(safe_reopen_problem_code(&response, &foreign), None);
+        assert_eq!(safe_machine_problem_code(&response, &foreign), None);
         let secret_body = MachineHttpResponse::new(409, b"SECRET=presigned-url".to_vec());
-        assert_eq!(safe_reopen_problem_code(&secret_body, &request_id), None);
+        assert_eq!(safe_machine_problem_code(&secret_body, &request_id), None);
         let oversized_body = MachineHttpResponse::new(409, vec![b'X'; 2049]);
-        assert_eq!(safe_reopen_problem_code(&oversized_body, &request_id), None);
+        assert_eq!(
+            safe_machine_problem_code(&oversized_body, &request_id),
+            None
+        );
         Ok(())
     }
 
@@ -1402,6 +1606,108 @@ mod tests {
             ));
             self.responses.pop_front().ok_or(())
         }
+    }
+
+    #[test]
+    fn concurrent_scoped_renewals_serialize_on_one_cursor() -> Result<(), Box<dyn std::error::Error>>
+    {
+        let tenant = TenantId::parse("tenant_shared_heartbeat_01")?;
+        let profile = ProfileId::parse("profile_shared_heartbeat_01")?;
+        let device = DeviceId::parse("device_shared_heartbeat_01")?;
+        let session = SessionId::parse("session_shared_heartbeat_01")?;
+        let fence = FencingToken::parse("fence_shared_heartbeat_01")?;
+        let lease = ProfileLease::issue(
+            tenant.clone(),
+            profile.clone(),
+            session.clone(),
+            device.clone(),
+            7,
+            fence.clone(),
+        )?;
+        let accepted = |sequence: u64| -> Result<_, serde_json::Error> {
+            let response = CoordinatorResponseDto {
+                outcome: CoordinatorOutcomeDto::HeartbeatAccepted,
+                version: sequence + 1,
+                sequence,
+                replayed: false,
+                fencing_token: Some(fence.as_str().to_owned()),
+                epoch: Some(7),
+                projection: CoordinatorProjectionDto {
+                    tenant_id: tenant.as_str().to_owned(),
+                    profile_id: profile.as_str().to_owned(),
+                    status: CoordinatorStatusDto::Active,
+                    version: sequence + 1,
+                    sequence,
+                    next_epoch: 8,
+                    active_session_id: Some(session.as_str().to_owned()),
+                    active_device_id: Some(device.as_str().to_owned()),
+                    active_epoch: Some(7),
+                    idle_expires_at_ms: Some(60_000 + sequence),
+                    hard_expires_at_ms: Some(900_000 + sequence),
+                    drain_deadline_ms: None,
+                    pending_launch_intent_id: None,
+                    pending_intent_expires_at_ms: None,
+                },
+            };
+            Ok(MachineHttpResponse::new(
+                200,
+                serde_json::to_vec(&response)?,
+            ))
+        };
+        let shared = SharedControlPlaneCoordinator::new(ControlPlaneCoordinator {
+            transport: SealingMachineHttp {
+                responses: VecDeque::from([accepted(14)?, accepted(15)?]),
+                requests: Vec::new(),
+            },
+            cursor: Some(CoordinatorCursor {
+                tenant_id: tenant,
+                profile_id: profile,
+                device_id: device,
+                session_id: session,
+                epoch: 7,
+                fencing_token: fence,
+                version: 14,
+                sequence: 13,
+                timing: ControlPlaneLeaseTiming {
+                    idle_expires_at_ms: 30_000,
+                    hard_expires_at_ms: 900_000,
+                },
+                pending_heartbeat: None,
+            }),
+        });
+        let mut first = shared.clone();
+        let mut second = shared.clone();
+        std::thread::scope(|scope| {
+            let a = scope.spawn(|| first.heartbeat_lease(&lease));
+            let b = scope.spawn(|| second.heartbeat_lease(&lease));
+            assert!(matches!(a.join(), Ok(Ok(()))));
+            assert!(matches!(b.join(), Ok(Ok(()))));
+        });
+        let locked = shared
+            .inner
+            .lock()
+            .map_err(|_| "coordinator lock poisoned")?;
+        assert_eq!(locked.transport.requests.len(), 2);
+        let requests: Vec<CoordinatorCommandRequestDto> = locked
+            .transport
+            .requests
+            .iter()
+            .map(|(_, _, body)| serde_json::from_slice(body))
+            .collect::<Result<_, _>>()?;
+        assert_eq!(requests[0].sequence, 14);
+        assert_eq!(requests[1].sequence, 15);
+        assert_ne!(requests[0].idempotency_key, requests[1].idempotency_key);
+        assert!(matches!(
+            requests[0].command,
+            CoordinatorCommandDto::RenewLease { .. }
+        ));
+        assert!(matches!(
+            requests[1].command,
+            CoordinatorCommandDto::RenewLease { .. }
+        ));
+        drop(locked);
+        assert_eq!(shared.runtime_timing()?.hard_expires_at_ms(), 900_015);
+        Ok(())
     }
 
     #[derive(Default)]
@@ -1543,7 +1849,7 @@ mod tests {
             assert_eq!(actual.sequence, 14);
             assert!(matches!(
                 actual.command,
-                CoordinatorCommandDto::Heartbeat { .. }
+                CoordinatorCommandDto::RenewLease { .. }
             ));
             assert!(
                 coordinator
@@ -1644,7 +1950,7 @@ mod tests {
                 // There is no authority refresh or second idempotency key here.
                 assert!(matches!(
                     command.command,
-                    CoordinatorCommandDto::Heartbeat { .. }
+                    CoordinatorCommandDto::RenewLease { .. }
                 ));
             }
         }

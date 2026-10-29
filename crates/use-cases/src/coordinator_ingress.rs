@@ -90,12 +90,22 @@ pub enum CoordinatorCommandInput {
         device_id: DeviceId,
         expires_in_ms: u64,
     },
+    RecoverAndIssueLaunchIntent {
+        launch_intent_id: LaunchIntentId,
+        device_id: DeviceId,
+        expires_in_ms: u64,
+    },
     Claim {
         launch_intent_id: LaunchIntentId,
         device_id: DeviceId,
         session_id: SessionId,
     },
     Heartbeat {
+        session_id: SessionId,
+        epoch: u64,
+        fencing_token: FencingToken,
+    },
+    RenewLease {
         session_id: SessionId,
         epoch: u64,
         fencing_token: FencingToken,
@@ -218,6 +228,27 @@ fn build_envelope<P: CoordinatorIngressApplicationPort, C: CoordinatorIngressClo
                 expires_at,
             }
         }
+        CoordinatorCommandInput::RecoverAndIssueLaunchIntent {
+            launch_intent_id,
+            device_id,
+            expires_in_ms,
+        } => {
+            if !(MIN_INTENT_TTL_MS..=MAX_INTENT_TTL_MS).contains(&expires_in_ms) {
+                return Err(CoordinatorIngressOperationError::InvalidRequest);
+            }
+            let expires_at = now
+                .value()
+                .checked_add(expires_in_ms)
+                .map(UnixMillis::new)
+                .ok_or(CoordinatorIngressOperationError::InvalidRequest)?;
+            CoordinatorCommand::RecoverAndIssueLaunchIntent {
+                launch_intent_id,
+                actor_id: actor.actor_id().clone(),
+                device_id,
+                now,
+                expires_at,
+            }
+        }
         CoordinatorCommandInput::Claim {
             launch_intent_id,
             device_id,
@@ -235,6 +266,16 @@ fn build_envelope<P: CoordinatorIngressApplicationPort, C: CoordinatorIngressClo
             epoch,
             fencing_token,
         } => CoordinatorCommand::Heartbeat {
+            session_id,
+            epoch,
+            fencing_token,
+            now,
+        },
+        CoordinatorCommandInput::RenewLease {
+            session_id,
+            epoch,
+            fencing_token,
+        } => CoordinatorCommand::RenewLease {
             session_id,
             epoch,
             fencing_token,

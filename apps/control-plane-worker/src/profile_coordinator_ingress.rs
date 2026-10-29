@@ -236,9 +236,9 @@ fn bridge_command_policy(
             device_id: claimed_device,
             ..
         } if claimed_device == device_id.as_str() => Ok(BridgeCommandPolicy::Claim),
-        CoordinatorCommandDto::Heartbeat { .. } | CoordinatorCommandDto::Release { .. } => {
-            Ok(BridgeCommandPolicy::ActiveSession)
-        }
+        CoordinatorCommandDto::Heartbeat { .. }
+        | CoordinatorCommandDto::RenewLease { .. }
+        | CoordinatorCommandDto::Release { .. } => Ok(BridgeCommandPolicy::ActiveSession),
         CoordinatorCommandDto::IssueLaunchIntent { .. }
         | CoordinatorCommandDto::Claim { .. }
         | CoordinatorCommandDto::BeginDrain
@@ -322,6 +322,15 @@ fn command_into_application(value: CoordinatorCommandDto) -> Result<CoordinatorC
             epoch,
             fencing_token,
         } => CoordinatorCommandInput::Heartbeat {
+            session_id: SessionId::parse(session_id).map_err(|_| ())?,
+            epoch,
+            fencing_token: FencingToken::parse(fencing_token).map_err(|_| ())?,
+        },
+        CoordinatorCommandDto::RenewLease {
+            session_id,
+            epoch,
+            fencing_token,
+        } => CoordinatorCommandInput::RenewLease {
             session_id: SessionId::parse(session_id).map_err(|_| ())?,
             epoch,
             fencing_token: FencingToken::parse(fencing_token).map_err(|_| ())?,

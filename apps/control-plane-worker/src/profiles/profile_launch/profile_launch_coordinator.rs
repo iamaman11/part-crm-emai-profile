@@ -8,6 +8,7 @@ use identity_access_domain::MembershipRole;
 use profile_platform_primitives::{
     ActorContext, DeviceId, IdempotencyKey, LaunchIntentId, ProfileId,
 };
+use session_domain::coordinator::CoordinatorStatus;
 use sha2::{Digest, Sha256};
 use use_cases::coordinator_ingress::{
     CoordinatorCommandInput, CoordinatorIngressOperationError, CoordinatorIngressRequest,
@@ -67,12 +68,33 @@ pub(super) async fn ensure_bridge_launch_intent(
         let still_live = projection
             .pending_intent_expires_at()
             .is_some_and(|expires_at| expires_at > clock.now());
-        if existing == &launch_intent_id && still_live {
-            return Ok(launch_intent_id);
+        if still_live {
+            if existing == &launch_intent_id {
+                return Ok(launch_intent_id);
+            }
+            return Err(ApplicationError::new(ProblemCode::LeaseConflict));
         }
-        return Err(ApplicationError::new(ProblemCode::LeaseConflict));
+        // A timed-out recovery intent must not strand the original device.
+        // The DO's same-actor/device guard still controls a renewed attempt.
     }
 
+    // A CNG-authenticated redemption may atomically recover the same
+    // original actor/device only. Historical Claim provenance is checked by
+    // the Durable Object before it persists the one recovery + launch event.
+    // No separate MarkRecovered window can admit a foreign stale-N claim.
+    let command_input = match projection.status() {
+        CoordinatorStatus::Idle => CoordinatorCommandInput::IssueLaunchIntent {
+            launch_intent_id: launch_intent_id.clone(),
+            device_id: device_id.clone(),
+            expires_in_ms: BRIDGE_LAUNCH_INTENT_TTL_MS,
+        },
+        CoordinatorStatus::Uncertain => CoordinatorCommandInput::RecoverAndIssueLaunchIntent {
+            launch_intent_id: launch_intent_id.clone(),
+            device_id: device_id.clone(),
+            expires_in_ms: BRIDGE_LAUNCH_INTENT_TTL_MS,
+        },
+        _ => return Err(ApplicationError::new(ProblemCode::LeaseConflict)),
+    };
     let sequence = snapshot
         .sequence()
         .checked_add(1)
@@ -81,11 +103,7 @@ pub(super) async fn ensure_bridge_launch_intent(
         idempotency_key,
         sequence,
         snapshot.version(),
-        CoordinatorCommandInput::IssueLaunchIntent {
-            launch_intent_id: launch_intent_id.clone(),
-            device_id: device_id.clone(),
-            expires_in_ms: BRIDGE_LAUNCH_INTENT_TTL_MS,
-        },
+        command_input,
     );
     let issued = execute_prepared_coordinator_ingress(
         actor,

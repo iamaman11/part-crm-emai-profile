@@ -198,7 +198,7 @@ fn command_response(
                 projection: active_projection(2, 1, session_id, 30_000),
             })
         }
-        CoordinatorCommandDto::Heartbeat {
+        CoordinatorCommandDto::RenewLease {
             session_id,
             epoch,
             fencing_token,

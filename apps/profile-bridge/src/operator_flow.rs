@@ -692,18 +692,21 @@ where
             claim,
             root,
             now,
-            |coordinator, tenant_id, profile_id, generation_id, device_id, epoch| {
-                ensure_authoritative_generation(
-                    root,
-                    tenant_id,
-                    profile_id,
-                    generation_id,
-                    device_id,
-                    epoch,
-                    coordinator,
-                    downloader,
-                )
-            },
+            (
+                |_coordinator, _lease| {},
+                |coordinator, tenant_id, profile_id, generation_id, device_id, epoch| {
+                    ensure_authoritative_generation(
+                        root,
+                        tenant_id,
+                        profile_id,
+                        generation_id,
+                        device_id,
+                        epoch,
+                        coordinator,
+                        downloader,
+                    )
+                },
+            ),
             before_runtime_start,
             |_coordinator, _tenant, _profile, _selected, _lease| PendingSaveRecovery::Blocked,
         )
@@ -714,8 +717,10 @@ where
     /// callback may first-seal the original N+1 or finish an exact checkpoint;
     /// only a completed ACTIVE_EXACT binding may allow an ordinary Open.
     /// The unresolved-checkpoint guard remains authoritative.
+    /// One existing Open owner; callbacks share one lifetime and one lease.
     pub fn open_authoritative_with_runtime_health_and_pending_recovery<
         Dl,
+        OnClaim,
         BeforeRuntime,
         ObservePending,
     >(
@@ -724,7 +729,7 @@ where
         root: &MaterializationRoot,
         downloader: &mut Dl,
         now: UnixMillis,
-        before_runtime_start: BeforeRuntime,
+        callbacks: (OnClaim, BeforeRuntime),
         observe_pending: ObservePending,
     ) -> Result<(), OperatorFlowError>
     where
@@ -732,6 +737,7 @@ where
         <C as GenerationReopenControlPort>::Error: Into<GenerationReopenControlError>,
         Dl: GenerationObjectDownloadPort,
         Dl::Error: Into<GenerationObjectDownloadError>,
+        OnClaim: FnMut(&mut C, &ProfileLease),
         BeforeRuntime: FnMut() -> Result<(), ()>,
         ObservePending: FnMut(
             &mut C,
@@ -741,22 +747,26 @@ where
             &ProfileLease,
         ) -> PendingSaveRecovery,
     {
+        let (on_claim, before_runtime_start) = callbacks;
         self.open_with_materialization(
             claim,
             root,
             now,
-            |coordinator, tenant_id, profile_id, generation_id, device_id, epoch| {
-                ensure_authoritative_generation(
-                    root,
-                    tenant_id,
-                    profile_id,
-                    generation_id,
-                    device_id,
-                    epoch,
-                    coordinator,
-                    downloader,
-                )
-            },
+            (
+                on_claim,
+                |coordinator, tenant_id, profile_id, generation_id, device_id, epoch| {
+                    ensure_authoritative_generation(
+                        root,
+                        tenant_id,
+                        profile_id,
+                        generation_id,
+                        device_id,
+                        epoch,
+                        coordinator,
+                        downloader,
+                    )
+                },
+            ),
             before_runtime_start,
             observe_pending,
         )
@@ -894,18 +904,22 @@ where
             claim,
             root,
             now,
-            |_coordinator, _tenant_id, _profile_id, _generation_id, _device_id, _epoch| Ok(()),
+            (
+                |_coordinator, _lease| {},
+                |_coordinator, _tenant_id, _profile_id, _generation_id, _device_id, _epoch| Ok(()),
+            ),
             || Ok(()),
             |_coordinator, _tenant, _profile, _selected, _lease| PendingSaveRecovery::Blocked,
         )
     }
 
-    fn open_with_materialization<F, BeforeRuntime, ObservePending>(
+    // One pre-browser state machine owns materialization and both safety hooks.
+    fn open_with_materialization<OnClaim, F, BeforeRuntime, ObservePending>(
         &mut self,
         claim: &ClaimUri,
         root: &MaterializationRoot,
         now: UnixMillis,
-        mut ensure_materialized: F,
+        (mut on_claim, mut ensure_materialized): (OnClaim, F),
         mut before_runtime_start: BeforeRuntime,
         mut observe_pending: ObservePending,
     ) -> Result<(), OperatorFlowError>
@@ -918,6 +932,7 @@ where
             &DeviceId,
             u64,
         ) -> Result<(), AuthoritativeGenerationMaterializationError>,
+        OnClaim: FnMut(&mut C, &ProfileLease),
         BeforeRuntime: FnMut() -> Result<(), ()>,
         ObservePending: FnMut(
             &mut C,
@@ -972,6 +987,11 @@ where
         {
             return Err(self.fail_before_local_use(OperatorFailureStage::LeaseValidation, lease));
         }
+
+        // One session-scoped keepalive also spans blocking local/cloud Open
+        // materialization and real Camoufox startup, not only a pending Save.
+        // It shares this exact verified cursor and is owned by composition.
+        on_claim(&mut self.coordinator, &lease);
 
         // Any surviving exact save or interrupted checkpoint stage is unresolved
         // recovery evidence. Even if the old cloud pointer is still accessible,
@@ -2720,13 +2740,16 @@ mod tests {
             &fixture.claim_uri,
             &fixture.root,
             UnixMillis::new(10),
-            |_coordinator, _tenant, _profile, _generation, _device, _epoch| {
-                Err(
-                    AuthoritativeGenerationMaterializationError::ControlPlaneBeforeLocalUse(
-                        GenerationReopenControlError::Transport,
-                    ),
-                )
-            },
+            (
+                |_coordinator, _lease| {},
+                |_coordinator, _tenant, _profile, _generation, _device, _epoch| {
+                    Err(
+                        AuthoritativeGenerationMaterializationError::ControlPlaneBeforeLocalUse(
+                            GenerationReopenControlError::Transport,
+                        ),
+                    )
+                },
+            ),
             || {
                 runtime_health_started = true;
                 Ok(())
@@ -2760,21 +2783,24 @@ mod tests {
                 &fixture.claim_uri,
                 root,
                 UnixMillis::new(10),
-                |_coordinator, tenant, profile, generation, _device, _epoch| {
-                    if create_during_attempt {
-                        assert!(
-                            root.create_generation(tenant, profile, generation).is_ok(),
-                            "simulated concurrent writer changes workspace"
-                        );
-                    }
-                    Err(
-                        AuthoritativeGenerationMaterializationError::ReadBeforeLocalUse(
-                            AuthoritativeGenerationPreWriteError::Download(
-                                GenerationObjectDownloadError::Transport,
+                (
+                    |_coordinator, _lease| {},
+                    |_coordinator, tenant, profile, generation, _device, _epoch| {
+                        if create_during_attempt {
+                            assert!(
+                                root.create_generation(tenant, profile, generation).is_ok(),
+                                "simulated concurrent writer changes workspace"
+                            );
+                        }
+                        Err(
+                            AuthoritativeGenerationMaterializationError::ReadBeforeLocalUse(
+                                AuthoritativeGenerationPreWriteError::Download(
+                                    GenerationObjectDownloadError::Transport,
+                                ),
                             ),
-                        ),
-                    )
-                },
+                        )
+                    },
+                ),
                 || {
                     runtime_health_started = true;
                     Ok(())
@@ -2811,16 +2837,19 @@ mod tests {
                 &fixture.claim_uri,
                 root,
                 UnixMillis::new(10),
-                |_coordinator, tenant, profile, generation, _device, _epoch| {
-                    if create_during_attempt {
-                        assert!(root.create_generation(tenant, profile, generation).is_ok());
-                    }
-                    Err(
-                        AuthoritativeGenerationMaterializationError::ControlPlaneBeforeLocalUse(
-                            GenerationReopenControlError::HttpStatus,
-                        ),
-                    )
-                },
+                (
+                    |_coordinator, _lease| {},
+                    |_coordinator, tenant, profile, generation, _device, _epoch| {
+                        if create_during_attempt {
+                            assert!(root.create_generation(tenant, profile, generation).is_ok());
+                        }
+                        Err(
+                            AuthoritativeGenerationMaterializationError::ControlPlaneBeforeLocalUse(
+                                GenerationReopenControlError::HttpStatus,
+                            ),
+                        )
+                    },
+                ),
                 || Ok(()),
                 |_coordinator, _tenant, _profile, _selected, _lease| PendingSaveRecovery::Blocked,
             );
@@ -2845,11 +2874,14 @@ mod tests {
             &fixture.claim_uri,
             &fixture.root,
             UnixMillis::new(10),
-            |_coordinator, _tenant, _profile, _generation, _device, _epoch| {
-                Err(AuthoritativeGenerationMaterializationError::ControlPlane(
-                    GenerationReopenControlError::InvalidResponse,
-                ))
-            },
+            (
+                |_coordinator, _lease| {},
+                |_coordinator, _tenant, _profile, _generation, _device, _epoch| {
+                    Err(AuthoritativeGenerationMaterializationError::ControlPlane(
+                        GenerationReopenControlError::InvalidResponse,
+                    ))
+                },
+            ),
             || Ok(()),
             |_coordinator, _tenant, _profile, _selected, _lease| PendingSaveRecovery::Blocked,
         );
@@ -3270,6 +3302,7 @@ mod tests {
 
         let mut owner = operator(&fixture, FakeCamouhost::default())?;
         let observed = Cell::new(0_u32);
+        let lease_start_callbacks = Cell::new(0_u32);
         let materializations = Cell::new(0_u32);
         let runtime_starts = Cell::new(0_u32);
         assert_eq!(
@@ -3277,10 +3310,16 @@ mod tests {
                 &fixture.claim_uri,
                 &fixture.root,
                 UnixMillis::new(10),
-                |_coordinator, _tenant, _profile, _generation, _device, _epoch| {
-                    materializations.set(materializations.get() + 1);
-                    Ok(())
-                },
+                (
+                    |_coordinator, lease| {
+                        assert_eq!(lease.device_id(), &fixture.device_id);
+                        lease_start_callbacks.set(lease_start_callbacks.get() + 1);
+                    },
+                    |_coordinator, _tenant, _profile, _generation, _device, _epoch| {
+                        materializations.set(materializations.get() + 1);
+                        Ok(())
+                    }
+                ),
                 || {
                     runtime_starts.set(runtime_starts.get() + 1);
                     Ok(())
@@ -3303,6 +3342,7 @@ mod tests {
             ))
         );
         assert_eq!(observed.get(), 1);
+        assert_eq!(lease_start_callbacks.get(), 1);
         assert_eq!(materializations.get(), 0);
         assert_eq!(runtime_starts.get(), 0);
         assert_eq!(owner.coordinator().claimed, 1);
@@ -3317,6 +3357,7 @@ mod tests {
         let mut rejected = operator(&fixture, FakeCamouhost::default())?;
         rejected.coordinator.claim_fail = true;
         let unauthorized_observations = Cell::new(0_u32);
+        let unauthorized_lease_callbacks = Cell::new(0_u32);
         let unauthorized_materializations = Cell::new(0_u32);
         let unauthorized_starts = Cell::new(0_u32);
         assert_eq!(
@@ -3324,10 +3365,15 @@ mod tests {
                 &fixture.claim_uri,
                 &fixture.root,
                 UnixMillis::new(11),
-                |_coordinator, _tenant, _profile, _generation, _device, _epoch| {
-                    unauthorized_materializations.set(unauthorized_materializations.get() + 1);
-                    Ok(())
-                },
+                (
+                    |_coordinator, _lease| {
+                        unauthorized_lease_callbacks.set(unauthorized_lease_callbacks.get() + 1);
+                    },
+                    |_coordinator, _tenant, _profile, _generation, _device, _epoch| {
+                        unauthorized_materializations.set(unauthorized_materializations.get() + 1);
+                        Ok(())
+                    }
+                ),
                 || {
                     unauthorized_starts.set(unauthorized_starts.get() + 1);
                     Ok(())
@@ -3342,6 +3388,7 @@ mod tests {
             ))
         );
         assert_eq!(unauthorized_observations.get(), 0);
+        assert_eq!(unauthorized_lease_callbacks.get(), 0);
         assert_eq!(unauthorized_materializations.get(), 0);
         assert_eq!(unauthorized_starts.get(), 0);
         assert!(rejected.process().actions().is_empty());
@@ -3518,7 +3565,10 @@ mod tests {
             &fixture.claim_uri,
             &fixture.root,
             UnixMillis::new(10),
-            |_coordinator, _tenant, _profile, _generation, _device, _epoch| Ok(()),
+            (
+                |_coordinator, _lease| {},
+                |_coordinator, _tenant, _profile, _generation, _device, _epoch| Ok(()),
+            ),
             || {
                 started_health = true;
                 Ok(())
@@ -3541,7 +3591,10 @@ mod tests {
             &fixture.claim_uri,
             &fixture.root,
             UnixMillis::new(10),
-            |_coordinator, _tenant, _profile, _generation, _device, _epoch| Ok(()),
+            (
+                |_coordinator, _lease| {},
+                |_coordinator, _tenant, _profile, _generation, _device, _epoch| Ok(()),
+            ),
             || {
                 started_health = true;
                 Ok(())
@@ -3566,7 +3619,10 @@ mod tests {
             &fixture.claim_uri,
             &fixture.root,
             UnixMillis::new(10),
-            |_coordinator, _tenant, _profile, _generation, _device, _epoch| Ok(()),
+            (
+                |_coordinator, _lease| {},
+                |_coordinator, _tenant, _profile, _generation, _device, _epoch| Ok(()),
+            ),
             || {
                 start_attempts += 1;
                 Err(())

@@ -4,13 +4,177 @@ use profile_platform_primitives::{
 };
 use serde::{Deserialize, Serialize};
 use session_domain::coordinator::{
-    CoordinatorCommand, CoordinatorCommandEnvelope, CoordinatorConfig, CoordinatorDecision,
-    CoordinatorError, CoordinatorOutcome, CoordinatorStatus, ProfileCoordinatorState,
-    ReleaseDisposition,
+    CoordinatorCheckpoint, CoordinatorCommand, CoordinatorCommandEnvelope, CoordinatorConfig,
+    CoordinatorDecision, CoordinatorError, CoordinatorLease, CoordinatorOutcome, CoordinatorStatus,
+    PendingLaunchIntent, ProfileCoordinatorState, ReleaseDisposition,
 };
 use std::fmt;
 
-const MAX_JOURNAL_ENTRIES: usize = 4_096;
+// Keep the same recent-command idempotency window as the domain (32).
+// Compact at 64 instead of letting healthy sessions exhaust a 4096-entry
+// journal after hours of regular renewals. No separate owner or storage key.
+const COMPACT_JOURNAL_AT: usize = 64;
+const RETAIN_RECENT_COMMANDS: usize = 32;
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+enum StoredCoordinatorStatus {
+    Idle,
+    Active,
+    Draining,
+    Dirty,
+    Uncertain,
+}
+
+impl From<CoordinatorStatus> for StoredCoordinatorStatus {
+    fn from(value: CoordinatorStatus) -> Self {
+        match value {
+            CoordinatorStatus::Idle => Self::Idle,
+            CoordinatorStatus::Active => Self::Active,
+            CoordinatorStatus::Draining => Self::Draining,
+            CoordinatorStatus::Dirty => Self::Dirty,
+            CoordinatorStatus::Uncertain => Self::Uncertain,
+        }
+    }
+}
+
+impl From<StoredCoordinatorStatus> for CoordinatorStatus {
+    fn from(value: StoredCoordinatorStatus) -> Self {
+        match value {
+            StoredCoordinatorStatus::Idle => Self::Idle,
+            StoredCoordinatorStatus::Active => Self::Active,
+            StoredCoordinatorStatus::Draining => Self::Draining,
+            StoredCoordinatorStatus::Dirty => Self::Dirty,
+            StoredCoordinatorStatus::Uncertain => Self::Uncertain,
+        }
+    }
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+struct StoredPendingIntent {
+    launch_intent_id: String,
+    actor_id: String,
+    device_id: String,
+    expires_at_ms: u64,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+struct StoredActiveLease {
+    session_id: String,
+    device_id: String,
+    epoch: u64,
+    fencing_token: String,
+    claimed_at_ms: u64,
+    last_heartbeat_at_ms: u64,
+    idle_expires_at_ms: u64,
+    hard_expires_at_ms: u64,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+struct StoredClaimIdentity {
+    actor_id: String,
+    device_id: String,
+    session_id: String,
+}
+
+/// Same Durable Object document, bounded replay anchor. Existing documents
+/// without a checkpoint are read unchanged; the first compaction is atomic
+/// with the already-existing DO put of the command result.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+struct StoredCoordinatorCheckpoint {
+    version: u64,
+    sequence: u64,
+    observed_at_ms: u64,
+    next_epoch: u64,
+    status: StoredCoordinatorStatus,
+    pending_intent: Option<StoredPendingIntent>,
+    #[serde(default)]
+    recovery_claim_pending: bool,
+    active_lease: Option<StoredActiveLease>,
+    drain_deadline_ms: Option<u64>,
+    last_claim: Option<StoredClaimIdentity>,
+}
+
+impl StoredCoordinatorCheckpoint {
+    fn from_state(
+        state: &ProfileCoordinatorState,
+        last_claim: Option<StoredClaimIdentity>,
+    ) -> Self {
+        let value = state.checkpoint();
+        let pending_intent = value.pending_intent.map(|p| StoredPendingIntent {
+            launch_intent_id: p.launch_intent_id().as_str().to_owned(),
+            actor_id: p.actor_id().as_str().to_owned(),
+            device_id: p.device_id().as_str().to_owned(),
+            expires_at_ms: p.expires_at().value(),
+        });
+        let active_lease = value.active_lease.map(|l| StoredActiveLease {
+            session_id: l.session_id().as_str().to_owned(),
+            device_id: l.device_id().as_str().to_owned(),
+            epoch: l.epoch(),
+            fencing_token: l.fencing_token().as_str().to_owned(),
+            claimed_at_ms: l.claimed_at().value(),
+            last_heartbeat_at_ms: l.last_heartbeat_at().value(),
+            idle_expires_at_ms: l.idle_expires_at().value(),
+            hard_expires_at_ms: l.hard_expires_at().value(),
+        });
+        Self {
+            version: value.version.value(),
+            sequence: value.sequence,
+            observed_at_ms: value.observed_at.value(),
+            next_epoch: value.next_epoch,
+            status: value.status.into(),
+            pending_intent,
+            recovery_claim_pending: value.recovery_claim_pending,
+            active_lease,
+            drain_deadline_ms: value.drain_deadline.map(UnixMillis::value),
+            // Preserve the original actor/device even after a crash or
+            // uncertain release: that identity is the recovery admission gate.
+            // active_claim_matches still requires a currently active lease.
+            last_claim,
+        }
+    }
+
+    fn into_domain(self) -> Result<CoordinatorCheckpoint, CoordinatorAdapterError> {
+        let pending_intent = self
+            .pending_intent
+            .map(|p| {
+                Ok::<_, CoordinatorAdapterError>(PendingLaunchIntent::restored(
+                    LaunchIntentId::parse(p.launch_intent_id)?,
+                    ActorId::parse(p.actor_id)?,
+                    DeviceId::parse(p.device_id)?,
+                    UnixMillis::new(p.expires_at_ms),
+                ))
+            })
+            .transpose()?;
+        let active_lease = self
+            .active_lease
+            .map(|l| {
+                CoordinatorLease::restored(
+                    SessionId::parse(l.session_id)?,
+                    DeviceId::parse(l.device_id)?,
+                    l.epoch,
+                    FencingToken::parse(l.fencing_token)?,
+                    UnixMillis::new(l.claimed_at_ms),
+                    UnixMillis::new(l.last_heartbeat_at_ms),
+                    UnixMillis::new(l.idle_expires_at_ms),
+                    UnixMillis::new(l.hard_expires_at_ms),
+                )
+                .map_err(CoordinatorAdapterError::from)
+            })
+            .transpose()?;
+        Ok(CoordinatorCheckpoint {
+            version: AggregateVersion::new(self.version)?,
+            sequence: self.sequence,
+            observed_at: UnixMillis::new(self.observed_at_ms),
+            next_epoch: self.next_epoch,
+            status: self.status.into(),
+            pending_intent,
+            recovery_claim_pending: self.recovery_claim_pending,
+            active_lease,
+            drain_deadline: self.drain_deadline_ms.map(UnixMillis::new),
+        })
+    }
+}
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct StoredCoordinatorDocument {
@@ -19,6 +183,8 @@ pub struct StoredCoordinatorDocument {
     idle_timeout_ms: u64,
     hard_timeout_ms: u64,
     drain_timeout_ms: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    checkpoint: Option<StoredCoordinatorCheckpoint>,
     journal: Vec<StoredCoordinatorEnvelope>,
 }
 
@@ -30,6 +196,7 @@ impl StoredCoordinatorDocument {
             idle_timeout_ms: config.idle_timeout_ms(),
             hard_timeout_ms: config.hard_timeout_ms(),
             drain_timeout_ms: config.drain_timeout_ms(),
+            checkpoint: None,
             journal: Vec::new(),
         }
     }
@@ -53,14 +220,49 @@ impl StoredCoordinatorDocument {
         envelope: StoredCoordinatorEnvelope,
     ) -> Result<CoordinatorApplied, CoordinatorAdapterError> {
         let mut state = self.replay()?;
+        if let StoredCoordinatorCommand::IssueLaunchIntent {
+            actor_id,
+            device_id,
+            ..
+        } = &envelope.command
+        {
+            // An expired recovery intent remains a reservation for the
+            // original device even when its D1 projection is Idle. Never
+            // admit a foreign plain IssueLaunchIntent in that gap.
+            if state.recovery_claim_pending()
+                && !self.last_claim_matches(
+                    &ActorId::parse(actor_id.clone())?,
+                    &DeviceId::parse(device_id.clone())?,
+                )
+            {
+                return Err(CoordinatorAdapterError::Domain(
+                    CoordinatorError::StaleWriter,
+                ));
+            }
+        }
+        if let StoredCoordinatorCommand::RecoverAndIssueLaunchIntent {
+            actor_id,
+            device_id,
+            ..
+        } = &envelope.command
+        {
+            if !self.last_claim_matches(
+                &ActorId::parse(actor_id.clone())?,
+                &DeviceId::parse(device_id.clone())?,
+            ) {
+                return Err(CoordinatorAdapterError::Domain(
+                    CoordinatorError::StaleWriter,
+                ));
+            }
+        }
         let previous_sequence = state.last_sequence();
         let decision = state.apply(envelope.to_domain()?)?;
         let appended = decision.sequence() > previous_sequence;
         if appended {
-            if self.journal.len() >= MAX_JOURNAL_ENTRIES {
-                return Err(CoordinatorAdapterError::JournalCapacityExceeded);
-            }
             self.journal.push(envelope);
+            if self.journal.len() >= COMPACT_JOURNAL_AT {
+                self.compact_journal()?;
+            }
         }
         Ok(CoordinatorApplied {
             projection: CoordinatorProjection::from_state(&state),
@@ -70,23 +272,103 @@ impl StoredCoordinatorDocument {
         })
     }
 
-    pub fn replay(&self) -> Result<ProfileCoordinatorState, CoordinatorAdapterError> {
-        let tenant_id = TenantId::parse(self.tenant_id.clone())?;
-        let profile_id = ProfileId::parse(self.profile_id.clone())?;
+    fn restore_base(&self) -> Result<ProfileCoordinatorState, CoordinatorAdapterError> {
+        let tenant = TenantId::parse(self.tenant_id.clone())?;
+        let profile = ProfileId::parse(self.profile_id.clone())?;
         let config = CoordinatorConfig::new(
             self.idle_timeout_ms,
             self.hard_timeout_ms,
             self.drain_timeout_ms,
         )?;
-        let mut state = ProfileCoordinatorState::new(tenant_id, profile_id, config);
+        match self.checkpoint.clone() {
+            Some(stored) => ProfileCoordinatorState::restore_checkpoint(
+                tenant,
+                profile,
+                config,
+                stored.into_domain()?,
+            )
+            .map_err(CoordinatorAdapterError::from),
+            None => Ok(ProfileCoordinatorState::new(tenant, profile, config)),
+        }
+    }
+
+    pub fn replay(&self) -> Result<ProfileCoordinatorState, CoordinatorAdapterError> {
+        let mut state = self.restore_base()?;
         for envelope in &self.journal {
             state.apply(envelope.to_domain()?)?;
         }
         Ok(state)
     }
 
+    fn compact_journal(&mut self) -> Result<(), CoordinatorAdapterError> {
+        let count = self.journal.len().saturating_sub(RETAIN_RECENT_COMMANDS);
+        if count == 0 {
+            return Ok(());
+        }
+        let mut anchor = self.restore_base()?;
+        let mut last_claim = self.checkpoint.as_ref().and_then(|p| p.last_claim.clone());
+        for envelope in self.journal.iter().take(count) {
+            anchor.apply(envelope.to_domain()?)?;
+            if let StoredCoordinatorCommand::Claim {
+                actor_id,
+                device_id,
+                session_id,
+                ..
+            } = &envelope.command
+            {
+                last_claim = Some(StoredClaimIdentity {
+                    actor_id: actor_id.clone(),
+                    device_id: device_id.clone(),
+                    session_id: session_id.clone(),
+                });
+            }
+        }
+        let next = StoredCoordinatorCheckpoint::from_state(&anchor, last_claim);
+        // Verify full replay equality BEFORE changing the stored journal.
+        let expected = self.replay()?.checkpoint();
+        let mut verified = ProfileCoordinatorState::restore_checkpoint(
+            anchor.tenant_id().clone(),
+            anchor.profile_id().clone(),
+            anchor.config(),
+            next.clone().into_domain()?,
+        )?;
+        for envelope in self.journal.iter().skip(count) {
+            verified.apply(envelope.to_domain()?)?;
+        }
+        if verified.checkpoint() != expected {
+            return Err(CoordinatorAdapterError::Domain(
+                CoordinatorError::InvalidCheckpoint,
+            ));
+        }
+        self.checkpoint = Some(next);
+        self.journal.drain(..count);
+        Ok(())
+    }
+
     pub fn projection(&self) -> Result<CoordinatorProjection, CoordinatorAdapterError> {
         Ok(CoordinatorProjection::from_state(&self.replay()?))
+    }
+
+    /// The last original Claim must belong to the exact CNG-authenticated
+    /// actor and device; recent journal and checkpoint share this one owner.
+    #[must_use]
+    pub fn last_claim_matches(&self, actor: &ActorId, device: &DeviceId) -> bool {
+        for envelope in self.journal.iter().rev() {
+            if let StoredCoordinatorCommand::Claim {
+                actor_id,
+                device_id,
+                ..
+            } = &envelope.command
+            {
+                return actor_id == actor.as_str() && device_id == device.as_str();
+            }
+        }
+        self.checkpoint
+            .as_ref()
+            .and_then(|cp| cp.last_claim.as_ref())
+            .is_some_and(|last| {
+                last.actor_id == actor.as_str() && last.device_id == device.as_str()
+            })
     }
 
     /// Prove that the current live coordinator lease was created by the exact P2 Claim actor,
@@ -118,7 +400,15 @@ impl StoredCoordinatorDocument {
                 return Ok(stored_actor == actor_id.as_str() && stored_device == device_id.as_str());
             }
         }
-        Ok(false)
+        Ok(self
+            .checkpoint
+            .as_ref()
+            .and_then(|cp| cp.last_claim.as_ref())
+            .is_some_and(|last| {
+                last.actor_id == actor_id.as_str()
+                    && last.device_id == device_id.as_str()
+                    && last.session_id == session_id.as_str()
+            }))
     }
 
     #[must_use]
@@ -194,6 +484,13 @@ pub enum StoredCoordinatorCommand {
         now_ms: u64,
         expires_at_ms: u64,
     },
+    RecoverAndIssueLaunchIntent {
+        launch_intent_id: String,
+        actor_id: String,
+        device_id: String,
+        now_ms: u64,
+        expires_at_ms: u64,
+    },
     Claim {
         launch_intent_id: String,
         actor_id: String,
@@ -203,6 +500,13 @@ pub enum StoredCoordinatorCommand {
         now_ms: u64,
     },
     Heartbeat {
+        session_id: String,
+        epoch: u64,
+        fencing_token: String,
+        now_ms: u64,
+    },
+    /// New event type. Historical heartbeat events replay as before.
+    RenewLease {
         session_id: String,
         epoch: u64,
         fencing_token: String,
@@ -242,6 +546,19 @@ impl StoredCoordinatorCommand {
                 now: UnixMillis::new(*now_ms),
                 expires_at: UnixMillis::new(*expires_at_ms),
             },
+            Self::RecoverAndIssueLaunchIntent {
+                launch_intent_id,
+                actor_id,
+                device_id,
+                now_ms,
+                expires_at_ms,
+            } => CoordinatorCommand::RecoverAndIssueLaunchIntent {
+                launch_intent_id: LaunchIntentId::parse(launch_intent_id.clone())?,
+                actor_id: ActorId::parse(actor_id.clone())?,
+                device_id: DeviceId::parse(device_id.clone())?,
+                now: UnixMillis::new(*now_ms),
+                expires_at: UnixMillis::new(*expires_at_ms),
+            },
             Self::Claim {
                 launch_intent_id,
                 actor_id,
@@ -263,6 +580,17 @@ impl StoredCoordinatorCommand {
                 fencing_token,
                 now_ms,
             } => CoordinatorCommand::Heartbeat {
+                session_id: SessionId::parse(session_id.clone())?,
+                epoch: *epoch,
+                fencing_token: FencingToken::parse(fencing_token.clone())?,
+                now: UnixMillis::new(*now_ms),
+            },
+            Self::RenewLease {
+                session_id,
+                epoch,
+                fencing_token,
+                now_ms,
+            } => CoordinatorCommand::RenewLease {
                 session_id: SessionId::parse(session_id.clone())?,
                 epoch: *epoch,
                 fencing_token: FencingToken::parse(fencing_token.clone())?,
@@ -544,6 +872,332 @@ mod tests {
             &device,
             &SessionId::parse("session_02JADAPTER")?,
         )?);
+        Ok(())
+    }
+
+    #[test]
+    fn bounded_checkpoint_preserves_live_claim_and_replay_for_long_sessions()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let mut document = document()?;
+        document.apply(StoredCoordinatorEnvelope::new(
+            "idem_issue_long_01JADAPTER",
+            1,
+            1,
+            StoredCoordinatorCommand::IssueLaunchIntent {
+                launch_intent_id: "intent_long_01JADAPTER".to_owned(),
+                actor_id: "actor_01JADAPTER".to_owned(),
+                device_id: "device_01JADAPTER".to_owned(),
+                now_ms: 1,
+                expires_at_ms: 500,
+            },
+        ))?;
+        document.apply(StoredCoordinatorEnvelope::new(
+            "idem_claim_long_01JADAPTER",
+            2,
+            2,
+            StoredCoordinatorCommand::Claim {
+                launch_intent_id: "intent_long_01JADAPTER".to_owned(),
+                actor_id: "actor_01JADAPTER".to_owned(),
+                device_id: "device_01JADAPTER".to_owned(),
+                session_id: "session_long_01JADAPTER".to_owned(),
+                fencing_token: "fence_long_01JADAPTER".to_owned(),
+                now_ms: 2,
+            },
+        ))?;
+        // Exceeds the previous 4096-event lifetime. Every renewal advances
+        // the original coordinator fence and must not grow the DO journal.
+        for sequence in 3_u64..=4_200 {
+            document.apply(StoredCoordinatorEnvelope::new(
+                format!("idem_roll_{sequence:08}_01JADAPTER"),
+                sequence,
+                sequence,
+                StoredCoordinatorCommand::RenewLease {
+                    session_id: "session_long_01JADAPTER".to_owned(),
+                    epoch: 1,
+                    fencing_token: "fence_long_01JADAPTER".to_owned(),
+                    now_ms: sequence,
+                },
+            ))?;
+            assert!(document.journal_len() < super::COMPACT_JOURNAL_AT);
+        }
+        assert_eq!(document.projection()?.sequence, 4_200);
+        assert_eq!(
+            document.replay()?.active_lease().map(|l| l.epoch()),
+            Some(1)
+        );
+        assert!(document.active_claim_matches(
+            &ActorId::parse("actor_01JADAPTER")?,
+            &DeviceId::parse("device_01JADAPTER")?,
+            &SessionId::parse("session_long_01JADAPTER")?,
+        )?);
+        assert!(!document.active_claim_matches(
+            &ActorId::parse("actor_other_01JADAPTER")?,
+            &DeviceId::parse("device_01JADAPTER")?,
+            &SessionId::parse("session_long_01JADAPTER")?,
+        )?);
+        let encoded = serde_json::to_vec(&document)?;
+        let restored: StoredCoordinatorDocument = serde_json::from_slice(&encoded)?;
+        assert_eq!(
+            restored.replay()?.checkpoint(),
+            document.replay()?.checkpoint()
+        );
+        assert_eq!(restored.journal_len(), document.journal_len());
+        Ok(())
+    }
+
+    #[test]
+    fn uncertain_recovery_is_single_atomic_same_device_intent()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let mut document = document()?;
+        document.apply(StoredCoordinatorEnvelope::new(
+            "idem_recovery_issue_01JADAPTER",
+            1,
+            1,
+            StoredCoordinatorCommand::IssueLaunchIntent {
+                launch_intent_id: "intent_recovery_01JADAPTER".to_owned(),
+                actor_id: "actor_01JADAPTER".to_owned(),
+                device_id: "device_01JADAPTER".to_owned(),
+                now_ms: 1,
+                expires_at_ms: 50,
+            },
+        ))?;
+        document.apply(StoredCoordinatorEnvelope::new(
+            "idem_recovery_claim_01JADAPTER",
+            2,
+            2,
+            StoredCoordinatorCommand::Claim {
+                launch_intent_id: "intent_recovery_01JADAPTER".to_owned(),
+                actor_id: "actor_01JADAPTER".to_owned(),
+                device_id: "device_01JADAPTER".to_owned(),
+                session_id: "session_recovery_01JADAPTER".to_owned(),
+                fencing_token: "fence_recovery_01JADAPTER".to_owned(),
+                now_ms: 2,
+            },
+        ))?;
+        document.apply(StoredCoordinatorEnvelope::new(
+            "idem_recovery_uncertain_01JADAPTER",
+            3,
+            3,
+            StoredCoordinatorCommand::Release {
+                session_id: "session_recovery_01JADAPTER".to_owned(),
+                epoch: 1,
+                fencing_token: "fence_recovery_01JADAPTER".to_owned(),
+                disposition: StoredReleaseDisposition::Uncertain,
+                now_ms: 3,
+            },
+        ))?;
+        let wrong = StoredCoordinatorEnvelope::new(
+            "idem_wrong_device_01JADAPTER",
+            4,
+            4,
+            StoredCoordinatorCommand::RecoverAndIssueLaunchIntent {
+                launch_intent_id: "intent_new_01JADAPTER".to_owned(),
+                actor_id: "actor_01JADAPTER".to_owned(),
+                device_id: "device_foreign_01JADAPTER".to_owned(),
+                now_ms: 4,
+                expires_at_ms: 54,
+            },
+        );
+        assert!(document.apply(wrong).is_err());
+        assert_eq!(document.replay()?.last_sequence(), 3);
+        assert_eq!(
+            document.replay()?.status(),
+            session_domain::coordinator::CoordinatorStatus::Uncertain
+        );
+        let same = StoredCoordinatorEnvelope::new(
+            "idem_same_device_01JADAPTER",
+            4,
+            4,
+            StoredCoordinatorCommand::RecoverAndIssueLaunchIntent {
+                launch_intent_id: "intent_new_01JADAPTER".to_owned(),
+                actor_id: "actor_01JADAPTER".to_owned(),
+                device_id: "device_01JADAPTER".to_owned(),
+                now_ms: 4,
+                expires_at_ms: 54,
+            },
+        );
+        let first = document.apply(same.clone())?;
+        let replayed = document.apply(same)?;
+        assert_eq!(first.decision(), replayed.decision());
+        assert!(!replayed.appended());
+        assert_eq!(
+            document.replay()?.status(),
+            session_domain::coordinator::CoordinatorStatus::Idle
+        );
+        assert_eq!(document.projection()?.sequence, 4);
+        assert_eq!(
+            document
+                .projection()?
+                .pending_launch_intent_id
+                .as_ref()
+                .map(|v| v.as_str()),
+            Some("intent_new_01JADAPTER")
+        );
+        // Only original actor/device can claim the one pending launch. The
+        // old session and fence are gone; next Claim receives a fresh epoch.
+        let claimed = document.apply(StoredCoordinatorEnvelope::new(
+            "idem_recovery_claim_fresh_01JADAPTER",
+            5,
+            5,
+            StoredCoordinatorCommand::Claim {
+                launch_intent_id: "intent_new_01JADAPTER".to_owned(),
+                actor_id: "actor_01JADAPTER".to_owned(),
+                device_id: "device_01JADAPTER".to_owned(),
+                session_id: "session_fresh_01JADAPTER".to_owned(),
+                fencing_token: "fence_fresh_01JADAPTER".to_owned(),
+                now_ms: 5,
+            },
+        ))?;
+        assert!(matches!(
+            claimed.decision().outcome(),
+            session_domain::coordinator::CoordinatorOutcome::LeaseClaimed { lease } if lease.epoch() == 2
+        ));
+        Ok(())
+    }
+
+    #[test]
+    fn uncertain_claim_provenance_survives_compaction() -> Result<(), Box<dyn std::error::Error>> {
+        let mut document = document()?;
+        document.apply(StoredCoordinatorEnvelope::new(
+            "idem_uncertain_issue_01JADAPTER",
+            1,
+            1,
+            StoredCoordinatorCommand::IssueLaunchIntent {
+                launch_intent_id: "intent_uncertain_01JADAPTER".to_owned(),
+                actor_id: "actor_01JADAPTER".to_owned(),
+                device_id: "device_01JADAPTER".to_owned(),
+                now_ms: 1,
+                expires_at_ms: 50,
+            },
+        ))?;
+        document.apply(StoredCoordinatorEnvelope::new(
+            "idem_uncertain_claim_01JADAPTER",
+            2,
+            2,
+            StoredCoordinatorCommand::Claim {
+                launch_intent_id: "intent_uncertain_01JADAPTER".to_owned(),
+                actor_id: "actor_01JADAPTER".to_owned(),
+                device_id: "device_01JADAPTER".to_owned(),
+                session_id: "session_uncertain_01JADAPTER".to_owned(),
+                fencing_token: "fence_uncertain_01JADAPTER".to_owned(),
+                now_ms: 2,
+            },
+        ))?;
+        document.apply(StoredCoordinatorEnvelope::new(
+            "idem_uncertain_release_01JADAPTER",
+            3,
+            3,
+            StoredCoordinatorCommand::Release {
+                session_id: "session_uncertain_01JADAPTER".to_owned(),
+                epoch: 1,
+                fencing_token: "fence_uncertain_01JADAPTER".to_owned(),
+                disposition: StoredReleaseDisposition::Uncertain,
+                now_ms: 3,
+            },
+        ))?;
+        for n in 4_u64..=70 {
+            document.apply(StoredCoordinatorEnvelope::new(
+                format!("idem_uncertain_tick_{n:04}_01JADAPTER"),
+                n,
+                n,
+                StoredCoordinatorCommand::Tick { now_ms: n },
+            ))?;
+        }
+        assert!(document.journal_len() < super::COMPACT_JOURNAL_AT);
+        let encoded = serde_json::to_vec(&document)?;
+        let mut reloaded: StoredCoordinatorDocument = serde_json::from_slice(&encoded)?;
+        assert!(reloaded.last_claim_matches(
+            &ActorId::parse("actor_01JADAPTER")?,
+            &DeviceId::parse("device_01JADAPTER")?,
+        ));
+        assert!(!reloaded.last_claim_matches(
+            &ActorId::parse("actor_01JADAPTER")?,
+            &DeviceId::parse("device_foreign_01JADAPTER")?,
+        ));
+        reloaded.apply(StoredCoordinatorEnvelope::new(
+            "idem_uncertain_recover_after_compact_01JADAPTER",
+            71,
+            71,
+            StoredCoordinatorCommand::RecoverAndIssueLaunchIntent {
+                launch_intent_id: "intent_after_compact_01JADAPTER".to_owned(),
+                actor_id: "actor_01JADAPTER".to_owned(),
+                device_id: "device_01JADAPTER".to_owned(),
+                now_ms: 71,
+                expires_at_ms: 90,
+            },
+        ))?;
+        assert_eq!(
+            reloaded.replay()?.status(),
+            session_domain::coordinator::CoordinatorStatus::Idle
+        );
+        assert!(reloaded.replay()?.recovery_claim_pending());
+
+        // Crash before Claim: expiry never releases the profile to a foreign
+        // device, even when the original Claim was checkpoint-compacted.
+        reloaded.apply(StoredCoordinatorEnvelope::new(
+            "idem_recovery_expire_01JADAPTER",
+            72,
+            72,
+            StoredCoordinatorCommand::Tick { now_ms: 91 },
+        ))?;
+        assert!(reloaded.replay()?.pending_intent().is_none());
+        assert!(reloaded.replay()?.recovery_claim_pending());
+        let foreign = StoredCoordinatorEnvelope::new(
+            "idem_foreign_after_expiry_01JADAPTER",
+            73,
+            73,
+            StoredCoordinatorCommand::IssueLaunchIntent {
+                launch_intent_id: "intent_foreign_after_expiry_01JADAPTER".to_owned(),
+                actor_id: "actor_01JADAPTER".to_owned(),
+                device_id: "device_foreign_01JADAPTER".to_owned(),
+                now_ms: 92,
+                expires_at_ms: 120,
+            },
+        );
+        assert!(reloaded.apply(foreign).is_err());
+        assert_eq!(reloaded.replay()?.last_sequence(), 72);
+        reloaded.apply(StoredCoordinatorEnvelope::new(
+            "idem_original_after_expiry_01JADAPTER",
+            73,
+            73,
+            StoredCoordinatorCommand::IssueLaunchIntent {
+                launch_intent_id: "intent_original_after_expiry_01JADAPTER".to_owned(),
+                actor_id: "actor_01JADAPTER".to_owned(),
+                device_id: "device_01JADAPTER".to_owned(),
+                now_ms: 92,
+                expires_at_ms: 120,
+            },
+        ))?;
+        assert!(reloaded.replay()?.recovery_claim_pending());
+        reloaded.apply(StoredCoordinatorEnvelope::new(
+            "idem_original_fresh_claim_01JADAPTER",
+            74,
+            74,
+            StoredCoordinatorCommand::Claim {
+                launch_intent_id: "intent_original_after_expiry_01JADAPTER".to_owned(),
+                actor_id: "actor_01JADAPTER".to_owned(),
+                device_id: "device_01JADAPTER".to_owned(),
+                session_id: "session_after_expiry_01JADAPTER".to_owned(),
+                fencing_token: "fence_after_expiry_01JADAPTER".to_owned(),
+                now_ms: 93,
+            },
+        ))?;
+        assert_eq!(
+            reloaded.replay()?.status(),
+            session_domain::coordinator::CoordinatorStatus::Active
+        );
+        assert!(!reloaded.replay()?.recovery_claim_pending());
+        Ok(())
+    }
+
+    #[test]
+    fn old_document_without_checkpoint_remains_readable() -> Result<(), Box<dyn std::error::Error>>
+    {
+        let original = document()?;
+        let json = serde_json::to_string(&original)?;
+        assert!(!json.contains("checkpoint"));
+        let decoded: StoredCoordinatorDocument = serde_json::from_str(&json)?;
+        assert_eq!(decoded.projection()?, original.projection()?);
         Ok(())
     }
 
