@@ -880,6 +880,47 @@ fn allowlisted_camouhost_diagnostic(line: &[u8]) -> Option<&str> {
     None
 }
 
+/// The stderr adapter already verified the entire message against a closed vocabulary.
+/// Only these typed observations may be persisted; never propagate raw stderr.
+fn record_allowlisted_runtime_stage(message: &str) {
+    use crate::user_diagnostics::report::{self, Cause, Cloud, Outcome, Stage};
+    let mut stage = Stage::CamouhostLaunch;
+    let mut outcome = Outcome::Observed;
+    let mut cause = Cause::None;
+    if let Some(rest) = message.strip_prefix("camouhost_stage phase=") {
+        let Some((phase, step)) = rest.split_once(" step=") else { return };
+        stage = match (phase, step) {
+            ("startup", _) | ("launch", "before_browser_enter" | "browser_entered" | "ready") => Stage::CamouhostLaunch,
+            ("launch", "network_blocked") => Stage::BrowserPreflight,
+            _ => return,
+        };
+        outcome = if matches!(step, "begin" | "before_browser_enter") {
+            Outcome::Started
+        } else {
+            Outcome::Observed
+        };
+    } else if let Some(rest) = message.strip_prefix("camouhost_failure phase=") {
+        let Some((phase, category)) = rest.split_once(" category=") else { return };
+        stage = match phase {
+            "browser_visible" | "navigation" => Stage::BrowserPreflight,
+            "close" | "cleanup" => Stage::BrowserClosed,
+            _ => Stage::CamouhostLaunch,
+        };
+        outcome = Outcome::Failed;
+        cause = match category {
+            "dependency" => Cause::RuntimeDependency,
+            "contract" => Cause::RuntimeContract,
+            "timeout" => Cause::RuntimeTimeout,
+            "io" => Cause::RuntimeIo,
+            "browser_closed" => Cause::RuntimeClosed,
+            _ => Cause::RuntimeUnexpected,
+        };
+    } else {
+        return;
+    }
+    report::record_current(stage, outcome, Cloud::Unknown, cause, 0);
+}
+
 fn spawn_camouhost_diagnostic_reader(stderr: ChildStderr) {
     // Drain stderr continuously to prevent a filled OS pipe from blocking the
     // real browser. Oversized/unrecognised lines are discarded, never retained.
@@ -911,6 +952,8 @@ fn spawn_camouhost_diagnostic_reader(stderr: ChildStderr) {
                         .and_then(|value| value.parse::<u16>().ok())
                     {
                         crate::user_diagnostics::report::record_open_pages(count);
+                    } else {
+                        record_allowlisted_runtime_stage(message);
                     }
                     eprintln!("CAMOUHOST_RUNTIME_DIAGNOSTIC {message}");
                 }
