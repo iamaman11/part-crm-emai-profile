@@ -977,7 +977,7 @@ mod tests {
         assert!(document.apply(wrong).is_err());
         assert_eq!(document.replay()?.last_sequence(), 3);
         assert_eq!(
-            document.projection()?.status,
+            document.replay()?.status(),
             session_domain::coordinator::CoordinatorStatus::Uncertain
         );
         let same = StoredCoordinatorEnvelope::new(
@@ -997,7 +997,7 @@ mod tests {
         assert_eq!(first.decision(), replayed.decision());
         assert!(!replayed.appended());
         assert_eq!(
-            document.projection()?.status,
+            document.replay()?.status(),
             session_domain::coordinator::CoordinatorStatus::Idle
         );
         assert_eq!(document.projection()?.sequence, 4);
@@ -1103,7 +1103,7 @@ mod tests {
             },
         ))?;
         assert_eq!(
-            reloaded.projection()?.status,
+            reloaded.replay()?.status(),
             session_domain::coordinator::CoordinatorStatus::Idle
         );
         Ok(())
