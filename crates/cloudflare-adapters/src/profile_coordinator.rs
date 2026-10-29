@@ -217,13 +217,18 @@ impl StoredCoordinatorDocument {
     ) -> Result<CoordinatorApplied, CoordinatorAdapterError> {
         let mut state = self.replay()?;
         if let StoredCoordinatorCommand::RecoverAndIssueLaunchIntent {
-            actor_id, device_id, ..
-        } = &envelope.command {
+            actor_id,
+            device_id,
+            ..
+        } = &envelope.command
+        {
             if !self.last_claim_matches(
                 &ActorId::parse(actor_id.clone())?,
                 &DeviceId::parse(device_id.clone())?,
             ) {
-                return Err(CoordinatorAdapterError::Domain(CoordinatorError::StaleWriter));
+                return Err(CoordinatorAdapterError::Domain(
+                    CoordinatorError::StaleWriter,
+                ));
             }
         }
         let previous_sequence = state.last_sequence();
@@ -326,7 +331,9 @@ impl StoredCoordinatorDocument {
     pub fn last_claim_matches(&self, actor: &ActorId, device: &DeviceId) -> bool {
         for envelope in self.journal.iter().rev() {
             if let StoredCoordinatorCommand::Claim {
-                actor_id, device_id, ..
+                actor_id,
+                device_id,
+                ..
             } = &envelope.command
             {
                 return actor_id == actor.as_str() && device_id == device.as_str();
@@ -920,7 +927,8 @@ mod tests {
         let mut document = document()?;
         document.apply(StoredCoordinatorEnvelope::new(
             "idem_recovery_issue_01JADAPTER",
-            1, 1,
+            1,
+            1,
             StoredCoordinatorCommand::IssueLaunchIntent {
                 launch_intent_id: "intent_recovery_01JADAPTER".to_owned(),
                 actor_id: "actor_01JADAPTER".to_owned(),
@@ -931,7 +939,8 @@ mod tests {
         ))?;
         document.apply(StoredCoordinatorEnvelope::new(
             "idem_recovery_claim_01JADAPTER",
-            2, 2,
+            2,
+            2,
             StoredCoordinatorCommand::Claim {
                 launch_intent_id: "intent_recovery_01JADAPTER".to_owned(),
                 actor_id: "actor_01JADAPTER".to_owned(),
@@ -943,7 +952,8 @@ mod tests {
         ))?;
         document.apply(StoredCoordinatorEnvelope::new(
             "idem_recovery_uncertain_01JADAPTER",
-            3, 3,
+            3,
+            3,
             StoredCoordinatorCommand::Release {
                 session_id: "session_recovery_01JADAPTER".to_owned(),
                 epoch: 1,
@@ -954,7 +964,8 @@ mod tests {
         ))?;
         let wrong = StoredCoordinatorEnvelope::new(
             "idem_wrong_device_01JADAPTER",
-            4, 4,
+            4,
+            4,
             StoredCoordinatorCommand::RecoverAndIssueLaunchIntent {
                 launch_intent_id: "intent_new_01JADAPTER".to_owned(),
                 actor_id: "actor_01JADAPTER".to_owned(),
@@ -965,10 +976,14 @@ mod tests {
         );
         assert!(document.apply(wrong).is_err());
         assert_eq!(document.replay()?.last_sequence(), 3);
-        assert_eq!(document.projection()?.status, session_domain::coordinator::CoordinatorStatus::Uncertain);
+        assert_eq!(
+            document.projection()?.status,
+            session_domain::coordinator::CoordinatorStatus::Uncertain
+        );
         let same = StoredCoordinatorEnvelope::new(
             "idem_same_device_01JADAPTER",
-            4, 4,
+            4,
+            4,
             StoredCoordinatorCommand::RecoverAndIssueLaunchIntent {
                 launch_intent_id: "intent_new_01JADAPTER".to_owned(),
                 actor_id: "actor_01JADAPTER".to_owned(),
@@ -981,17 +996,25 @@ mod tests {
         let replayed = document.apply(same)?;
         assert_eq!(first.decision(), replayed.decision());
         assert!(!replayed.appended());
-        assert_eq!(document.projection()?.status, session_domain::coordinator::CoordinatorStatus::Idle);
+        assert_eq!(
+            document.projection()?.status,
+            session_domain::coordinator::CoordinatorStatus::Idle
+        );
         assert_eq!(document.projection()?.sequence, 4);
         assert_eq!(
-            document.projection()?.pending_launch_intent_id.as_ref().map(|v| v.as_str()),
+            document
+                .projection()?
+                .pending_launch_intent_id
+                .as_ref()
+                .map(|v| v.as_str()),
             Some("intent_new_01JADAPTER")
         );
         // Only original actor/device can claim the one pending launch. The
         // old session and fence are gone; next Claim receives a fresh epoch.
         let claimed = document.apply(StoredCoordinatorEnvelope::new(
             "idem_recovery_claim_fresh_01JADAPTER",
-            5, 5,
+            5,
+            5,
             StoredCoordinatorCommand::Claim {
                 launch_intent_id: "intent_new_01JADAPTER".to_owned(),
                 actor_id: "actor_01JADAPTER".to_owned(),
@@ -1009,20 +1032,24 @@ mod tests {
     }
 
     #[test]
-    fn uncertain_claim_provenance_survives_compaction()
-    -> Result<(), Box<dyn std::error::Error>> {
+    fn uncertain_claim_provenance_survives_compaction() -> Result<(), Box<dyn std::error::Error>> {
         let mut document = document()?;
         document.apply(StoredCoordinatorEnvelope::new(
-            "idem_uncertain_issue_01JADAPTER", 1, 1,
+            "idem_uncertain_issue_01JADAPTER",
+            1,
+            1,
             StoredCoordinatorCommand::IssueLaunchIntent {
                 launch_intent_id: "intent_uncertain_01JADAPTER".to_owned(),
                 actor_id: "actor_01JADAPTER".to_owned(),
                 device_id: "device_01JADAPTER".to_owned(),
-                now_ms: 1, expires_at_ms: 50,
+                now_ms: 1,
+                expires_at_ms: 50,
             },
         ))?;
         document.apply(StoredCoordinatorEnvelope::new(
-            "idem_uncertain_claim_01JADAPTER", 2, 2,
+            "idem_uncertain_claim_01JADAPTER",
+            2,
+            2,
             StoredCoordinatorCommand::Claim {
                 launch_intent_id: "intent_uncertain_01JADAPTER".to_owned(),
                 actor_id: "actor_01JADAPTER".to_owned(),
@@ -1033,7 +1060,9 @@ mod tests {
             },
         ))?;
         document.apply(StoredCoordinatorEnvelope::new(
-            "idem_uncertain_release_01JADAPTER", 3, 3,
+            "idem_uncertain_release_01JADAPTER",
+            3,
+            3,
             StoredCoordinatorCommand::Release {
                 session_id: "session_uncertain_01JADAPTER".to_owned(),
                 epoch: 1,
@@ -1044,7 +1073,9 @@ mod tests {
         ))?;
         for n in 4_u64..=70 {
             document.apply(StoredCoordinatorEnvelope::new(
-                format!("idem_uncertain_tick_{n:04}_01JADAPTER"), n, n,
+                format!("idem_uncertain_tick_{n:04}_01JADAPTER"),
+                n,
+                n,
                 StoredCoordinatorCommand::Tick { now_ms: n },
             ))?;
         }
@@ -1060,15 +1091,21 @@ mod tests {
             &DeviceId::parse("device_foreign_01JADAPTER")?,
         ));
         reloaded.apply(StoredCoordinatorEnvelope::new(
-            "idem_uncertain_recover_after_compact_01JADAPTER", 71, 71,
+            "idem_uncertain_recover_after_compact_01JADAPTER",
+            71,
+            71,
             StoredCoordinatorCommand::RecoverAndIssueLaunchIntent {
                 launch_intent_id: "intent_after_compact_01JADAPTER".to_owned(),
                 actor_id: "actor_01JADAPTER".to_owned(),
                 device_id: "device_01JADAPTER".to_owned(),
-                now_ms: 71, expires_at_ms: 90,
+                now_ms: 71,
+                expires_at_ms: 90,
             },
         ))?;
-        assert_eq!(reloaded.projection()?.status, session_domain::coordinator::CoordinatorStatus::Idle);
+        assert_eq!(
+            reloaded.projection()?.status,
+            session_domain::coordinator::CoordinatorStatus::Idle
+        );
         Ok(())
     }
 
