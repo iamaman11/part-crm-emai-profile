@@ -874,7 +874,10 @@ def camoufox_kwargs(
         # Playwright 1.60 waits for a Page/load during persistent-context
         # startup; explicitly request a regular blank tab so that its normal
         # default-context admission can complete without disabling session restore.
-        "args": ["-new-tab", "about:blank"],
+        # Firefox must start offline before restoring user tabs. The regular
+        # Playwright context stays offline through browser-visible admission;
+        # admit_navigation is the only point that releases connectivity.
+        "args": ["-offline", "-new-tab", "about:blank"],
         "i_know_what_im_doing": True,
         "persistent_context": True,
         "proxy": resolve_proxy(),
