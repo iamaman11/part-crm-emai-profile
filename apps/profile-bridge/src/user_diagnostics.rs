@@ -266,6 +266,7 @@ impl PendingSaveReadOnlyDiagnosis {
 pub enum UserDiagnostic {
     Installation(crate::windows_delivery_install::NativeInstallerError),
     StartFromApplication,
+    ReportUnavailable,
     InvalidHandoff,
     Pairing(DevicePairingBootstrapError),
     Launch(ShippingCompositionError),
@@ -305,6 +306,7 @@ impl UserDiagnostic {
                 }
             }
             Self::StartFromApplication => "BRIDGE_OPEN_FROM_APPLICATION",
+            Self::ReportUnavailable => "BRIDGE_DIAGNOSTIC_COPY_UNAVAILABLE",
             Self::InvalidHandoff => "BRIDGE_INVALID_HANDOFF",
             Self::Pairing(error) => match error {
                 Pairing::UnsupportedPlatform => "BRIDGE_WINDOWS_REQUIRED",
@@ -398,6 +400,9 @@ impl UserDiagnostic {
             }
             Self::StartFromApplication => {
                 "Open Profile Operations in your browser and choose a profile or Connect this computer. Profile Bridge starts from the application."
+            }
+            Self::ReportUnavailable => {
+                "Could not copy the local diagnostic report. Return to Settings and try again. No diagnostic data was sent to a server."
             }
             Self::InvalidHandoff => {
                 "The application link is invalid. Return to Profile Operations and start the action again. Do not copy or edit the link."
