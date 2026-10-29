@@ -68,10 +68,14 @@ pub(super) async fn ensure_bridge_launch_intent(
         let still_live = projection
             .pending_intent_expires_at()
             .is_some_and(|expires_at| expires_at > clock.now());
-        if existing == &launch_intent_id && still_live {
-            return Ok(launch_intent_id);
+        if still_live {
+            if existing == &launch_intent_id {
+                return Ok(launch_intent_id);
+            }
+            return Err(ApplicationError::new(ProblemCode::LeaseConflict));
         }
-        return Err(ApplicationError::new(ProblemCode::LeaseConflict));
+        // A timed-out recovery intent must not strand the original device.
+        // The DO's same-actor/device guard still controls a renewed attempt.
     }
 
     // A CNG-authenticated redemption may atomically recover the same
