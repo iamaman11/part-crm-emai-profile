@@ -545,7 +545,6 @@ impl ProfileCoordinatorState {
         self.status
     }
 
-    #[must_use]
     /// An expired recovery intent remains exclusive until the same original
     /// actor/device obtains a new Claim. The adapter checks historical Claim
     /// provenance for every IssueLaunchIntent while this fence is set.
@@ -554,6 +553,7 @@ impl ProfileCoordinatorState {
         self.recovery_claim_pending
     }
 
+    #[must_use]
     pub const fn pending_intent(&self) -> Option<&PendingLaunchIntent> {
         self.pending_intent.as_ref()
     }
