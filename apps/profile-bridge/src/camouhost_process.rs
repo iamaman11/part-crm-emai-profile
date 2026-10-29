@@ -782,20 +782,21 @@ fn exchange_shared(
     let frame = message
         .to_frame()
         .map_err(|_| BridgePortError::InvalidResponse)?;
-    let response = exchange_frame_shared(shared, &frame, response_timeout(message)?).map_err(|error| {
-        // A trusted IPC phase and closed error enum, never request contents or profile paths.
-        let phase = match message {
-            CamouhostMessage::Hello { .. } => "hello",
-            CamouhostMessage::Launch { .. } => "launch",
-            CamouhostMessage::ObserveBrowserVisible { .. } => "browser_visible",
-            CamouhostMessage::AdmitNavigation { .. } => "navigation",
-            CamouhostMessage::ObserveClose { .. } => "observe_close",
-            CamouhostMessage::Close { .. } => "close",
-            _ => "other",
-        };
-        eprintln!("CAMOUHOST_IPC_FAILURE phase={phase} category={error:?}");
-        error
-    })?;
+    let response =
+        exchange_frame_shared(shared, &frame, response_timeout(message)?).map_err(|error| {
+            // A trusted IPC phase and closed error enum, never request contents or profile paths.
+            let phase = match message {
+                CamouhostMessage::Hello { .. } => "hello",
+                CamouhostMessage::Launch { .. } => "launch",
+                CamouhostMessage::ObserveBrowserVisible { .. } => "browser_visible",
+                CamouhostMessage::AdmitNavigation { .. } => "navigation",
+                CamouhostMessage::ObserveClose { .. } => "observe_close",
+                CamouhostMessage::Close { .. } => "close",
+                _ => "other",
+            };
+            eprintln!("CAMOUHOST_IPC_FAILURE phase={phase} category={error:?}");
+            error
+        })?;
     let parsed =
         CamouhostMessage::parse(&response).map_err(|_| BridgePortError::InvalidResponse)?;
     parsed
@@ -830,7 +831,6 @@ fn exchange_frame_shared(
     receive_response(responses, timeout)
 }
 
-
 fn allowlisted_camouhost_diagnostic(line: &[u8]) -> Option<&str> {
     // Do not log raw child stderr: Python/Playwright may emit private URLs,
     // filesystem paths, environment variables or profile content in tracebacks.
@@ -842,9 +842,19 @@ fn allowlisted_camouhost_diagnostic(line: &[u8]) -> Option<&str> {
         .strip_prefix("camouhost_failure phase=")
         .and_then(|rest| rest.split_once(" category="))
     {
-        if matches!(phase, "startup" | "launch" | "browser_visible" | "navigation" | "close" | "cleanup" | "unknown")
-            && matches!(category, "contract" | "timeout" | "io" | "browser_closed" | "unexpected" | "dependency")
-        {
+        if matches!(
+            phase,
+            "startup"
+                | "launch"
+                | "browser_visible"
+                | "navigation"
+                | "close"
+                | "cleanup"
+                | "unknown"
+        ) && matches!(
+            category,
+            "contract" | "timeout" | "io" | "browser_closed" | "unexpected" | "dependency"
+        ) {
             return Some(message);
         }
     }
@@ -854,7 +864,10 @@ fn allowlisted_camouhost_diagnostic(line: &[u8]) -> Option<&str> {
     {
         if (phase == "startup" && matches!(step, "begin" | "ready"))
             || (phase == "launch"
-                && matches!(step, "before_browser_enter" | "browser_entered" | "network_blocked" | "ready"))
+                && matches!(
+                    step,
+                    "before_browser_enter" | "browser_entered" | "network_blocked" | "ready"
+                ))
         {
             return Some(message);
         }
@@ -1249,7 +1262,9 @@ mod tests {
             Some("camouhost_failure phase=launch category=timeout")
         );
         assert_eq!(
-            allowlisted_camouhost_diagnostic(b"camouhost_stage phase=launch step=before_browser_enter\n"),
+            allowlisted_camouhost_diagnostic(
+                b"camouhost_stage phase=launch step=before_browser_enter\n"
+            ),
             Some("camouhost_stage phase=launch step=before_browser_enter")
         );
         for invalid in [
@@ -1261,7 +1276,10 @@ mod tests {
         ] {
             assert_eq!(allowlisted_camouhost_diagnostic(invalid), None);
         }
-        let huge = format!("camouhost_failure phase=launch category={}\n", "x".repeat(512));
+        let huge = format!(
+            "camouhost_failure phase=launch category={}\n",
+            "x".repeat(512)
+        );
         assert_eq!(allowlisted_camouhost_diagnostic(huge.as_bytes()), None);
     }
 
