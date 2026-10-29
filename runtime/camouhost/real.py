@@ -870,6 +870,11 @@ def camoufox_kwargs(
             **touch_runtime_preferences(config),
         },
         "headless": resolve_headless_mode(),
+        # A restored Firefox session can open only chrome/internal tabs first.
+        # Playwright 1.60 waits for a Page/load during persistent-context
+        # startup; explicitly request a regular blank tab so that its normal
+        # default-context admission can complete without disabling session restore.
+        "args": ["-new-tab", "about:blank"],
         "i_know_what_im_doing": True,
         "persistent_context": True,
         "proxy": resolve_proxy(),
