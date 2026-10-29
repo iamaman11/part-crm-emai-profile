@@ -483,6 +483,19 @@ fn stored_command(command: &CoordinatorCommand) -> StoredCoordinatorCommand {
             now_ms: now.value(),
             expires_at_ms: expires_at.value(),
         },
+        CoordinatorCommand::RecoverAndIssueLaunchIntent {
+            launch_intent_id,
+            actor_id,
+            device_id,
+            now,
+            expires_at,
+        } => StoredCoordinatorCommand::RecoverAndIssueLaunchIntent {
+            launch_intent_id: launch_intent_id.as_str().to_owned(),
+            actor_id: actor_id.as_str().to_owned(),
+            device_id: device_id.as_str().to_owned(),
+            now_ms: now.value(),
+            expires_at_ms: expires_at.value(),
+        },
         CoordinatorCommand::Claim {
             launch_intent_id,
             actor_id,
