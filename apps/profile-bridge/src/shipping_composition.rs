@@ -700,11 +700,18 @@ mod windows {
                     Ok(())
                 },
                 |live_coordinator, tenant, profile, selected_generation, fresh_lease| {
+                    // Recovery can perform a 120-second signed PUT just like
+                    // ordinary Close/Save. Keep the ONE freshly claimed DO
+                    // session live across this exact N+1 retry as well.
+                    let recovery_heartbeat = RetainedSaveHeartbeat::start(
+                        (*live_coordinator).clone(),
+                        fresh_lease.clone(),
+                    );
                     // The existing operator already proved fresh CNG/ACL,
                     // tenant/Profile enrollment and exclusive coordinator
                     // writer claim. Only exact ACTIVE_EXACT may repair an
                     // unchanged N+1 binding; never PUT/commit with old fence.
-                    match complete_active_exact_after_restart(
+                    let recovered = match complete_active_exact_after_restart(
                         &materialization_root,
                         tenant,
                         profile,
@@ -841,6 +848,11 @@ mod windows {
                             );
                             PendingSaveRecovery::Blocked
                         }
+                    };
+                    if recovery_heartbeat.is_healthy() {
+                        recovered
+                    } else {
+                        PendingSaveRecovery::Blocked
                     }
                 },
             )
