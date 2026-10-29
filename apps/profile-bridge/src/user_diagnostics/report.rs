@@ -233,6 +233,24 @@ pub fn record_open_pages(count: u16) {
     }
 }
 
+fn runtime_identity(root: &Path) -> Option<String> {
+    #[cfg(windows)]
+    {
+        let store = crate::windows_delivery_store::DeliveryStateStore::open(root.join("state")).ok()?;
+        let identity = &store.state().active()?.runtime_bundle_release_id;
+        let digest = identity.strip_prefix("runtime-bundle-v3-sha256-")?;
+        if digest.len() == 64 && digest.bytes().all(|byte| byte.is_ascii_digit() || matches!(byte, b'a'..=b'f')) {
+            return Some(identity.clone());
+        }
+        None
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = root;
+        None
+    }
+}
+
 /// Read-only, strictly reconstructed from admitted typed observations. No profile data is read.
 #[must_use]
 pub fn report_current() -> String {
@@ -244,7 +262,8 @@ pub fn report_current() -> String {
 
 #[must_use]
 pub fn report_at(root: &Path) -> String {
-    let mut report = format!("PROFILE_BRIDGE_DIAGNOSTICS_V1\nBRIDGE_VERSION={}\nRUNTIME_IDENTITY=NOT_OBSERVED\nREPORT_AUTHORITY=LOCAL_OBSERVATIONS_ONLY\n", env!("CARGO_PKG_VERSION"));
+    let runtime = runtime_identity(root).unwrap_or_else(|| "NOT_OBSERVED".to_owned());
+    let mut report = format!("PROFILE_BRIDGE_DIAGNOSTICS_V1\nBRIDGE_VERSION={}\nRUNTIME_IDENTITY={}\nREPORT_AUTHORITY=LOCAL_OBSERVATIONS_ONLY\n", env!("CARGO_PKG_VERSION"), runtime);
     for record in observations(root) {
         let line = format!(
             "TIME_MS={};OP={};STAGE={:?};OUTCOME={:?};CLOUD={:?};CAUSE={:?};DURATION_MS={}\n",
