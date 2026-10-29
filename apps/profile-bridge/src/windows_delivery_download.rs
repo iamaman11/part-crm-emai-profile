@@ -716,6 +716,21 @@ fn wait_for_fetch_process(
     expected_size: u64,
     asset_name: &str,
 ) -> Result<ExitStatus, WindowsReleaseAssetFetcherError> {
+    wait_for_fetch_process_with_limits(
+        child, destination, expected_size, asset_name,
+        FETCH_NO_BYTE_TIMEOUT, FETCH_PROCESS_TIMEOUT,
+    )
+}
+
+#[cfg(windows)]
+fn wait_for_fetch_process_with_limits(
+    child: &mut Child,
+    destination: &Path,
+    expected_size: u64,
+    asset_name: &str,
+    idle_limit: Duration,
+    total_limit: Duration,
+) -> Result<ExitStatus, WindowsReleaseAssetFetcherError> {
     let started = Instant::now();
     let mut last_byte_at = started;
     let mut last_bytes = 0_u64;
@@ -756,11 +771,11 @@ fn wait_for_fetch_process(
             Ok(None) => {}
             Err(_) => return Err(WindowsReleaseAssetFetcherError::Process),
         }
-        if started.elapsed() >= FETCH_PROCESS_TIMEOUT {
+        if started.elapsed() >= total_limit {
             terminate_fetch(child)?;
             return Err(WindowsReleaseAssetFetcherError::Timeout);
         }
-        if idle >= FETCH_NO_BYTE_TIMEOUT {
+        if idle >= idle_limit {
             terminate_fetch(child)?;
             return Err(WindowsReleaseAssetFetcherError::Stalled);
         }
@@ -984,6 +999,51 @@ mod tests {
             file.write_all(bytes).map_err(|_| ())?;
             file.sync_all().map_err(|_| ())
         }
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn native_silent_fetch_exits_with_bounded_stall_and_cleans_child() -> TestResult {
+        let directory = TestDirectory::create("native-stall")?;
+        // No destination appears: this simulates the observed zero-byte
+        // response-header/connect hang without using a network endpoint.
+        let mut child = Command::new(system_powershell_executable()?)
+            .args(["-NoLogo", "-NoProfile", "-NonInteractive", "-Command",
+                   "Start-Sleep -Seconds 30"])
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()?;
+        let result = wait_for_fetch_process_with_limits(
+            &mut child, &directory.0.join("still-missing.pending"), 1_188_812_800,
+            RUNTIME_BUNDLE_ASSET, Duration::from_secs(2), Duration::from_secs(10),
+        );
+        assert_eq!(result, Err(WindowsReleaseAssetFetcherError::Stalled));
+        assert!(child.try_wait()?.is_some(), "installer fetch child leaked");
+        Ok(())
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn network_categories_never_embed_urls_or_credentials() {
+        for (code, category) in [
+            (20, "HTTP"), (21, "SIZE"), (22, "SIZE"), (23, "SIZE"),
+            (24, "INSECURE_REDIRECT"), (31, "DNS"), (32, "CONNECT"),
+            (33, "TLS"), (34, "TIMEOUT"), (36, "DISK"),
+        ] {
+            assert_eq!(
+                fetch_exit_disposition(Some(code)).unwrap_err().category(),
+                category
+            );
+        }
+        assert_eq!(fetch_exit_disposition(Some(0)), Ok(()));
+        assert_eq!(
+            fetch_exit_disposition(Some(30)).unwrap_err().category(),
+            "NETWORK_OR_PROCESS"
+        );
+        assert!(FETCH_SCRIPT.contains("$handler.UseProxy = $true"));
+        assert!(!FETCH_SCRIPT.contains("Write-Host"));
+        assert!(!FETCH_SCRIPT.contains("Write-Error"));
     }
 
     struct RejectingFetcher;
