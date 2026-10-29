@@ -715,6 +715,10 @@ where
     /// callback may first-seal the original N+1 or finish an exact checkpoint;
     /// only a completed ACTIVE_EXACT binding may allow an ordinary Open.
     /// The unresolved-checkpoint guard remains authoritative.
+    // The existing Open owner takes explicit callbacks for independent proof
+    // boundaries: post-Claim lease, runtime health, and pending N+1 recovery.
+    // Keep them as typed closures rather than introducing a parallel options SM.
+    #[allow(clippy::too_many_arguments)]
     pub fn open_authoritative_with_runtime_health_and_pending_recovery<
         Dl,
         OnClaim,
@@ -906,6 +910,8 @@ where
         )
     }
 
+    // One pre-browser state machine owns materialization and both safety hooks.
+    #[allow(clippy::too_many_arguments)]
     fn open_with_materialization<OnClaim, F, BeforeRuntime, ObservePending>(
         &mut self,
         claim: &ClaimUri,
