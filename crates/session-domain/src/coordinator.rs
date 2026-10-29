@@ -393,6 +393,9 @@ pub struct CoordinatorCheckpoint {
     pub next_epoch: u64,
     pub status: CoordinatorStatus,
     pub pending_intent: Option<PendingLaunchIntent>,
+    /// Keep the Idle projection blocked until an exact original-device
+    /// recovery claim succeeds; intent expiry alone is never admission.
+    pub recovery_claim_pending: bool,
     pub active_lease: Option<CoordinatorLease>,
     pub drain_deadline: Option<UnixMillis>,
 }
@@ -408,6 +411,7 @@ pub struct ProfileCoordinatorState {
     next_epoch: u64,
     status: CoordinatorStatus,
     pending_intent: Option<PendingLaunchIntent>,
+    recovery_claim_pending: bool,
     active_lease: Option<CoordinatorLease>,
     drain_deadline: Option<UnixMillis>,
     receipts: Vec<CommandReceipt>,
@@ -430,6 +434,7 @@ impl ProfileCoordinatorState {
             next_epoch: 0,
             status: CoordinatorStatus::Idle,
             pending_intent: None,
+            recovery_claim_pending: false,
             active_lease: None,
             drain_deadline: None,
             receipts: Vec::new(),
@@ -445,6 +450,7 @@ impl ProfileCoordinatorState {
             next_epoch: self.next_epoch,
             status: self.status,
             pending_intent: self.pending_intent.clone(),
+            recovery_claim_pending: self.recovery_claim_pending,
             active_lease: self.active_lease.clone(),
             drain_deadline: self.drain_deadline,
         }
@@ -475,6 +481,8 @@ impl ProfileCoordinatorState {
                 .is_some_and(|lease| lease.epoch() > snapshot.next_epoch)
             || (snapshot.pending_intent.is_some()
                 && (snapshot.status != CoordinatorStatus::Idle || has_writer))
+            || (snapshot.recovery_claim_pending
+                && (snapshot.status != CoordinatorStatus::Idle || has_writer))
             || (snapshot.drain_deadline.is_some()
                 != (snapshot.status == CoordinatorStatus::Draining))
         {
@@ -490,6 +498,7 @@ impl ProfileCoordinatorState {
             next_epoch: snapshot.next_epoch,
             status: snapshot.status,
             pending_intent: snapshot.pending_intent,
+            recovery_claim_pending: snapshot.recovery_claim_pending,
             active_lease: snapshot.active_lease,
             drain_deadline: snapshot.drain_deadline,
             receipts: Vec::new(),
@@ -682,7 +691,10 @@ impl ProfileCoordinatorState {
         if expires_at <= now {
             return Err(CoordinatorError::InvalidIntentExpiry);
         }
-        if self.active_lease.is_some() || self.status != CoordinatorStatus::Idle {
+        if self.active_lease.is_some()
+            || self.status != CoordinatorStatus::Idle
+            || self.recovery_claim_pending
+        {
             return Err(CoordinatorError::CoordinatorUnavailable);
         }
         if self
@@ -751,6 +763,7 @@ impl ProfileCoordinatorState {
         };
         self.next_epoch = epoch;
         self.status = CoordinatorStatus::Active;
+        self.recovery_claim_pending = false;
         self.pending_intent = None;
         self.active_lease = Some(lease.clone());
         self.drain_deadline = None;
@@ -765,9 +778,10 @@ impl ProfileCoordinatorState {
         now: UnixMillis,
         expires_at: UnixMillis,
     ) -> Result<CoordinatorOutcome, CoordinatorError> {
-        if self.status != CoordinatorStatus::Uncertain
+        if !(self.status == CoordinatorStatus::Uncertain
+            || (self.status == CoordinatorStatus::Idle && self.recovery_claim_pending))
             || self.active_lease.is_some()
-            || self.pending_intent.is_some()
+            || self.pending_intent.as_ref().is_some_and(|intent| intent.expires_at > now)
         {
             return Err(CoordinatorError::CoordinatorUnavailable);
         }
@@ -783,6 +797,7 @@ impl ProfileCoordinatorState {
             expires_at,
         });
         self.status = CoordinatorStatus::Idle;
+        self.recovery_claim_pending = true;
         self.drain_deadline = None;
         Ok(CoordinatorOutcome::LaunchIntentIssued {
             launch_intent_id: launch_intent_id.clone(),
@@ -933,6 +948,7 @@ impl ProfileCoordinatorState {
             return Err(CoordinatorError::RecoveryNotRequired);
         }
         self.status = CoordinatorStatus::Idle;
+        self.recovery_claim_pending = false;
         self.pending_intent = None;
         self.drain_deadline = None;
         Ok(CoordinatorOutcome::Recovered)
