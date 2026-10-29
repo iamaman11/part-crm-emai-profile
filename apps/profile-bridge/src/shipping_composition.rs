@@ -684,12 +684,21 @@ mod windows {
         let opened_at = now()?;
         let mut pending_health = pending_health;
         let mut started_health = None;
-        operator
+        let mut prelaunch_keepalive = None;
+        let opening = operator
             .open_authoritative_with_runtime_health_and_pending_recovery(
                 claim,
                 &materialization_root,
                 &mut generation_downloader,
                 opened_at,
+                |current, lease| {
+                    // The same original cursor stays alive during exact
+                    // pending N+1 recovery, R2 download and Camoufox startup.
+                    prelaunch_keepalive = Some(RetainedSaveHeartbeat::start(
+                        current.clone(),
+                        lease.clone(),
+                    ));
+                },
                 || {
                     started_health = pending_health
                         .take()
@@ -700,13 +709,8 @@ mod windows {
                     Ok(())
                 },
                 |live_coordinator, tenant, profile, selected_generation, fresh_lease| {
-                    // Recovery can perform a 120-second signed PUT just like
-                    // ordinary Close/Save. Keep the ONE freshly claimed DO
-                    // session live across this exact N+1 retry as well.
-                    let recovery_heartbeat = RetainedSaveHeartbeat::start(
-                        (*live_coordinator).clone(),
-                        fresh_lease.clone(),
-                    );
+                    // The pre-launch keepalive above already spans exact
+                    // recovery and any long R2 PUT. No duplicate thread.
                     // The existing operator already proved fresh CNG/ACL,
                     // tenant/Profile enrollment and exclusive coordinator
                     // writer claim. Only exact ACTIVE_EXACT may repair an
@@ -849,14 +853,24 @@ mod windows {
                             PendingSaveRecovery::Blocked
                         }
                     };
-                    if recovery_heartbeat.is_healthy() {
-                        recovered
-                    } else {
-                        PendingSaveRecovery::Blocked
-                    }
+                    recovered
                 },
-            )
-            .map_err(ShippingCompositionError::Operator)?;
+            );
+        // Always finish the heartbeat thread before observing its final
+        // authority result. A slow or failed heartbeat cannot be ignored just
+        // because the browser opened successfully in the foreground.
+        let health = prelaunch_keepalive
+            .as_ref()
+            .map(|guard: &RetainedSaveHeartbeat| Arc::clone(&guard.healthy));
+        drop(prelaunch_keepalive);
+        opening.map_err(ShippingCompositionError::Operator)?;
+        if !health
+            .as_ref()
+            .is_some_and(|confirmed| confirmed.load(Ordering::Acquire))
+        {
+            let _ = operator.abort(now().unwrap_or(opened_at));
+            return Err(ShippingCompositionError::HeartbeatAuthorityUncertain);
+        }
 
         if let Some(confirmation) = started_health
             && confirmation.confirm_after_runtime_ready().is_err()
