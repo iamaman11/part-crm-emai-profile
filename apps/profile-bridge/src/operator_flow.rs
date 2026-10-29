@@ -749,7 +749,7 @@ where
             claim,
             root,
             now,
-            |_coordinator, _lease| {},
+            on_claim,
             |coordinator, tenant_id, profile_id, generation_id, device_id, epoch| {
                 ensure_authoritative_generation(
                     root,
