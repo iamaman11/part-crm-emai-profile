@@ -493,6 +493,56 @@ mod tests {
     }
 
     #[test]
+    fn diagnostic_directory_is_outside_strict_delivery_state_and_survives_open() {
+        let root = test_root();
+        fs::remove_dir(root.join("state")).expect("empty state fixture");
+        let before = crate::windows_delivery_store::DeliveryStateStore::initialize(
+            root.join("state"),
+        ).expect("canonical delivery store");
+        let original_revision = before.revision();
+        record_at(
+            &root,
+            Stage::OpenRequested,
+            Outcome::Started,
+            Cloud::Unknown,
+            Cause::None,
+            0,
+        );
+        assert!(root.join(DIRECTORY).is_dir());
+        assert!(!root.join("state").join(DIRECTORY).exists());
+        let _report = report_at(&root);
+        let after = crate::windows_delivery_store::DeliveryStateStore::open(
+            root.join("state"),
+        ).expect("diagnostic observation must not invalidate canonical store");
+        assert_eq!(after.revision(), original_revision);
+        fs::remove_dir_all(root).expect("cleanup");
+    }
+
+    #[test]
+    fn last_verified_runtime_is_observation_only_and_rejects_forged_identity() {
+        let root = test_root();
+        let runtime_id = format!("runtime-bundle-v3-sha256-{}", "a".repeat(64));
+        assert!(valid_runtime_release_id(&runtime_id));
+        assert!(!valid_runtime_release_id("https://private.invalid/secret"));
+        let recorded = try_record(
+            &root,
+            Stage::RuntimeIdentityObserved,
+            Outcome::Observed,
+            Cloud::Unknown,
+            Cause::None,
+            0,
+            None,
+            Some((534, &runtime_id)),
+        );
+        assert_eq!(recorded, Some(()));
+        let report = report_at(&root);
+        assert!(report.contains("LAST_OBSERVED_RELEASE_SEQUENCE=534"));
+        assert!(report.contains(&runtime_id));
+        assert!(!report.contains("CURRENT_RUNTIME_IDENTITY="));
+        fs::remove_dir_all(root).expect("cleanup");
+    }
+
+    #[test]
     fn report_is_bounded_and_ignores_symlink_or_missing_state() {
         let root = test_root();
         for _ in 0..100 { record_at(&root, Stage::BrowserPreflight, Outcome::Observed, Cloud::Unknown, Cause::None, 1); }
