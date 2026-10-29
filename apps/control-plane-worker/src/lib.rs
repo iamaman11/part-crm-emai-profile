@@ -348,8 +348,57 @@ fn binding_probe(env: &Env, capability_context: &RuntimeCapabilityContext) -> Re
 
 #[cfg(test)]
 mod tests {
-    use super::{ControlPlaneQueueMessage, RuntimeSurface, queue_surface};
+    use super::{
+        ControlPlaneQueueMessage, RuntimeSurface, profile_generation_successor_ingress,
+        queue_surface,
+    };
+    use control_plane_contract::{RouteClass, classify_route};
+    use profile_generation_successor_ingress::BridgeGenerationMachineOperation;
     use serde_json::json;
+    use worker::Method;
+
+    #[test]
+    fn external_bridge_retry_routes_reach_the_existing_authorized_handlers() {
+        // Reproduce the original 404: Worker::main classifies before calling
+        // dispatch_profile_coordinator, so a handler-only test cannot catch it.
+        for (suffix, operation) in [
+            (
+                "generation-successor/retry-decision",
+                BridgeGenerationMachineOperation::RetryDecision,
+            ),
+            (
+                "generation-successor/local-unsynced/retry-decision",
+                BridgeGenerationMachineOperation::LocalUnsyncedRetryDecision,
+            ),
+        ] {
+            let path = format!("/bridge/v1/tenants/tenant_01/profiles/profile_01/{suffix}");
+            assert_eq!(
+                classify_route("POST", &path),
+                RouteClass::ProfileCoordinatorApi,
+                "Worker entrypoint must not return 404 before authorization"
+            );
+            assert_eq!(
+                profile_generation_successor_ingress::operation(&path, Method::Post),
+                Some(operation),
+                "the existing authenticated coordinator ingress must find its handler"
+            );
+
+            for (method, worker_method) in [
+                ("GET", Method::Get),
+                ("PUT", Method::Put),
+                ("DELETE", Method::Delete),
+            ] {
+                assert_eq!(
+                    classify_route(method, &path),
+                    RouteClass::BridgeDeniedByDefault
+                );
+                assert_eq!(
+                    profile_generation_successor_ingress::operation(&path, worker_method),
+                    None
+                );
+            }
+        }
+    }
 
     #[test]
     fn queue_messages_select_named_policy_surfaces() -> Result<(), Box<dyn std::error::Error>> {
