@@ -140,7 +140,9 @@ fn journal_dir(root: &Path, create: bool) -> Option<PathBuf> {
     if !root.is_absolute() || !valid_directory(root) || !valid_directory(&root.join("state")) {
         return None;
     }
-    let path = root.join("state").join(DIRECTORY);
+    // The Windows delivery state store rejects ANY unknown state/ child.
+    // Diagnostics must stay a sibling of state/, never inside that journal.
+    let path = root.join(DIRECTORY);
     if create {
         match fs::symlink_metadata(&path) {
             Ok(_) => {}
@@ -384,7 +386,7 @@ mod tests {
     fn corrupted_and_untrusted_files_are_never_echoed() {
         let root = test_root();
         record_at(&root, Stage::OpenRequested, Outcome::Started, Cloud::Unknown, Cause::None, 0);
-        let directory = root.join("state").join(DIRECTORY);
+        let directory = root.join(DIRECTORY);
         fs::write(directory.join("event-0000000000000001-fake.json"), b"https://secret.invalid/?token=top_secret profile_bytes cookie").expect("fixture");
         let output = report_at(&root);
         for leak in ["secret.invalid", "top_secret", "profile_bytes", "cookie", root.to_str().expect("path")] {
@@ -396,7 +398,7 @@ mod tests {
     #[test]
     fn untrusted_records_never_admit_unknown_fields_or_secret_urls() {
         let root = test_root();
-        let directory = root.join("state").join(DIRECTORY);
+        let directory = root.join(DIRECTORY);
         // Even a plausible event file cannot smuggle arbitrary fields into a
         // typed diagnostic. Production never deserializes it into owner state.
         let malicious = serde_json::json!({
