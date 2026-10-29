@@ -151,7 +151,15 @@ pub fn record_at(
     cause: Cause,
     duration_ms: u64,
 ) {
-    let _ = try_record(root, stage, outcome, cloud, cause, duration_ms, ObservationExtra::None);
+    let _ = try_record(
+        root,
+        stage,
+        outcome,
+        cloud,
+        cause,
+        duration_ms,
+        ObservationExtra::None,
+    );
 }
 
 fn installed_root() -> Option<PathBuf> {
@@ -220,9 +228,10 @@ fn try_record(
     let (open_pages, runtime) = match extra {
         ObservationExtra::None => (None, None),
         ObservationExtra::Pages(count) => (Some(count), None),
-        ObservationExtra::VerifiedRuntime { sequence, release_id } => {
-            (None, Some((sequence, release_id)))
-        }
+        ObservationExtra::VerifiedRuntime {
+            sequence,
+            release_id,
+        } => (None, Some((sequence, release_id))),
     };
     let directory = journal_dir(root, true)?;
     let now = unix_ms()?;
@@ -440,7 +449,10 @@ pub fn record_runtime_identity(sequence: u64, release_id: &str) {
             Cloud::Unknown,
             Cause::None,
             0,
-            ObservationExtra::VerifiedRuntime { sequence, release_id },
+            ObservationExtra::VerifiedRuntime {
+                sequence,
+                release_id,
+            },
         );
     }
 }
@@ -551,7 +563,8 @@ mod tests {
     }
 
     #[test]
-    fn typed_report_survives_restart_and_does_not_replay_owner_state() -> Result<(), Box<dyn std::error::Error>> {
+    fn typed_report_survives_restart_and_does_not_replay_owner_state()
+    -> Result<(), Box<dyn std::error::Error>> {
         let root = test_root()?;
         record_at(
             &root,
@@ -594,8 +607,7 @@ mod tests {
         fs::write(
             directory.join("event-0000000000000001-fake.json"),
             b"https://secret.invalid/?token=top_secret profile_bytes cookie",
-        )
-        ?;
+        )?;
         let output = report_at(&root);
         for leak in [
             "secret.invalid",
@@ -611,7 +623,8 @@ mod tests {
     }
 
     #[test]
-    fn untrusted_records_never_admit_unknown_fields_or_secret_urls() -> Result<(), Box<dyn std::error::Error>> {
+    fn untrusted_records_never_admit_unknown_fields_or_secret_urls()
+    -> Result<(), Box<dyn std::error::Error>> {
         let root = test_root()?;
         let directory = root.join(DIRECTORY);
         // Even a plausible event file cannot smuggle arbitrary fields into a
@@ -631,11 +644,7 @@ mod tests {
             .as_u64()
             .ok_or("fixture timestamp missing")?;
         let name = format!("event-{timestamp:016x}-00000001-0000000000000000.json");
-        fs::write(
-            directory.join(name),
-            serde_json::to_vec(&malicious)?,
-        )
-        ?;
+        fs::write(directory.join(name), serde_json::to_vec(&malicious)?)?;
         let report = report_at(&root);
         assert!(!report.contains("private.invalid"));
         assert!(!report.contains("CLOUD_SAVE_CONFIRMED"));
@@ -645,7 +654,8 @@ mod tests {
     }
 
     #[test]
-    fn read_only_report_does_not_create_or_repair_any_state() -> Result<(), Box<dyn std::error::Error>> {
+    fn read_only_report_does_not_create_or_repair_any_state()
+    -> Result<(), Box<dyn std::error::Error>> {
         let root = std::env::temp_dir().join(format!(
             "bridge-report-no-state-{}-{}",
             std::process::id(),
@@ -661,7 +671,8 @@ mod tests {
     }
 
     #[test]
-    fn reporting_pending_local_never_claims_cloud_commit_or_authorized_retry() -> Result<(), Box<dyn std::error::Error>> {
+    fn reporting_pending_local_never_claims_cloud_commit_or_authorized_retry()
+    -> Result<(), Box<dyn std::error::Error>> {
         let root = test_root()?;
         record_at(
             &root,
@@ -681,12 +692,12 @@ mod tests {
     }
 
     #[test]
-    fn diagnostic_directory_is_outside_strict_delivery_state_and_survives_open() -> Result<(), Box<dyn std::error::Error>> {
+    fn diagnostic_directory_is_outside_strict_delivery_state_and_survives_open()
+    -> Result<(), Box<dyn std::error::Error>> {
         let root = test_root()?;
         fs::remove_dir(root.join("state"))?;
         let before =
-            crate::windows_delivery_store::DeliveryStateStore::initialize(root.join("state"))
-                ?;
+            crate::windows_delivery_store::DeliveryStateStore::initialize(root.join("state"))?;
         let original_revision = before.revision();
         record_at(
             &root,
@@ -699,15 +710,15 @@ mod tests {
         assert!(root.join(DIRECTORY).is_dir());
         assert!(!root.join("state").join(DIRECTORY).exists());
         let _report = report_at(&root);
-        let after = crate::windows_delivery_store::DeliveryStateStore::open(root.join("state"))
-            ?;
+        let after = crate::windows_delivery_store::DeliveryStateStore::open(root.join("state"))?;
         assert_eq!(after.revision(), original_revision);
         fs::remove_dir_all(root)?;
         Ok(())
     }
 
     #[test]
-    fn last_verified_runtime_is_observation_only_and_rejects_forged_identity() -> Result<(), Box<dyn std::error::Error>> {
+    fn last_verified_runtime_is_observation_only_and_rejects_forged_identity()
+    -> Result<(), Box<dyn std::error::Error>> {
         let root = test_root()?;
         let runtime_id = format!("runtime-bundle-v3-sha256-{}", "a".repeat(64));
         assert!(valid_runtime_release_id(&runtime_id));
@@ -735,7 +746,8 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
-    fn symlink_to_private_file_is_never_read_or_deleted() -> Result<(), Box<dyn std::error::Error>> {
+    fn symlink_to_private_file_is_never_read_or_deleted() -> Result<(), Box<dyn std::error::Error>>
+    {
         use std::os::unix::fs::symlink;
         let root = test_root()?;
         let private = root.join("private-user-data");
@@ -763,7 +775,8 @@ mod tests {
     }
 
     #[test]
-    fn report_is_bounded_and_ignores_symlink_or_missing_state() -> Result<(), Box<dyn std::error::Error>> {
+    fn report_is_bounded_and_ignores_symlink_or_missing_state()
+    -> Result<(), Box<dyn std::error::Error>> {
         let root = test_root()?;
         for _ in 0..100 {
             record_at(
