@@ -23,7 +23,7 @@ use std::env;
 use std::fs;
 use std::io::{BufRead, BufReader, Write};
 use std::path::{Path, PathBuf};
-use std::process::{Child, ChildStdin, ChildStdout, Command, ExitStatus, Stdio};
+use std::process::{Child, ChildStderr, ChildStdin, ChildStdout, Command, ExitStatus, Stdio};
 use std::sync::{
     Arc, Mutex,
     mpsc::{self, Receiver, RecvTimeoutError},
@@ -46,6 +46,8 @@ const HELLO_RESPONSE_TIMEOUT: Duration = Duration::from_secs(30);
 #[cfg(not(windows))]
 const HELLO_RESPONSE_TIMEOUT: Duration = Duration::from_secs(10);
 const LAUNCH_RESPONSE_TIMEOUT: Duration = Duration::from_secs(120);
+// Child stderr is untrusted. Only small, fixed-vocabulary diagnostics may reach Bridge logs.
+const MAX_CAMOUHOST_DIAGNOSTIC_BYTES: usize = 128;
 const BROWSER_VISIBLE_RESPONSE_TIMEOUT: Duration = Duration::from_secs(30);
 const NAVIGATION_RESPONSE_TIMEOUT: Duration = Duration::from_secs(120);
 const OBSERVE_CLOSE_RESPONSE_TIMEOUT: Duration = Duration::from_secs(5);
@@ -486,7 +488,7 @@ impl ManagedCamouhostProcess {
             .env("PYTHONUNBUFFERED", "1")
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
-            .stderr(Stdio::null());
+            .stderr(Stdio::piped());
         if let Some(path) = &self.config.proxy_config_path {
             command.env("CAMOUHOST_PROXY_CONFIG_PATH", path);
         }
@@ -512,6 +514,8 @@ impl ProcessControlPort for ManagedCamouhostProcess {
         let mut child = self.launch_child(session_id, &binding)?;
         let stdin = child.stdin.take().ok_or(BridgePortError::Unavailable)?;
         let stdout = child.stdout.take().ok_or(BridgePortError::Unavailable)?;
+        let stderr = child.stderr.take().ok_or(BridgePortError::Unavailable)?;
+        spawn_camouhost_diagnostic_reader(stderr);
         state.stdin = Some(stdin);
         state.responses = Some(spawn_response_reader(stdout));
         state.active_session = Some(session_id.clone());
@@ -778,7 +782,20 @@ fn exchange_shared(
     let frame = message
         .to_frame()
         .map_err(|_| BridgePortError::InvalidResponse)?;
-    let response = exchange_frame_shared(shared, &frame, response_timeout(message)?)?;
+    let response =
+        exchange_frame_shared(shared, &frame, response_timeout(message)?).inspect_err(|error| {
+            // A trusted IPC phase and closed error enum, never request contents or profile paths.
+            let phase = match message {
+                CamouhostMessage::Hello { .. } => "hello",
+                CamouhostMessage::Launch { .. } => "launch",
+                CamouhostMessage::ObserveBrowserVisible { .. } => "browser_visible",
+                CamouhostMessage::AdmitNavigation { .. } => "navigation",
+                CamouhostMessage::ObserveClose { .. } => "observe_close",
+                CamouhostMessage::Close { .. } => "close",
+                _ => "other",
+            };
+            eprintln!("CAMOUHOST_IPC_FAILURE phase={phase} category={error:?}");
+        })?;
     let parsed =
         CamouhostMessage::parse(&response).map_err(|_| BridgePortError::InvalidResponse)?;
     parsed
@@ -811,6 +828,83 @@ fn exchange_frame_shared(
         .as_ref()
         .ok_or(BridgePortError::Unavailable)?;
     receive_response(responses, timeout)
+}
+
+fn allowlisted_camouhost_diagnostic(line: &[u8]) -> Option<&str> {
+    // Do not log raw child stderr: Python/Playwright may emit private URLs,
+    // filesystem paths, environment variables or profile content in tracebacks.
+    if line.len() > MAX_CAMOUHOST_DIAGNOSTIC_BYTES || line.last() != Some(&b'\n') {
+        return None;
+    }
+    let message = std::str::from_utf8(&line[..line.len() - 1]).ok()?;
+    let allowed_failure = message
+        .strip_prefix("camouhost_failure phase=")
+        .and_then(|rest| rest.split_once(" category="))
+        .is_some_and(|(phase, category)| {
+            matches!(
+                phase,
+                "startup"
+                    | "launch"
+                    | "browser_visible"
+                    | "navigation"
+                    | "close"
+                    | "cleanup"
+                    | "unknown"
+            ) && matches!(
+                category,
+                "contract" | "timeout" | "io" | "browser_closed" | "unexpected" | "dependency"
+            )
+        });
+    let allowed_stage = message
+        .strip_prefix("camouhost_stage phase=")
+        .and_then(|rest| rest.split_once(" step="))
+        .is_some_and(|(phase, step)| {
+            (phase == "startup" && matches!(step, "begin" | "ready"))
+                || (phase == "launch"
+                    && matches!(
+                        step,
+                        "before_browser_enter" | "browser_entered" | "network_blocked" | "ready"
+                    ))
+        });
+    if allowed_failure || allowed_stage {
+        return Some(message);
+    }
+    None
+}
+
+fn spawn_camouhost_diagnostic_reader(stderr: ChildStderr) {
+    // Drain stderr continuously to prevent a filled OS pipe from blocking the
+    // real browser. Oversized/unrecognised lines are discarded, never retained.
+    thread::spawn(move || {
+        let mut reader = BufReader::new(stderr);
+        let mut line = Vec::with_capacity(MAX_CAMOUHOST_DIAGNOSTIC_BYTES);
+        let mut oversized = false;
+        loop {
+            let available = match reader.fill_buf() {
+                Ok(available) if !available.is_empty() => available,
+                _ => break,
+            };
+            let end = available.iter().position(|byte| *byte == b'\n');
+            let consumed = end.map_or(available.len(), |index| index + 1);
+            if !oversized {
+                if line.len().saturating_add(consumed) > MAX_CAMOUHOST_DIAGNOSTIC_BYTES {
+                    line.clear();
+                    oversized = true;
+                } else {
+                    line.extend_from_slice(&available[..consumed]);
+                }
+            }
+            let complete = end.is_some();
+            reader.consume(consumed);
+            if complete {
+                if !oversized && let Some(message) = allowlisted_camouhost_diagnostic(&line) {
+                    eprintln!("CAMOUHOST_RUNTIME_DIAGNOSTIC {message}");
+                }
+                line.clear();
+                oversized = false;
+            }
+        }
+    });
 }
 
 fn spawn_response_reader(stdout: ChildStdout) -> Receiver<Result<String, BridgePortError>> {
@@ -987,7 +1081,7 @@ fn inherit_runtime_environment(command: &mut Command) {
 mod tests {
     use super::{
         FINGERPRINT_SOURCE_PREFIX, RuntimeBindingBrowserLaunchPreflight, RuntimeBindingSlot,
-        decode_hex, hex_encode, receive_response, sha256_hex,
+        allowlisted_camouhost_diagnostic, decode_hex, hex_encode, receive_response, sha256_hex,
     };
     use crate::browser_execution::persist_materialization_binding;
     use crate::browser_preflight::{BrowserRuntimeObservation, BrowserRuntimeObservationPort};
@@ -1154,6 +1248,34 @@ mod tests {
             workspace.inventory()?.inventory_digest(),
             browser_identity,
         )?)
+    }
+
+    #[test]
+    fn only_bounded_closed_camouhost_diagnostics_are_logged() {
+        assert_eq!(
+            allowlisted_camouhost_diagnostic(b"camouhost_failure phase=launch category=timeout\n"),
+            Some("camouhost_failure phase=launch category=timeout")
+        );
+        assert_eq!(
+            allowlisted_camouhost_diagnostic(
+                b"camouhost_stage phase=launch step=before_browser_enter\n"
+            ),
+            Some("camouhost_stage phase=launch step=before_browser_enter")
+        );
+        for invalid in [
+            b"Traceback: C:\\private\\profile".as_slice(),
+            b"camouhost_failure phase=launch category=timeout private=secret\n",
+            b"camouhost_stage phase=launch step=browser_entered https://secret\n",
+            b"camouhost_failure phase=launch category=timeout\r\n",
+            b"camouhost_stage phase=launch step=unknown\n",
+        ] {
+            assert_eq!(allowlisted_camouhost_diagnostic(invalid), None);
+        }
+        let huge = format!(
+            "camouhost_failure phase=launch category={}\n",
+            "x".repeat(512)
+        );
+        assert_eq!(allowlisted_camouhost_diagnostic(huge.as_bytes()), None);
     }
 
     #[test]
