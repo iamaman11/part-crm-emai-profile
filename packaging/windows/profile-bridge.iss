@@ -92,6 +92,7 @@ const
 var
   BridgeOutputError: Boolean;
   BridgeLastLine: String;
+  BridgeOwnerVerdict: String;
   BridgeDownloadFailure: String;
   PreparedDirectory: String;
   InstallerProgress: TOutputMarqueeProgressWizardPage;
@@ -144,6 +145,18 @@ end;
 function SafeDownloadAsset(const Value: String): Boolean;
 begin
   Result := (Value = 'profile-bridge.zip') or (Value = 'runtime-bundle.tar');
+end;
+
+function SafeSignedDeliveryPolicyVerdict(const Value: String): Boolean;
+begin
+  { Closed semantic values from the existing native CMS admission owner.
+    Never retain an arbitrary Debug payload, URL, pathname, credential or key. }
+  Result := (Value = 'Preparation(Policy(SignatureInvalid))') or
+            (Value = 'Preparation(Policy(SignatureVerificationFailed))') or
+            (Value = 'Preparation(Policy(UnknownSigner))') or
+            (Value = 'Preparation(Policy(RevokedSigner))') or
+            (Value = 'Preparation(Policy(DowngradeRejected))') or
+            (Value = 'Preparation(Policy(ReplayConflict))');
 end;
 
 function SafeNativeFailureCode(const Value: String): Boolean;
@@ -214,6 +227,23 @@ begin
   end;
 end;
 
+procedure CaptureSignedDeliveryVerdict(const Line: String);
+var
+  Prefix, Tail, Candidate: String;
+  Position, Terminator: Integer;
+begin
+  if Length(Line) > 2048 then exit;
+  Prefix := '"owner_verdict":"';
+  Position := Pos(Prefix, Line);
+  if Position = 0 then exit;
+  Tail := Copy(Line, Position + Length(Prefix), Length(Line));
+  Terminator := Pos('"', Tail);
+  if Terminator = 0 then exit;
+  Candidate := Copy(Tail, 1, Terminator - 1);
+  if SafeSignedDeliveryPolicyVerdict(Candidate) then
+    BridgeOwnerVerdict := Candidate;
+end;
+
 procedure CaptureBridgeOutput(const S: String; const Error, FirstLine: Boolean);
 var
   Directory: String;
@@ -245,11 +275,17 @@ begin
     { stderr may include process-local details; log only that it occurred. }
     Log('BRIDGE_INSTALLATION_STDERR_OBSERVED');
   end else if Trim(S) <> '' then begin
-    { Retain only the native owner's bounded symbolic error codes. Reject
-      arbitrary text, stack traces, URLs, paths and request payloads. }
-    if SafeNativeFailureCode(Trim(S)) then
-      BridgeLastLine := Trim(S)
-    else
+    { Recover only a closed typed signing verdict from native installation
+      outcome JSON, never the surrounding raw error/debug payload. }
+    CaptureSignedDeliveryVerdict(S);
+    { Preserve a bounded symbolic prefix even if a static safe explanation
+      follows a colon. Never surface the explanation or unrelated text. }
+    Directory := Trim(S);
+    if Pos(':', Directory) > 0 then
+      Directory := Copy(Directory, 1, Pos(':', Directory) - 1);
+    if SafeNativeFailureCode(Directory) then
+      BridgeLastLine := Directory
+    else if BridgeLastLine = '' then
       BridgeLastLine := 'BRIDGE_INSTALLATION_OWNER_REJECTED';
   end;
 end;
@@ -267,6 +303,7 @@ begin
   Result := '';
   BridgeOutputError := False;
   BridgeLastLine := '';
+  BridgeOwnerVerdict := '';
   BridgeDownloadFailure := '';
   Code := -1;
   try
@@ -293,6 +330,8 @@ begin
       Result := BridgeLastLine
     else
       Result := 'BRIDGE_INSTALLATION_PROCESS_FAILED';
+    if BridgeOwnerVerdict <> '' then
+      Result := Result + ' (' + BridgeOwnerVerdict + ')';
   end;
 end;
 
