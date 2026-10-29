@@ -691,7 +691,7 @@ mod windows {
                 &materialization_root,
                 &mut generation_downloader,
                 opened_at,
-                |current, lease| {
+                (|current, lease| {
                     // The same original cursor stays alive during exact
                     // pending N+1 recovery, R2 download and Camoufox startup.
                     prelaunch_keepalive = Some(RetainedSaveHeartbeat::start(
@@ -707,7 +707,7 @@ mod windows {
                         })
                         .transpose()?;
                     Ok(())
-                },
+                }),
                 |live_coordinator, tenant, profile, selected_generation, fresh_lease| {
                     // The pre-launch keepalive above already spans exact
                     // recovery and any long R2 PUT. No duplicate thread.
