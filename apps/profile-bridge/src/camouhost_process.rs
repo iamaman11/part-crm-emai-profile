@@ -833,10 +833,14 @@ fn exchange_frame_shared(
 fn allowlisted_camouhost_diagnostic(line: &[u8]) -> Option<&str> {
     // Do not log raw child stderr: Python/Playwright may emit private URLs,
     // filesystem paths, environment variables or profile content in tracebacks.
-    if line.len() > MAX_CAMOUHOST_DIAGNOSTIC_BYTES || line.last() != Some(&b'\n') {
+    if line.len() > MAX_CAMOUHOST_DIAGNOSTIC_BYTES {
         return None;
     }
-    let message = std::str::from_utf8(&line[..line.len() - 1]).ok()?;
+    let message = line.strip_suffix(b"\n")?;
+    // Python writes CRLF to stderr on Windows; accept that transport framing
+    // without admitting CR or any untrusted fields inside the closed diagnostic.
+    let message = message.strip_suffix(b"\r").unwrap_or(message);
+    let message = std::str::from_utf8(message).ok()?;
     let allowed_failure = message
         .strip_prefix("camouhost_failure phase=")
         .and_then(|rest| rest.split_once(" category="))
@@ -1257,8 +1261,18 @@ mod tests {
             Some("camouhost_failure phase=launch category=timeout")
         );
         assert_eq!(
+            allowlisted_camouhost_diagnostic(b"camouhost_failure phase=launch category=timeout\r\n"),
+            Some("camouhost_failure phase=launch category=timeout")
+        );
+        assert_eq!(
             allowlisted_camouhost_diagnostic(
                 b"camouhost_stage phase=launch step=before_browser_enter\n"
+            ),
+            Some("camouhost_stage phase=launch step=before_browser_enter")
+        );
+        assert_eq!(
+            allowlisted_camouhost_diagnostic(
+                b"camouhost_stage phase=launch step=before_browser_enter\r\n"
             ),
             Some("camouhost_stage phase=launch step=before_browser_enter")
         );
@@ -1266,7 +1280,8 @@ mod tests {
             b"Traceback: C:\\private\\profile".as_slice(),
             b"camouhost_failure phase=launch category=timeout private=secret\n",
             b"camouhost_stage phase=launch step=browser_entered https://secret\n",
-            b"camouhost_failure phase=launch category=timeout\r\n",
+            b"camouhost_failure phase=launch category=timeout\r\r\n",
+            b"camouhost_failure phase=launch\r category=timeout\n",
             b"camouhost_stage phase=launch step=unknown\n",
         ] {
             assert_eq!(allowlisted_camouhost_diagnostic(invalid), None);
