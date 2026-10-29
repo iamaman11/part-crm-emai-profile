@@ -137,10 +137,13 @@ where
     ) -> Result<(), Self::Error> {
         let runtime_manifest = runtime_bundle.manifest();
         let browser_identity = self.expected.browser_identity();
-        if browser_identity.runtime_version() != runtime_manifest.runtime_version()
-            || browser_identity.runtime_inventory_sha256()
-                != runtime_manifest.inventory_sha256().as_str()
-        {
+        // An approved runtime may be repackaged (e.g. Camouhost diagnostics)
+        // without changing the profile's browser identity contract. The full
+        // inventory is verified by the runtime bundle owner, while the pinned
+        // config, writer, network and browser-visible identity remain checked
+        // by their respective launch owners. Keep the original runtime digest
+        // in the generation identity as provenance; never rewrite it on Open.
+        if browser_identity.runtime_version() != runtime_manifest.runtime_version() {
             return Err(BrowserLaunchBlocker::MaterializationStale);
         }
 
@@ -274,7 +277,9 @@ mod tests {
         BoundBrowserLaunchPreflight, BrowserRuntimeObservation, BrowserRuntimeObservationPort,
         CAMOUFOX_CONFIG_FILE, classify_browser_launch_blocker, validate_camoufox_webgl_value,
     };
-    use crate::browser_execution::{BrowserLaunchBlocker, persist_materialization_binding};
+    use crate::browser_execution::{
+        BrowserLaunchBlocker, load_materialization_binding, persist_materialization_binding,
+    };
     use crate::local_profile::{BridgeWorkspaceLock, GenerationWorkspace, MaterializationRoot};
     use crate::operator_flow::{BrowserLaunchPreflightPort, OperationalRejectionReason};
     use crate::runtime_bundle::ApprovedRuntimeBundle;
@@ -435,6 +440,7 @@ mod tests {
             "route-a",
         )?;
         let calls = Rc::new(Cell::new(0));
+        let original_binding = binding.clone();
         let mut preflight = BoundBrowserLaunchPreflight::new(
             binding,
             policy,
@@ -455,6 +461,26 @@ mod tests {
         );
         assert_eq!(calls.get(), 0);
 
+        // A maintenance release can change the signed runtime file inventory
+        // without changing the browser identity/compatibility version. Reopen
+        // must not rewrite the generation-owned identity or its local binding.
+        preflight.evaluate_before_launch(
+            &workspace,
+            &device,
+            3,
+            &approved_bundle("0.1.0", 'f')?,
+        )?;
+        assert_eq!(calls.get(), 1);
+        assert_eq!(
+            load_materialization_binding(
+                &workspace,
+                original_binding.tenant_id(),
+                original_binding.profile_id(),
+                original_binding.generation_id(),
+            )?,
+            original_binding,
+        );
+
         fs::write(
             workspace.path().join(CAMOUFOX_CONFIG_FILE),
             r#"{"webGl:parameters":{"2928":[NaN,1.0]}}"#,
@@ -468,7 +494,7 @@ mod tests {
             ),
             Err(BrowserLaunchBlocker::InvalidMaterializationEvidence)
         );
-        assert_eq!(calls.get(), 0);
+        assert_eq!(calls.get(), 1);
 
         fs::write(
             workspace.path().join(CAMOUFOX_CONFIG_FILE),
@@ -480,7 +506,7 @@ mod tests {
             3,
             &approved_bundle("0.1.0", 'a')?,
         )?;
-        assert_eq!(calls.get(), 1);
+        assert_eq!(calls.get(), 2);
         lock.release()?;
         remove_test_root(&root_path)?;
         Ok(())
