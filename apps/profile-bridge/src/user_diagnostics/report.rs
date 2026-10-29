@@ -137,8 +137,23 @@ fn installed_root() -> Option<PathBuf> {
     coordinator.installed_root().ok().map(Path::to_path_buf)
 }
 
+fn linked_or_reparse(meta: &fs::Metadata) -> bool {
+    if meta.file_type().is_symlink() {
+        return true;
+    }
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::MetadataExt;
+        meta.file_attributes() & 0x0400 != 0
+    }
+    #[cfg(not(windows))]
+    {
+        false
+    }
+}
+
 fn valid_directory(path: &Path) -> bool {
-    fs::symlink_metadata(path).is_ok_and(|meta| meta.is_dir() && !meta.file_type().is_symlink())
+    fs::symlink_metadata(path).is_ok_and(|meta| meta.is_dir() && !linked_or_reparse(&meta))
 }
 
 fn journal_dir(root: &Path, create: bool) -> Option<PathBuf> {
@@ -215,7 +230,7 @@ fn observations(root: &Path) -> Vec<Observation> {
         let Some(name) = name.to_str() else { continue };
         if !is_event_name(name) { continue; }
         let Ok(meta) = fs::symlink_metadata(item.path()) else { continue };
-        if !meta.is_file() || meta.file_type().is_symlink() || meta.len() > MAX_RECORD_BYTES { continue; }
+        if !meta.is_file() || linked_or_reparse(&meta) || meta.len() > MAX_RECORD_BYTES { continue; }
         let Ok(file) = File::open(item.path()) else { continue };
         let mut bytes = Vec::new();
         if file.take(MAX_RECORD_BYTES + 1).read_to_end(&mut bytes).is_err() || bytes.len() > MAX_RECORD_BYTES as usize { continue; }
@@ -256,7 +271,7 @@ fn prune(directory: &Path, now: u64) {
         let Some(name) = name.to_str() else { continue };
         if !is_event_name(name) { continue; }
         let Ok(meta) = fs::symlink_metadata(item.path()) else { continue };
-        if !meta.is_file() || meta.file_type().is_symlink() { continue; }
+        if !meta.is_file() || linked_or_reparse(&meta) { continue; }
         files.push((name.to_owned(), item.path()));
     }
     files.sort_by(|left, right| left.0.cmp(&right.0));
