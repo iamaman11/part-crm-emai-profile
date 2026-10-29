@@ -20,7 +20,7 @@ import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from types import ModuleType
-from typing import BinaryIO, Iterator
+from typing import BinaryIO, Callable, Iterator
 from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -245,15 +245,18 @@ def prove_managed_environment_projection(runtime: ModuleType) -> None:
         assert runtime.browser_environment() == expected
 
 
-def run_cold_launch(root: Path, report: dict[str, str], url: str) -> None:
+def run_cold_launch(
+    root: Path, report: dict[str, str], url: str, on_ready: Callable[[], None] | None = None
+) -> None:
     # A file avoids a full stderr pipe blocking runtime-owned browser cleanup. Read only
     # a bounded tail after process exit; do not block on stderr while the child is alive.
     with tempfile.TemporaryFile() as diagnostics:
-        run_cold_launch_observed(root, report, url, diagnostics)
+        run_cold_launch_observed(root, report, url, diagnostics, on_ready)
 
 
 def run_cold_launch_observed(
-    root: Path, report: dict[str, str], url: str, diagnostics: BinaryIO
+    root: Path, report: dict[str, str], url: str, diagnostics: BinaryIO,
+    on_ready: Callable[[], None] | None = None,
 ) -> None:
     process = subprocess.Popen(
         [sys.executable, str(CAMOUHOST)],
@@ -270,6 +273,8 @@ def run_cold_launch_observed(
     try:
         assert exchange(process, f"hello|{IPC_VERSION}") == f"hello_ack|{IPC_VERSION}"
         assert exchange(process, f"launch|{SESSION}") == f"ready|{SESSION}"
+        if on_ready is not None:
+            on_ready()
         complete_pre_navigation_protocol(process, url)
         assert exchange(process, f"close|{SESSION}") == f"closed|{SESSION}|true"
         returncode = process.wait(timeout=60)
@@ -407,13 +412,31 @@ def main() -> int:
                 )
 
             assert_clean_launch_lock_state(first_root)
-            run_cold_launch(first_root, first, url)
+            # Restore a *previously browsed* tab on the next cold launch. The
+            # test copy retains Firefox's own session setting and files.
+            with (first_root / "user_data" / "user.js").open(
+                "a", encoding="utf-8", newline="\n"
+            ) as prefs:
+                prefs.write('\nuser_pref("browser.startup.page", 3);\n')
+
+            def require_no_early_network() -> None:
+                if not server.observations.empty():
+                    raise AssertionError(
+                        "restored tab accessed the network before navigation admission"
+                    )
+
+            run_cold_launch(first_root, first, url, require_no_early_network)
             observed_second = server.observations.get(timeout=15)
             if observed_second != (True, True):
                 raise AssertionError(
                     "durable cookie/localStorage did not survive clean cold relaunch: "
                     f"{observed_second}"
                 )
+            # A restored foreground tab may reload after admission alongside
+            # the explicit navigation; neither may contaminate another profile.
+            while not server.observations.empty():
+                if server.observations.get_nowait() != (True, True):
+                    raise AssertionError("restored tab lost its persisted origin state")
 
             assert_clean_launch_lock_state(first_root)
             run_cold_launch(second_root, second, url)
