@@ -59,7 +59,9 @@ REPOSITORY_REQUIRED = {
     "apps/profile-bridge/src/browser_preflight.rs": (
         "pub struct BoundBrowserLaunchPreflight",
         "BrowserRuntimeObservationPort",
-        "runtime_inventory_sha256()",
+        # Runtime package inventory is checked by its owner; saved profiles
+        # gate on the declared compatibility version, not old package bytes.
+        "browser_identity.runtime_version() != runtime_manifest.runtime_version()",
         ".observe(workspace, device_id)",
         "evaluate_browser_launch(",
     ),
