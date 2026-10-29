@@ -783,7 +783,7 @@ fn exchange_shared(
         .to_frame()
         .map_err(|_| BridgePortError::InvalidResponse)?;
     let response =
-        exchange_frame_shared(shared, &frame, response_timeout(message)?).map_err(|error| {
+        exchange_frame_shared(shared, &frame, response_timeout(message)?).inspect_err(|error| {
             // A trusted IPC phase and closed error enum, never request contents or profile paths.
             let phase = match message {
                 CamouhostMessage::Hello { .. } => "hello",
@@ -795,7 +795,6 @@ fn exchange_shared(
                 _ => "other",
             };
             eprintln!("CAMOUHOST_IPC_FAILURE phase={phase} category={error:?}");
-            error
         })?;
     let parsed =
         CamouhostMessage::parse(&response).map_err(|_| BridgePortError::InvalidResponse)?;
@@ -838,39 +837,37 @@ fn allowlisted_camouhost_diagnostic(line: &[u8]) -> Option<&str> {
         return None;
     }
     let message = std::str::from_utf8(&line[..line.len() - 1]).ok()?;
-    if let Some((phase, category)) = message
+    let allowed_failure = message
         .strip_prefix("camouhost_failure phase=")
         .and_then(|rest| rest.split_once(" category="))
-    {
-        if matches!(
-            phase,
-            "startup"
-                | "launch"
-                | "browser_visible"
-                | "navigation"
-                | "close"
-                | "cleanup"
-                | "unknown"
-        ) && matches!(
-            category,
-            "contract" | "timeout" | "io" | "browser_closed" | "unexpected" | "dependency"
-        ) {
-            return Some(message);
-        }
-    }
-    if let Some((phase, step)) = message
+        .is_some_and(|(phase, category)| {
+            matches!(
+                phase,
+                "startup"
+                    | "launch"
+                    | "browser_visible"
+                    | "navigation"
+                    | "close"
+                    | "cleanup"
+                    | "unknown"
+            ) && matches!(
+                category,
+                "contract" | "timeout" | "io" | "browser_closed" | "unexpected" | "dependency"
+            )
+        });
+    let allowed_stage = message
         .strip_prefix("camouhost_stage phase=")
         .and_then(|rest| rest.split_once(" step="))
-    {
-        if (phase == "startup" && matches!(step, "begin" | "ready"))
-            || (phase == "launch"
-                && matches!(
-                    step,
-                    "before_browser_enter" | "browser_entered" | "network_blocked" | "ready"
-                ))
-        {
-            return Some(message);
-        }
+        .is_some_and(|(phase, step)| {
+            (phase == "startup" && matches!(step, "begin" | "ready"))
+                || (phase == "launch"
+                    && matches!(
+                        step,
+                        "before_browser_enter" | "browser_entered" | "network_blocked" | "ready"
+                    ))
+        });
+    if allowed_failure || allowed_stage {
+        return Some(message);
     }
     None
 }
@@ -900,10 +897,8 @@ fn spawn_camouhost_diagnostic_reader(stderr: ChildStderr) {
             let complete = end.is_some();
             reader.consume(consumed);
             if complete {
-                if !oversized {
-                    if let Some(message) = allowlisted_camouhost_diagnostic(&line) {
-                        eprintln!("CAMOUHOST_RUNTIME_DIAGNOSTIC {message}");
-                    }
+                if !oversized && let Some(message) = allowlisted_camouhost_diagnostic(&line) {
+                    eprintln!("CAMOUHOST_RUNTIME_DIAGNOSTIC {message}");
                 }
                 line.clear();
                 oversized = false;
@@ -1086,7 +1081,7 @@ fn inherit_runtime_environment(command: &mut Command) {
 mod tests {
     use super::{
         FINGERPRINT_SOURCE_PREFIX, RuntimeBindingBrowserLaunchPreflight, RuntimeBindingSlot,
-        decode_hex, hex_encode, receive_response, sha256_hex,
+        allowlisted_camouhost_diagnostic, decode_hex, hex_encode, receive_response, sha256_hex,
     };
     use crate::browser_execution::persist_materialization_binding;
     use crate::browser_preflight::{BrowserRuntimeObservation, BrowserRuntimeObservationPort};
