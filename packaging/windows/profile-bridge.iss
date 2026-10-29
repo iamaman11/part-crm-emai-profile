@@ -146,6 +146,20 @@ begin
   Result := (Value = 'profile-bridge.zip') or (Value = 'runtime-bundle.tar');
 end;
 
+function SafeNativeFailureCode(const Value: String): Boolean;
+var
+  Index: Integer;
+begin
+  Result := False;
+  if (Length(Value) < 8) or (Length(Value) > 80) or
+     (Pos('BRIDGE_', Value) <> 1) then exit;
+  for Index := 1 to Length(Value) do
+    if not (((Value[Index] >= 'A') and (Value[Index] <= 'Z')) or
+            ((Value[Index] >= '0') and (Value[Index] <= '9')) or
+            (Value[Index] = '_')) then exit;
+  Result := True;
+end;
+
 procedure DisplayDownloadProgress(const Line: String);
 var
   Tail, Asset, Bytes, Total, Idle: String;
@@ -231,9 +245,12 @@ begin
     { stderr may include process-local details; log only that it occurred. }
     Log('BRIDGE_INSTALLATION_STDERR_OBSERVED');
   end else if Trim(S) <> '' then begin
-    { Do not retain arbitrary stdout text as a user-visible diagnostic. The
-      typed download category and process outcome are sufficient here. }
-    BridgeLastLine := 'BRIDGE_INSTALLATION_OWNER_REJECTED';
+    { Retain only the native owner's bounded symbolic error codes. Reject
+      arbitrary text, stack traces, URLs, paths and request payloads. }
+    if SafeNativeFailureCode(Trim(S)) then
+      BridgeLastLine := Trim(S)
+    else
+      BridgeLastLine := 'BRIDGE_INSTALLATION_OWNER_REJECTED';
   end;
 end;
 
