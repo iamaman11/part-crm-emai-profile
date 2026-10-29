@@ -867,6 +867,9 @@ def camoufox_kwargs(
             "privacy.baselineFingerprintingProtection": False,
             "webgl.disabled": False,
             "webgl.enable-webgl2": enabled_webgl2,
+            # Keep native Windows accessibility APIs available to standard GUI automation.
+            # This does not enable remote debugging or inspect page content.
+            **({"accessibility.force_disabled": 0} if os.name == "nt" else {}),
             # Firefox offline mode can allow localhost by default. Block it
             # before restored pages load; admission later releases offline mode.
             "network.disable-localhost-when-offline": True,
@@ -1345,6 +1348,11 @@ def run_ipc() -> int:
                     emit("error|runtime")
                     return 5
                 navigation_admitted = True
+                # Live Playwright page count only: may include a startup blank tab.
+                # Never call this a restored-tab count and never send addresses/titles.
+                observed_pages = len(context.pages)
+                if 0 <= observed_pages <= 512:
+                    print(f"camouhost_pages count={observed_pages}", file=sys.stderr, flush=True)
                 emit(f"navigation_admitted|{active_session}")
                 continue
 
