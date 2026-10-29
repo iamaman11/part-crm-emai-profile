@@ -70,14 +70,31 @@ en.FinishingInstallation=Finishing installation and checking the installed compo
 ru.FinishingInstallation=Завершение установки и проверка установленных компонентов.
 en.InstallationFailed=Installation could not finish. Check the message below, then retry this installer. Keep the setup log if the problem repeats.
 ru.InstallationFailed=Не удалось завершить установку. Проверьте сообщение ниже и повторите установку. Если ошибка повторяется, сохраните журнал установки.
+en.DownloadBytes=Downloaded bytes
+ru.DownloadBytes=Загружено байт
+en.LastByteAgo=Seconds since last received byte
+ru.LastByteAgo=Секунд с получения последнего байта
+en.DownloadFailure=Download failure category
+ru.DownloadFailure=Категория ошибки загрузки
+en.DownloadVerifying=Verifying downloaded archive integrity.
+ru.DownloadVerifying=Проверка целостности загруженного архива.
+en.DownloadCached=Using previously verified local archive.
+ru.DownloadCached=Используется ранее проверенный локальный архив.
+en.DownloadComplete=Archive verified. Preparing browser components.
+ru.DownloadComplete=Архив проверен. Подготовка компонентов браузера.
 
 [Code]
 const
   DirectoryPrefix = 'PROFILE_BRIDGE_PREPARED_DIRECTORY_V1=';
+  DownloadProgressPrefix = 'PROFILE_BRIDGE_DOWNLOAD_PROGRESS_V1=';
+  DownloadStagePrefix = 'PROFILE_BRIDGE_DOWNLOAD_STAGE_V1=';
+  DownloadFailurePrefix = 'PROFILE_BRIDGE_DOWNLOAD_FAILURE_V1=';
 var
   BridgeOutputError: Boolean;
   BridgeLastLine: String;
+  BridgeDownloadFailure: String;
   PreparedDirectory: String;
+  InstallerProgress: TOutputMarqueeProgressWizardPage;
 
 function SafePreparedDirectory(const Value: String): Boolean;
 var
@@ -99,12 +116,108 @@ begin
   Result := ExpandConstant('{app}\releases\') + PreparedDirectory + '\profile-bridge\profile-bridge.exe';
 end;
 
+function TakeField(var Tail: String): String;
+var
+  Delimiter: Integer;
+begin
+  Delimiter := Pos('|', Tail);
+  if Delimiter = 0 then begin
+    Result := Tail;
+    Tail := '';
+  end else begin
+    Result := Copy(Tail, 1, Delimiter - 1);
+    Delete(Tail, 1, Delimiter);
+  end;
+end;
+
+function DecimalBytes(const Value: String): Boolean;
+var
+  Index: Integer;
+begin
+  Result := False;
+  if (Length(Value) = 0) or (Length(Value) > 20) then exit;
+  for Index := 1 to Length(Value) do
+    if (Value[Index] < '0') or (Value[Index] > '9') then exit;
+  Result := True;
+end;
+
+function SafeDownloadAsset(const Value: String): Boolean;
+begin
+  Result := (Value = 'profile-bridge.zip') or (Value = 'runtime-bundle.tar');
+end;
+
+procedure DisplayDownloadProgress(const Line: String);
+var
+  Tail, Asset, Bytes, Total, Idle: String;
+begin
+  if Length(Line) > 120 then exit;
+  Tail := Line;
+  Asset := TakeField(Tail);
+  Bytes := TakeField(Tail);
+  Total := TakeField(Tail);
+  Idle := TakeField(Tail);
+  if not SafeDownloadAsset(Asset) or not DecimalBytes(Bytes) or
+     not DecimalBytes(Total) or not DecimalBytes(Idle) or (Tail <> '') then exit;
+  InstallerProgress.SetText(
+    Asset + ': ' + CustomMessage('DownloadBytes') + ' ' + Bytes + ' / ' + Total,
+    CustomMessage('LastByteAgo') + ': ' + Idle);
+end;
+
+procedure DisplayDownloadStage(const Line: String);
+var
+  Tail, Asset, Stage, Description: String;
+begin
+  if Length(Line) > 100 then exit;
+  Tail := Line;
+  Asset := TakeField(Tail);
+  Stage := TakeField(Tail);
+  if not SafeDownloadAsset(Asset) or (Tail <> '') then exit;
+  Description := '';
+  if Stage = 'download' then Description := CustomMessage('InstallingBrowser')
+  else if Stage = 'cached' then Description := CustomMessage('DownloadCached')
+  else if Stage = 'verifying' then Description := CustomMessage('DownloadVerifying')
+  else if Stage = 'verified' then Description := CustomMessage('DownloadComplete');
+  if Description <> '' then InstallerProgress.SetText(Asset, Description);
+end;
+
+procedure CaptureDownloadFailure(const Line: String);
+var
+  Tail, Asset, Category: String;
+begin
+  if Length(Line) > 100 then exit;
+  Tail := Line;
+  Asset := TakeField(Tail);
+  Category := TakeField(Tail);
+  if not SafeDownloadAsset(Asset) or (Tail <> '') then exit;
+  if (Category = 'DNS') or (Category = 'CONNECT') or
+     (Category = 'TLS') or (Category = 'HTTP') or
+     (Category = 'READ_STALLED') or (Category = 'TIMEOUT') or
+     (Category = 'SIZE') or (Category = 'DISK') or
+     (Category = 'INSECURE_REDIRECT') or (Category = 'NETWORK_OR_PROCESS') or
+     (Category = 'INVALID_REQUEST') or (Category = 'PLATFORM') then begin
+    BridgeDownloadFailure := Asset + ': ' + Category;
+    InstallerProgress.SetText(CustomMessage('DownloadFailure'), BridgeDownloadFailure);
+  end;
+end;
+
 procedure CaptureBridgeOutput(const S: String; const Error, FirstLine: Boolean);
 var
   Directory: String;
 begin
-  { Preserve native diagnostics as they arrive, before enforcing any exit gate. }
-  Log(S);
+  { Only bounded allowlisted download frames reach user-facing UI. Never
+    display raw HTTP exceptions, URLs, proxy credentials or request payloads. }
+  if not Error and (Pos(DownloadProgressPrefix, S) = 1) then begin
+    DisplayDownloadProgress(Copy(S, Length(DownloadProgressPrefix) + 1, Length(S)));
+    exit;
+  end;
+  if not Error and (Pos(DownloadStagePrefix, S) = 1) then begin
+    DisplayDownloadStage(Copy(S, Length(DownloadStagePrefix) + 1, Length(S)));
+    exit;
+  end;
+  if not Error and (Pos(DownloadFailurePrefix, S) = 1) then begin
+    CaptureDownloadFailure(Copy(S, Length(DownloadFailurePrefix) + 1, Length(S)));
+    exit;
+  end;
   if not Error and (Pos(DirectoryPrefix, S) = 1) then begin
     Directory := Copy(S, Length(DirectoryPrefix) + 1, Length(S));
     if not SafePreparedDirectory(Directory) or (PreparedDirectory <> '') then
@@ -113,10 +226,15 @@ begin
       PreparedDirectory := Directory;
     exit;
   end;
-  if Error then
-    BridgeOutputError := True
-  else if Trim(S) <> '' then
-    BridgeLastLine := Trim(S);
+  if Error then begin
+    BridgeOutputError := True;
+    { stderr may include process-local details; log only that it occurred. }
+    Log('BRIDGE_INSTALLATION_STDERR_OBSERVED');
+  end else if Trim(S) <> '' then begin
+    { Do not retain arbitrary stdout text as a user-visible diagnostic. The
+      typed download category and process outcome are sufficient here. }
+    BridgeLastLine := 'BRIDGE_INSTALLATION_OWNER_REJECTED';
+  end;
 end;
 
 function QuoteArgument(const Value: String): String;
@@ -132,6 +250,7 @@ begin
   Result := '';
   BridgeOutputError := False;
   BridgeLastLine := '';
+  BridgeDownloadFailure := '';
   Code := -1;
   try
     Started := ExecAndLogOutput(Filename, Parameters, '', SW_SHOWNORMAL,
@@ -146,10 +265,14 @@ begin
   end;
   if BridgeOutputError then begin
     Result := 'BRIDGE_INSTALLATION_OUTPUT_UNAVAILABLE';
+    if BridgeDownloadFailure <> '' then
+      Result := Result + ' (' + BridgeDownloadFailure + ')';
     exit;
   end;
   if Code <> 0 then begin
-    if BridgeLastLine <> '' then
+    if BridgeDownloadFailure <> '' then
+      Result := 'BRIDGE_INSTALLATION_DOWNLOAD_FAILED (' + BridgeDownloadFailure + ')'
+    else if BridgeLastLine <> '' then
       Result := BridgeLastLine
     else
       Result := 'BRIDGE_INSTALLATION_PROCESS_FAILED';
@@ -159,17 +282,16 @@ end;
 function PrepareToInstall(var NeedsRestart: Boolean): String;
 var
   Target: String;
-  Progress: TOutputMarqueeProgressWizardPage;
-begin
+ begin
   NeedsRestart := False;
   Result := '';
   PreparedDirectory := '';
-  Progress := CreateOutputMarqueeProgressPage(CustomMessage('PreparingTitle'),
+  InstallerProgress := CreateOutputMarqueeProgressPage(CustomMessage('PreparingTitle'),
     CustomMessage('PreparingDescription'));
-  Progress.SetText(CustomMessage('InstallingBrowser'), '');
-  Progress.Show;
+  InstallerProgress.SetText(CustomMessage('InstallingBrowser'), '');
+  InstallerProgress.Show;
   try
-    Progress.Animate;
+    InstallerProgress.Animate;
     ExtractTemporaryFile('profile-bridge.exe');
     ExtractTemporaryFile('installation.json');
     ExtractTemporaryFile('windows-delivery-manifest.json');
@@ -179,12 +301,12 @@ begin
     if (Result = '') and (PreparedDirectory = '') then
       Result := 'BRIDGE_INSTALLATION_OUTPUT_UNAVAILABLE';
     if Result = '' then begin
-      Progress.SetText(CustomMessage('FinishingInstallation'), '');
+      InstallerProgress.SetText(CustomMessage('FinishingInstallation'), '');
       Target := InstalledBridgePath('');
       Result := RunBridge(Target, '--delivery-install-staged ' + QuoteArgument('{#ControlPlaneOrigin}'));
     end;
   finally
-    Progress.Hide;
+    InstallerProgress.Hide;
   end;
   if Result <> '' then
     Result := CustomMessage('InstallationFailed') + #13#10 + Result;
