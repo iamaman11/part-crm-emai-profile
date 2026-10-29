@@ -22,6 +22,16 @@ export function SettingsWorkspace() {
           provider tokens and raw environment values are deliberately absent.
         </p>
       </section>
+      <section className="panel" aria-label="Windows Profile Bridge diagnostics">
+        <h3>Windows Profile Bridge</h3>
+        <p>
+          The installed Bridge can copy a small, locally retained report of recent operations.
+          The report contains only bounded status codes, stages and timings; it does not include
+          profile contents, visited pages, credentials or raw errors. Nothing is uploaded.
+          This button starts the installed Windows application; it cannot inspect another device.
+        </p>
+        <a href="profilebridge://diagnostics/copy">Скопировать диагностику</a>
+      </section>
       <section className="workspace-grid">
         <article className="panel">
           <h3>Control-plane health</h3>
