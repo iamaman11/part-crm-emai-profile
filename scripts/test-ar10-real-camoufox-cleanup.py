@@ -399,8 +399,10 @@ import importlib.util
 import json
 import os
 import sys
+import time
 from pathlib import Path
 from camoufox.sync_api import Camoufox
+from playwright.sync_api import TimeoutError as PlaywrightTimeoutError
 
 camouhost, lockfile, root, origin = map(str, sys.argv[1:5])
 spec = importlib.util.spec_from_file_location("camouhost_restore_session_proof", camouhost)
@@ -435,12 +437,24 @@ finally:
 
 manager, context = enter()
 try:
-    # Observe native, previously existing pages rather than creating new ones.
-    # Do not admit network until the restored targets are inspectable.
-    present = {page.url: page for page in context.pages}
-    missing = set(urls) - set(present)
-    if missing:
-        raise AssertionError("previously open Firefox tabs absent from Playwright context")
+    # Firefox SessionStore restores windows asynchronously on Windows. Wait
+    # for the existing native pages; never synthesize pages on the second launch.
+    deadline = time.monotonic() + 20
+    while True:
+        present = {page.url: page for page in context.pages}
+        missing = set(urls) - set(present)
+        if not missing:
+            break
+        if time.monotonic() >= deadline:
+            raise AssertionError(
+                "previously open Firefox tabs absent from Playwright context; "
+                f"missing={sorted(missing)!r}; "
+                f"observed={sorted(page.url for page in context.pages)!r}"
+            )
+        try:
+            context.wait_for_event("page", timeout=500)
+        except PlaywrightTimeoutError:
+            pass
     retained = present[urls[0]].evaluate("localStorage.getItem('restore-proof')")
     if retained != "retained":
         raise AssertionError("restored tab lost persistent origin state")
