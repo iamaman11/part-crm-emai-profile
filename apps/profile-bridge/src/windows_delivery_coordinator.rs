@@ -50,6 +50,8 @@ impl<'a> WindowsDeliveryCoordinator<'a> {
             verifier,
         )
         .map_err(WindowsDeliveryCoordinatorError::Policy)?;
+        #[cfg(windows)]
+        println!("PROFILE_BRIDGE_INSTALL_STAGE_V1=ADMISSION_VERIFIED");
         let active = crate::windows_delivery_handoff::installation_candidate(
             self.state_store.state(),
             self.state_store.handoff(),
@@ -127,6 +129,8 @@ impl<'a> WindowsDeliveryCoordinator<'a> {
             fetcher,
         )
         .map_err(WindowsDeliveryCoordinatorError::Download)?;
+        #[cfg(windows)]
+        println!("PROFILE_BRIDGE_INSTALL_STAGE_V1=UNPACK_VERIFY");
         let staged = stage_verified_delivery(
             self.staging_root,
             &candidate,
@@ -136,6 +140,8 @@ impl<'a> WindowsDeliveryCoordinator<'a> {
         )
         .map_err(WindowsDeliveryCoordinatorError::Staging)?;
 
+        #[cfg(windows)]
+        println!("PROFILE_BRIDGE_INSTALL_STAGE_V1=STAGED");
         let reopened = reopen_staged_delivery(self.staging_root, staged.identity())
             .map_err(WindowsDeliveryCoordinatorError::Staging)?;
         if reopened.identity() != &candidate.identity() || reopened.path() != staged.path() {
