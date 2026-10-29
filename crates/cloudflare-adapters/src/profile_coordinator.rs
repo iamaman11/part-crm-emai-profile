@@ -915,6 +915,164 @@ mod tests {
     }
 
     #[test]
+    fn uncertain_recovery_is_single_atomic_same_device_intent()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let mut document = document()?;
+        document.apply(StoredCoordinatorEnvelope::new(
+            "idem_recovery_issue_01JADAPTER",
+            1, 1,
+            StoredCoordinatorCommand::IssueLaunchIntent {
+                launch_intent_id: "intent_recovery_01JADAPTER".to_owned(),
+                actor_id: "actor_01JADAPTER".to_owned(),
+                device_id: "device_01JADAPTER".to_owned(),
+                now_ms: 1,
+                expires_at_ms: 50,
+            },
+        ))?;
+        document.apply(StoredCoordinatorEnvelope::new(
+            "idem_recovery_claim_01JADAPTER",
+            2, 2,
+            StoredCoordinatorCommand::Claim {
+                launch_intent_id: "intent_recovery_01JADAPTER".to_owned(),
+                actor_id: "actor_01JADAPTER".to_owned(),
+                device_id: "device_01JADAPTER".to_owned(),
+                session_id: "session_recovery_01JADAPTER".to_owned(),
+                fencing_token: "fence_recovery_01JADAPTER".to_owned(),
+                now_ms: 2,
+            },
+        ))?;
+        document.apply(StoredCoordinatorEnvelope::new(
+            "idem_recovery_uncertain_01JADAPTER",
+            3, 3,
+            StoredCoordinatorCommand::Release {
+                session_id: "session_recovery_01JADAPTER".to_owned(),
+                epoch: 1,
+                fencing_token: "fence_recovery_01JADAPTER".to_owned(),
+                disposition: StoredReleaseDisposition::Uncertain,
+                now_ms: 3,
+            },
+        ))?;
+        let wrong = StoredCoordinatorEnvelope::new(
+            "idem_wrong_device_01JADAPTER",
+            4, 4,
+            StoredCoordinatorCommand::RecoverAndIssueLaunchIntent {
+                launch_intent_id: "intent_new_01JADAPTER".to_owned(),
+                actor_id: "actor_01JADAPTER".to_owned(),
+                device_id: "device_foreign_01JADAPTER".to_owned(),
+                now_ms: 4,
+                expires_at_ms: 54,
+            },
+        );
+        assert!(document.apply(wrong).is_err());
+        assert_eq!(document.replay()?.last_sequence(), 3);
+        assert_eq!(document.projection()?.status, session_domain::coordinator::CoordinatorStatus::Uncertain);
+        let same = StoredCoordinatorEnvelope::new(
+            "idem_same_device_01JADAPTER",
+            4, 4,
+            StoredCoordinatorCommand::RecoverAndIssueLaunchIntent {
+                launch_intent_id: "intent_new_01JADAPTER".to_owned(),
+                actor_id: "actor_01JADAPTER".to_owned(),
+                device_id: "device_01JADAPTER".to_owned(),
+                now_ms: 4,
+                expires_at_ms: 54,
+            },
+        );
+        let first = document.apply(same.clone())?;
+        let replayed = document.apply(same)?;
+        assert_eq!(first.decision(), replayed.decision());
+        assert!(!replayed.appended());
+        assert_eq!(document.projection()?.status, session_domain::coordinator::CoordinatorStatus::Idle);
+        assert_eq!(document.projection()?.sequence, 4);
+        assert_eq!(
+            document.projection()?.pending_launch_intent_id.as_ref().map(|v| v.as_str()),
+            Some("intent_new_01JADAPTER")
+        );
+        // Only original actor/device can claim the one pending launch. The
+        // old session and fence are gone; next Claim receives a fresh epoch.
+        let claimed = document.apply(StoredCoordinatorEnvelope::new(
+            "idem_recovery_claim_fresh_01JADAPTER",
+            5, 5,
+            StoredCoordinatorCommand::Claim {
+                launch_intent_id: "intent_new_01JADAPTER".to_owned(),
+                actor_id: "actor_01JADAPTER".to_owned(),
+                device_id: "device_01JADAPTER".to_owned(),
+                session_id: "session_fresh_01JADAPTER".to_owned(),
+                fencing_token: "fence_fresh_01JADAPTER".to_owned(),
+                now_ms: 5,
+            },
+        ))?;
+        assert!(matches!(
+            claimed.decision().outcome(),
+            session_domain::coordinator::CoordinatorOutcome::LeaseClaimed { lease } if lease.epoch() == 2
+        ));
+        Ok(())
+    }
+
+    #[test]
+    fn uncertain_claim_provenance_survives_compaction()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let mut document = document()?;
+        document.apply(StoredCoordinatorEnvelope::new(
+            "idem_uncertain_issue_01JADAPTER", 1, 1,
+            StoredCoordinatorCommand::IssueLaunchIntent {
+                launch_intent_id: "intent_uncertain_01JADAPTER".to_owned(),
+                actor_id: "actor_01JADAPTER".to_owned(),
+                device_id: "device_01JADAPTER".to_owned(),
+                now_ms: 1, expires_at_ms: 50,
+            },
+        ))?;
+        document.apply(StoredCoordinatorEnvelope::new(
+            "idem_uncertain_claim_01JADAPTER", 2, 2,
+            StoredCoordinatorCommand::Claim {
+                launch_intent_id: "intent_uncertain_01JADAPTER".to_owned(),
+                actor_id: "actor_01JADAPTER".to_owned(),
+                device_id: "device_01JADAPTER".to_owned(),
+                session_id: "session_uncertain_01JADAPTER".to_owned(),
+                fencing_token: "fence_uncertain_01JADAPTER".to_owned(),
+                now_ms: 2,
+            },
+        ))?;
+        document.apply(StoredCoordinatorEnvelope::new(
+            "idem_uncertain_release_01JADAPTER", 3, 3,
+            StoredCoordinatorCommand::Release {
+                session_id: "session_uncertain_01JADAPTER".to_owned(),
+                epoch: 1,
+                fencing_token: "fence_uncertain_01JADAPTER".to_owned(),
+                disposition: StoredReleaseDisposition::Uncertain,
+                now_ms: 3,
+            },
+        ))?;
+        for n in 4_u64..=70 {
+            document.apply(StoredCoordinatorEnvelope::new(
+                format!("idem_uncertain_tick_{n:04}_01JADAPTER"), n, n,
+                StoredCoordinatorCommand::Tick { now_ms: n },
+            ))?;
+        }
+        assert!(document.journal_len() < super::COMPACT_JOURNAL_AT);
+        let encoded = serde_json::to_vec(&document)?;
+        let mut reloaded: StoredCoordinatorDocument = serde_json::from_slice(&encoded)?;
+        assert!(reloaded.last_claim_matches(
+            &ActorId::parse("actor_01JADAPTER")?,
+            &DeviceId::parse("device_01JADAPTER")?,
+        ));
+        assert!(!reloaded.last_claim_matches(
+            &ActorId::parse("actor_01JADAPTER")?,
+            &DeviceId::parse("device_foreign_01JADAPTER")?,
+        ));
+        reloaded.apply(StoredCoordinatorEnvelope::new(
+            "idem_uncertain_recover_after_compact_01JADAPTER", 71, 71,
+            StoredCoordinatorCommand::RecoverAndIssueLaunchIntent {
+                launch_intent_id: "intent_after_compact_01JADAPTER".to_owned(),
+                actor_id: "actor_01JADAPTER".to_owned(),
+                device_id: "device_01JADAPTER".to_owned(),
+                now_ms: 71, expires_at_ms: 90,
+            },
+        ))?;
+        assert_eq!(reloaded.projection()?.status, session_domain::coordinator::CoordinatorStatus::Idle);
+        Ok(())
+    }
+
+    #[test]
     fn old_document_without_checkpoint_remains_readable() -> Result<(), Box<dyn std::error::Error>>
     {
         let original = document()?;
