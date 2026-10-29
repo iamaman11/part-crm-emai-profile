@@ -44,6 +44,9 @@ observed.send();
 class ObservationServer(ThreadingHTTPServer):
     def __init__(self) -> None:
         self.observations: queue.Queue[tuple[bool, bool]] = queue.Queue()
+        # Record ALL HTTP requests to this controlled origin, including document,
+        # favicon, CSS and fetch loads, not just the persistence beacon.
+        self.requests: queue.Queue[str] = queue.Queue()
         super().__init__(("127.0.0.1", 0), Handler)
 
 
@@ -54,6 +57,7 @@ class Handler(BaseHTTPRequestHandler):
         return
 
     def do_GET(self) -> None:  # noqa: N802 - BaseHTTPRequestHandler contract
+        self.server.requests.put(self.path)
         if self.path.startswith("/observed?"):
             query = self.path.split("?", 1)[1]
             values = dict(part.split("=", 1) for part in query.split("&"))
@@ -275,7 +279,10 @@ def run_cold_launch_observed(
         assert exchange(process, f"launch|{SESSION}") == f"ready|{SESSION}"
         if on_ready is not None:
             on_ready()
-        complete_pre_navigation_protocol(process, url)
+        observe_browser_visible_wire(process)
+        if on_ready is not None:
+            on_ready()  # Also require isolation after the browser-visible probe.
+        admit_navigation(process, url)
         assert exchange(process, f"close|{SESSION}") == f"closed|{SESSION}|true"
         returncode = process.wait(timeout=60)
         if returncode != 0:
@@ -414,10 +421,15 @@ def main() -> int:
             assert_clean_launch_lock_state(first_root)
             # The prior browser has exited. Prove its requests are completely
             # consumed before attributing any new observation to restored tabs.
+            # Drain all requests from the completed first browser (including
+            # /favicon etc). A clean queue marks the boundary for restore traffic.
+            previous_requests = []
+            while not server.requests.empty():
+                previous_requests.append(server.requests.get_nowait())
+            if not any(path == "/" for path in previous_requests):
+                raise AssertionError("first browser never requested the test document")
             if not server.observations.empty():
-                raise AssertionError(
-                    "prior browser left queued network observations before session restore"
-                )
+                raise AssertionError("prior browser left unconsumed persistence beacons")
             # Restore a *previously browsed* tab on the next cold launch. The
             # test copy retains Firefox's own session setting and files.
             with (first_root / "user_data" / "user.js").open(
@@ -426,9 +438,9 @@ def main() -> int:
                 prefs.write('\nuser_pref("browser.startup.page", 3);\n')
 
             def require_no_early_network() -> None:
-                if not server.observations.empty():
+                if not server.requests.empty() or not server.observations.empty():
                     raise AssertionError(
-                        "restored tab accessed the network before navigation admission"
+                        "restored tab requested the loopback origin before navigation admission"
                     )
 
             run_cold_launch(first_root, first, url, require_no_early_network)
