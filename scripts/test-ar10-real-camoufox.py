@@ -344,6 +344,8 @@ def run_cold_launch_observed(
     if primary is not None:
         primary.add_note(evidence)
         raise primary
+    if "camouhost_pages count=" not in tail:
+        raise AssertionError("no count-only live page observation from the managed browser")
     if cleanup != "normal_exit":
         raise AssertionError(evidence)
 
@@ -424,8 +426,10 @@ def main() -> int:
             expect_materialization_requires_bridge_lock(base / "generation-unowned")
             first_root = base / "generation-a"
             second_root = base / "generation-b"
+            third_root = base / "generation-c"
             first = materialize(first_root)
             second = materialize(second_root)
+            third = materialize(third_root)
 
             if first["fingerprint_config_sha256"] == second["fingerprint_config_sha256"]:
                 raise AssertionError(
@@ -491,6 +495,12 @@ def main() -> int:
                 )
 
             assert_clean_launch_lock_state(second_root)
+            # Third independent browser profile must not inherit another
+            # user's test cookies or storage.
+            run_cold_launch(third_root, third, url)
+            if server.observations.get(timeout=15) != (False, False):
+                raise AssertionError("third independent browser profile inherited another profile's state")
+            assert_clean_launch_lock_state(third_root)
             expect_prelaunch_identity_rejection(first_root, first)
             expect_probe_digest_non_authoritative(first_root, first)
 
