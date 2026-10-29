@@ -236,7 +236,9 @@ fn build_envelope<P: CoordinatorIngressApplicationPort, C: CoordinatorIngressClo
             if !(MIN_INTENT_TTL_MS..=MAX_INTENT_TTL_MS).contains(&expires_in_ms) {
                 return Err(CoordinatorIngressOperationError::InvalidRequest);
             }
-            let expires_at = now.value().checked_add(expires_in_ms)
+            let expires_at = now
+                .value()
+                .checked_add(expires_in_ms)
                 .map(UnixMillis::new)
                 .ok_or(CoordinatorIngressOperationError::InvalidRequest)?;
             CoordinatorCommand::RecoverAndIssueLaunchIntent {
