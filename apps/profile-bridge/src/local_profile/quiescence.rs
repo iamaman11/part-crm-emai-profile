@@ -328,7 +328,7 @@ mod tests {
         let (_test_root, root, workspace, device) = fixture("pending-save-install")?;
         let marker = workspace.path().join(BRIDGE_LOCK_FILE);
         let content = format!(
-            "profile-platform-bridge-lock-v1\\n{}\\n5\\n",
+            "profile-platform-bridge-lock-v1\n{}\n5\n",
             device.as_str()
         );
         fs::write(&marker, content.as_bytes())?;
