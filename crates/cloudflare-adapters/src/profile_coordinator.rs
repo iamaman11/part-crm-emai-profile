@@ -1130,6 +1130,60 @@ mod tests {
             reloaded.replay()?.status(),
             session_domain::coordinator::CoordinatorStatus::Idle
         );
+        assert!(reloaded.replay()?.recovery_claim_pending());
+
+        // Crash before Claim: expiry never releases the profile to a foreign
+        // device, even when the original Claim was checkpoint-compacted.
+        reloaded.apply(StoredCoordinatorEnvelope::new(
+            "idem_recovery_expire_01JADAPTER",
+            72,
+            72,
+            StoredCoordinatorCommand::Tick { now_ms: 91 },
+        ))?;
+        assert!(reloaded.replay()?.pending_intent().is_none());
+        assert!(reloaded.replay()?.recovery_claim_pending());
+        let foreign = StoredCoordinatorEnvelope::new(
+            "idem_foreign_after_expiry_01JADAPTER",
+            73,
+            73,
+            StoredCoordinatorCommand::IssueLaunchIntent {
+                launch_intent_id: "intent_foreign_after_expiry_01JADAPTER".to_owned(),
+                actor_id: "actor_01JADAPTER".to_owned(),
+                device_id: "device_foreign_01JADAPTER".to_owned(),
+                now_ms: 92,
+                expires_at_ms: 120,
+            },
+        );
+        assert!(reloaded.apply(foreign).is_err());
+        assert_eq!(reloaded.replay()?.last_sequence(), 72);
+        reloaded.apply(StoredCoordinatorEnvelope::new(
+            "idem_original_after_expiry_01JADAPTER",
+            73,
+            73,
+            StoredCoordinatorCommand::IssueLaunchIntent {
+                launch_intent_id: "intent_original_after_expiry_01JADAPTER".to_owned(),
+                actor_id: "actor_01JADAPTER".to_owned(),
+                device_id: "device_01JADAPTER".to_owned(),
+                now_ms: 92,
+                expires_at_ms: 120,
+            },
+        ))?;
+        assert!(reloaded.replay()?.recovery_claim_pending());
+        reloaded.apply(StoredCoordinatorEnvelope::new(
+            "idem_original_fresh_claim_01JADAPTER",
+            74,
+            74,
+            StoredCoordinatorCommand::Claim {
+                launch_intent_id: "intent_original_after_expiry_01JADAPTER".to_owned(),
+                actor_id: "actor_01JADAPTER".to_owned(),
+                device_id: "device_01JADAPTER".to_owned(),
+                session_id: "session_after_expiry_01JADAPTER".to_owned(),
+                fencing_token: "fence_after_expiry_01JADAPTER".to_owned(),
+                now_ms: 93,
+            },
+        ))?;
+        assert_eq!(reloaded.replay()?.status(), session_domain::coordinator::CoordinatorStatus::Active);
+        assert!(!reloaded.replay()?.recovery_claim_pending());
         Ok(())
     }
 
