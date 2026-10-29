@@ -459,9 +459,14 @@ def main() -> int:
                 prefs.write('\nuser_pref("browser.startup.page", 3);\n')
 
             def require_no_early_network() -> None:
-                if not server.requests.empty() or not server.observations.empty():
+                pending = []
+                while not server.requests.empty():
+                    pending.append(server.requests.get_nowait())
+                if pending or not server.requests.empty() or not server.observations.empty():
                     raise AssertionError(
-                        "restored tab requested the loopback origin before navigation admission"
+                        "restored tab requested the loopback origin before navigation admission; "
+                        f"paths={pending[:8]!r}; "
+                        f"persistence_beacon={not server.observations.empty()}"
                     )
 
             run_cold_launch(first_root, first, url, require_no_early_network)

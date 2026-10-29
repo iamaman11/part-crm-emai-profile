@@ -867,6 +867,9 @@ def camoufox_kwargs(
             "privacy.baselineFingerprintingProtection": False,
             "webgl.disabled": False,
             "webgl.enable-webgl2": enabled_webgl2,
+            # Firefox -offline still allows localhost by default. Block it before
+            # restored pages load; normal admission later releases offline mode.
+            "network.disable-localhost-when-offline": True,
             **touch_runtime_preferences(config),
         },
         "headless": resolve_headless_mode(),
