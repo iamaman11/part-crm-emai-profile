@@ -753,7 +753,7 @@ sys.exit(5)
 
     with patch.object(proof, "base_env", return_value=os.environ.copy()), \
             patch.object(proof.subprocess, "Popen", side_effect=start_child), \
-            patch.object(proof, "complete_pre_navigation_protocol", side_effect=primary):
+            patch.object(proof, "observe_browser_visible_wire", side_effect=primary):
         try:
             proof.run_cold_launch(source_root, {}, "http://127.0.0.1/")
         except AssertionError as observed:
