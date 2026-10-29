@@ -71,6 +71,12 @@ pub enum Cause {
     CoordinatorUncertain,
     CloudSaveFailed,
     OtherSafeFailure,
+    RuntimeDependency,
+    RuntimeContract,
+    RuntimeTimeout,
+    RuntimeIo,
+    RuntimeClosed,
+    RuntimeUnexpected,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
