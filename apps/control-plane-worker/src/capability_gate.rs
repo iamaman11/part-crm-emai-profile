@@ -384,6 +384,10 @@ mod tests {
         for suffix in [
             "generation-successor/retry-decision",
             "generation-successor/local-unsynced/retry-decision",
+            "generation-reopen/opening-material",
+            "generation-working-candidate/download-capability",
+            "generation-working-candidate/opening-material",
+            "generation-working-candidate/certify",
         ] {
             let path = format!("/bridge/v1/tenants/tenant_01/profiles/profile_01/{suffix}");
             assert_eq!(
