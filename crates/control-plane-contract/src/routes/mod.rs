@@ -113,7 +113,17 @@ fn bridge_profile_generation_machine_route(method: &str, path: &str) -> bool {
             "profiles",
             _,
             "generation-successor",
-            "upload-capability" | "sealing-material" | "commit" | "observe"
+            "upload-capability" | "sealing-material" | "commit" | "observe" | "retry-decision"
+        ] | [
+            "bridge",
+            "v1",
+            "tenants",
+            _,
+            "profiles",
+            _,
+            "generation-successor",
+            "local-unsynced",
+            "retry-decision"
         ] | [
             "bridge",
             "v1",
@@ -183,6 +193,8 @@ mod tests {
             "/bridge/v1/tenants/tenant_01/profiles/profile_01/generation-successor/sealing-material",
             "/bridge/v1/tenants/tenant_01/profiles/profile_01/generation-successor/commit",
             "/bridge/v1/tenants/tenant_01/profiles/profile_01/generation-successor/observe",
+            "/bridge/v1/tenants/tenant_01/profiles/profile_01/generation-successor/retry-decision",
+            "/bridge/v1/tenants/tenant_01/profiles/profile_01/generation-successor/local-unsynced/retry-decision",
             "/bridge/v1/tenants/tenant_01/profiles/profile_01/generation-reopen/download-capability",
         ] {
             assert_eq!(classify("POST", path), RouteClass::ProfileCoordinatorApi);
@@ -194,6 +206,10 @@ mod tests {
             "/bridge/v2/tenants/tenant_01/profiles/profile_01/generation-successor/commit",
             "/bridge/v1/tenants/tenant_01/profiles/profile_01/generation-successor/verify",
             "/bridge/v1/tenants/tenant_01/profiles/profile_01/generation-successor/commit/extra",
+            "/bridge/v1/tenants/tenant_01/profiles/profile_01/generation-successor/retry-decision/extra",
+            "/bridge/v1/tenants/tenant_01/profiles/profile_01/generation-successor/local-unsynced/retry-decision/extra",
+            "/bridge/v2/tenants/tenant_01/profiles/profile_01/generation-successor/retry-decision",
+            "/bridge/v1/tenants/tenant_01/profiles/profile_01/generation-successor/local-unsynced/commit",
             "/bridge/v1/tenants/tenant_01/profiles/generation-successor/commit",
             "/bridge/v2/tenants/tenant_01/profiles/profile_01/generation-reopen/download-capability",
             "/bridge/v1/tenants/tenant_01/profiles/profile_01/generation-reopen/download-capability/extra",
