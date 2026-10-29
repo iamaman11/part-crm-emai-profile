@@ -209,6 +209,7 @@ fn observations(root: &Path) -> Vec<Observation> {
             || !record.operation_id.starts_with("op_")
             || !record.operation_id[3..].bytes().all(|b| b.is_ascii_hexdigit() || b == b'_')
             || record.duration_ms > 86_400_000
+            || record.open_pages.is_some_and(|count| count > 512)
         { continue; }
         records.push(record);
     }
@@ -393,12 +394,64 @@ mod tests {
     }
 
     #[test]
+    fn untrusted_records_never_admit_unknown_fields_or_secret_urls() {
+        let root = test_root();
+        let directory = root.join("state").join(DIRECTORY);
+        // Even a plausible event file cannot smuggle arbitrary fields into a
+        // typed diagnostic. Production never deserializes it into owner state.
+        let malicious = serde_json::json!({
+            "schema_version": 1,
+            "time_unix_ms": unix_ms().expect("clock"),
+            "operation_id": operation_id(),
+            "stage": "CLOUD_SAVE_CONFIRMED",
+            "outcome": "SUCCEEDED",
+            "cloud": "COMMITTED_EXACT",
+            "cause": "NONE",
+            "duration_ms": 100,
+            "private_url": "https://private.invalid/?token=secret",
+        });
+        fs::write(directory.join("event-0000000000000001-forged.json"), serde_json::to_vec(&malicious).expect("fixture")).expect("fixture");
+        let report = report_at(&root);
+        assert!(!report.contains("private.invalid"));
+        assert!(!report.contains("CLOUD_SAVE_CONFIRMED"));
+        assert!(report.contains("REPORT_AUTHORITY=LOCAL_OBSERVATIONS_ONLY"));
+        fs::remove_dir_all(root).expect("cleanup");
+    }
+
+    #[test]
+    fn read_only_report_does_not_create_or_repair_any_state() {
+        let root = std::env::temp_dir().join(format!(
+            "bridge-report-no-state-{}-{}",
+            std::process::id(),
+            TEST_ID.fetch_add(1, Ordering::Relaxed)
+        ));
+        fs::create_dir(&root).expect("fixture");
+        let report = report_at(&root);
+        assert!(report.contains("RUNTIME_IDENTITY=NOT_OBSERVED"));
+        assert!(!root.join("state").exists());
+        assert!(!root.join(DIRECTORY).exists());
+        fs::remove_dir(root).expect("cleanup");
+    }
+
+    #[test]
+    fn reporting_pending_local_never_claims_cloud_commit_or_authorized_retry() {
+        let root = test_root();
+        record_at(&root, Stage::LocalUnsynced, Outcome::Unconfirmed, Cloud::NotConfirmed, Cause::None, 42);
+        let report = report_at(&root);
+        assert!(report.contains("LOCAL=LOCAL_UNSYNCED_RETAINED"));
+        assert!(report.contains("PRESERVE_LOCAL_WAIT_FOR_OWNED_RECOVERY"));
+        assert!(!report.contains("CLOUD=CommittedExact"));
+        assert!(!report.contains("AUTHORIZATION_GRANTED"));
+        fs::remove_dir_all(root).expect("cleanup");
+    }
+
+    #[test]
     fn report_is_bounded_and_ignores_symlink_or_missing_state() {
         let root = test_root();
         for _ in 0..100 { record_at(&root, Stage::BrowserPreflight, Outcome::Observed, Cloud::Unknown, Cause::None, 1); }
         let text = report_at(&root);
         assert!(text.len() <= MAX_REPORT_BYTES);
-        assert!(text.lines().count() <= MAX_EVENTS + 4);
+        assert!(text.lines().count() <= MAX_EVENTS + 5);
         fs::remove_dir_all(root).expect("cleanup fixture");
     }
 }
