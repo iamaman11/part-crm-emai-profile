@@ -348,8 +348,98 @@ fn binding_probe(env: &Env, capability_context: &RuntimeCapabilityContext) -> Re
 
 #[cfg(test)]
 mod tests {
-    use super::{ControlPlaneQueueMessage, RuntimeSurface, queue_surface};
+    use super::{
+        ControlPlaneQueueMessage, RuntimeSurface, profile_generation_successor_ingress,
+        queue_surface,
+    };
+    use control_plane_contract::{RouteClass, classify_route};
+    use profile_generation_successor_ingress::BridgeGenerationMachineOperation;
     use serde_json::json;
+    use worker::Method;
+
+    #[test]
+    fn all_existing_bridge_generation_operations_reach_their_authorized_handlers() {
+        // Worker::main classifies before calling dispatch_profile_coordinator.
+        // Keep the outer allowlist exactly in sync with the existing handler,
+        // so a 404 cannot silently block Save, Reopen or WORKING/LKG recovery.
+        for (suffix, operation) in [
+            (
+                "generation-initialization",
+                BridgeGenerationMachineOperation::Initialize,
+            ),
+            (
+                "generation-successor/sealing-material",
+                BridgeGenerationMachineOperation::SealingMaterial,
+            ),
+            (
+                "generation-successor/upload-capability",
+                BridgeGenerationMachineOperation::UploadCapability,
+            ),
+            (
+                "generation-successor/commit",
+                BridgeGenerationMachineOperation::Commit,
+            ),
+            (
+                "generation-successor/observe",
+                BridgeGenerationMachineOperation::Observe,
+            ),
+            (
+                "generation-successor/retry-decision",
+                BridgeGenerationMachineOperation::RetryDecision,
+            ),
+            (
+                "generation-successor/local-unsynced/retry-decision",
+                BridgeGenerationMachineOperation::LocalUnsyncedRetryDecision,
+            ),
+            (
+                "generation-reopen/download-capability",
+                BridgeGenerationMachineOperation::DownloadCapability,
+            ),
+            (
+                "generation-reopen/opening-material",
+                BridgeGenerationMachineOperation::OpeningMaterial,
+            ),
+            (
+                "generation-working-candidate/download-capability",
+                BridgeGenerationMachineOperation::PredecessorDownloadCapability,
+            ),
+            (
+                "generation-working-candidate/opening-material",
+                BridgeGenerationMachineOperation::PredecessorOpeningMaterial,
+            ),
+            (
+                "generation-working-candidate/certify",
+                BridgeGenerationMachineOperation::PredecessorCertifyWorking,
+            ),
+        ] {
+            let path = format!("/bridge/v1/tenants/tenant_01/profiles/profile_01/{suffix}");
+            assert_eq!(
+                classify_route("POST", &path),
+                RouteClass::ProfileCoordinatorApi,
+                "Worker entrypoint must not return 404 before authorization"
+            );
+            assert_eq!(
+                profile_generation_successor_ingress::operation(&path, Method::Post),
+                Some(operation),
+                "the existing authenticated coordinator ingress must find its handler"
+            );
+
+            for (method, worker_method) in [
+                ("GET", Method::Get),
+                ("PUT", Method::Put),
+                ("DELETE", Method::Delete),
+            ] {
+                assert_eq!(
+                    classify_route(method, &path),
+                    RouteClass::BridgeDeniedByDefault
+                );
+                assert_eq!(
+                    profile_generation_successor_ingress::operation(&path, worker_method),
+                    None
+                );
+            }
+        }
+    }
 
     #[test]
     fn queue_messages_select_named_policy_surfaces() -> Result<(), Box<dyn std::error::Error>> {
