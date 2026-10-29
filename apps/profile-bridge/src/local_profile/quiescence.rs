@@ -327,10 +327,7 @@ mod tests {
     -> Result<(), Box<dyn std::error::Error>> {
         let (_test_root, root, workspace, device) = fixture("pending-save-install")?;
         let marker = workspace.path().join(BRIDGE_LOCK_FILE);
-        let content = format!(
-            "profile-platform-bridge-lock-v1\n{}\n5\n",
-            device.as_str()
-        );
+        let content = format!("profile-platform-bridge-lock-v1\n{}\n5\n", device.as_str());
         fs::write(&marker, content.as_bytes())?;
         let browser_data = workspace.path().join("user_data");
         fs::create_dir(&browser_data)?;
