@@ -1182,7 +1182,10 @@ mod tests {
                 now_ms: 93,
             },
         ))?;
-        assert_eq!(reloaded.replay()?.status(), session_domain::coordinator::CoordinatorStatus::Active);
+        assert_eq!(
+            reloaded.replay()?.status(),
+            session_domain::coordinator::CoordinatorStatus::Active
+        );
         assert!(!reloaded.replay()?.recovery_claim_pending());
         Ok(())
     }
