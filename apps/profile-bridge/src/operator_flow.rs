@@ -692,6 +692,7 @@ where
             claim,
             root,
             now,
+            |_coordinator, _lease| {},
             |coordinator, tenant_id, profile_id, generation_id, device_id, epoch| {
                 ensure_authoritative_generation(
                     root,
@@ -716,6 +717,7 @@ where
     /// The unresolved-checkpoint guard remains authoritative.
     pub fn open_authoritative_with_runtime_health_and_pending_recovery<
         Dl,
+        OnClaim,
         BeforeRuntime,
         ObservePending,
     >(
@@ -724,6 +726,7 @@ where
         root: &MaterializationRoot,
         downloader: &mut Dl,
         now: UnixMillis,
+        on_claim: OnClaim,
         before_runtime_start: BeforeRuntime,
         observe_pending: ObservePending,
     ) -> Result<(), OperatorFlowError>
@@ -732,6 +735,7 @@ where
         <C as GenerationReopenControlPort>::Error: Into<GenerationReopenControlError>,
         Dl: GenerationObjectDownloadPort,
         Dl::Error: Into<GenerationObjectDownloadError>,
+        OnClaim: FnMut(&mut C, &ProfileLease),
         BeforeRuntime: FnMut() -> Result<(), ()>,
         ObservePending: FnMut(
             &mut C,
@@ -745,6 +749,7 @@ where
             claim,
             root,
             now,
+            |_coordinator, _lease| {},
             |coordinator, tenant_id, profile_id, generation_id, device_id, epoch| {
                 ensure_authoritative_generation(
                     root,
@@ -894,17 +899,19 @@ where
             claim,
             root,
             now,
+            |_coordinator, _lease| {},
             |_coordinator, _tenant_id, _profile_id, _generation_id, _device_id, _epoch| Ok(()),
             || Ok(()),
             |_coordinator, _tenant, _profile, _selected, _lease| PendingSaveRecovery::Blocked,
         )
     }
 
-    fn open_with_materialization<F, BeforeRuntime, ObservePending>(
+    fn open_with_materialization<OnClaim, F, BeforeRuntime, ObservePending>(
         &mut self,
         claim: &ClaimUri,
         root: &MaterializationRoot,
         now: UnixMillis,
+        mut on_claim: OnClaim,
         mut ensure_materialized: F,
         mut before_runtime_start: BeforeRuntime,
         mut observe_pending: ObservePending,
@@ -918,6 +925,7 @@ where
             &DeviceId,
             u64,
         ) -> Result<(), AuthoritativeGenerationMaterializationError>,
+        OnClaim: FnMut(&mut C, &ProfileLease),
         BeforeRuntime: FnMut() -> Result<(), ()>,
         ObservePending: FnMut(
             &mut C,
@@ -972,6 +980,11 @@ where
         {
             return Err(self.fail_before_local_use(OperatorFailureStage::LeaseValidation, lease));
         }
+
+        // One session-scoped keepalive also spans blocking local/cloud Open
+        // materialization and real Camoufox startup, not only a pending Save.
+        // It shares this exact verified cursor and is owned by composition.
+        on_claim(&mut self.coordinator, &lease);
 
         // Any surviving exact save or interrupted checkpoint stage is unresolved
         // recovery evidence. Even if the old cloud pointer is still accessible,
@@ -2720,6 +2733,7 @@ mod tests {
             &fixture.claim_uri,
             &fixture.root,
             UnixMillis::new(10),
+            |_coordinator, _lease| {},
             |_coordinator, _tenant, _profile, _generation, _device, _epoch| {
                 Err(
                     AuthoritativeGenerationMaterializationError::ControlPlaneBeforeLocalUse(
@@ -2760,6 +2774,7 @@ mod tests {
                 &fixture.claim_uri,
                 root,
                 UnixMillis::new(10),
+                |_coordinator, _lease| {},
                 |_coordinator, tenant, profile, generation, _device, _epoch| {
                     if create_during_attempt {
                         assert!(
@@ -2811,6 +2826,7 @@ mod tests {
                 &fixture.claim_uri,
                 root,
                 UnixMillis::new(10),
+                |_coordinator, _lease| {},
                 |_coordinator, tenant, profile, generation, _device, _epoch| {
                     if create_during_attempt {
                         assert!(root.create_generation(tenant, profile, generation).is_ok());
@@ -2845,6 +2861,7 @@ mod tests {
             &fixture.claim_uri,
             &fixture.root,
             UnixMillis::new(10),
+            |_coordinator, _lease| {},
             |_coordinator, _tenant, _profile, _generation, _device, _epoch| {
                 Err(AuthoritativeGenerationMaterializationError::ControlPlane(
                     GenerationReopenControlError::InvalidResponse,
@@ -3277,6 +3294,7 @@ mod tests {
                 &fixture.claim_uri,
                 &fixture.root,
                 UnixMillis::new(10),
+                |_coordinator, _lease| {},
                 |_coordinator, _tenant, _profile, _generation, _device, _epoch| {
                     materializations.set(materializations.get() + 1);
                     Ok(())
@@ -3324,6 +3342,7 @@ mod tests {
                 &fixture.claim_uri,
                 &fixture.root,
                 UnixMillis::new(11),
+                |_coordinator, _lease| {},
                 |_coordinator, _tenant, _profile, _generation, _device, _epoch| {
                     unauthorized_materializations.set(unauthorized_materializations.get() + 1);
                     Ok(())
@@ -3518,6 +3537,7 @@ mod tests {
             &fixture.claim_uri,
             &fixture.root,
             UnixMillis::new(10),
+            |_coordinator, _lease| {},
             |_coordinator, _tenant, _profile, _generation, _device, _epoch| Ok(()),
             || {
                 started_health = true;
@@ -3541,6 +3561,7 @@ mod tests {
             &fixture.claim_uri,
             &fixture.root,
             UnixMillis::new(10),
+            |_coordinator, _lease| {},
             |_coordinator, _tenant, _profile, _generation, _device, _epoch| Ok(()),
             || {
                 started_health = true;
@@ -3566,6 +3587,7 @@ mod tests {
             &fixture.claim_uri,
             &fixture.root,
             UnixMillis::new(10),
+            |_coordinator, _lease| {},
             |_coordinator, _tenant, _profile, _generation, _device, _epoch| Ok(()),
             || {
                 start_attempts += 1;
