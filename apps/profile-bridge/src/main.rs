@@ -14,6 +14,10 @@ use profile_bridge::shipping_composition::{
     run_delivery_command, run_historical_candidate_probe,
 };
 use profile_bridge::user_diagnostics::UserDiagnostic;
+use profile_bridge::user_diagnostics::report::{self, Cause, Cloud, Outcome, Stage};
+use std::time::Instant;
+
+const REPORT_COPY_URI: &str = "profilebridge://diagnostics/copy";
 use profile_bridge::windows_delivery_handoff::{
     FIRST_INSTALL_ARGUMENT, HANDOFF_ACTIVATE_ARGUMENT, HANDOFF_ARRIVAL_ARGUMENT,
 };
@@ -46,7 +50,34 @@ fn run<I>(arguments: I) -> Result<(), BridgeCliError>
 where
     I: IntoIterator<Item = String>,
 {
-    match parse_command(arguments)? {
+    let command = parse_command(arguments)?;
+    let installation_root = match &command {
+        BridgeCommand::PrepareInstallation(_, root) => Some(root.clone()),
+        _ => None,
+    };
+    let stage = match &command {
+        BridgeCommand::PrepareInstallation(..) => Stage::InstallPrepare,
+        BridgeCommand::InitialProfile(_) | BridgeCommand::Claim(_) => Stage::OpenRequested,
+        BridgeCommand::VerifyHistoricalCandidate(_) => Stage::LocalRecovery,
+        BridgeCommand::PairingStart(_) | BridgeCommand::PairingComplete(_) => Stage::Pairing,
+        BridgeCommand::DeliveryActivateStaged
+        | BridgeCommand::DeliveryInstallStaged(_)
+        | BridgeCommand::DeliveryHandoffArrived => Stage::Delivery,
+        BridgeCommand::CopyDiagnostics => Stage::Delivery,
+    };
+    let report_operation = !matches!(command, BridgeCommand::CopyDiagnostics);
+    let observe = |outcome, cause, elapsed| {
+        if let Some(root) = &installation_root {
+            report::record_at(root, stage, outcome, Cloud::Unknown, cause, elapsed);
+        } else {
+            report::record_current(stage, outcome, Cloud::Unknown, cause, elapsed);
+        }
+    };
+    if report_operation {
+        observe(Outcome::Started, Cause::None, 0);
+    }
+    let start = Instant::now();
+    let result = match command {
         BridgeCommand::PrepareInstallation(bundle, root) => {
             let result = run_install_preparation(&bundle, &root);
             if let Ok(directory) = &result {
@@ -95,6 +126,36 @@ where
             run_delivery_command(ShippingDeliveryCommand::HandoffArrived)
                 .map_err(BridgeCliError::DeliveryFailed)
         }
+        BridgeCommand::CopyDiagnostics => copy_diagnostics(),
+    };
+    if report_operation {
+        let cause = match &result {
+            Ok(()) => Cause::None,
+            Err(BridgeCliError::InstallationFailed(_)) => Cause::InstallBlocked,
+            Err(BridgeCliError::LaunchFailed(ShippingCompositionError::HeartbeatAuthorityUncertain)) => Cause::CoordinatorUncertain,
+            Err(BridgeCliError::LaunchFailed(ShippingCompositionError::CommittedRecoveryRequired)) => Cause::CloudSaveFailed,
+            Err(BridgeCliError::LaunchFailed(_)) => Cause::BrowserUnavailable,
+            Err(_) => Cause::OtherSafeFailure,
+        };
+        let elapsed = u64::try_from(start.elapsed().as_millis()).unwrap_or(u64::MAX).min(86_400_000);
+        observe(if result.is_ok() { Outcome::Succeeded } else { Outcome::Failed }, cause, elapsed);
+    }
+    result
+}
+
+fn copy_diagnostics() -> Result<(), BridgeCliError> {
+    #[cfg(windows)]
+    {
+        let text = report::report_current();
+        if !windows_desktop_ui::copy_redacted_report(&text) {
+            return Err(BridgeCliError::DiagnosticsUnavailable);
+        }
+        windows_desktop_ui::show_report_copied();
+        Ok(())
+    }
+    #[cfg(not(windows))]
+    {
+        Err(BridgeCliError::DiagnosticsUnavailable)
     }
 }
 
@@ -108,6 +169,7 @@ enum BridgeCommand {
     DeliveryActivateStaged,
     DeliveryInstallStaged(ControlPlaneOrigin),
     DeliveryHandoffArrived,
+    CopyDiagnostics,
 }
 
 fn parse_command<I>(arguments: I) -> Result<BridgeCommand, BridgeCliError>
@@ -166,6 +228,7 @@ where
     match argument.as_str() {
         HANDOFF_ACTIVATE_ARGUMENT => Ok(BridgeCommand::DeliveryActivateStaged),
         HANDOFF_ARRIVAL_ARGUMENT => Ok(BridgeCommand::DeliveryHandoffArrived),
+        REPORT_COPY_URI => Ok(BridgeCommand::CopyDiagnostics),
         value if value.starts_with(INITIAL_OPEN_URI_PREFIX) => InitialProfileOpen::parse(value)
             .map(BridgeCommand::InitialProfile)
             .map_err(|_| BridgeCliError::InvalidClaimUri),
@@ -194,6 +257,7 @@ enum BridgeCliError {
     LaunchFailed(ShippingCompositionError),
     PairingFailed(DevicePairingBootstrapError),
     DeliveryFailed(ShippingCompositionError),
+    DiagnosticsUnavailable,
 }
 
 impl BridgeCliError {
@@ -201,6 +265,7 @@ impl BridgeCliError {
         match self {
             Self::InstallationFailed(error) => UserDiagnostic::Installation(error),
             Self::MissingLaunchArgument => UserDiagnostic::StartFromApplication,
+            Self::DiagnosticsUnavailable => UserDiagnostic::ReportUnavailable,
             Self::UnexpectedArgument
             | Self::InvalidClaimUri
             | Self::InvalidPairingUri
