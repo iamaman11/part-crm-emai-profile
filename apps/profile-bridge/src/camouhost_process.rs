@@ -839,8 +839,8 @@ fn allowlisted_camouhost_diagnostic(line: &[u8]) -> Option<&str> {
     }
     let message = std::str::from_utf8(&line[..line.len() - 1]).ok()?;
     if let Some((phase, category)) = message
-        .strip_prefix("camouhost_failure phase=")?
-        .split_once(" category=")
+        .strip_prefix("camouhost_failure phase=")
+        .and_then(|rest| rest.split_once(" category="))
     {
         if matches!(phase, "startup" | "launch" | "browser_visible" | "navigation" | "close" | "cleanup" | "unknown")
             && matches!(category, "contract" | "timeout" | "io" | "browser_closed" | "unexpected" | "dependency")
@@ -849,8 +849,8 @@ fn allowlisted_camouhost_diagnostic(line: &[u8]) -> Option<&str> {
         }
     }
     if let Some((phase, step)) = message
-        .strip_prefix("camouhost_stage phase=")?
-        .split_once(" step=")
+        .strip_prefix("camouhost_stage phase=")
+        .and_then(|rest| rest.split_once(" step="))
     {
         if (phase == "startup" && matches!(step, "begin" | "ready"))
             || (phase == "launch"
