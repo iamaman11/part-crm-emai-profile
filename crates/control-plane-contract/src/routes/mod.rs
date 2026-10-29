@@ -132,7 +132,16 @@ fn bridge_profile_generation_machine_route(method: &str, path: &str) -> bool {
             "profiles",
             _,
             "generation-reopen",
-            "download-capability"
+            "download-capability" | "opening-material"
+        ] | [
+            "bridge",
+            "v1",
+            "tenants",
+            _,
+            "profiles",
+            _,
+            "generation-working-candidate",
+            "download-capability" | "opening-material" | "certify"
         ]
     )
 }
@@ -196,6 +205,10 @@ mod tests {
             "/bridge/v1/tenants/tenant_01/profiles/profile_01/generation-successor/retry-decision",
             "/bridge/v1/tenants/tenant_01/profiles/profile_01/generation-successor/local-unsynced/retry-decision",
             "/bridge/v1/tenants/tenant_01/profiles/profile_01/generation-reopen/download-capability",
+            "/bridge/v1/tenants/tenant_01/profiles/profile_01/generation-reopen/opening-material",
+            "/bridge/v1/tenants/tenant_01/profiles/profile_01/generation-working-candidate/download-capability",
+            "/bridge/v1/tenants/tenant_01/profiles/profile_01/generation-working-candidate/opening-material",
+            "/bridge/v1/tenants/tenant_01/profiles/profile_01/generation-working-candidate/certify",
         ] {
             assert_eq!(classify("POST", path), RouteClass::ProfileCoordinatorApi);
             for method in ["GET", "PUT", "DELETE"] {
@@ -213,6 +226,10 @@ mod tests {
             "/bridge/v1/tenants/tenant_01/profiles/generation-successor/commit",
             "/bridge/v2/tenants/tenant_01/profiles/profile_01/generation-reopen/download-capability",
             "/bridge/v1/tenants/tenant_01/profiles/profile_01/generation-reopen/download-capability/extra",
+            "/bridge/v1/tenants/tenant_01/profiles/profile_01/generation-reopen/opening-material/extra",
+            "/bridge/v1/tenants/tenant_01/profiles/profile_01/generation-working-candidate/download-capability/extra",
+            "/bridge/v2/tenants/tenant_01/profiles/profile_01/generation-working-candidate/certify",
+            "/bridge/v1/tenants/tenant_01/profiles/profile_01/generation-working-candidate/commit",
         ] {
             assert_eq!(classify("POST", invalid), RouteClass::BridgeDeniedByDefault);
         }
