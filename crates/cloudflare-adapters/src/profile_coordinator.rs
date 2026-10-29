@@ -220,6 +220,26 @@ impl StoredCoordinatorDocument {
         envelope: StoredCoordinatorEnvelope,
     ) -> Result<CoordinatorApplied, CoordinatorAdapterError> {
         let mut state = self.replay()?;
+        if let StoredCoordinatorCommand::IssueLaunchIntent {
+            actor_id,
+            device_id,
+            ..
+        } = &envelope.command
+        {
+            // An expired recovery intent remains a reservation for the
+            // original device even when its D1 projection is Idle. Never
+            // admit a foreign plain IssueLaunchIntent in that gap.
+            if state.recovery_claim_pending()
+                && !self.last_claim_matches(
+                    &ActorId::parse(actor_id.clone())?,
+                    &DeviceId::parse(device_id.clone())?,
+                )
+            {
+                return Err(CoordinatorAdapterError::Domain(
+                    CoordinatorError::StaleWriter,
+                ));
+            }
+        }
         if let StoredCoordinatorCommand::RecoverAndIssueLaunchIntent {
             actor_id,
             device_id,
