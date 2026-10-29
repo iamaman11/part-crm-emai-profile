@@ -283,6 +283,7 @@ impl UserDiagnostic {
                         "BRIDGE_INSTALLATION_PACKAGE_INVALID"
                     }
                     Install::StateStore(_) => "BRIDGE_INSTALLATION_STATE_INVALID",
+                    Install::ActivationGuard => "BRIDGE_INSTALLATION_PROFILE_BUSY",
                     Install::Preparation(Preparation::Policy(_)) => {
                         "BRIDGE_INSTALLATION_ADMISSION_REJECTED"
                     }
@@ -385,6 +386,9 @@ impl UserDiagnostic {
         use DevicePairingBootstrapError as Pairing;
         use ShippingCompositionError as Launch;
         match self {
+            Self::Installation(crate::windows_delivery_install::NativeInstallerError::ActivationGuard) => {
+                "The browser profile is still in use, or Windows cannot confirm it is idle. Close Profile Bridge and Firefox, then retry the update from the application. The existing installation and unsaved profile data have not been reset. Do not delete lock files."
+            }
             Self::Installation(_) => {
                 "Profile Bridge installation could not be completed. Review the diagnostic code in setup and try again from the application. Keep existing device and profile files; do not reset installation state manually."
             }
@@ -1238,6 +1242,18 @@ mod tests {
         assert!(diagnostic.message().contains("fresh authorization"));
         assert!(diagnostic.message().contains("Do not reuse"));
         assert!(!diagnostic.message().contains("saved failed"));
+    }
+
+    #[test]
+    fn installer_live_writer_refusal_is_actionable_and_never_suggests_deleting_local_evidence() {
+        let diagnostic = UserDiagnostic::Installation(
+            crate::windows_delivery_install::NativeInstallerError::ActivationGuard,
+        );
+        assert_eq!(diagnostic.code(), "BRIDGE_INSTALLATION_PROFILE_BUSY");
+        assert!(diagnostic.message().contains("retry the update"));
+        assert!(diagnostic.message().contains("unsaved profile data"));
+        assert!(diagnostic.message().contains("Do not delete lock files"));
+        assert!(!diagnostic.message().contains("reset the profile"));
     }
 
     #[test]
