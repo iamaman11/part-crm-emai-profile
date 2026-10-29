@@ -17,6 +17,7 @@ import importlib.util
 import io
 import json
 import os
+import queue
 import subprocess
 import sys
 import tempfile
@@ -284,6 +285,69 @@ def prove_immediate_relaunch_after_cleanup(
             process.kill()
             process.wait(timeout=30)
     assert_writer_quiescent(runtime, root, "post-launch EOF")
+
+
+def prove_session_restore_startup(
+    python: Path,
+    camouhost: Path,
+    env: dict[str, str],
+    runtime: ModuleType,
+    root: Path,
+) -> None:
+    """Real disposable Firefox profile: session restore must not deadlock IPC Ready.
+
+    This checks the native pref rather than mocking Camoufox or disabling Firefox
+    session restore. Only the temporary test generation is modified.
+    """
+    prefs = root / "user_data" / "user.js"
+    with prefs.open("a", encoding="utf-8", newline="\n") as stream:
+        stream.write('\nuser_pref("browser.startup.page", 3);\n')
+    process = start_runtime(python, camouhost, env)
+
+    def bounded_exchange(frame: str, seconds: int) -> str:
+        assert process.stdin is not None and process.stdout is not None
+        response: queue.Queue[str] = queue.Queue(maxsize=1)
+
+        def read_response() -> None:
+            response.put(process.stdout.readline().rstrip("\n"))
+
+        reader = threading.Thread(target=read_response, daemon=True)
+        reader.start()
+        process.stdin.write(frame + "\n")
+        process.stdin.flush()
+        try:
+            result = response.get(timeout=seconds)
+        except queue.Empty as error:
+            raise AssertionError(
+                "Firefox session restore blocked managed Camouhost readiness"
+            ) from error
+        if not result:
+            raise AssertionError("Firefox session restore lost managed Camouhost IPC")
+        return result
+
+    try:
+        assert bounded_exchange(f"hello|{IPC_VERSION}", 15) == f"hello_ack|{IPC_VERSION}"
+        assert bounded_exchange(f"launch|{SESSION}", 45) == f"ready|{SESSION}"
+        assert bounded_exchange(f"observe_browser_visible|{SESSION}", 30).startswith(
+            f"browser_visible|{SESSION}|"
+        ), "session restore has no browser-visible identity witness"
+        assert bounded_exchange(f"admit_navigation|{SESSION}|", 30) == (
+            f"navigation_admitted|{SESSION}"
+        )
+        assert bounded_exchange(f"close|{SESSION}", 45) == f"closed|{SESSION}|true"
+        assert process.wait(timeout=30) == 0
+    finally:
+        if process.poll() is None:
+            process.kill()
+            process.wait(timeout=30)
+        if process.stdin is not None:
+            process.stdin.close()
+        if process.stdout is not None:
+            process.stdout.close()
+        if process.stderr is not None:
+            process.stderr.close()
+    assert 'user_pref("browser.startup.page", 3);' in prefs.read_text(encoding="utf-8")
+    assert_writer_quiescent(runtime, root, "Firefox session restore startup")
 
 
 def prove_external_windows_gui_close(
@@ -588,11 +652,12 @@ def main() -> int:
 
         prove_protocol_failure_cleanup(python, camouhost, env, runtime, root)
         prove_immediate_relaunch_after_cleanup(python, camouhost, env, runtime, root)
+        prove_session_restore_startup(python, camouhost, env, runtime, root)
         if os.name == "nt" and args.headless == "false":
             prove_external_windows_gui_close(python, camouhost, env, runtime, root)
 
     print(
-        "AR-10 real Camoufox post-launch cleanup, immediate relaunch and external Windows GUI-close evidence passed."
+        "AR-10 real Camoufox post-launch cleanup, Firefox session restore launch, immediate relaunch and GUI-close evidence passed."
     )
     return 0
 
