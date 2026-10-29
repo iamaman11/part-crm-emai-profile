@@ -213,6 +213,16 @@ impl StoredCoordinatorDocument {
         envelope: StoredCoordinatorEnvelope,
     ) -> Result<CoordinatorApplied, CoordinatorAdapterError> {
         let mut state = self.replay()?;
+        if let StoredCoordinatorCommand::RecoverAndIssueLaunchIntent {
+            actor_id, device_id, ..
+        } = &envelope.command {
+            if !self.last_claim_matches(
+                &ActorId::parse(actor_id.clone())?,
+                &DeviceId::parse(device_id.clone())?,
+            ) {
+                return Err(CoordinatorAdapterError::Domain(CoordinatorError::StaleWriter));
+            }
+        }
         let previous_sequence = state.last_sequence();
         let decision = state.apply(envelope.to_domain()?)?;
         let appended = decision.sequence() > previous_sequence;
@@ -305,6 +315,26 @@ impl StoredCoordinatorDocument {
 
     pub fn projection(&self) -> Result<CoordinatorProjection, CoordinatorAdapterError> {
         Ok(CoordinatorProjection::from_state(&self.replay()?))
+    }
+
+    /// The last original Claim must belong to the exact CNG-authenticated
+    /// actor and device; recent journal and checkpoint share this one owner.
+    #[must_use]
+    pub fn last_claim_matches(&self, actor: &ActorId, device: &DeviceId) -> bool {
+        for envelope in self.journal.iter().rev() {
+            if let StoredCoordinatorCommand::Claim {
+                actor_id, device_id, ..
+            } = &envelope.command
+            {
+                return actor_id == actor.as_str() && device_id == device.as_str();
+            }
+        }
+        self.checkpoint
+            .as_ref()
+            .and_then(|cp| cp.last_claim.as_ref())
+            .is_some_and(|last| {
+                last.actor_id == actor.as_str() && last.device_id == device.as_str()
+            })
     }
 
     /// Prove that the current live coordinator lease was created by the exact P2 Claim actor,
@@ -420,6 +450,13 @@ pub enum StoredCoordinatorCommand {
         now_ms: u64,
         expires_at_ms: u64,
     },
+    RecoverAndIssueLaunchIntent {
+        launch_intent_id: String,
+        actor_id: String,
+        device_id: String,
+        now_ms: u64,
+        expires_at_ms: u64,
+    },
     Claim {
         launch_intent_id: String,
         actor_id: String,
@@ -469,6 +506,19 @@ impl StoredCoordinatorCommand {
                 now_ms,
                 expires_at_ms,
             } => CoordinatorCommand::IssueLaunchIntent {
+                launch_intent_id: LaunchIntentId::parse(launch_intent_id.clone())?,
+                actor_id: ActorId::parse(actor_id.clone())?,
+                device_id: DeviceId::parse(device_id.clone())?,
+                now: UnixMillis::new(*now_ms),
+                expires_at: UnixMillis::new(*expires_at_ms),
+            },
+            Self::RecoverAndIssueLaunchIntent {
+                launch_intent_id,
+                actor_id,
+                device_id,
+                now_ms,
+                expires_at_ms,
+            } => CoordinatorCommand::RecoverAndIssueLaunchIntent {
                 launch_intent_id: LaunchIntentId::parse(launch_intent_id.clone())?,
                 actor_id: ActorId::parse(actor_id.clone())?,
                 device_id: DeviceId::parse(device_id.clone())?,
