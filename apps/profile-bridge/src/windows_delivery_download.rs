@@ -717,8 +717,12 @@ fn wait_for_fetch_process(
     asset_name: &str,
 ) -> Result<ExitStatus, WindowsReleaseAssetFetcherError> {
     wait_for_fetch_process_with_limits(
-        child, destination, expected_size, asset_name,
-        FETCH_NO_BYTE_TIMEOUT, FETCH_PROCESS_TIMEOUT,
+        child,
+        destination,
+        expected_size,
+        asset_name,
+        FETCH_NO_BYTE_TIMEOUT,
+        FETCH_PROCESS_TIMEOUT,
     )
 }
 
@@ -787,8 +791,12 @@ fn wait_for_fetch_process_with_limits(
 fn terminate_fetch(child: &mut Child) -> Result<(), WindowsReleaseAssetFetcherError> {
     // On a stalled socket, the only permitted termination is the installer-owned
     // network helper, never Firefox, Bridge user sessions or profile processes.
-    child.kill().map_err(|_| WindowsReleaseAssetFetcherError::Process)?;
-    child.wait().map_err(|_| WindowsReleaseAssetFetcherError::Process)?;
+    child
+        .kill()
+        .map_err(|_| WindowsReleaseAssetFetcherError::Process)?;
+    child
+        .wait()
+        .map_err(|_| WindowsReleaseAssetFetcherError::Process)?;
     Ok(())
 }
 
@@ -1008,15 +1016,24 @@ mod tests {
         // No destination appears: this simulates the observed zero-byte
         // response-header/connect hang without using a network endpoint.
         let mut child = Command::new(system_powershell_executable()?)
-            .args(["-NoLogo", "-NoProfile", "-NonInteractive", "-Command",
-                   "Start-Sleep -Seconds 30"])
+            .args([
+                "-NoLogo",
+                "-NoProfile",
+                "-NonInteractive",
+                "-Command",
+                "Start-Sleep -Seconds 30",
+            ])
             .stdin(Stdio::null())
             .stdout(Stdio::null())
             .stderr(Stdio::null())
             .spawn()?;
         let result = wait_for_fetch_process_with_limits(
-            &mut child, &directory.0.join("still-missing.pending"), 1_188_812_800,
-            RUNTIME_BUNDLE_ASSET, Duration::from_secs(2), Duration::from_secs(10),
+            &mut child,
+            &directory.0.join("still-missing.pending"),
+            1_188_812_800,
+            RUNTIME_BUNDLE_ASSET,
+            Duration::from_secs(2),
+            Duration::from_secs(10),
         );
         assert_eq!(result, Err(WindowsReleaseAssetFetcherError::Stalled));
         assert!(child.try_wait()?.is_some(), "installer fetch child leaked");
@@ -1027,9 +1044,16 @@ mod tests {
     #[test]
     fn network_categories_never_embed_urls_or_credentials() {
         for (code, category) in [
-            (20, "HTTP"), (21, "SIZE"), (22, "SIZE"), (23, "SIZE"),
-            (24, "INSECURE_REDIRECT"), (31, "DNS"), (32, "CONNECT"),
-            (33, "TLS"), (34, "TIMEOUT"), (36, "DISK"),
+            (20, "HTTP"),
+            (21, "SIZE"),
+            (22, "SIZE"),
+            (23, "SIZE"),
+            (24, "INSECURE_REDIRECT"),
+            (31, "DNS"),
+            (32, "CONNECT"),
+            (33, "TLS"),
+            (34, "TIMEOUT"),
+            (36, "DISK"),
         ] {
             assert_eq!(
                 fetch_exit_disposition(Some(code)).unwrap_err().category(),
