@@ -867,8 +867,8 @@ def camoufox_kwargs(
             "privacy.baselineFingerprintingProtection": False,
             "webgl.disabled": False,
             "webgl.enable-webgl2": enabled_webgl2,
-            # Firefox -offline still allows localhost by default. Block it before
-            # restored pages load; normal admission later releases offline mode.
+            # Firefox offline mode can allow localhost by default. Block it
+            # before restored pages load; admission later releases offline mode.
             "network.disable-localhost-when-offline": True,
             **touch_runtime_preferences(config),
         },
@@ -877,10 +877,11 @@ def camoufox_kwargs(
         # Playwright 1.60 waits for a Page/load during persistent-context
         # startup; explicitly request a regular blank tab so that its normal
         # default-context admission can complete without disabling session restore.
-        # Firefox must start offline before restoring user tabs. The regular
-        # Playwright context stays offline through browser-visible admission;
-        # admit_navigation is the only point that releases connectivity.
-        "args": ["-offline", "-new-tab", "about:blank"],
+        # Set offline as a native persistent-context launch option, before
+        # restored tabs are admitted. Unlike Firefox's -offline CLI switch,
+        # this is released by Playwright set_offline(False) at admission.
+        "offline": True,
+        "args": ["-new-tab", "about:blank"],
         "i_know_what_im_doing": True,
         "persistent_context": True,
         "proxy": resolve_proxy(),
