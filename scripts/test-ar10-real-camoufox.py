@@ -412,6 +412,12 @@ def main() -> int:
                 )
 
             assert_clean_launch_lock_state(first_root)
+            # The prior browser has exited. Prove its requests are completely
+            # consumed before attributing any new observation to restored tabs.
+            if not server.observations.empty():
+                raise AssertionError(
+                    "prior browser left queued network observations before session restore"
+                )
             # Restore a *previously browsed* tab on the next cold launch. The
             # test copy retains Firefox's own session setting and files.
             with (first_root / "user_data" / "user.js").open(
