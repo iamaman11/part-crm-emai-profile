@@ -479,12 +479,20 @@ def prove_failure_observation_contract() -> None:
         assert result == exit_code, (phase, result)
         if phase == "success":
             assert stdout.buffer.getvalue().decode("ascii").splitlines()[-1] == f"closed|{SESSION}|true"
-            assert stderr.getvalue() == ""
+            assert stderr.getvalue().splitlines() == [
+                "camouhost_stage phase=startup step=begin",
+                "camouhost_stage phase=startup step=ready",
+                "camouhost_stage phase=launch step=ready",
+            ]
             close.assert_called_once()
             continue
         expected_failure = f"closed|{SESSION}|false" if phase == "close" else "error|runtime"
         assert stdout.buffer.getvalue().decode("ascii").splitlines()[-1] == expected_failure
         assert f"camouhost_failure phase={phase} category=timeout\n" in stderr.getvalue()
+        assert stderr.getvalue().splitlines()[:2] == [
+            "camouhost_stage phase=startup step=begin",
+            "camouhost_stage phase=startup step=ready",
+        ]
         assert "secret" not in stderr.getvalue()
         assert (close.call_count == 0) == (phase == "launch")
         if cleanup_failure:
