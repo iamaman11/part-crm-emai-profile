@@ -65,7 +65,7 @@ where
         | BridgeCommand::DeliveryHandoffArrived => Stage::Delivery,
         BridgeCommand::CopyDiagnostics => Stage::Delivery,
     };
-    let report_operation = !matches!(command, BridgeCommand::CopyDiagnostics);
+    let report_operation = !matches!(&command, BridgeCommand::CopyDiagnostics);
     let observe = |outcome, cause, elapsed| {
         if let Some(root) = &installation_root {
             report::record_at(root, stage, outcome, Cloud::Unknown, cause, elapsed);
@@ -305,6 +305,28 @@ mod tests {
             return Err("expected claim command".into());
         };
         assert!(!format!("{claim:?}").contains("claim_01JBRIDGE_FEASIBILITY"));
+        Ok(())
+    }
+
+    #[test]
+    fn local_diagnostic_export_is_exact_and_has_no_remote_input() -> Result<(), Box<dyn std::error::Error>> {
+        let parsed = parse_command([
+            "profile-bridge".to_owned(),
+            super::REPORT_COPY_URI.to_owned(),
+        ])?;
+        assert!(matches!(parsed, BridgeCommand::CopyDiagnostics));
+        for invalid in [
+            "profilebridge://diagnostics/copy?origin=https://untrusted.invalid",
+            "profilebridge://diagnostics/copy/other",
+            "profilebridge://diagnostics/export",
+        ] {
+            assert!(parse_command(["profile-bridge".to_owned(), invalid.to_owned()]).is_err());
+        }
+        assert!(parse_command([
+            "profile-bridge".to_owned(),
+            super::REPORT_COPY_URI.to_owned(),
+            "unexpected".to_owned(),
+        ]).is_err());
         Ok(())
     }
 
