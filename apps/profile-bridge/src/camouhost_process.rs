@@ -870,7 +870,11 @@ fn allowlisted_camouhost_diagnostic(line: &[u8]) -> Option<&str> {
                         "before_browser_enter" | "browser_entered" | "network_blocked" | "ready"
                     ))
         });
-    if allowed_failure || allowed_stage {
+    let allowed_pages = message
+        .strip_prefix("camouhost_pages count=")
+        .and_then(|count| count.parse::<u16>().ok())
+        .is_some_and(|count| count <= 512);
+    if allowed_failure || allowed_stage || allowed_pages {
         return Some(message);
     }
     None
@@ -902,6 +906,12 @@ fn spawn_camouhost_diagnostic_reader(stderr: ChildStderr) {
             reader.consume(consumed);
             if complete {
                 if !oversized && let Some(message) = allowlisted_camouhost_diagnostic(&line) {
+                    if let Some(count) = message
+                        .strip_prefix("camouhost_pages count=")
+                        .and_then(|value| value.parse::<u16>().ok())
+                    {
+                        crate::user_diagnostics::report::record_open_pages(count);
+                    }
                     eprintln!("CAMOUHOST_RUNTIME_DIAGNOSTIC {message}");
                 }
                 line.clear();
@@ -1278,7 +1288,15 @@ mod tests {
             ),
             Some("camouhost_stage phase=launch step=before_browser_enter")
         );
+        assert_eq!(
+            allowlisted_camouhost_diagnostic(b"camouhost_pages count=3\n"),
+            Some("camouhost_pages count=3")
+        );
         for invalid in [
+            b"camouhost_pages count=513\n".as_slice(),
+            b"camouhost_pages count=3 url=https://secret.invalid\n",
+            b"camouhost_pages count=-1\n",
+            b"camouhost_pages count=99999999999999999999\n",
             b"Traceback: C:\\private\\profile".as_slice(),
             b"camouhost_failure phase=launch category=timeout private=secret\n",
             b"camouhost_stage phase=launch step=browser_entered https://secret\n",
