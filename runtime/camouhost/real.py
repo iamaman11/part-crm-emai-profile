@@ -891,13 +891,16 @@ def launch_verified_context(
         raise RuntimeContractError("Firefox writer is already active")
     manager = Camoufox(**camoufox_kwargs(lock, root, config))
     try:
+        report_runtime_stage("launch", "before_browser_enter")
         with contextlib.redirect_stdout(sys.stderr):
             context = manager.__enter__()
+        report_runtime_stage("launch", "browser_entered")
         # Shipping browser starts network-offline. Rust/browser-execution-domain is the sole
         # semantic identity admission owner and the only authority that can release navigation.
         # The aggregate probe digest remains materialization/integrity evidence only; Python must
         # not compare it to browser behavior and independently veto typed Rust admission.
         context.set_offline(True)
+        report_runtime_stage("launch", "network_blocked")
         return manager, context
     except BaseException:
         with contextlib.suppress(BaseException):
@@ -1179,6 +1182,8 @@ def valid_frame(raw: str) -> bool:
 
 
 def runtime_failure_category(error: BaseException) -> str:
+    if isinstance(error, importlib.metadata.PackageNotFoundError):
+        return "dependency"
     if isinstance(error, RuntimeContractError):
         return "contract"
     elif isinstance(error, TimeoutError) or type(error).__name__ == "TimeoutError":
@@ -1193,13 +1198,28 @@ def runtime_failure_category(error: BaseException) -> str:
 
 def report_runtime_failure(phase: str, error: BaseException) -> None:
     """Report only closed diagnostic categories; exception text may contain profile data."""
-    if phase not in {"launch", "browser_visible", "navigation", "close", "cleanup"}:
+    if phase not in {"startup", "launch", "browser_visible", "navigation", "close", "cleanup"}:
         phase = "unknown"
     category = runtime_failure_category(error)
     print(f"camouhost_failure phase={phase} category={category}", file=sys.stderr, flush=True)
 
 
+def report_runtime_stage(phase: str, step: str) -> None:
+    """Only fixed protocol milestones, never Python/Playwright's arbitrary stderr."""
+    allowed = {
+        ("startup", "begin"),
+        ("startup", "ready"),
+        ("launch", "before_browser_enter"),
+        ("launch", "browser_entered"),
+        ("launch", "network_blocked"),
+        ("launch", "ready"),
+    }
+    if (phase, step) in allowed:
+        print(f"camouhost_stage phase={phase} step={step}", file=sys.stderr, flush=True)
+
+
 def run_ipc() -> int:
+    report_runtime_stage("startup", "begin")
     try:
         lock, _ = load_runtime_lock()
         verify_python_components(lock)
@@ -1210,10 +1230,12 @@ def run_ipc() -> int:
         expected_probe = os.environ.get(EXPECTED_PROBE_SHA256_ENV)
         if not valid_sha256(expected_probe):
             raise RuntimeContractError("expected profile-stable probe digest is missing")
-    except (OSError, RuntimeContractError, importlib.metadata.PackageNotFoundError):
+    except Exception as error:
+        report_runtime_failure("startup", error)
         emit("error|identity")
         return 4
 
+    report_runtime_stage("startup", "ready")
     negotiated = False
     active_session: str | None = None
     manager: Any | None = None
@@ -1250,6 +1272,7 @@ def run_ipc() -> int:
                     emit("error|runtime")
                     return 5
                 active_session = parts[1]
+                report_runtime_stage("launch", "ready")
                 emit(f"ready|{active_session}")
                 continue
 
