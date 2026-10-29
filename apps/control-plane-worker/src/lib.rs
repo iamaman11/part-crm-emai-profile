@@ -358,10 +358,31 @@ mod tests {
     use worker::Method;
 
     #[test]
-    fn external_bridge_retry_routes_reach_the_existing_authorized_handlers() {
-        // Reproduce the original 404: Worker::main classifies before calling
-        // dispatch_profile_coordinator, so a handler-only test cannot catch it.
+    fn all_existing_bridge_generation_operations_reach_their_authorized_handlers() {
+        // Worker::main classifies before calling dispatch_profile_coordinator.
+        // Keep the outer allowlist exactly in sync with the existing handler,
+        // so a 404 cannot silently block Save, Reopen or WORKING/LKG recovery.
         for (suffix, operation) in [
+            (
+                "generation-initialization",
+                BridgeGenerationMachineOperation::Initialize,
+            ),
+            (
+                "generation-successor/sealing-material",
+                BridgeGenerationMachineOperation::SealingMaterial,
+            ),
+            (
+                "generation-successor/upload-capability",
+                BridgeGenerationMachineOperation::UploadCapability,
+            ),
+            (
+                "generation-successor/commit",
+                BridgeGenerationMachineOperation::Commit,
+            ),
+            (
+                "generation-successor/observe",
+                BridgeGenerationMachineOperation::Observe,
+            ),
             (
                 "generation-successor/retry-decision",
                 BridgeGenerationMachineOperation::RetryDecision,
@@ -369,6 +390,26 @@ mod tests {
             (
                 "generation-successor/local-unsynced/retry-decision",
                 BridgeGenerationMachineOperation::LocalUnsyncedRetryDecision,
+            ),
+            (
+                "generation-reopen/download-capability",
+                BridgeGenerationMachineOperation::DownloadCapability,
+            ),
+            (
+                "generation-reopen/opening-material",
+                BridgeGenerationMachineOperation::OpeningMaterial,
+            ),
+            (
+                "generation-working-candidate/download-capability",
+                BridgeGenerationMachineOperation::PredecessorDownloadCapability,
+            ),
+            (
+                "generation-working-candidate/opening-material",
+                BridgeGenerationMachineOperation::PredecessorOpeningMaterial,
+            ),
+            (
+                "generation-working-candidate/certify",
+                BridgeGenerationMachineOperation::PredecessorCertifyWorking,
             ),
         ] {
             let path = format!("/bridge/v1/tenants/tenant_01/profiles/profile_01/{suffix}");
