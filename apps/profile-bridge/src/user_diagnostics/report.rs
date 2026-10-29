@@ -77,6 +77,16 @@ pub enum Cause {
     RuntimeIo,
     RuntimeClosed,
     RuntimeUnexpected,
+    DownloadDns,
+    DownloadConnect,
+    DownloadTls,
+    DownloadHttp,
+    DownloadTimeout,
+    DownloadStalled,
+    DownloadSize,
+    DownloadDisk,
+    DownloadRedirect,
+    DownloadProcess,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -232,6 +242,12 @@ fn prune(directory: &Path, now: u64) {
 
 /// Observed live Playwright pages (tabs), never inferred restored tab count or window count.
 /// There are no titles, addresses or raw browser IPC bytes in this event.
+/// Installer-only download evidence. Source and error classification are owned
+/// by the verified Windows asset fetcher. No URL, destination or proxy details.
+pub fn record_download_failure(root: &Path, cause: Cause) {
+    record_at(root, Stage::InstallPrepare, Outcome::Failed, Cloud::Unknown, cause, 0);
+}
+
 pub fn record_open_pages(count: u16) {
     if count > 512 { return; }
     if let Some(root) = installed_root() {
