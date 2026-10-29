@@ -88,6 +88,8 @@ struct StoredCoordinatorCheckpoint {
     next_epoch: u64,
     status: StoredCoordinatorStatus,
     pending_intent: Option<StoredPendingIntent>,
+    #[serde(default)]
+    recovery_claim_pending: bool,
     active_lease: Option<StoredActiveLease>,
     drain_deadline_ms: Option<u64>,
     last_claim: Option<StoredClaimIdentity>,
@@ -122,6 +124,7 @@ impl StoredCoordinatorCheckpoint {
             next_epoch: value.next_epoch,
             status: value.status.into(),
             pending_intent,
+            recovery_claim_pending: value.recovery_claim_pending,
             active_lease,
             drain_deadline_ms: value.drain_deadline.map(UnixMillis::value),
             // Preserve the original actor/device even after a crash or
@@ -166,6 +169,7 @@ impl StoredCoordinatorCheckpoint {
             next_epoch: self.next_epoch,
             status: self.status.into(),
             pending_intent,
+            recovery_claim_pending: self.recovery_claim_pending,
             active_lease,
             drain_deadline: self.drain_deadline_ms.map(UnixMillis::new),
         })
