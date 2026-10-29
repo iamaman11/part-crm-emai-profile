@@ -71,6 +71,14 @@ describe('DevicePairingPanel', () => {
     expect(mockedGetDeviceRegistration).not.toHaveBeenCalled();
   });
 
+  it('exposes the exact local diagnostics command without credentials or remote upload', async () => {
+    renderPanel();
+    const link = await screen.findByRole('link', { name: 'Скопировать диагностику' });
+    expect(link.getAttribute('href')).toBe('profilebridge://diagnostics/copy');
+    expect(link.getAttribute('href')).not.toContain('tenant_');
+    expect(link.getAttribute('href')).not.toContain('http');
+  });
+
   it('offers retry without an installer link when metadata is unavailable', async () => {
     vi.mocked(getDeviceInstaller).mockRejectedValue(new Error('Installer unavailable'));
     renderPanel();
