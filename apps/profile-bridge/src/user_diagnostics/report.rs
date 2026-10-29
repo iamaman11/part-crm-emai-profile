@@ -151,7 +151,7 @@ pub fn record_at(
     cause: Cause,
     duration_ms: u64,
 ) {
-    let _ = try_record(root, stage, outcome, cloud, cause, duration_ms, None, None);
+    let _ = try_record(root, stage, outcome, cloud, cause, duration_ms, ObservationExtra::None);
 }
 
 fn installed_root() -> Option<PathBuf> {
@@ -202,6 +202,12 @@ fn journal_dir(root: &Path, create: bool) -> Option<PathBuf> {
     valid_directory(&path).then_some(path)
 }
 
+enum ObservationExtra<'a> {
+    None,
+    Pages(u16),
+    VerifiedRuntime { sequence: u64, release_id: &'a str },
+}
+
 fn try_record(
     root: &Path,
     stage: Stage,
@@ -209,9 +215,15 @@ fn try_record(
     cloud: Cloud,
     cause: Cause,
     duration_ms: u64,
-    open_pages: Option<u16>,
-    runtime: Option<(u64, &str)>,
+    extra: ObservationExtra<'_>,
 ) -> Option<()> {
+    let (open_pages, runtime) = match extra {
+        ObservationExtra::None => (None, None),
+        ObservationExtra::Pages(count) => (Some(count), None),
+        ObservationExtra::VerifiedRuntime { sequence, release_id } => {
+            (None, Some((sequence, release_id)))
+        }
+    };
     let directory = journal_dir(root, true)?;
     let now = unix_ms()?;
     let record = Observation {
@@ -398,8 +410,7 @@ pub fn record_open_pages(count: u16) {
             Cloud::Unknown,
             Cause::None,
             0,
-            Some(count),
-            None,
+            ObservationExtra::Pages(count),
         );
     }
 }
@@ -429,8 +440,7 @@ pub fn record_runtime_identity(sequence: u64, release_id: &str) {
             Cloud::Unknown,
             Cause::None,
             0,
-            None,
-            Some((sequence, release_id)),
+            ObservationExtra::VerifiedRuntime { sequence, release_id },
         );
     }
 }
@@ -530,19 +540,19 @@ mod tests {
 
     static TEST_ID: AtomicU64 = AtomicU64::new(0);
 
-    fn test_root() -> PathBuf {
+    fn test_root() -> std::io::Result<PathBuf> {
         let root = std::env::temp_dir().join(format!(
             "bridge-report-{}-{}",
             std::process::id(),
             TEST_ID.fetch_add(1, Ordering::Relaxed)
         ));
-        fs::create_dir_all(root.join("state")).expect("test root");
-        root
+        fs::create_dir_all(root.join("state"))?;
+        Ok(root)
     }
 
     #[test]
-    fn typed_report_survives_restart_and_does_not_replay_owner_state() {
-        let root = test_root();
+    fn typed_report_survives_restart_and_does_not_replay_owner_state() -> Result<(), Box<dyn std::error::Error>> {
+        let root = test_root()?;
         record_at(
             &root,
             Stage::LocalUnsynced,
@@ -565,12 +575,13 @@ mod tests {
         assert!(text.contains("LOCAL_OBSERVATIONS_ONLY"));
         assert!(!text.contains(&root.to_string_lossy().to_string()));
         assert_eq!(text, report_at(&root));
-        fs::remove_dir_all(root).expect("cleanup fixture");
+        fs::remove_dir_all(root)?;
+        Ok(())
     }
 
     #[test]
-    fn corrupted_and_untrusted_files_are_never_echoed() {
-        let root = test_root();
+    fn corrupted_and_untrusted_files_are_never_echoed() -> Result<(), Box<dyn std::error::Error>> {
+        let root = test_root()?;
         record_at(
             &root,
             Stage::OpenRequested,
@@ -584,29 +595,30 @@ mod tests {
             directory.join("event-0000000000000001-fake.json"),
             b"https://secret.invalid/?token=top_secret profile_bytes cookie",
         )
-        .expect("fixture");
+        ?;
         let output = report_at(&root);
         for leak in [
             "secret.invalid",
             "top_secret",
             "profile_bytes",
             "cookie",
-            root.to_str().expect("path"),
+            root.to_str().ok_or("path unavailable")?,
         ] {
             assert!(!output.contains(leak));
         }
-        fs::remove_dir_all(root).expect("cleanup fixture");
+        fs::remove_dir_all(root)?;
+        Ok(())
     }
 
     #[test]
-    fn untrusted_records_never_admit_unknown_fields_or_secret_urls() {
-        let root = test_root();
+    fn untrusted_records_never_admit_unknown_fields_or_secret_urls() -> Result<(), Box<dyn std::error::Error>> {
+        let root = test_root()?;
         let directory = root.join(DIRECTORY);
         // Even a plausible event file cannot smuggle arbitrary fields into a
         // typed diagnostic. Production never deserializes it into owner state.
         let malicious = serde_json::json!({
             "schema_version": 1,
-            "time_unix_ms": unix_ms().expect("clock"),
+            "time_unix_ms": unix_ms().ok_or("clock unavailable")?,
             "operation_id": operation_id(),
             "stage": "CLOUD_SAVE_CONFIRMED",
             "outcome": "SUCCEEDED",
@@ -617,38 +629,40 @@ mod tests {
         });
         let timestamp = malicious["time_unix_ms"]
             .as_u64()
-            .expect("fixture timestamp");
+            .ok_or("fixture timestamp missing")?;
         let name = format!("event-{timestamp:016x}-00000001-0000000000000000.json");
         fs::write(
             directory.join(name),
-            serde_json::to_vec(&malicious).expect("fixture"),
+            serde_json::to_vec(&malicious)?,
         )
-        .expect("fixture");
+        ?;
         let report = report_at(&root);
         assert!(!report.contains("private.invalid"));
         assert!(!report.contains("CLOUD_SAVE_CONFIRMED"));
         assert!(report.contains("REPORT_AUTHORITY=LOCAL_OBSERVATIONS_ONLY"));
-        fs::remove_dir_all(root).expect("cleanup");
+        fs::remove_dir_all(root)?;
+        Ok(())
     }
 
     #[test]
-    fn read_only_report_does_not_create_or_repair_any_state() {
+    fn read_only_report_does_not_create_or_repair_any_state() -> Result<(), Box<dyn std::error::Error>> {
         let root = std::env::temp_dir().join(format!(
             "bridge-report-no-state-{}-{}",
             std::process::id(),
             TEST_ID.fetch_add(1, Ordering::Relaxed)
         ));
-        fs::create_dir(&root).expect("fixture");
+        fs::create_dir(&root)?;
         let report = report_at(&root);
         assert!(report.contains("LAST_OBSERVED_RUNTIME_IDENTITY=NOT_OBSERVED"));
         assert!(!root.join("state").exists());
         assert!(!root.join(DIRECTORY).exists());
-        fs::remove_dir(root).expect("cleanup");
+        fs::remove_dir(root)?;
+        Ok(())
     }
 
     #[test]
-    fn reporting_pending_local_never_claims_cloud_commit_or_authorized_retry() {
-        let root = test_root();
+    fn reporting_pending_local_never_claims_cloud_commit_or_authorized_retry() -> Result<(), Box<dyn std::error::Error>> {
+        let root = test_root()?;
         record_at(
             &root,
             Stage::LocalUnsynced,
@@ -662,16 +676,17 @@ mod tests {
         assert!(report.contains("PRESERVE_LOCAL_WAIT_FOR_OWNED_RECOVERY"));
         assert!(!report.contains("CLOUD=CommittedExact"));
         assert!(!report.contains("AUTHORIZATION_GRANTED"));
-        fs::remove_dir_all(root).expect("cleanup");
+        fs::remove_dir_all(root)?;
+        Ok(())
     }
 
     #[test]
-    fn diagnostic_directory_is_outside_strict_delivery_state_and_survives_open() {
-        let root = test_root();
-        fs::remove_dir(root.join("state")).expect("empty state fixture");
+    fn diagnostic_directory_is_outside_strict_delivery_state_and_survives_open() -> Result<(), Box<dyn std::error::Error>> {
+        let root = test_root()?;
+        fs::remove_dir(root.join("state"))?;
         let before =
             crate::windows_delivery_store::DeliveryStateStore::initialize(root.join("state"))
-                .expect("canonical delivery store");
+                ?;
         let original_revision = before.revision();
         record_at(
             &root,
@@ -685,14 +700,15 @@ mod tests {
         assert!(!root.join("state").join(DIRECTORY).exists());
         let _report = report_at(&root);
         let after = crate::windows_delivery_store::DeliveryStateStore::open(root.join("state"))
-            .expect("diagnostic observation must not invalidate canonical store");
+            ?;
         assert_eq!(after.revision(), original_revision);
-        fs::remove_dir_all(root).expect("cleanup");
+        fs::remove_dir_all(root)?;
+        Ok(())
     }
 
     #[test]
-    fn last_verified_runtime_is_observation_only_and_rejects_forged_identity() {
-        let root = test_root();
+    fn last_verified_runtime_is_observation_only_and_rejects_forged_identity() -> Result<(), Box<dyn std::error::Error>> {
+        let root = test_root()?;
         let runtime_id = format!("runtime-bundle-v3-sha256-{}", "a".repeat(64));
         assert!(valid_runtime_release_id(&runtime_id));
         assert!(!valid_runtime_release_id("https://private.invalid/secret"));
@@ -703,30 +719,33 @@ mod tests {
             Cloud::Unknown,
             Cause::None,
             0,
-            None,
-            Some((534, &runtime_id)),
+            ObservationExtra::VerifiedRuntime {
+                sequence: 534,
+                release_id: &runtime_id,
+            },
         );
         assert_eq!(recorded, Some(()));
         let report = report_at(&root);
         assert!(report.contains("LAST_OBSERVED_RELEASE_SEQUENCE=534"));
         assert!(report.contains(&runtime_id));
         assert!(!report.contains("CURRENT_RUNTIME_IDENTITY="));
-        fs::remove_dir_all(root).expect("cleanup");
+        fs::remove_dir_all(root)?;
+        Ok(())
     }
 
     #[cfg(unix)]
     #[test]
-    fn symlink_to_private_file_is_never_read_or_deleted() {
+    fn symlink_to_private_file_is_never_read_or_deleted() -> Result<(), Box<dyn std::error::Error>> {
         use std::os::unix::fs::symlink;
-        let root = test_root();
+        let root = test_root()?;
         let private = root.join("private-user-data");
-        fs::write(&private, b"https://private.invalid/?token=secret").expect("fixture");
-        let timestamp = unix_ms().expect("clock");
+        fs::write(&private, b"https://private.invalid/?token=secret")?;
+        let timestamp = unix_ms().ok_or("clock unavailable")?;
         let linked_event = root.join(DIRECTORY).join(format!(
             "event-{timestamp:016x}-00000001-0000000000000000.json",
         ));
-        fs::create_dir(root.join(DIRECTORY)).expect("fixture");
-        symlink(&private, &linked_event).expect("fixture");
+        fs::create_dir(root.join(DIRECTORY))?;
+        symlink(&private, &linked_event)?;
         record_at(
             &root,
             Stage::OpenRequested,
@@ -739,12 +758,13 @@ mod tests {
         assert!(!report.contains("private.invalid"));
         assert!(private.is_file());
         assert!(linked_event.is_symlink());
-        fs::remove_dir_all(root).expect("cleanup");
+        fs::remove_dir_all(root)?;
+        Ok(())
     }
 
     #[test]
-    fn report_is_bounded_and_ignores_symlink_or_missing_state() {
-        let root = test_root();
+    fn report_is_bounded_and_ignores_symlink_or_missing_state() -> Result<(), Box<dyn std::error::Error>> {
+        let root = test_root()?;
         for _ in 0..100 {
             record_at(
                 &root,
@@ -758,6 +778,7 @@ mod tests {
         let text = report_at(&root);
         assert!(text.len() <= MAX_REPORT_BYTES);
         assert!(text.lines().count() <= MAX_EVENTS + 5);
-        fs::remove_dir_all(root).expect("cleanup fixture");
+        fs::remove_dir_all(root)?;
+        Ok(())
     }
 }
