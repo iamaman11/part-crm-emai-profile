@@ -441,7 +441,10 @@ fn read_regular_file(path: &Path) -> Result<String, BrowserLaunchBlocker> {
 fn observed_browser_writer_locks(
     workspace: &GenerationWorkspace,
 ) -> Result<(bool, bool), BrowserLaunchBlocker> {
-    let root = workspace.path();
+    observed_browser_writer_locks_at(workspace.path())
+}
+
+fn observed_browser_writer_locks_at(root: &Path) -> Result<(bool, bool), BrowserLaunchBlocker> {
     let parent_lock = path_present(&root.join(FIREFOX_PARENT_LOCK_FILE))?;
     let lock = path_present(&root.join(FIREFOX_LOCK_FILE))?;
     // Windows is the production shipping OS: its user_data/parent.lock is a real
@@ -466,7 +469,13 @@ fn observed_browser_writer_locks(
 pub(crate) fn browser_writer_locks_absent(
     workspace: &GenerationWorkspace,
 ) -> Result<bool, BrowserLaunchBlocker> {
-    let (parent_lock, lock) = observed_browser_writer_locks(workspace)?;
+    browser_writer_locks_absent_at(workspace.path())
+}
+
+/// Read-only native lock check for the Windows installer, which has the canonical
+/// workspace directory but must never claim a generation or alter pending-save data.
+pub(crate) fn browser_writer_locks_absent_at(root: &Path) -> Result<bool, BrowserLaunchBlocker> {
+    let (parent_lock, lock) = observed_browser_writer_locks_at(root)?;
     if parent_lock || lock {
         return Ok(false);
     }
@@ -475,7 +484,7 @@ pub(crate) fn browser_writer_locks_absent(
         // Camouhost alone can distinguish stale Unix fcntl marker files from
         // active writers before launch. The stricter coordinator Clean proof
         // cannot borrow that future check: ANY unknown marker forbids Clean.
-        let data = workspace.path().join(FIREFOX_USER_DATA_DIRECTORY);
+        let data = root.join(FIREFOX_USER_DATA_DIRECTORY);
         for marker in [
             FIREFOX_PARENT_LOCK_FILE,
             FIREFOX_WINDOWS_PARENT_LOCK_FILE,
