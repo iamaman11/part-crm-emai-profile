@@ -84,6 +84,8 @@ struct Observation {
     cloud: Cloud,
     cause: Cause,
     duration_ms: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    open_pages: Option<u16>,
 }
 
 fn unix_ms() -> Option<u64> {
@@ -105,7 +107,7 @@ pub fn record_current(stage: Stage, outcome: Outcome, cloud: Cloud, cause: Cause
 
 /// The installer already owns its trusted installation root; no URI may select this path.
 pub fn record_at(root: &Path, stage: Stage, outcome: Outcome, cloud: Cloud, cause: Cause, duration_ms: u64) {
-    let _ = try_record(root, stage, outcome, cloud, cause, duration_ms);
+    let _ = try_record(root, stage, outcome, cloud, cause, duration_ms, None);
 }
 
 fn installed_root() -> Option<PathBuf> {
@@ -135,7 +137,7 @@ fn journal_dir(root: &Path, create: bool) -> Option<PathBuf> {
     valid_directory(&path).then_some(path)
 }
 
-fn try_record(root: &Path, stage: Stage, outcome: Outcome, cloud: Cloud, cause: Cause, duration_ms: u64) -> Option<()> {
+fn try_record(root: &Path, stage: Stage, outcome: Outcome, cloud: Cloud, cause: Cause, duration_ms: u64, open_pages: Option<u16>) -> Option<()> {
     let directory = journal_dir(root, true)?;
     let now = unix_ms()?;
     let record = Observation {
@@ -147,6 +149,7 @@ fn try_record(root: &Path, stage: Stage, outcome: Outcome, cloud: Cloud, cause: 
         cloud,
         cause,
         duration_ms,
+        open_pages,
     };
     let bytes = serde_json::to_vec(&record).ok()?;
     if bytes.len() > MAX_RECORD_BYTES as usize {
@@ -221,6 +224,15 @@ fn prune(directory: &Path, now: u64) {
     }
 }
 
+/// Observed live Playwright pages (tabs), never inferred restored tab count or window count.
+/// There are no titles, addresses or raw browser IPC bytes in this event.
+pub fn record_open_pages(count: u16) {
+    if count > 512 { return; }
+    if let Some(root) = installed_root() {
+        let _ = try_record(&root, Stage::BrowserVisible, Outcome::Observed, Cloud::Unknown, Cause::None, 0, Some(count));
+    }
+}
+
 /// Read-only, strictly reconstructed from admitted typed observations. No profile data is read.
 #[must_use]
 pub fn report_current() -> String {
@@ -240,6 +252,10 @@ pub fn report_at(root: &Path) -> String {
         );
         if report.len() + line.len() > MAX_REPORT_BYTES { break; }
         report.push_str(&line);
+        if let Some(pages) = record.open_pages {
+            let count_line = format!("OBSERVED_OPEN_PAGES={pages};RESTORED_COUNT=UNPROVEN;WINDOW_COUNT=UNKNOWN\n");
+            if report.len() + count_line.len() <= MAX_REPORT_BYTES { report.push_str(&count_line); }
+        }
     }
     report
 }
