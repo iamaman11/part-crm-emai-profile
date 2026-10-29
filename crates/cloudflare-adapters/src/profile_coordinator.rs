@@ -124,7 +124,10 @@ impl StoredCoordinatorCheckpoint {
             pending_intent,
             active_lease,
             drain_deadline_ms: value.drain_deadline.map(UnixMillis::value),
-            last_claim: state.active_lease().and(last_claim),
+            // Preserve the original actor/device even after a crash or
+            // uncertain release: that identity is the recovery admission gate.
+            // active_claim_matches still requires a currently active lease.
+            last_claim,
         }
     }
 
