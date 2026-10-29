@@ -884,45 +884,45 @@ fn allowlisted_camouhost_diagnostic(line: &[u8]) -> Option<&str> {
 /// Only these typed observations may be persisted; never propagate raw stderr.
 fn record_allowlisted_runtime_stage(message: &str) {
     use crate::user_diagnostics::report::{self, Cause, Cloud, Outcome, Stage};
-    let (stage, outcome, cause) =
-        if let Some(rest) = message.strip_prefix("camouhost_stage phase=") {
-            let Some((phase, step)) = rest.split_once(" step=") else {
-                return;
-            };
-            let stage = match (phase, step) {
-                ("startup", _) | ("launch", "before_browser_enter" | "browser_entered" | "ready") => {
-                    Stage::CamouhostLaunch
-                }
-                ("launch", "network_blocked") => Stage::BrowserPreflight,
-                _ => return,
-            };
-            let outcome = if matches!(step, "begin" | "before_browser_enter") {
-                Outcome::Started
-            } else {
-                Outcome::Observed
-            };
-            (stage, outcome, Cause::None)
-        } else if let Some(rest) = message.strip_prefix("camouhost_failure phase=") {
-            let Some((phase, category)) = rest.split_once(" category=") else {
-                return;
-            };
-            let stage = match phase {
-                "browser_visible" | "navigation" => Stage::BrowserPreflight,
-                "close" | "cleanup" => Stage::BrowserClosed,
-                _ => Stage::CamouhostLaunch,
-            };
-            let cause = match category {
-                "dependency" => Cause::RuntimeDependency,
-                "contract" => Cause::RuntimeContract,
-                "timeout" => Cause::RuntimeTimeout,
-                "io" => Cause::RuntimeIo,
-                "browser_closed" => Cause::RuntimeClosed,
-                _ => Cause::RuntimeUnexpected,
-            };
-            (stage, Outcome::Failed, cause)
-        } else {
+    let (stage, outcome, cause) = if let Some(rest) = message.strip_prefix("camouhost_stage phase=")
+    {
+        let Some((phase, step)) = rest.split_once(" step=") else {
             return;
         };
+        let stage = match (phase, step) {
+            ("startup", _) | ("launch", "before_browser_enter" | "browser_entered" | "ready") => {
+                Stage::CamouhostLaunch
+            }
+            ("launch", "network_blocked") => Stage::BrowserPreflight,
+            _ => return,
+        };
+        let outcome = if matches!(step, "begin" | "before_browser_enter") {
+            Outcome::Started
+        } else {
+            Outcome::Observed
+        };
+        (stage, outcome, Cause::None)
+    } else if let Some(rest) = message.strip_prefix("camouhost_failure phase=") {
+        let Some((phase, category)) = rest.split_once(" category=") else {
+            return;
+        };
+        let stage = match phase {
+            "browser_visible" | "navigation" => Stage::BrowserPreflight,
+            "close" | "cleanup" => Stage::BrowserClosed,
+            _ => Stage::CamouhostLaunch,
+        };
+        let cause = match category {
+            "dependency" => Cause::RuntimeDependency,
+            "contract" => Cause::RuntimeContract,
+            "timeout" => Cause::RuntimeTimeout,
+            "io" => Cause::RuntimeIo,
+            "browser_closed" => Cause::RuntimeClosed,
+            _ => Cause::RuntimeUnexpected,
+        };
+        (stage, Outcome::Failed, cause)
+    } else {
+        return;
+    };
     report::record_current(stage, outcome, Cloud::Unknown, cause, 0);
 }
 

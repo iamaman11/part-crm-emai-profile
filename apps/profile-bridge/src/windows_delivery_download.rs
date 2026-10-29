@@ -641,7 +641,11 @@ impl DeliveryAssetFetcher for WindowsReleaseAssetFetcher {
             if let Some(root) = destination
                 .parent()
                 .and_then(Path::parent)
-                .filter(|downloads| downloads.file_name().is_some_and(|name| name == "downloads"))
+                .filter(|downloads| {
+                    downloads
+                        .file_name()
+                        .is_some_and(|name| name == "downloads")
+                })
                 .and_then(Path::parent)
             {
                 crate::user_diagnostics::report::record_download_failure(

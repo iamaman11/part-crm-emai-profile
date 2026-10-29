@@ -61,8 +61,9 @@ where
         BridgeCommand::VerifyHistoricalCandidate(_) => Stage::LocalRecovery,
         BridgeCommand::PairingStart(_) | BridgeCommand::PairingComplete(_) => Stage::Pairing,
         BridgeCommand::DeliveryActivateStaged => Stage::InstallActivate,
-        BridgeCommand::DeliveryInstallStaged(_)
-        | BridgeCommand::DeliveryHandoffArrived => Stage::Delivery,
+        BridgeCommand::DeliveryInstallStaged(_) | BridgeCommand::DeliveryHandoffArrived => {
+            Stage::Delivery
+        }
         BridgeCommand::CopyDiagnostics => Stage::Delivery,
     };
     let report_operation = !matches!(&command, BridgeCommand::CopyDiagnostics);
@@ -132,12 +133,18 @@ where
         let cause = match &result {
             Ok(()) => Cause::None,
             Err(BridgeCliError::InstallationFailed(_)) => Cause::InstallBlocked,
-            Err(BridgeCliError::LaunchFailed(ShippingCompositionError::HeartbeatAuthorityUncertain)) => Cause::CoordinatorUncertain,
-            Err(BridgeCliError::LaunchFailed(ShippingCompositionError::CommittedRecoveryRequired)) => Cause::CloudSaveFailed,
+            Err(BridgeCliError::LaunchFailed(
+                ShippingCompositionError::HeartbeatAuthorityUncertain,
+            )) => Cause::CoordinatorUncertain,
+            Err(BridgeCliError::LaunchFailed(
+                ShippingCompositionError::CommittedRecoveryRequired,
+            )) => Cause::CloudSaveFailed,
             Err(BridgeCliError::LaunchFailed(_)) => Cause::BrowserUnavailable,
             Err(_) => Cause::OtherSafeFailure,
         };
-        let elapsed = u64::try_from(start.elapsed().as_millis()).unwrap_or(u64::MAX).min(86_400_000);
+        let elapsed = u64::try_from(start.elapsed().as_millis())
+            .unwrap_or(u64::MAX)
+            .min(86_400_000);
         // A completed launch command is not proof of a currently open browser:
         // it may have completed delivery recovery or a controlled close/save.
         // Only the operator's live Ready and exact Save witnesses are positive.
@@ -149,7 +156,14 @@ where
         observe(outcome, cause, elapsed);
         if result.is_ok() && stage == Stage::InstallPrepare {
             if let Some(root) = &installation_root {
-                report::record_at(root, Stage::InstallVerified, Outcome::Observed, Cloud::Unknown, Cause::None, elapsed);
+                report::record_at(
+                    root,
+                    Stage::InstallVerified,
+                    Outcome::Observed,
+                    Cloud::Unknown,
+                    Cause::None,
+                    elapsed,
+                );
             }
         }
     }
@@ -322,7 +336,8 @@ mod tests {
     }
 
     #[test]
-    fn local_diagnostic_export_is_exact_and_has_no_remote_input() -> Result<(), Box<dyn std::error::Error>> {
+    fn local_diagnostic_export_is_exact_and_has_no_remote_input()
+    -> Result<(), Box<dyn std::error::Error>> {
         let parsed = parse_command([
             "profile-bridge".to_owned(),
             super::REPORT_COPY_URI.to_owned(),
@@ -335,11 +350,14 @@ mod tests {
         ] {
             assert!(parse_command(["profile-bridge".to_owned(), invalid.to_owned()]).is_err());
         }
-        assert!(parse_command([
-            "profile-bridge".to_owned(),
-            super::REPORT_COPY_URI.to_owned(),
-            "unexpected".to_owned(),
-        ]).is_err());
+        assert!(
+            parse_command([
+                "profile-bridge".to_owned(),
+                super::REPORT_COPY_URI.to_owned(),
+                "unexpected".to_owned(),
+            ])
+            .is_err()
+        );
         Ok(())
     }
 

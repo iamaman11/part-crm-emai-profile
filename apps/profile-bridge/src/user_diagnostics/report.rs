@@ -6,8 +6,8 @@ use serde::{Deserialize, Serialize};
 use std::fs::{self, File, OpenOptions};
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::OnceLock;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 const DIRECTORY: &str = "diagnostics";
@@ -110,30 +110,57 @@ struct Observation {
 }
 
 fn unix_ms() -> Option<u64> {
-    u64::try_from(SystemTime::now().duration_since(UNIX_EPOCH).ok()?.as_millis()).ok()
+    u64::try_from(
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .ok()?
+            .as_millis(),
+    )
+    .ok()
 }
 
 fn operation_id() -> &'static str {
     OPERATION_ID.get_or_init(|| {
-        format!("op_{:08x}_{:016x}", std::process::id(), unix_ms().unwrap_or(0))
+        format!(
+            "op_{:08x}_{:016x}",
+            std::process::id(),
+            unix_ms().unwrap_or(0)
+        )
     })
 }
 
 /// A best-effort, local-only observation. Failure is never an application failure.
-pub fn record_current(stage: Stage, outcome: Outcome, cloud: Cloud, cause: Cause, duration_ms: u64) {
+pub fn record_current(
+    stage: Stage,
+    outcome: Outcome,
+    cloud: Cloud,
+    cause: Cause,
+    duration_ms: u64,
+) {
     if let Some(root) = installed_root() {
         record_at(&root, stage, outcome, cloud, cause, duration_ms);
     }
 }
 
 /// The installer already owns its trusted installation root; no URI may select this path.
-pub fn record_at(root: &Path, stage: Stage, outcome: Outcome, cloud: Cloud, cause: Cause, duration_ms: u64) {
+pub fn record_at(
+    root: &Path,
+    stage: Stage,
+    outcome: Outcome,
+    cloud: Cloud,
+    cause: Cause,
+    duration_ms: u64,
+) {
     let _ = try_record(root, stage, outcome, cloud, cause, duration_ms, None, None);
 }
 
 fn installed_root() -> Option<PathBuf> {
     let executable = std::env::current_exe().ok()?;
-    let coordinator = crate::windows_delivery_handoff::DeliveryHandoffCoordinator::from_current_executable(executable).ok()?;
+    let coordinator =
+        crate::windows_delivery_handoff::DeliveryHandoffCoordinator::from_current_executable(
+            executable,
+        )
+        .ok()?;
     coordinator.installed_root().ok().map(Path::to_path_buf)
 }
 
@@ -205,8 +232,15 @@ fn try_record(
         return None;
     }
     let sequence = SEQUENCE.fetch_add(1, Ordering::Relaxed);
-    let file_path = directory.join(format!("event-{now:016x}-{:08x}-{sequence:016x}.json", std::process::id()));
-    let mut file = OpenOptions::new().write(true).create_new(true).open(file_path).ok()?;
+    let file_path = directory.join(format!(
+        "event-{now:016x}-{:08x}-{sequence:016x}.json",
+        std::process::id()
+    ));
+    let mut file = OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(file_path)
+        .ok()?;
     file.write_all(&bytes).and_then(|()| file.sync_all()).ok()?;
     prune(&directory, now);
     Some(())
@@ -216,31 +250,58 @@ fn is_event_name(value: &str) -> bool {
     value.starts_with("event-")
         && value.ends_with(".json")
         && value.len() <= 90
-        && value.bytes().all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'-' || byte == b'.')
+        && value.bytes().all(|byte| {
+            byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'-' || byte == b'.'
+        })
 }
 
 fn observations(root: &Path) -> Vec<Observation> {
-    let Some(directory) = journal_dir(root, false) else { return Vec::new() };
-    let Some(now) = unix_ms() else { return Vec::new() };
-    let Ok(entries) = fs::read_dir(directory) else { return Vec::new() };
+    let Some(directory) = journal_dir(root, false) else {
+        return Vec::new();
+    };
+    let Some(now) = unix_ms() else {
+        return Vec::new();
+    };
+    let Ok(entries) = fs::read_dir(directory) else {
+        return Vec::new();
+    };
     let mut records = Vec::new();
     // A corrupt, partial, foreign, oversized or link file is ignored, never displayed.
     for item in entries.flatten().take(2_048) {
         let name = item.file_name();
         let Some(name) = name.to_str() else { continue };
-        if !is_event_name(name) { continue; }
-        let Ok(meta) = fs::symlink_metadata(item.path()) else { continue };
-        if !meta.is_file() || linked_or_reparse(&meta) || meta.len() > MAX_RECORD_BYTES { continue; }
-        let Ok(file) = File::open(item.path()) else { continue };
+        if !is_event_name(name) {
+            continue;
+        }
+        let Ok(meta) = fs::symlink_metadata(item.path()) else {
+            continue;
+        };
+        if !meta.is_file() || linked_or_reparse(&meta) || meta.len() > MAX_RECORD_BYTES {
+            continue;
+        }
+        let Ok(file) = File::open(item.path()) else {
+            continue;
+        };
         let mut bytes = Vec::new();
-        if file.take(MAX_RECORD_BYTES + 1).read_to_end(&mut bytes).is_err() || bytes.len() > MAX_RECORD_BYTES as usize { continue; }
-        let Ok(record) = serde_json::from_slice::<Observation>(&bytes) else { continue };
+        if file
+            .take(MAX_RECORD_BYTES + 1)
+            .read_to_end(&mut bytes)
+            .is_err()
+            || bytes.len() > MAX_RECORD_BYTES as usize
+        {
+            continue;
+        }
+        let Ok(record) = serde_json::from_slice::<Observation>(&bytes) else {
+            continue;
+        };
         if record.schema_version != 1
             || record.time_unix_ms > now.saturating_add(60_000)
             || now.saturating_sub(record.time_unix_ms) > MAX_AGE_MS
             || record.operation_id.len() != 28
             || !record.operation_id.starts_with("op_")
-            || !record.operation_id[3..].bytes().all(|b| b.is_ascii_hexdigit() || b == b'_')
+            || !record.operation_id[3..]
+                .bytes()
+                .all(|b| b.is_ascii_hexdigit() || b == b'_')
             || record.duration_ms > 86_400_000
             || record.open_pages.is_some_and(|count| count > 512)
             || match (&record.verified_runtime, record.verified_sequence) {
@@ -253,7 +314,9 @@ fn observations(root: &Path) -> Vec<Observation> {
                 }
                 _ => true,
             }
-        { continue; }
+        {
+            continue;
+        }
         // The filename is generated by the same owner and encodes the event
         // timestamp. Malformed or mismatched records remain non-authoritative.
         let stamp = name
@@ -277,20 +340,31 @@ fn observations(root: &Path) -> Vec<Observation> {
 }
 
 fn prune(directory: &Path, now: u64) {
-    let Ok(entries) = fs::read_dir(directory) else { return };
+    let Ok(entries) = fs::read_dir(directory) else {
+        return;
+    };
     let mut files = Vec::new();
     for item in entries.flatten().take(2_048) {
         let name = item.file_name();
         let Some(name) = name.to_str() else { continue };
-        if !is_event_name(name) { continue; }
-        let Ok(meta) = fs::symlink_metadata(item.path()) else { continue };
-        if !meta.is_file() || linked_or_reparse(&meta) { continue; }
+        if !is_event_name(name) {
+            continue;
+        }
+        let Ok(meta) = fs::symlink_metadata(item.path()) else {
+            continue;
+        };
+        if !meta.is_file() || linked_or_reparse(&meta) {
+            continue;
+        }
         files.push((name.to_owned(), item.path()));
     }
     files.sort_by(|left, right| left.0.cmp(&right.0));
     let excess = files.len().saturating_sub(MAX_EVENTS);
     for (index, (name, path)) in files.into_iter().enumerate() {
-        let timestamp = name.split('-').nth(1).and_then(|hex| u64::from_str_radix(hex, 16).ok());
+        let timestamp = name
+            .split('-')
+            .nth(1)
+            .and_then(|hex| u64::from_str_radix(hex, 16).ok());
         if index < excess || timestamp.is_some_and(|stamp| now.saturating_sub(stamp) > MAX_AGE_MS) {
             let _ = fs::remove_file(path);
         }
@@ -302,21 +376,43 @@ fn prune(directory: &Path, now: u64) {
 /// Installer-only download evidence. Source and error classification are owned
 /// by the verified Windows asset fetcher. No URL, destination or proxy details.
 pub fn record_download_failure(root: &Path, cause: Cause) {
-    record_at(root, Stage::InstallPrepare, Outcome::Failed, Cloud::Unknown, cause, 0);
+    record_at(
+        root,
+        Stage::InstallPrepare,
+        Outcome::Failed,
+        Cloud::Unknown,
+        cause,
+        0,
+    );
 }
 
 pub fn record_open_pages(count: u16) {
-    if count > 512 { return; }
+    if count > 512 {
+        return;
+    }
     if let Some(root) = installed_root() {
-        let _ = try_record(&root, Stage::BrowserVisible, Outcome::Observed, Cloud::Unknown, Cause::None, 0, Some(count), None);
+        let _ = try_record(
+            &root,
+            Stage::BrowserVisible,
+            Outcome::Observed,
+            Cloud::Unknown,
+            Cause::None,
+            0,
+            Some(count),
+            None,
+        );
     }
 }
 
 fn valid_runtime_release_id(value: &str) -> bool {
-    value.strip_prefix("runtime-bundle-v3-sha256-").is_some_and(|digest| {
-        digest.len() == 64
-            && digest.bytes().all(|byte| byte.is_ascii_digit() || matches!(byte, b'a'..=b'f'))
-    })
+    value
+        .strip_prefix("runtime-bundle-v3-sha256-")
+        .is_some_and(|digest| {
+            digest.len() == 64
+                && digest
+                    .bytes()
+                    .all(|byte| byte.is_ascii_digit() || matches!(byte, b'a'..=b'f'))
+        })
 }
 
 /// This source is the existing verified Windows delivery owner, never a
@@ -346,12 +442,12 @@ fn next_safe_step(record: &Observation) -> &'static str {
         (Stage::CloudSaveConfirmed, Outcome::Succeeded, Cloud::CommittedExact) => {
             "NORMAL_NEXT_OPEN"
         }
-        (Stage::CloudSaveAttempt, _, Cloud::NotConfirmed) => {
-            "CLOUD_NOT_CONFIRMED_PRESERVE_LOCAL"
-        }
-        (Stage::InstallPrepare | Stage::InstallVerified | Stage::InstallActivate, Outcome::Failed, _) => {
-            "RETRY_INSTALLER_AFTER_CHECK"
-        }
+        (Stage::CloudSaveAttempt, _, Cloud::NotConfirmed) => "CLOUD_NOT_CONFIRMED_PRESERVE_LOCAL",
+        (
+            Stage::InstallPrepare | Stage::InstallVerified | Stage::InstallActivate,
+            Outcome::Failed,
+            _,
+        ) => "RETRY_INSTALLER_AFTER_CHECK",
         (Stage::BrowserPreflight | Stage::CamouhostLaunch, Outcome::Failed, _) => {
             "RETRY_THROUGH_OWNED_OPEN"
         }
@@ -375,10 +471,7 @@ fn local_confirmation(record: &Observation) -> &'static str {
 /// Read-only, strictly reconstructed from admitted typed observations. No profile data is read.
 #[must_use]
 pub fn report_current() -> String {
-    installed_root().map_or_else(
-        || report_at(Path::new("")),
-        |root| report_at(&root),
-    )
+    installed_root().map_or_else(|| report_at(Path::new("")), |root| report_at(&root))
 }
 
 #[must_use]
@@ -386,28 +479,45 @@ pub fn report_at(root: &Path) -> String {
     let records = observations(root);
     // The last verified delivery observation may predate an update. Never label
     // it as the CURRENT delivery or treat it as an activation certificate.
-    let last_runtime = records
-        .iter()
-        .rev()
-        .find_map(|record| record.verified_runtime.as_ref().zip(record.verified_sequence));
+    let last_runtime = records.iter().rev().find_map(|record| {
+        record
+            .verified_runtime
+            .as_ref()
+            .zip(record.verified_sequence)
+    });
     let (release_sequence, runtime) = last_runtime
         .map(|(id, sequence)| (sequence.to_string(), id.clone()))
         .unwrap_or_else(|| ("NOT_OBSERVED".to_owned(), "NOT_OBSERVED".to_owned()));
     let mut report = format!(
         "PROFILE_BRIDGE_DIAGNOSTICS_V1\nBRIDGE_VERSION={}\nLAST_OBSERVED_RELEASE_SEQUENCE={}\nLAST_OBSERVED_RUNTIME_IDENTITY={}\nREPORT_AUTHORITY=LOCAL_OBSERVATIONS_ONLY\n",
-        env!("CARGO_PKG_VERSION"), release_sequence, runtime,
+        env!("CARGO_PKG_VERSION"),
+        release_sequence,
+        runtime,
     );
     for record in records {
         let line = format!(
             "TIME_MS={};OP={};STAGE={:?};OUTCOME={:?};CLOUD={:?};CAUSE={:?};DURATION_MS={};LOCAL={};NEXT_SAFE_STEP={}\n",
-            record.time_unix_ms, record.operation_id, record.stage, record.outcome, record.cloud, record.cause, record.duration_ms,
-            local_confirmation(&record), next_safe_step(&record)
+            record.time_unix_ms,
+            record.operation_id,
+            record.stage,
+            record.outcome,
+            record.cloud,
+            record.cause,
+            record.duration_ms,
+            local_confirmation(&record),
+            next_safe_step(&record)
         );
-        if report.len() + line.len() > MAX_REPORT_BYTES { break; }
+        if report.len() + line.len() > MAX_REPORT_BYTES {
+            break;
+        }
         report.push_str(&line);
         if let Some(pages) = record.open_pages {
-            let count_line = format!("OBSERVED_OPEN_PAGES={pages};RESTORED_COUNT=UNPROVEN;WINDOW_COUNT=UNKNOWN\n");
-            if report.len() + count_line.len() <= MAX_REPORT_BYTES { report.push_str(&count_line); }
+            let count_line = format!(
+                "OBSERVED_OPEN_PAGES={pages};RESTORED_COUNT=UNPROVEN;WINDOW_COUNT=UNKNOWN\n"
+            );
+            if report.len() + count_line.len() <= MAX_REPORT_BYTES {
+                report.push_str(&count_line);
+            }
         }
     }
     report
@@ -421,7 +531,11 @@ mod tests {
     static TEST_ID: AtomicU64 = AtomicU64::new(0);
 
     fn test_root() -> PathBuf {
-        let root = std::env::temp_dir().join(format!("bridge-report-{}-{}", std::process::id(), TEST_ID.fetch_add(1, Ordering::Relaxed)));
+        let root = std::env::temp_dir().join(format!(
+            "bridge-report-{}-{}",
+            std::process::id(),
+            TEST_ID.fetch_add(1, Ordering::Relaxed)
+        ));
         fs::create_dir_all(root.join("state")).expect("test root");
         root
     }
@@ -429,8 +543,22 @@ mod tests {
     #[test]
     fn typed_report_survives_restart_and_does_not_replay_owner_state() {
         let root = test_root();
-        record_at(&root, Stage::LocalUnsynced, Outcome::Unconfirmed, Cloud::NotConfirmed, Cause::None, 7);
-        record_at(&root, Stage::CloudSaveConfirmed, Outcome::Succeeded, Cloud::CommittedExact, Cause::None, 9);
+        record_at(
+            &root,
+            Stage::LocalUnsynced,
+            Outcome::Unconfirmed,
+            Cloud::NotConfirmed,
+            Cause::None,
+            7,
+        );
+        record_at(
+            &root,
+            Stage::CloudSaveConfirmed,
+            Outcome::Succeeded,
+            Cloud::CommittedExact,
+            Cause::None,
+            9,
+        );
         let text = report_at(&root);
         assert!(text.contains("LocalUnsynced"));
         assert!(text.contains("CloudSaveConfirmed"));
@@ -443,11 +571,28 @@ mod tests {
     #[test]
     fn corrupted_and_untrusted_files_are_never_echoed() {
         let root = test_root();
-        record_at(&root, Stage::OpenRequested, Outcome::Started, Cloud::Unknown, Cause::None, 0);
+        record_at(
+            &root,
+            Stage::OpenRequested,
+            Outcome::Started,
+            Cloud::Unknown,
+            Cause::None,
+            0,
+        );
         let directory = root.join(DIRECTORY);
-        fs::write(directory.join("event-0000000000000001-fake.json"), b"https://secret.invalid/?token=top_secret profile_bytes cookie").expect("fixture");
+        fs::write(
+            directory.join("event-0000000000000001-fake.json"),
+            b"https://secret.invalid/?token=top_secret profile_bytes cookie",
+        )
+        .expect("fixture");
         let output = report_at(&root);
-        for leak in ["secret.invalid", "top_secret", "profile_bytes", "cookie", root.to_str().expect("path")] {
+        for leak in [
+            "secret.invalid",
+            "top_secret",
+            "profile_bytes",
+            "cookie",
+            root.to_str().expect("path"),
+        ] {
             assert!(!output.contains(leak));
         }
         fs::remove_dir_all(root).expect("cleanup fixture");
@@ -470,9 +615,15 @@ mod tests {
             "duration_ms": 100,
             "private_url": "https://private.invalid/?token=secret",
         });
-        let timestamp = malicious["time_unix_ms"].as_u64().expect("fixture timestamp");
+        let timestamp = malicious["time_unix_ms"]
+            .as_u64()
+            .expect("fixture timestamp");
         let name = format!("event-{timestamp:016x}-00000001-0000000000000000.json");
-        fs::write(directory.join(name), serde_json::to_vec(&malicious).expect("fixture")).expect("fixture");
+        fs::write(
+            directory.join(name),
+            serde_json::to_vec(&malicious).expect("fixture"),
+        )
+        .expect("fixture");
         let report = report_at(&root);
         assert!(!report.contains("private.invalid"));
         assert!(!report.contains("CLOUD_SAVE_CONFIRMED"));
@@ -498,7 +649,14 @@ mod tests {
     #[test]
     fn reporting_pending_local_never_claims_cloud_commit_or_authorized_retry() {
         let root = test_root();
-        record_at(&root, Stage::LocalUnsynced, Outcome::Unconfirmed, Cloud::NotConfirmed, Cause::None, 42);
+        record_at(
+            &root,
+            Stage::LocalUnsynced,
+            Outcome::Unconfirmed,
+            Cloud::NotConfirmed,
+            Cause::None,
+            42,
+        );
         let report = report_at(&root);
         assert!(report.contains("LOCAL=LOCAL_UNSYNCED_RETAINED"));
         assert!(report.contains("PRESERVE_LOCAL_WAIT_FOR_OWNED_RECOVERY"));
@@ -511,9 +669,9 @@ mod tests {
     fn diagnostic_directory_is_outside_strict_delivery_state_and_survives_open() {
         let root = test_root();
         fs::remove_dir(root.join("state")).expect("empty state fixture");
-        let before = crate::windows_delivery_store::DeliveryStateStore::initialize(
-            root.join("state"),
-        ).expect("canonical delivery store");
+        let before =
+            crate::windows_delivery_store::DeliveryStateStore::initialize(root.join("state"))
+                .expect("canonical delivery store");
         let original_revision = before.revision();
         record_at(
             &root,
@@ -526,9 +684,8 @@ mod tests {
         assert!(root.join(DIRECTORY).is_dir());
         assert!(!root.join("state").join(DIRECTORY).exists());
         let _report = report_at(&root);
-        let after = crate::windows_delivery_store::DeliveryStateStore::open(
-            root.join("state"),
-        ).expect("diagnostic observation must not invalidate canonical store");
+        let after = crate::windows_delivery_store::DeliveryStateStore::open(root.join("state"))
+            .expect("diagnostic observation must not invalidate canonical store");
         assert_eq!(after.revision(), original_revision);
         fs::remove_dir_all(root).expect("cleanup");
     }
@@ -588,7 +745,16 @@ mod tests {
     #[test]
     fn report_is_bounded_and_ignores_symlink_or_missing_state() {
         let root = test_root();
-        for _ in 0..100 { record_at(&root, Stage::BrowserPreflight, Outcome::Observed, Cloud::Unknown, Cause::None, 1); }
+        for _ in 0..100 {
+            record_at(
+                &root,
+                Stage::BrowserPreflight,
+                Outcome::Observed,
+                Cloud::Unknown,
+                Cause::None,
+                1,
+            );
+        }
         let text = report_at(&root);
         assert!(text.len() <= MAX_REPORT_BYTES);
         assert!(text.lines().count() <= MAX_EVENTS + 5);

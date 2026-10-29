@@ -46,7 +46,6 @@ unsafe extern "system" {
     fn MessageBoxW(owner: *mut c_void, text: *const u16, title: *const u16, flags: u32) -> i32;
 }
 
-
 const CF_UNICODETEXT: u32 = 13;
 const GMEM_MOVEABLE: u32 = 0x0002;
 
@@ -64,9 +63,18 @@ pub(super) fn copy_redacted_report(report: &str) -> bool {
         // system-class window for this one synchronous copy operation.
         let window_class: Vec<u16> = "STATIC".encode_utf16().chain([0]).collect();
         let owner = CreateWindowExW(
-            0, window_class.as_ptr(), ptr::null(), 0,
-            0, 0, 0, 0, ptr::null_mut(), ptr::null_mut(),
-            ptr::null_mut(), ptr::null(),
+            0,
+            window_class.as_ptr(),
+            ptr::null(),
+            0,
+            0,
+            0,
+            0,
+            0,
+            ptr::null_mut(),
+            ptr::null_mut(),
+            ptr::null_mut(),
+            ptr::null(),
         );
         if owner.is_null() {
             return false;
@@ -128,9 +136,14 @@ unsafe extern "system" {
         class_name: *const u16,
         window_name: *const u16,
         style: u32,
-        x: i32, y: i32, width: i32, height: i32,
-        parent: *mut c_void, menu: *mut c_void,
-        instance: *mut c_void, parameter: *const c_void,
+        x: i32,
+        y: i32,
+        width: i32,
+        height: i32,
+        parent: *mut c_void,
+        menu: *mut c_void,
+        instance: *mut c_void,
+        parameter: *const c_void,
     ) -> *mut c_void;
     fn DestroyWindow(window: *mut c_void) -> i32;
     fn OpenClipboard(owner: *mut c_void) -> i32;
