@@ -3287,6 +3287,7 @@ mod tests {
 
         let mut owner = operator(&fixture, FakeCamouhost::default())?;
         let observed = Cell::new(0_u32);
+        let lease_start_callbacks = Cell::new(0_u32);
         let materializations = Cell::new(0_u32);
         let runtime_starts = Cell::new(0_u32);
         assert_eq!(
@@ -3294,7 +3295,10 @@ mod tests {
                 &fixture.claim_uri,
                 &fixture.root,
                 UnixMillis::new(10),
-                |_coordinator, _lease| {},
+                |_coordinator, lease| {
+                    assert_eq!(lease.device_id(), &fixture.device_id);
+                    lease_start_callbacks.set(lease_start_callbacks.get() + 1);
+                },
                 |_coordinator, _tenant, _profile, _generation, _device, _epoch| {
                     materializations.set(materializations.get() + 1);
                     Ok(())
@@ -3321,6 +3325,7 @@ mod tests {
             ))
         );
         assert_eq!(observed.get(), 1);
+        assert_eq!(lease_start_callbacks.get(), 1);
         assert_eq!(materializations.get(), 0);
         assert_eq!(runtime_starts.get(), 0);
         assert_eq!(owner.coordinator().claimed, 1);
@@ -3335,6 +3340,7 @@ mod tests {
         let mut rejected = operator(&fixture, FakeCamouhost::default())?;
         rejected.coordinator.claim_fail = true;
         let unauthorized_observations = Cell::new(0_u32);
+        let unauthorized_lease_callbacks = Cell::new(0_u32);
         let unauthorized_materializations = Cell::new(0_u32);
         let unauthorized_starts = Cell::new(0_u32);
         assert_eq!(
@@ -3342,7 +3348,9 @@ mod tests {
                 &fixture.claim_uri,
                 &fixture.root,
                 UnixMillis::new(11),
-                |_coordinator, _lease| {},
+                |_coordinator, _lease| {
+                    unauthorized_lease_callbacks.set(unauthorized_lease_callbacks.get() + 1);
+                },
                 |_coordinator, _tenant, _profile, _generation, _device, _epoch| {
                     unauthorized_materializations.set(unauthorized_materializations.get() + 1);
                     Ok(())
@@ -3361,6 +3369,7 @@ mod tests {
             ))
         );
         assert_eq!(unauthorized_observations.get(), 0);
+        assert_eq!(unauthorized_lease_callbacks.get(), 0);
         assert_eq!(unauthorized_materializations.get(), 0);
         assert_eq!(unauthorized_starts.get(), 0);
         assert!(rejected.process().actions().is_empty());
