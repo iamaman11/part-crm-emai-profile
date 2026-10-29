@@ -692,7 +692,7 @@ where
             claim,
             root,
             now,
-            (|_coordinator, _lease| {}),
+            (|_coordinator, _lease| {},
             |coordinator, tenant_id, profile_id, generation_id, device_id, epoch| {
                 ensure_authoritative_generation(
                     root,
@@ -704,7 +704,7 @@ where
                     coordinator,
                     downloader,
                 )
-            },
+            }),
             before_runtime_start,
             |_coordinator, _tenant, _profile, _selected, _lease| PendingSaveRecovery::Blocked,
         )
@@ -751,7 +751,7 @@ where
             root,
             now,
             (on_claim,
-            |coordinator), tenant_id, profile_id, generation_id, device_id, epoch| {
+            |coordinator, tenant_id, profile_id, generation_id, device_id, epoch| {
                 ensure_authoritative_generation(
                     root,
                     tenant_id,
@@ -762,7 +762,7 @@ where
                     coordinator,
                     downloader,
                 )
-            },
+            }),
             before_runtime_start,
             observe_pending,
         )
@@ -900,8 +900,8 @@ where
             claim,
             root,
             now,
-            (|_coordinator, _lease| {}),
-            |_coordinator, _tenant_id, _profile_id, _generation_id, _device_id, _epoch| Ok(()),
+            (|_coordinator, _lease| {},
+            |_coordinator, _tenant_id, _profile_id, _generation_id, _device_id, _epoch| Ok(())),
             || Ok(()),
             |_coordinator, _tenant, _profile, _selected, _lease| PendingSaveRecovery::Blocked,
         )
@@ -2734,14 +2734,14 @@ mod tests {
             &fixture.claim_uri,
             &fixture.root,
             UnixMillis::new(10),
-            (|_coordinator, _lease| {}),
+            (|_coordinator, _lease| {},
             |_coordinator, _tenant, _profile, _generation, _device, _epoch| {
                 Err(
                     AuthoritativeGenerationMaterializationError::ControlPlaneBeforeLocalUse(
                         GenerationReopenControlError::Transport,
                     ),
                 )
-            },
+            }),
             || {
                 runtime_health_started = true;
                 Ok(())
@@ -2775,7 +2775,7 @@ mod tests {
                 &fixture.claim_uri,
                 root,
                 UnixMillis::new(10),
-                (|_coordinator, _lease| {}),
+                (|_coordinator, _lease| {},
                 |_coordinator, tenant, profile, generation, _device, _epoch| {
                     if create_during_attempt {
                         assert!(
@@ -2790,7 +2790,7 @@ mod tests {
                             ),
                         ),
                     )
-                },
+                }),
                 || {
                     runtime_health_started = true;
                     Ok(())
@@ -2827,7 +2827,7 @@ mod tests {
                 &fixture.claim_uri,
                 root,
                 UnixMillis::new(10),
-                (|_coordinator, _lease| {}),
+                (|_coordinator, _lease| {},
                 |_coordinator, tenant, profile, generation, _device, _epoch| {
                     if create_during_attempt {
                         assert!(root.create_generation(tenant, profile, generation).is_ok());
@@ -2837,7 +2837,7 @@ mod tests {
                             GenerationReopenControlError::HttpStatus,
                         ),
                     )
-                },
+                }),
                 || Ok(()),
                 |_coordinator, _tenant, _profile, _selected, _lease| PendingSaveRecovery::Blocked,
             );
@@ -2862,12 +2862,12 @@ mod tests {
             &fixture.claim_uri,
             &fixture.root,
             UnixMillis::new(10),
-            (|_coordinator, _lease| {}),
+            (|_coordinator, _lease| {},
             |_coordinator, _tenant, _profile, _generation, _device, _epoch| {
                 Err(AuthoritativeGenerationMaterializationError::ControlPlane(
                     GenerationReopenControlError::InvalidResponse,
                 ))
-            },
+            }),
             || Ok(()),
             |_coordinator, _tenant, _profile, _selected, _lease| PendingSaveRecovery::Blocked,
         );
@@ -3299,11 +3299,11 @@ mod tests {
                 (|_coordinator, lease| {
                     assert_eq!(lease.device_id(), &fixture.device_id);
                     lease_start_callbacks.set(lease_start_callbacks.get() + 1);
-                }),
+                },
                 |_coordinator, _tenant, _profile, _generation, _device, _epoch| {
                     materializations.set(materializations.get() + 1);
                     Ok(())
-                },
+                }),
                 || {
                     runtime_starts.set(runtime_starts.get() + 1);
                     Ok(())
@@ -3351,11 +3351,11 @@ mod tests {
                 UnixMillis::new(11),
                 (|_coordinator, _lease| {
                     unauthorized_lease_callbacks.set(unauthorized_lease_callbacks.get() + 1);
-                }),
+                },
                 |_coordinator, _tenant, _profile, _generation, _device, _epoch| {
                     unauthorized_materializations.set(unauthorized_materializations.get() + 1);
                     Ok(())
-                },
+                }),
                 || {
                     unauthorized_starts.set(unauthorized_starts.get() + 1);
                     Ok(())
@@ -3547,8 +3547,8 @@ mod tests {
             &fixture.claim_uri,
             &fixture.root,
             UnixMillis::new(10),
-            (|_coordinator, _lease| {}),
-            |_coordinator, _tenant, _profile, _generation, _device, _epoch| Ok(()),
+            (|_coordinator, _lease| {},
+            |_coordinator, _tenant, _profile, _generation, _device, _epoch| Ok(())),
             || {
                 started_health = true;
                 Ok(())
@@ -3571,8 +3571,8 @@ mod tests {
             &fixture.claim_uri,
             &fixture.root,
             UnixMillis::new(10),
-            (|_coordinator, _lease| {}),
-            |_coordinator, _tenant, _profile, _generation, _device, _epoch| Ok(()),
+            (|_coordinator, _lease| {},
+            |_coordinator, _tenant, _profile, _generation, _device, _epoch| Ok(())),
             || {
                 started_health = true;
                 Ok(())
@@ -3597,8 +3597,8 @@ mod tests {
             &fixture.claim_uri,
             &fixture.root,
             UnixMillis::new(10),
-            (|_coordinator, _lease| {}),
-            |_coordinator, _tenant, _profile, _generation, _device, _epoch| Ok(()),
+            (|_coordinator, _lease| {},
+            |_coordinator, _tenant, _profile, _generation, _device, _epoch| Ok(())),
             || {
                 start_attempts += 1;
                 Err(())
