@@ -154,17 +154,18 @@ where
             (Err(_), _) => Outcome::Failed,
         };
         observe(outcome, cause, elapsed);
-        if result.is_ok() && stage == Stage::InstallPrepare {
-            if let Some(root) = &installation_root {
-                report::record_at(
-                    root,
-                    Stage::InstallVerified,
-                    Outcome::Observed,
-                    Cloud::Unknown,
-                    Cause::None,
-                    elapsed,
-                );
-            }
+        if result.is_ok()
+            && stage == Stage::InstallPrepare
+            && let Some(root) = &installation_root
+        {
+            report::record_at(
+                root,
+                Stage::InstallVerified,
+                Outcome::Observed,
+                Cloud::Unknown,
+                Cause::None,
+                elapsed,
+            );
         }
     }
     result
