@@ -786,7 +786,10 @@ impl ProfileCoordinatorState {
         if !(self.status == CoordinatorStatus::Uncertain
             || (self.status == CoordinatorStatus::Idle && self.recovery_claim_pending))
             || self.active_lease.is_some()
-            || self.pending_intent.as_ref().is_some_and(|intent| intent.expires_at > now)
+            || self
+                .pending_intent
+                .as_ref()
+                .is_some_and(|intent| intent.expires_at > now)
         {
             return Err(CoordinatorError::CoordinatorUnavailable);
         }
