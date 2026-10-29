@@ -692,7 +692,7 @@ where
             claim,
             root,
             now,
-            |_coordinator, _lease| {},
+            (|_coordinator, _lease| {}),
             |coordinator, tenant_id, profile_id, generation_id, device_id, epoch| {
                 ensure_authoritative_generation(
                     root,
@@ -715,10 +715,7 @@ where
     /// callback may first-seal the original N+1 or finish an exact checkpoint;
     /// only a completed ACTIVE_EXACT binding may allow an ordinary Open.
     /// The unresolved-checkpoint guard remains authoritative.
-    // The existing Open owner takes explicit callbacks for independent proof
-    // boundaries: post-Claim lease, runtime health, and pending N+1 recovery.
-    // Keep them as typed closures rather than introducing a parallel options SM.
-    #[allow(clippy::too_many_arguments)]
+    /// One existing Open owner; callbacks share one lifetime and one lease.
     pub fn open_authoritative_with_runtime_health_and_pending_recovery<
         Dl,
         OnClaim,
@@ -730,8 +727,7 @@ where
         root: &MaterializationRoot,
         downloader: &mut Dl,
         now: UnixMillis,
-        on_claim: OnClaim,
-        before_runtime_start: BeforeRuntime,
+        callbacks: (OnClaim, BeforeRuntime),
         observe_pending: ObservePending,
     ) -> Result<(), OperatorFlowError>
     where
@@ -749,12 +745,13 @@ where
             &ProfileLease,
         ) -> PendingSaveRecovery,
     {
+        let (on_claim, before_runtime_start) = callbacks;
         self.open_with_materialization(
             claim,
             root,
             now,
-            on_claim,
-            |coordinator, tenant_id, profile_id, generation_id, device_id, epoch| {
+            (on_claim,
+            |coordinator), tenant_id, profile_id, generation_id, device_id, epoch| {
                 ensure_authoritative_generation(
                     root,
                     tenant_id,
@@ -903,7 +900,7 @@ where
             claim,
             root,
             now,
-            |_coordinator, _lease| {},
+            (|_coordinator, _lease| {}),
             |_coordinator, _tenant_id, _profile_id, _generation_id, _device_id, _epoch| Ok(()),
             || Ok(()),
             |_coordinator, _tenant, _profile, _selected, _lease| PendingSaveRecovery::Blocked,
@@ -911,14 +908,12 @@ where
     }
 
     // One pre-browser state machine owns materialization and both safety hooks.
-    #[allow(clippy::too_many_arguments)]
     fn open_with_materialization<OnClaim, F, BeforeRuntime, ObservePending>(
         &mut self,
         claim: &ClaimUri,
         root: &MaterializationRoot,
         now: UnixMillis,
-        mut on_claim: OnClaim,
-        mut ensure_materialized: F,
+        (mut on_claim, mut ensure_materialized): (OnClaim, F),
         mut before_runtime_start: BeforeRuntime,
         mut observe_pending: ObservePending,
     ) -> Result<(), OperatorFlowError>
@@ -2739,7 +2734,7 @@ mod tests {
             &fixture.claim_uri,
             &fixture.root,
             UnixMillis::new(10),
-            |_coordinator, _lease| {},
+            (|_coordinator, _lease| {}),
             |_coordinator, _tenant, _profile, _generation, _device, _epoch| {
                 Err(
                     AuthoritativeGenerationMaterializationError::ControlPlaneBeforeLocalUse(
@@ -2780,7 +2775,7 @@ mod tests {
                 &fixture.claim_uri,
                 root,
                 UnixMillis::new(10),
-                |_coordinator, _lease| {},
+                (|_coordinator, _lease| {}),
                 |_coordinator, tenant, profile, generation, _device, _epoch| {
                     if create_during_attempt {
                         assert!(
@@ -2832,7 +2827,7 @@ mod tests {
                 &fixture.claim_uri,
                 root,
                 UnixMillis::new(10),
-                |_coordinator, _lease| {},
+                (|_coordinator, _lease| {}),
                 |_coordinator, tenant, profile, generation, _device, _epoch| {
                     if create_during_attempt {
                         assert!(root.create_generation(tenant, profile, generation).is_ok());
@@ -2867,7 +2862,7 @@ mod tests {
             &fixture.claim_uri,
             &fixture.root,
             UnixMillis::new(10),
-            |_coordinator, _lease| {},
+            (|_coordinator, _lease| {}),
             |_coordinator, _tenant, _profile, _generation, _device, _epoch| {
                 Err(AuthoritativeGenerationMaterializationError::ControlPlane(
                     GenerationReopenControlError::InvalidResponse,
@@ -3301,10 +3296,10 @@ mod tests {
                 &fixture.claim_uri,
                 &fixture.root,
                 UnixMillis::new(10),
-                |_coordinator, lease| {
+                (|_coordinator, lease| {
                     assert_eq!(lease.device_id(), &fixture.device_id);
                     lease_start_callbacks.set(lease_start_callbacks.get() + 1);
-                },
+                }),
                 |_coordinator, _tenant, _profile, _generation, _device, _epoch| {
                     materializations.set(materializations.get() + 1);
                     Ok(())
@@ -3354,9 +3349,9 @@ mod tests {
                 &fixture.claim_uri,
                 &fixture.root,
                 UnixMillis::new(11),
-                |_coordinator, _lease| {
+                (|_coordinator, _lease| {
                     unauthorized_lease_callbacks.set(unauthorized_lease_callbacks.get() + 1);
-                },
+                }),
                 |_coordinator, _tenant, _profile, _generation, _device, _epoch| {
                     unauthorized_materializations.set(unauthorized_materializations.get() + 1);
                     Ok(())
@@ -3552,7 +3547,7 @@ mod tests {
             &fixture.claim_uri,
             &fixture.root,
             UnixMillis::new(10),
-            |_coordinator, _lease| {},
+            (|_coordinator, _lease| {}),
             |_coordinator, _tenant, _profile, _generation, _device, _epoch| Ok(()),
             || {
                 started_health = true;
@@ -3576,7 +3571,7 @@ mod tests {
             &fixture.claim_uri,
             &fixture.root,
             UnixMillis::new(10),
-            |_coordinator, _lease| {},
+            (|_coordinator, _lease| {}),
             |_coordinator, _tenant, _profile, _generation, _device, _epoch| Ok(()),
             || {
                 started_health = true;
@@ -3602,7 +3597,7 @@ mod tests {
             &fixture.claim_uri,
             &fixture.root,
             UnixMillis::new(10),
-            |_coordinator, _lease| {},
+            (|_coordinator, _lease| {}),
             |_coordinator, _tenant, _profile, _generation, _device, _epoch| Ok(()),
             || {
                 start_attempts += 1;
