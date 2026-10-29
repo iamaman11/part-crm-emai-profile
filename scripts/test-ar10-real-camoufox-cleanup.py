@@ -445,23 +445,33 @@ print("two previous Firefox tabs restored and tracked; partial close not complet
 """
     try:
         env = runtime_env(runtime_lock, headless)
-        completed = subprocess.run(
-            [str(python), "-c", proof, str(camouhost), str(runtime_lock),
-             str(root), f"http://127.0.0.1:{server.server_port}"],
-            env=env,
-            text=True,
-            capture_output=True,
-            timeout=150,
-            check=False,
-        )
-        if completed.returncode != 0 or (
-            "two previous Firefox tabs restored and tracked" not in completed.stdout
-        ):
-            # stderr is bounded for the runner only, not production diagnostics.
-            raise AssertionError(
-                "real native Firefox tab restoration not proven: "
-                f"rc={completed.returncode} diagnostic_tail={completed.stderr[-2400:]!r}"
+        # Firefox grandchildren may inherit stdout/stderr after the Python child
+        # exits. Capture to files, not pipes: communicate() would wait forever for
+        # inherited pipe writers and obscure the actual restore failure.
+        with tempfile.TemporaryFile(mode="w+t", encoding="utf-8") as output, \
+                tempfile.TemporaryFile(mode="w+t", encoding="utf-8") as diagnostics:
+            child = subprocess.Popen(
+                [str(python), "-c", proof, str(camouhost), str(runtime_lock),
+                 str(root), f"http://127.0.0.1:{server.server_port}"],
+                env=env, stdin=subprocess.DEVNULL, stdout=output, stderr=diagnostics,
             )
+            try:
+                result = child.wait(timeout=150)
+            except subprocess.TimeoutExpired as error:
+                child.kill()
+                child.wait(timeout=15)
+                raise AssertionError(
+                    "native session-restoration child exceeded bounded lifecycle"
+                ) from error
+            output.seek(0)
+            diagnostics.seek(0, os.SEEK_END)
+            diagnostics.seek(max(0, diagnostics.tell() - 2400))
+            tail = diagnostics.read()
+            if result != 0 or "two previous Firefox tabs restored and tracked" not in output.read():
+                raise AssertionError(
+                    "real native Firefox tab restoration not proven: "
+                    f"rc={result} diagnostic_tail={tail!r}"
+                )
         assert_writer_quiescent(load_runtime(camouhost), root, "restored tabs")
     finally:
         server.shutdown()
