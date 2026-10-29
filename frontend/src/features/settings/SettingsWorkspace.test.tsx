@@ -1,8 +1,13 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { render, screen } from '@testing-library/react';
+import { fireEvent, render, screen } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 import { getBindingProbe, getHealth } from './api';
 import { SettingsWorkspace } from './SettingsWorkspace';
+import { invokeProfileBridgeDiagnostics } from '../../shared/bridgeDiagnostics';
+
+vi.mock('../../shared/bridgeDiagnostics', () => ({
+  invokeProfileBridgeDiagnostics: vi.fn(),
+}));
 
 vi.mock('./api', () => ({
   getHealth: vi.fn(),
@@ -19,8 +24,9 @@ describe('Settings native diagnostics', () => {
         <SettingsWorkspace />
       </QueryClientProvider>,
     );
-    const link = screen.getByRole('link', { name: 'Скопировать диагностику' });
-    expect(link.getAttribute('href')).toBe('profilebridge://diagnostics/copy');
+    const button = screen.getByRole('button', { name: 'Скопировать диагностику' });
+    fireEvent.click(button);
+    expect(vi.mocked(invokeProfileBridgeDiagnostics)).toHaveBeenCalledTimes(1);
     expect(screen.getByText(/Nothing is uploaded/)).toBeTruthy();
   });
 });
