@@ -39,6 +39,7 @@ pub enum Stage {
     RecoveryRequired,
     Pairing,
     Delivery,
+    RuntimeIdentityObserved,
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Serialize, Eq, PartialEq)]
@@ -102,6 +103,10 @@ struct Observation {
     duration_ms: u64,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     open_pages: Option<u16>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    verified_runtime: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    verified_sequence: Option<u64>,
 }
 
 fn unix_ms() -> Option<u64> {
@@ -123,7 +128,7 @@ pub fn record_current(stage: Stage, outcome: Outcome, cloud: Cloud, cause: Cause
 
 /// The installer already owns its trusted installation root; no URI may select this path.
 pub fn record_at(root: &Path, stage: Stage, outcome: Outcome, cloud: Cloud, cause: Cause, duration_ms: u64) {
-    let _ = try_record(root, stage, outcome, cloud, cause, duration_ms, None);
+    let _ = try_record(root, stage, outcome, cloud, cause, duration_ms, None, None);
 }
 
 fn installed_root() -> Option<PathBuf> {
@@ -155,7 +160,16 @@ fn journal_dir(root: &Path, create: bool) -> Option<PathBuf> {
     valid_directory(&path).then_some(path)
 }
 
-fn try_record(root: &Path, stage: Stage, outcome: Outcome, cloud: Cloud, cause: Cause, duration_ms: u64, open_pages: Option<u16>) -> Option<()> {
+fn try_record(
+    root: &Path,
+    stage: Stage,
+    outcome: Outcome,
+    cloud: Cloud,
+    cause: Cause,
+    duration_ms: u64,
+    open_pages: Option<u16>,
+    runtime: Option<(u64, &str)>,
+) -> Option<()> {
     let directory = journal_dir(root, true)?;
     let now = unix_ms()?;
     let record = Observation {
@@ -168,6 +182,8 @@ fn try_record(root: &Path, stage: Stage, outcome: Outcome, cloud: Cloud, cause: 
         cause,
         duration_ms,
         open_pages,
+        verified_runtime: runtime.map(|(_, id)| id.to_owned()),
+        verified_sequence: runtime.map(|(sequence, _)| sequence),
     };
     let bytes = serde_json::to_vec(&record).ok()?;
     if bytes.len() > MAX_RECORD_BYTES as usize {
@@ -212,6 +228,16 @@ fn observations(root: &Path) -> Vec<Observation> {
             || !record.operation_id[3..].bytes().all(|b| b.is_ascii_hexdigit() || b == b'_')
             || record.duration_ms > 86_400_000
             || record.open_pages.is_some_and(|count| count > 512)
+            || match (&record.verified_runtime, record.verified_sequence) {
+                (None, None) => false,
+                (Some(id), Some(sequence)) => {
+                    record.stage != Stage::RuntimeIdentityObserved
+                        || record.outcome != Outcome::Observed
+                        || sequence == 0
+                        || !valid_runtime_release_id(id)
+                }
+                _ => true,
+            }
         { continue; }
         records.push(record);
     }
@@ -254,25 +280,34 @@ pub fn record_download_failure(root: &Path, cause: Cause) {
 pub fn record_open_pages(count: u16) {
     if count > 512 { return; }
     if let Some(root) = installed_root() {
-        let _ = try_record(&root, Stage::BrowserVisible, Outcome::Observed, Cloud::Unknown, Cause::None, 0, Some(count));
+        let _ = try_record(&root, Stage::BrowserVisible, Outcome::Observed, Cloud::Unknown, Cause::None, 0, Some(count), None);
     }
 }
 
-fn runtime_identity(root: &Path) -> Option<String> {
-    #[cfg(windows)]
-    {
-        let store = crate::windows_delivery_store::DeliveryStateStore::open(root.join("state")).ok()?;
-        let identity = &store.state().active()?.runtime_bundle_release_id;
-        let digest = identity.strip_prefix("runtime-bundle-v3-sha256-")?;
-        if digest.len() == 64 && digest.bytes().all(|byte| byte.is_ascii_digit() || matches!(byte, b'a'..=b'f')) {
-            return Some(identity.clone());
-        }
-        None
+fn valid_runtime_release_id(value: &str) -> bool {
+    value.strip_prefix("runtime-bundle-v3-sha256-").is_some_and(|digest| {
+        digest.len() == 64
+            && digest.bytes().all(|byte| byte.is_ascii_digit() || matches!(byte, b'a'..=b'f'))
+    })
+}
+
+/// This source is the existing verified Windows delivery owner, never a
+/// diagnostic lookup into canonical delivery state. Not a runtime grant.
+pub fn record_runtime_identity(sequence: u64, release_id: &str) {
+    if sequence == 0 || !valid_runtime_release_id(release_id) {
+        return;
     }
-    #[cfg(not(windows))]
-    {
-        let _ = root;
-        None
+    if let Some(root) = installed_root() {
+        let _ = try_record(
+            &root,
+            Stage::RuntimeIdentityObserved,
+            Outcome::Observed,
+            Cloud::Unknown,
+            Cause::None,
+            0,
+            None,
+            Some((sequence, release_id)),
+        );
     }
 }
 
@@ -309,19 +344,6 @@ fn local_confirmation(record: &Observation) -> &'static str {
     }
 }
 
-fn installed_sequence(root: &Path) -> Option<u64> {
-    #[cfg(windows)]
-    {
-        let store = crate::windows_delivery_store::DeliveryStateStore::open(root.join("state")).ok()?;
-        store.state().active().map(|identity| identity.sequence)
-    }
-    #[cfg(not(windows))]
-    {
-        let _ = root;
-        None
-    }
-}
-
 /// Read-only, strictly reconstructed from admitted typed observations. No profile data is read.
 #[must_use]
 pub fn report_current() -> String {
@@ -333,13 +355,21 @@ pub fn report_current() -> String {
 
 #[must_use]
 pub fn report_at(root: &Path) -> String {
-    let runtime = runtime_identity(root).unwrap_or_else(|| "NOT_OBSERVED".to_owned());
-    let release_sequence = installed_sequence(root).map_or_else(|| "NOT_OBSERVED".to_owned(), |n| n.to_string());
+    let records = observations(root);
+    // The last verified delivery observation may predate an update. Never label
+    // it as the CURRENT delivery or treat it as an activation certificate.
+    let last_runtime = records
+        .iter()
+        .rev()
+        .find_map(|record| record.verified_runtime.as_ref().zip(record.verified_sequence));
+    let (release_sequence, runtime) = last_runtime
+        .map(|(id, sequence)| (sequence.to_string(), id.clone()))
+        .unwrap_or_else(|| ("NOT_OBSERVED".to_owned(), "NOT_OBSERVED".to_owned()));
     let mut report = format!(
-        "PROFILE_BRIDGE_DIAGNOSTICS_V1\nBRIDGE_VERSION={}\nINSTALLED_RELEASE_SEQUENCE={}\nRUNTIME_IDENTITY={}\nREPORT_AUTHORITY=LOCAL_OBSERVATIONS_ONLY\n",
+        "PROFILE_BRIDGE_DIAGNOSTICS_V1\nBRIDGE_VERSION={}\nLAST_OBSERVED_RELEASE_SEQUENCE={}\nLAST_OBSERVED_RUNTIME_IDENTITY={}\nREPORT_AUTHORITY=LOCAL_OBSERVATIONS_ONLY\n",
         env!("CARGO_PKG_VERSION"), release_sequence, runtime,
     );
-    for record in observations(root) {
+    for record in records {
         let line = format!(
             "TIME_MS={};OP={};STAGE={:?};OUTCOME={:?};CLOUD={:?};CAUSE={:?};DURATION_MS={};LOCAL={};NEXT_SAFE_STEP={}\n",
             record.time_unix_ms, record.operation_id, record.stage, record.outcome, record.cloud, record.cause, record.duration_ms,
@@ -429,7 +459,7 @@ mod tests {
         ));
         fs::create_dir(&root).expect("fixture");
         let report = report_at(&root);
-        assert!(report.contains("RUNTIME_IDENTITY=NOT_OBSERVED"));
+        assert!(report.contains("LAST_OBSERVED_RUNTIME_IDENTITY=NOT_OBSERVED"));
         assert!(!root.join("state").exists());
         assert!(!root.join(DIRECTORY).exists());
         fs::remove_dir(root).expect("cleanup");
