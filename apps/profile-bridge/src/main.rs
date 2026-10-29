@@ -60,8 +60,8 @@ where
         BridgeCommand::InitialProfile(_) | BridgeCommand::Claim(_) => Stage::OpenRequested,
         BridgeCommand::VerifyHistoricalCandidate(_) => Stage::LocalRecovery,
         BridgeCommand::PairingStart(_) | BridgeCommand::PairingComplete(_) => Stage::Pairing,
-        BridgeCommand::DeliveryActivateStaged
-        | BridgeCommand::DeliveryInstallStaged(_)
+        BridgeCommand::DeliveryActivateStaged => Stage::InstallActivate,
+        BridgeCommand::DeliveryInstallStaged(_)
         | BridgeCommand::DeliveryHandoffArrived => Stage::Delivery,
         BridgeCommand::CopyDiagnostics => Stage::Delivery,
     };
@@ -138,7 +138,20 @@ where
             Err(_) => Cause::OtherSafeFailure,
         };
         let elapsed = u64::try_from(start.elapsed().as_millis()).unwrap_or(u64::MAX).min(86_400_000);
-        observe(if result.is_ok() { Outcome::Succeeded } else { Outcome::Failed }, cause, elapsed);
+        // A completed launch command is not proof of a currently open browser:
+        // it may have completed delivery recovery or a controlled close/save.
+        // Only the operator's live Ready and exact Save witnesses are positive.
+        let outcome = match (&result, stage) {
+            (Ok(()), Stage::OpenRequested) => Outcome::Observed,
+            (Ok(()), _) => Outcome::Succeeded,
+            (Err(_), _) => Outcome::Failed,
+        };
+        observe(outcome, cause, elapsed);
+        if result.is_ok() && stage == Stage::InstallPrepare {
+            if let Some(root) = &installation_root {
+                report::record_at(root, Stage::InstallVerified, Outcome::Observed, Cloud::Unknown, Cause::None, elapsed);
+            }
+        }
     }
     result
 }
