@@ -557,6 +557,34 @@ mod tests {
         fs::remove_dir_all(root).expect("cleanup");
     }
 
+    #[cfg(unix)]
+    #[test]
+    fn symlink_to_private_file_is_never_read_or_deleted() {
+        use std::os::unix::fs::symlink;
+        let root = test_root();
+        let private = root.join("private-user-data");
+        fs::write(&private, b"https://private.invalid/?token=secret").expect("fixture");
+        let timestamp = unix_ms().expect("clock");
+        let linked_event = root.join(DIRECTORY).join(format!(
+            "event-{timestamp:016x}-00000001-0000000000000000.json",
+        ));
+        fs::create_dir(root.join(DIRECTORY)).expect("fixture");
+        symlink(&private, &linked_event).expect("fixture");
+        record_at(
+            &root,
+            Stage::OpenRequested,
+            Outcome::Started,
+            Cloud::Unknown,
+            Cause::None,
+            0,
+        );
+        let report = report_at(&root);
+        assert!(!report.contains("private.invalid"));
+        assert!(private.is_file());
+        assert!(linked_event.is_symlink());
+        fs::remove_dir_all(root).expect("cleanup");
+    }
+
     #[test]
     fn report_is_bounded_and_ignores_symlink_or_missing_state() {
         let root = test_root();
