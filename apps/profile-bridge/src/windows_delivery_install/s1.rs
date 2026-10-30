@@ -614,6 +614,72 @@ mod tests {
         Ok(())
     }
 
+
+    #[test]
+    fn opened_exclusive_file_reports_exact_inventory_failure_without_change()
+    -> Result<(), Box<dyn std::error::Error>> {
+        use super::observe;
+        use std::os::windows::fs::OpenOptionsExt;
+        let directory = std::env::temp_dir().join(format!(
+            "s1-inventory-locked-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)?
+                .as_nanos()
+        ));
+        let root = MaterializationRoot::open_or_create(directory.join("profiles"))?;
+        let data = root.path().join("user_data");
+        fs::create_dir(&data)?;
+        let wal = data.join("cookies.sqlite-wal");
+        let original = b"original WAL must survive";
+        fs::write(&wal, original)?;
+        let lock = fs::OpenOptions::new().read(true).share_mode(0).open(&wal)?;
+        let error = super::inventory(&root).expect_err("locked original must fail");
+        assert_eq!(error.code, "OPEN_FILE");
+        assert_eq!(error.path, wal.to_string_lossy());
+        assert!(error.detail.as_ref().is_some_and(|detail| !detail.is_empty()));
+        assert!(error.os_error.is_some());
+
+        let observed = observe(&directory.join("missing-bundle"), &directory, None);
+        let report: serde_json::Value = serde_json::from_str(&observed)?;
+        assert_eq!(report["verdict"], "UNKNOWN");
+        assert_eq!(report["reason_codes"][0], "PROFILE_INVENTORY_UNVERIFIED");
+        assert_eq!(report["inventory_failure"]["code"], "OPEN_FILE");
+        assert_eq!(report["inventory_failure"]["path"], wal.to_string_lossy().as_ref());
+        assert!(report["inventory_failure"]["detail"].as_str().is_some());
+        assert!(report["inventory_failure"]["os_error"].as_i64().is_some());
+        assert!(report["inventory"].is_null());
+        drop(lock);
+        assert_eq!(fs::read(&wal)?, original);
+        assert!(super::inventory(&root).is_ok());
+        fs::remove_dir_all(directory)?;
+        Ok(())
+    }
+
+    #[test]
+    fn malformed_materialization_sidecar_exposes_path_and_reason_without_repair()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let directory = std::env::temp_dir().join(format!(
+            "s1-sidecar-diagnostic-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)?
+                .as_nanos()
+        ));
+        let root = MaterializationRoot::open_or_create(directory.join("profiles"))?;
+        let sidecar = root.path().join(".generation_test.materialization");
+        fs::write(&sidecar, b"not a valid sidecar")?;
+        let observed = inventory(&root)?;
+        assert_eq!(observed.materialization_sidecars, 1);
+        assert_eq!(observed.materializations_verified, 0);
+        assert_eq!(observed.sidecar_failures.len(), 1);
+        assert_eq!(observed.sidecar_failures[0].code, "SIDECAR_MISSING_ID");
+        assert_eq!(observed.sidecar_failures[0].path, sidecar.to_string_lossy());
+        assert_eq!(fs::read(&sidecar)?, b"not a valid sidecar");
+        fs::remove_dir_all(directory)?;
+        Ok(())
+    }
+
     #[test]
     fn active_native_firefox_writer_blocks_s1_without_cleaning_markers()
     -> Result<(), Box<dyn std::error::Error>> {
