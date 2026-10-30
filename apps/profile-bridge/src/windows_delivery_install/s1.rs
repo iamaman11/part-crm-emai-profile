@@ -256,6 +256,72 @@ mod tests {
     }
 
     #[test]
+    fn active_native_firefox_writer_blocks_s1_without_cleaning_markers()
+    -> Result<(), Box<dyn std::error::Error>> {
+        use super::observe;
+        use crate::local_profile::MaterializationRoot;
+        use profile_platform_primitives::{GenerationId, ProfileId, TenantId};
+        use std::os::windows::fs::OpenOptionsExt;
+
+        let installation = std::env::temp_dir().join(format!(
+            "s1-live-writer-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)?
+                .as_nanos()
+        ));
+        let profiles = MaterializationRoot::open_or_create(installation.join("profiles"))?;
+        let generation = profiles.create_generation(
+            &TenantId::parse("tenant_s1_native")?,
+            &ProfileId::parse("profile_s1_native")?,
+            &GenerationId::parse("generation_s1_native")?,
+        )?;
+        let user_data = generation.path().join("user_data");
+        fs::create_dir(&user_data)?;
+        let native_lock = user_data.join("parent.lock");
+        fs::write(&native_lock, b"original-native-marker")?;
+        let bridge_marker = generation.path().join(".profile-platform.lock");
+        fs::write(&bridge_marker, b"original-bridge-marker")?;
+        let handle = fs::OpenOptions::new()
+            .read(true)
+            .share_mode(0)
+            .open(&native_lock)?;
+
+        let result = observe(&installation.join("nonexistent-bundle"), &installation);
+        assert!(result.contains("\"verdict\":\"BLOCKED\""), "{result}");
+        assert!(result.contains("NATIVE_WRITER_LOCK_BUSY"), "{result}");
+        assert_eq!(fs::read(&native_lock)?, b"original-native-marker");
+        assert_eq!(fs::read(&bridge_marker)?, b"original-bridge-marker");
+        drop(handle);
+
+        let next = observe(&installation.join("nonexistent-bundle"), &installation);
+        assert!(next.contains("NO_ACTIVE_WRITER_DURING_OBSERVATION"), "{next}");
+        assert!(next.contains("\"verdict\":\"UNKNOWN\""), "{next}");
+        assert_eq!(fs::read(&bridge_marker)?, b"original-bridge-marker");
+        fs::remove_dir_all(installation)?;
+        Ok(())
+    }
+
+    #[test]
+    fn missing_profile_root_does_not_get_created() -> Result<(), Box<dyn std::error::Error>> {
+        use super::observe;
+        let installation = std::env::temp_dir().join(format!(
+            "s1-missing-profile-root-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)?
+                .as_nanos()
+        ));
+        fs::create_dir(&installation)?;
+        let result = observe(&installation.join("no-bundle"), &installation);
+        assert!(result.contains("PROFILE_ROOT_UNVERIFIED"), "{result}");
+        assert!(!installation.join("profiles").exists());
+        assert!(!installation.join("state").exists());
+        fs::remove_dir(installation)?;
+        Ok(())
+    }
+
+    #[test]
     fn inventory_rejects_unreadable_or_missing_root() {
         let missing = std::env::temp_dir().join(format!(
             "s1-unavailable-{}-missing", std::process::id()
