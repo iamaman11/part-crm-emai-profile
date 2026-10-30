@@ -517,6 +517,9 @@ impl ProcessControlPort for ManagedCamouhostProcess {
         if state.child.is_some() || state.active_session.is_some() {
             return Err(BridgePortError::Unavailable);
         }
+        // Validate test diagnostics BEFORE spawning: a path error must never
+        // strand an orphan browser child or its profile writer lock.
+        let agent_directory = local_agent_directory()?;
         let mut child = self.launch_child(session_id, &binding)?;
         let stdin = child.stdin.take().ok_or(BridgePortError::Unavailable)?;
         let stdout = child.stdout.take().ok_or(BridgePortError::Unavailable)?;
@@ -524,7 +527,7 @@ impl ProcessControlPort for ManagedCamouhostProcess {
         let stamp = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .map_or(0, |elapsed| elapsed.as_nanos());
-        let raw_diagnostics = local_agent_directory()?.map(|directory| {
+        let raw_diagnostics = agent_directory.map(|directory| {
             directory.join(format!("camouhost-{}-{stamp}.stderr.log", child.id()))
         });
         spawn_camouhost_diagnostic_reader(stderr, raw_diagnostics);
