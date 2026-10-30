@@ -9,6 +9,7 @@ use crate::windows_delivery::verify_delivery_candidate;
 use crate::windows_delivery_coordinator::accepted_floor;
 use crate::windows_delivery_signature::WindowsCmsSignatureVerifier;
 use crate::windows_delivery_store::DeliveryStateStore;
+use crate::windows_delivery_staging::{DeliveryStagingRoot, reopen_staged_delivery};
 use crate::windows_device_application::WindowsDeviceApplicationBinding;
 use serde::Serialize;
 use sha2::{Digest, Sha256};
@@ -131,6 +132,32 @@ fn inspect(bundle_directory: &Path, root: &Path, result: &mut S1Observation) {
             return;
         }
     };
+    let staging = match DeliveryStagingRoot::open_existing(root.join("releases")) {
+        Ok(staging) => staging,
+        Err(_) => {
+            result.installed_delivery = "STAGED_DELIVERY_UNVERIFIED";
+            result.reason_codes.push("RELEASES_DIRECTORY_UNVERIFIED");
+            return;
+        }
+    };
+    if state.state().active()
+        .is_none_or(|active| reopen_staged_delivery(&staging, active).is_err())
+    {
+        result.installed_delivery = "ACTIVE_COMPONENT_HASHES_UNVERIFIED";
+        result.reason_codes.push("ACTIVE_RELEASE_BYTES_UNVERIFIED");
+        return;
+    }
+    result.installed_delivery = "ACTIVE_HEALTHY_COMPONENTS_VERIFIED";
+    if let Some(lkg) = state.state().last_known_good() {
+        if reopen_staged_delivery(&staging, lkg).is_ok() {
+            result.independent_recovery = "PREVIOUS_DELIVERY_COMPONENTS_VERIFIED";
+        } else {
+            result.reason_codes.push("PREVIOUS_DELIVERY_BYTES_UNVERIFIED");
+        }
+    } else {
+        result.independent_recovery = "ACTIVE_DELIVERY_ONLY";
+    }
+
     // Device binding is the only local source for the CNG key name. Opening a
     // missing key must never trigger NCryptCreatePersistedKey.
     match WindowsDeviceApplicationBinding::open(&root.join("device-application-binding.json")) {
@@ -186,7 +213,7 @@ fn inspect(bundle_directory: &Path, root: &Path, result: &mut S1Observation) {
     // generation mapping or an independent restorable backup. Never silently
     // promote a structurally readable directory into a verified Save.
     result.reason_codes.push("GENERATION_AUTHORITY_NOT_YET_PROVEN");
-    result.reason_codes.push("INDEPENDENT_RECOVERY_NOT_YET_PROVEN");
+    result.reason_codes.push("INDEPENDENT_PROFILE_BACKUP_NOT_YET_PROVEN");
 }
 
 fn inventory(root: &MaterializationRoot) -> Result<ProfileObservation, &'static str> {
