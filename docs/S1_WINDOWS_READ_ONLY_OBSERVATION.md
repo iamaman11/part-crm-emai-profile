@@ -29,6 +29,19 @@ starts the browser. The read-only command does **not** write the regular applica
 diagnostic journal. Save the output under an operator-controlled directory outside
 the installation root.
 
+If `PROFILE_INVENTORY_UNVERIFIED` is reported, **do not re-inventory manually
+or delete anything**. Read the structured `inventory_failure` in the same JSON:
+`code` is the exact failed operation (for example `READ_DIRECTORY`,
+`OPEN_FILE`, `READ_FILE`, `LINK_REJECTED` or `CONCURRENT_MODIFICATION`);
+`path` is the original full Windows path; `detail` and `os_error`
+are the underlying Windows I/O diagnostic when available. Existing invalid
+materialization sidecars are listed in `inventory.sidecar_failures` with the
+exact path and reason. An invalid optional isolated copy is reported in
+`isolated_copy_failure`. These are **observations, never repair commands**.
+All ordinary Windows filenames are hashed as native UTF-16LE names, even when
+the file name cannot be represented as UTF-8. No copy, key, lock, pending item
+or profile is changed to produce the diagnostics.
+
 This first source slice:
 - Opens the existing materialization root, Windows device CNG key and installed
   delivery store without creating or repairing any of them. The existing CNG key
