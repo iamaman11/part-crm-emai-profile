@@ -1310,6 +1310,7 @@ class LocalPlaywrightAgent:
                         "context": context,
                         "pages": context.pages,
                         "session_id": self.session_id,
+                        "agent_artifacts_dir": self.results,
                         "result": None,
                     }
                     with contextlib.redirect_stdout(stdout), contextlib.redirect_stderr(stderr):
