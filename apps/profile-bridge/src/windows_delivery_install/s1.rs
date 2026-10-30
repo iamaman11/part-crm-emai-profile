@@ -647,7 +647,10 @@ mod tests {
         let guard = DeliveryActivationGuard::acquire(&root)?;
         let first = inventory(&root)?;
         let second = inventory(&root)?;
-        assert_eq!(first.content_manifest_sha256, second.content_manifest_sha256);
+        assert_eq!(
+            first.content_manifest_sha256,
+            second.content_manifest_sha256
+        );
         assert_eq!(first.sqlite_wal_files, 1);
         assert!(first.files >= 2); // marker counted; its verified bytes not redundantly reopened
         drop(guard);
