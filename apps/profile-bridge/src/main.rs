@@ -23,7 +23,7 @@ use profile_bridge::windows_delivery_handoff::{
 };
 use profile_bridge::windows_delivery_install::{
     NativeInstallerError, PREPARE_INSTALL_ARGUMENT, PREPARED_DIRECTORY_PREFIX,
-    run_install_preparation,
+    S1_OBSERVE_ARGUMENT, run_install_preparation, run_s1_observation,
 };
 use std::env;
 use std::fmt;
@@ -56,7 +56,7 @@ where
         _ => None,
     };
     let stage = match &command {
-        BridgeCommand::PrepareInstallation(..) => Stage::InstallPrepare,
+        BridgeCommand::PrepareInstallation(..) | BridgeCommand::ReadOnlyS1(..) => Stage::InstallPrepare,
         BridgeCommand::InitialProfile(_) | BridgeCommand::Claim(_) => Stage::OpenRequested,
         BridgeCommand::VerifyHistoricalCandidate(_) => Stage::LocalRecovery,
         BridgeCommand::PairingStart(_) | BridgeCommand::PairingComplete(_) => Stage::Pairing,
@@ -66,7 +66,7 @@ where
         }
         BridgeCommand::CopyDiagnostics => Stage::Delivery,
     };
-    let report_operation = !matches!(&command, BridgeCommand::CopyDiagnostics);
+    let report_operation = !matches!(&command, BridgeCommand::CopyDiagnostics | BridgeCommand::ReadOnlyS1(..));
     let observe = |outcome, cause, elapsed| {
         if let Some(root) = &installation_root {
             report::record_at(root, stage, outcome, Cloud::Unknown, cause, elapsed);
@@ -79,6 +79,10 @@ where
     }
     let start = Instant::now();
     let result = match command {
+        BridgeCommand::ReadOnlyS1(bundle, root) => {
+            println!("{}", run_s1_observation(&bundle, &root));
+            Ok(())
+        }
         BridgeCommand::PrepareInstallation(bundle, root) => {
             let result = run_install_preparation(&bundle, &root);
             if let Ok(directory) = &result {
@@ -189,6 +193,7 @@ fn copy_diagnostics() -> Result<(), BridgeCliError> {
 
 enum BridgeCommand {
     PrepareInstallation(PathBuf, PathBuf),
+    ReadOnlyS1(PathBuf, PathBuf),
     Claim(ClaimUri),
     VerifyHistoricalCandidate(ClaimUri),
     InitialProfile(InitialProfileOpen),
@@ -211,6 +216,22 @@ where
             .next()
             .ok_or(BridgeCliError::MissingLaunchArgument)?,
     );
+    if argument.as_str() == S1_OBSERVE_ARGUMENT {
+        let bundle = PathBuf::from(
+            arguments
+                .next()
+                .ok_or(BridgeCliError::InvalidInstallationArgument)?,
+        );
+        let root = PathBuf::from(
+            arguments
+                .next()
+                .ok_or(BridgeCliError::InvalidInstallationArgument)?,
+        );
+        if arguments.next().is_some() || !bundle.is_absolute() || !root.is_absolute() {
+            return Err(BridgeCliError::InvalidInstallationArgument);
+        }
+        return Ok(BridgeCommand::ReadOnlyS1(bundle, root));
+    }
     if argument.as_str() == PREPARE_INSTALL_ARGUMENT {
         let bundle = PathBuf::from(
             arguments
