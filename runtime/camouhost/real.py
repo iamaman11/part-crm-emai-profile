@@ -14,9 +14,13 @@ import hashlib
 import importlib.metadata
 import json
 import os
+import queue
 import re
+import secrets
 import sys
+import threading
 import time
+import traceback
 from pathlib import Path
 from typing import Any
 
@@ -40,6 +44,8 @@ EXPECTED_CONFIG_SHA256_ENV = "CAMOUHOST_EXPECTED_CONFIG_SHA256"
 EXPECTED_PROBE_SHA256_ENV = "CAMOUHOST_EXPECTED_PROBE_SHA256"
 HEADLESS_MODE_ENV = "CAMOUHOST_HEADLESS_MODE"
 PROXY_CONFIG_ENV = "CAMOUHOST_PROXY_CONFIG_PATH"
+AGENT_DIRECTORY_ENV = "CAMOUHOST_AGENT_DIRECTORY"
+AGENT_REQUEST_PATTERN = re.compile(r"[0-9a-f]{32}\.py\Z")
 
 FINGERPRINT_PROBE = """
 () => ({
@@ -1249,6 +1255,105 @@ def report_runtime_stage(phase: str, step: str) -> None:
         print(f"camouhost_stage phase={phase} step={step}", file=sys.stderr, flush=True)
 
 
+
+class LocalPlaywrightAgent:
+    """Explicitly opted-in local test runner; the live Camouhost thread owns Playwright.
+
+    Files are an operator-controlled, on-machine command inbox, not a browser port,
+    a second browser writer, or a server-side control plane. Source and raw output
+    are deliberately retained for full-fidelity test diagnostics.
+    """
+
+    def __init__(self, directory: str, session_id: str) -> None:
+        base = Path(directory)
+        if not base.is_absolute() or base.is_symlink() or not base.is_dir():
+            raise RuntimeContractError("local agent directory must exist and be a regular absolute directory")
+        self.base = base
+        self.session_id = session_id
+        self.run = base / f"camouhost-{os.getpid()}-{secrets.token_hex(12)}"
+        self.run.mkdir(mode=0o700)
+        self.requests = self.run / "requests"
+        self.results = self.run / "results"
+        self.requests.mkdir(mode=0o700)
+        self.results.mkdir(mode=0o700)
+        self.descriptor = base / f"active-{os.getpid()}.json"
+        descriptor_temp = base / f".active-{os.getpid()}-{secrets.token_hex(8)}.tmp"
+        descriptor_temp.write_text(
+            json.dumps({"pid": os.getpid(), "session": session_id, "run": str(self.run)}),
+            encoding="utf-8",
+        )
+        os.replace(descriptor_temp, self.descriptor)
+
+    def run_one(self, context: Any) -> bool:
+        # Never accept half-written jobs. The agent commits a request by atomic rename.
+        for request in sorted(self.requests.glob("*.py")):
+            if not AGENT_REQUEST_PATTERN.fullmatch(request.name) or request.is_symlink():
+                continue
+            job_id = request.stem
+            claimed = self.requests / f"{job_id}.running"
+            try:
+                os.replace(request, claimed)
+            except OSError:
+                continue
+            stdout_path = self.results / f"{job_id}.stdout.txt"
+            stderr_path = self.results / f"{job_id}.stderr.txt"
+            status_path = self.results / f"{job_id}.json"
+            outcome: dict[str, Any] = {"status": "ok"}
+            with stdout_path.open("w", encoding="utf-8") as stdout, \
+                    stderr_path.open("w", encoding="utf-8") as stderr:
+                try:
+                    # This is deliberately unrestricted local Python for the owner's
+                    # TEST environment: all existing profiles and Playwright APIs
+                    # are available. Only the already-owned context is supplied.
+                    scope: dict[str, Any] = {
+                        "__name__": "__camouhost_agent__",
+                        "context": context,
+                        "pages": context.pages,
+                        "session_id": self.session_id,
+                        "result": None,
+                    }
+                    with contextlib.redirect_stdout(stdout), contextlib.redirect_stderr(stderr):
+                        exec(compile(claimed.read_text(encoding="utf-8"), str(claimed), "exec"), scope)
+                    outcome["result"] = scope.get("result")
+                except BaseException:
+                    traceback.print_exc(file=stderr)
+                    outcome["status"] = "error"
+            staging = self.results / f"{job_id}.part"
+            try:
+                staging.write_text(json.dumps(outcome, ensure_ascii=False, default=str), encoding="utf-8")
+                os.replace(staging, status_path)
+            except OSError:
+                # An unavailable diagnostic store cannot become an invented success
+                # or a second owner of browser lifecycle.
+                print("camouhost_agent_result_write_failed", file=sys.stderr, flush=True)
+            return True
+        return False
+
+    def close(self) -> None:
+        # The complete test evidence remains. Only the live-session locator is retired.
+        try:
+            current = json.loads(self.descriptor.read_text(encoding="utf-8"))
+            if current.get("run") == str(self.run):
+                self.descriptor.unlink()
+        except (OSError, ValueError, AttributeError):
+            pass
+
+
+def bridge_command_queue() -> queue.Queue[str | None]:
+    """Move only stdin reading to a helper thread; all Playwright stays on this thread."""
+    commands: queue.Queue[str | None] = queue.Queue()
+
+    def read() -> None:
+        try:
+            for line in sys.stdin:
+                commands.put(line)
+        finally:
+            commands.put(None)
+
+    threading.Thread(target=read, name="camouhost-bridge-stdin", daemon=True).start()
+    return commands
+
+
 def run_ipc() -> int:
     report_runtime_stage("startup", "begin")
     try:
@@ -1275,9 +1380,23 @@ def run_ipc() -> int:
     browser_visible_observed = False
     navigation_admitted = False
     post_navigation_browser_visible_observed = False
+    agent: LocalPlaywrightAgent | None = None
+    commands = bridge_command_queue()
 
     try:
-        for raw in sys.stdin:
+        while True:
+            try:
+                raw = commands.get(timeout=0.1)
+            except queue.Empty:
+                if agent is not None and context is not None and navigation_admitted:
+                    try:
+                        agent.run_one(context)
+                    except OSError:
+                        # Diagnostics never override the existing browser/save authority.
+                        print("camouhost_agent_io_failure", file=sys.stderr, flush=True)
+                continue
+            if raw is None:
+                break
             if not valid_frame(raw):
                 emit("error|protocol")
                 return 2
@@ -1303,6 +1422,15 @@ def run_ipc() -> int:
                     emit("error|runtime")
                     return 5
                 active_session = parts[1]
+                # Only an explicitly opted-in local test Bridge publishes an agent
+                # directory. Ordinary user sessions have no executable-script inbox.
+                if os.environ.get(AGENT_DIRECTORY_ENV):
+                    try:
+                        agent = LocalPlaywrightAgent(os.environ[AGENT_DIRECTORY_ENV], active_session)
+                    except (OSError, RuntimeContractError) as error:
+                        report_runtime_failure("launch", error)
+                        emit("error|runtime")
+                        return 5
                 report_runtime_stage("launch", "ready")
                 emit(f"ready|{active_session}")
                 continue
@@ -1412,6 +1540,8 @@ def run_ipc() -> int:
 
         return 3 if negotiated or active_session is not None else 0
     finally:
+        if agent is not None:
+            agent.close()
         if manager is not None and context is not None:
             try:
                 close_context(manager, context, root)
