@@ -5,6 +5,7 @@ close a page. Keep all raw profile test data locally; do not post to GitHub.
 """
 import json
 import os
+import secrets
 from pathlib import Path
 
 observed = tuple(context.pages)  # BEFORE any agent action or page creation.
@@ -37,7 +38,7 @@ except Exception as error:
 report["count_after"] = len(context.pages)
 if report["count_after"] != report["count_before"]:
     report["errors"].append({"operation": "page_count_changed", "error": "the live context changed during observation"})
-artifact = Path(agent_artifacts_dir) / "b7-first-restore.json"
+artifact = Path(agent_artifacts_dir) / f"b7-first-restore-{secrets.token_hex(8)}.json"
 # Keep full results on disk, not truncated by the compact UI status.
 with artifact.open("x", encoding="utf-8") as output:
     json.dump(report, output, ensure_ascii=False, default=str)

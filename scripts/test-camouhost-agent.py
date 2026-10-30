@@ -147,7 +147,7 @@ def prove_agent() -> None:
             # A queued script which never reaches the owner is PENDING, not a
             # successful browser operation. It remains intact for examination.
             waiting = subprocess.run(
-                [*command[:-3], "--script", str(sample), "--timeout", "0.2"],
+                [*command[:6], "--script", str(sample), "--timeout", "0.2"],
                 capture_output=True, text=True, timeout=10,
             )
             assert waiting.returncode == 124, waiting.stderr
@@ -161,13 +161,13 @@ def prove_agent() -> None:
             os.replace(agent.requests / f"{claimed}.py", agent.requests / f"{claimed}.running")
             running = agent.requests / f"{claimed}.running"
             assert running.exists()
-            assert not agent.run_one(fake) or not running.exists()  # queued CLI request may complete
+            assert agent.run_one(fake)  # prior timed-out queued request can now complete
             assert running.exists() and not (agent.results / f"{claimed}.json").exists()
 
             # Invalid timeout values cannot mean "wait forever" by accident.
             for invalid in ("nan", "inf", "-1"):
                 rejected = subprocess.run(
-                    [*command[:-3], "--script", str(sample), "--timeout", invalid],
+                    [*command[:6], "--script", str(sample), "--timeout", invalid],
                     capture_output=True, text=True, timeout=10,
                 )
                 assert rejected.returncode == 2, rejected.stderr
@@ -178,13 +178,59 @@ def prove_agent() -> None:
                 agent.requests,
                 (ROOT / "scripts" / "b7-playwright-observe.py").read_text(encoding="utf-8"),
             )
-            assert agent.run_one(fake)
-            capture = json.loads((agent.results / "b7-first-restore.json").read_text(encoding="utf-8"))
+            for _ in range(3):
+                if (agent.results / f"{snapshot}.json").is_file():
+                    break
+                assert agent.run_one(fake)
+            snapshot_status = json.loads(
+                (agent.results / f"{snapshot}.json").read_text(encoding="utf-8")
+            )
+            assert snapshot_status["status"] == "ok", snapshot_status
+            capture = json.loads(
+                Path(snapshot_status["result"]["artifact"]).read_text(encoding="utf-8")
+            )
             assert capture["count_before"] == capture["count_after"] == 1
             assert capture["pages"][0]["url"] == private_content
             assert capture["pages"][0]["html"] == "<html>fake restored</html>"
             assert capture["cookies"] == [{"name": "test_cookie", "value": "full-value"}]
-            assert not capture["errors"] and (agent.results / f"{snapshot}.json").exists()
+            assert not capture["errors"]
+            assert fake.pages[0].url == private_content, "read-only B7 script navigated"
+
+            # A broken observation must preserve raw errors and must NOT
+            # become a positive restored-content claim or delete its artifact.
+            original = fake.pages[0].screenshot
+            fake.pages[0].screenshot = lambda **_args: (_ for _ in ()).throw(OSError("snapshot disk full"))
+            try:
+                broken = committed_request(
+                    agent.requests,
+                    (ROOT / "scripts" / "b7-playwright-observe.py").read_text(encoding="utf-8"),
+                )
+                assert agent.run_one(fake)
+                failed_status = json.loads(
+                    (agent.results / f"{broken}.json").read_text(encoding="utf-8")
+                )
+                assert failed_status["status"] == "error"
+                assert "snapshot disk full" in (
+                    agent.results / f"{broken}.stderr.txt"
+                ).read_text(encoding="utf-8")
+                assert len(list(agent.results.glob("b7-first-restore-*.json"))) == 2
+            finally:
+                fake.pages[0].screenshot = original
+
+            # If the live locator disappears while a submitted job is still
+            # awaiting dispatch, the CLI returns UNCONFIRMED, not Saved/OK.
+            prior = set(agent.requests.glob("*.py"))
+            pending = subprocess.Popen(
+                [*command[:6], "--script", str(sample), "--timeout", "5"],
+                stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+            )
+            cutoff = time.monotonic() + 4
+            while time.monotonic() < cutoff and set(agent.requests.glob("*.py")) == prior:
+                time.sleep(0.01)
+            assert set(agent.requests.glob("*.py")) != prior, "client never submitted pending job"
+            agent.close()
+            outgoing, errors = pending.communicate(timeout=8)
+            assert pending.returncode == 125 and "UNCONFIRMED" in errors, (outgoing, errors)
         finally:
             agent.close()
         assert not agent.descriptor.exists()
