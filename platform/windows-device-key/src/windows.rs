@@ -304,6 +304,11 @@ mod s1_tests {
         let existing = PersistedP256Key::open_existing(&name)?;
         assert_eq!(existing.disposition(), KeyDisposition::OpenedExisting);
         assert_eq!(existing.public_key_spki_der()?, original_public);
+        let challenge = b"read-only S1 device-key continuity";
+        let proof = existing.sign_sha256_message(challenge)?;
+        assert!(existing.verify_sha256_message(challenge, &proof)?);
+        assert!(!existing.verify_sha256_message(b"substituted message", &proof)?);
+        assert_eq!(existing.disposition(), KeyDisposition::OpenedExisting);
         drop(existing);
         owned.delete()?;
         assert!(PersistedP256Key::open_existing(&name).is_err());

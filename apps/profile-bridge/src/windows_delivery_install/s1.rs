@@ -41,12 +41,14 @@ struct S1Observation {
     verdict: &'static str,
     native_writer: &'static str,
     existing_key: &'static str,
+    existing_key_public_spki_sha256: Option<String>,
     signed_delivery: &'static str,
     installed_delivery: &'static str,
     profile_inventory: &'static str,
     pending_evidence: &'static str,
     pending_counts: Option<S1PendingInventory>,
     generation_authority: &'static str,
+    previous_delivery_rollback: &'static str,
     independent_recovery: &'static str,
     inventory: Option<ProfileObservation>,
     reason_codes: Vec<&'static str>,
@@ -62,12 +64,14 @@ pub(super) fn observe(bundle_directory: &Path, installation_root: &Path) -> Stri
         verdict: "UNKNOWN",
         native_writer: "UNKNOWN",
         existing_key: "UNKNOWN",
+        existing_key_public_spki_sha256: None,
         signed_delivery: "UNKNOWN",
         installed_delivery: "UNKNOWN",
         profile_inventory: "UNKNOWN",
         pending_evidence: "UNKNOWN",
         pending_counts: None,
         generation_authority: "UNKNOWN",
+        previous_delivery_rollback: "UNKNOWN",
         independent_recovery: "UNKNOWN",
         inventory: None,
         reason_codes: Vec::new(),
@@ -167,14 +171,14 @@ fn inspect(bundle_directory: &Path, root: &Path, result: &mut S1Observation) {
     result.installed_delivery = "ACTIVE_HEALTHY_COMPONENTS_VERIFIED";
     if let Some(lkg) = state.state().last_known_good() {
         if reopen_staged_delivery(&staging, lkg).is_ok() {
-            result.independent_recovery = "PREVIOUS_DELIVERY_COMPONENTS_VERIFIED";
+            result.previous_delivery_rollback = "PREVIOUS_DELIVERY_COMPONENTS_VERIFIED";
         } else {
             result
                 .reason_codes
                 .push("PREVIOUS_DELIVERY_BYTES_UNVERIFIED");
         }
     } else {
-        result.independent_recovery = "ACTIVE_DELIVERY_ONLY";
+        result.previous_delivery_rollback = "ACTIVE_DELIVERY_ONLY";
     }
 
     // Device binding is the only local source for the CNG key name. Opening a
@@ -183,10 +187,35 @@ fn inspect(bundle_directory: &Path, root: &Path, result: &mut S1Observation) {
         Ok(binding) => {
             let name = format!("part-crm.device.{}", binding.device_id().as_str());
             match PersistedP256Key::open_existing(&name) {
-                Ok(key) if key.public_key_spki_der().is_ok() => {
-                    result.existing_key = "OPENED_EXISTING_NONEXPORTABLE";
+                Ok(key) => {
+                    // A non-exportable key handle alone does not prove that its
+                    // private half is still usable. Exercise local P-256 PoP,
+                    // but never send a request, mint a key or claim that the
+                    // remote registered public key has been independently matched.
+                    let challenge = format!(
+                        "profile-bridge-s1-existing-device-key-v1:{}:{}",
+                        binding.tenant_id().as_str(),
+                        binding.device_id().as_str()
+                    );
+                    let proof = key.sign_sha256_message(challenge.as_bytes());
+                    let usable = proof
+                        .as_ref()
+                        .ok()
+                        .and_then(|signature| {
+                            key.verify_sha256_message(challenge.as_bytes(), signature)
+                                .ok()
+                        })
+                        == Some(true);
+                    match (usable, key.public_key_spki_der()) {
+                        (true, Ok(spki)) => {
+                            result.existing_key = "EXISTING_NONEXPORTABLE_LOCAL_SIGN_VERIFY";
+                            result.existing_key_public_spki_sha256 =
+                                Some(sha256_lower_hex(&spki));
+                        }
+                        _ => result.reason_codes.push("EXISTING_CNG_KEY_UNUSABLE"),
+                    }
                 }
-                _ => result.reason_codes.push("EXISTING_CNG_KEY_UNVERIFIED"),
+                Err(_) => result.reason_codes.push("EXISTING_CNG_KEY_UNVERIFIED"),
             }
         }
         Err(_) => result.reason_codes.push("DEVICE_BINDING_UNVERIFIED"),
@@ -237,6 +266,13 @@ fn inspect(bundle_directory: &Path, root: &Path, result: &mut S1Observation) {
     result
         .reason_codes
         .push("INDEPENDENT_PROFILE_BACKUP_NOT_YET_PROVEN");
+}
+
+fn sha256_lower_hex(bytes: &[u8]) -> String {
+    Sha256::digest(bytes)
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect()
 }
 
 fn inventory(root: &MaterializationRoot) -> Result<ProfileObservation, &'static str> {
@@ -477,6 +513,10 @@ mod tests {
         fs::create_dir(&installation)?;
         let result = observe(&installation.join("no-bundle"), &installation);
         assert!(result.contains("PROFILE_ROOT_UNVERIFIED"), "{result}");
+        let parsed: serde_json::Value = serde_json::from_str(&result)?;
+        assert_eq!(parsed["previous_delivery_rollback"], "UNKNOWN");
+        assert_eq!(parsed["independent_recovery"], "UNKNOWN");
+        assert!(parsed["existing_key_public_spki_sha256"].is_null());
         assert!(!installation.join("profiles").exists());
         assert!(!installation.join("state").exists());
         fs::remove_dir(installation)?;

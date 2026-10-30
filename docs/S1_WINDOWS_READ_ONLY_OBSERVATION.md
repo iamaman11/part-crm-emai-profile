@@ -23,7 +23,10 @@ the installation root.
 
 This first source slice:
 - Opens the existing materialization root, Windows device CNG key and installed
-  delivery store without creating or repairing any of them.
+  delivery store without creating or repairing any of them. The existing CNG key
+  signs and locally verifies a domain-separated challenge; the public SPKI SHA-256
+  fingerprint is reported for independent device registration matching.
+  **Local PoP alone does not certify the server's registered public key**.
 - Acquires the same root-exclusive native activation lock and uses the existing
   per-generation native Firefox lock check; retained inert Bridge markers are not
   deleted or mistaken for an active OS writer.
@@ -35,13 +38,16 @@ This first source slice:
 - Reuses the canonical local materialization-binding verifier on existing sidecars.
 - Reopens the original delivery and previous retained delivery using the existing
   full byte-level stage verifier; does not modify an installation record.
+  The `previous_delivery_rollback` report field is **not** browser-profile LKG
+  and cannot satisfy `independent_recovery`.
 - Verifies installed origin against signed bundle origin and executes existing CMS,
   signer admission, downgrade/replay and compatibility policy with no download or
   installation step.
 
 **Not yet a clearance:** local generation CURRENT/WORKING/LKG authority and the
 recoverability of an independent profile backup have no complete locally available
-non-mutating proof. The report emits `UNKNOWN` for these obligations and returns
+non-mutating proof. Verification of an older Bridge release is not verification
+of a restorable browser-profile generation. The report emits `UNKNOWN` for these obligations and returns
 a nonzero process exit. It must not be turned into `READY` just because files
 exist or because an older application release is present.
 
