@@ -188,11 +188,9 @@ pub fn run_complete(uri: &DevicePairingCompleteUri) -> Result<(), PairingError> 
     }
 
     let key_name = key_name(uri.device_id()).map_err(|_| PairingError::DeviceKey)?;
-    let key = PersistedP256Key::open_or_create(&key_name).map_err(|_| PairingError::DeviceKey)?;
-    if key.disposition() == KeyDisposition::Created {
-        key.delete().map_err(|_| PairingError::CleanupRequired)?;
-        return Err(PairingError::DeviceKey);
-    }
+    // Completion is not key enrollment: missing keys must not be minted,
+    // even transiently, for an unstarted or abandoned pairing callback.
+    let key = PersistedP256Key::open_existing(&key_name).map_err(|_| PairingError::DeviceKey)?;
     key.require_non_exportable()
         .map_err(|_| PairingError::DeviceKey)?;
 
