@@ -252,7 +252,7 @@ jobs:
 
       - name: Compile AR-10/S0 runtime acceptance sources
         if: needs.scope.outputs.heavy == 'true'
-        run: python3.12 -m py_compile runtime/camouhost/real.py scripts/diagnose-s0-webgl-parameters.py scripts/test-ar10-real-camoufox.py scripts/test-ar10-real-camoufox-cleanup.py scripts/test-s0-browser-visible-canvas.py scripts/test-s0-browser-visible-audio-fonts.py scripts/test-s0-portable-browser-state.py scripts/test-ar10-firefox-writer-locks.py scripts/check-ar10-runtime-cutover.py
+        run: python3.12 -m py_compile runtime/camouhost/real.py scripts/diagnose-s0-webgl-parameters.py scripts/test-ar10-real-camoufox.py scripts/test-ar10-real-camoufox-cleanup.py scripts/test-camouhost-agent.py scripts/camouhost-agent.py scripts/test-s0-browser-visible-canvas.py scripts/test-s0-browser-visible-audio-fonts.py scripts/test-s0-portable-browser-state.py scripts/test-ar10-firefox-writer-locks.py scripts/check-ar10-runtime-cutover.py
 
       - name: Enforce AR-10 successor-runtime policy
         if: needs.scope.outputs.heavy == 'true'
@@ -263,6 +263,10 @@ jobs:
       - name: Prove Firefox writer-lock failure semantics
         if: needs.scope.outputs.heavy == 'true'
         run: python3.12 scripts/test-ar10-firefox-writer-locks.py
+
+      - name: Prove owned Playwright agent atomic transport and full local diagnostics
+        if: needs.scope.outputs.heavy == 'true'
+        run: python3.12 scripts/test-camouhost-agent.py
 
       - name: Prove post-launch failure cleanup and immediate relaunch
         if: needs.scope.outputs.heavy == 'true'
@@ -405,7 +409,11 @@ jobs:
 
       - name: Compile runtime acceptance sources
         if: needs.scope.outputs.heavy == 'true'
-        run: python -m py_compile runtime/camouhost/real.py scripts/diagnose-s0-speech-voices.py scripts/test-ar10-real-camoufox-cleanup.py scripts/test-s0-browser-visible-canvas.py scripts/test-s0-browser-visible-audio-fonts.py scripts/test-s0-portable-browser-state.py scripts/test-ar10-firefox-writer-locks.py scripts/check-ar10-runtime-cutover.py scripts/camouhost-runtime-build-windows.py scripts/camouhost-windows-dependency-lock.py scripts/verify-camoufox-patched-candidate.py
+        run: python -m py_compile runtime/camouhost/real.py scripts/diagnose-s0-speech-voices.py scripts/test-ar10-real-camoufox-cleanup.py scripts/test-camouhost-agent.py scripts/camouhost-agent.py scripts/test-s0-browser-visible-canvas.py scripts/test-s0-browser-visible-audio-fonts.py scripts/test-s0-portable-browser-state.py scripts/test-ar10-firefox-writer-locks.py scripts/check-ar10-runtime-cutover.py scripts/camouhost-runtime-build-windows.py scripts/camouhost-windows-dependency-lock.py scripts/verify-camoufox-patched-candidate.py
+
+      - name: Prove Windows local owned Playwright agent protocol
+        if: needs.scope.outputs.heavy == 'true'
+        run: python scripts/test-camouhost-agent.py
 
       - name: Prove Firefox writer-lock failure semantics
         if: needs.scope.outputs.heavy == 'true'
