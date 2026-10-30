@@ -958,10 +958,17 @@ fn spawn_camouhost_diagnostic_reader(stderr: ChildStderr, raw_path: Option<PathB
         // Full stderr belongs to the local agent test run, not the compact
         // allowlisted end-user report. Do not truncate, redact or profile-filter it.
         let mut raw = raw_path.and_then(|path| {
-            match fs::OpenOptions::new().write(true).create_new(true).open(path) {
+            match fs::OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .open(path)
+            {
                 Ok(file) => Some(file),
                 Err(error) => {
-                    eprintln!("CAMOUHOST_AGENT_RAW_DIAGNOSTIC_OPEN_FAILED category={:?}", error.kind());
+                    eprintln!(
+                        "CAMOUHOST_AGENT_RAW_DIAGNOSTIC_OPEN_FAILED category={:?}",
+                        error.kind()
+                    );
                     None
                 }
             }
