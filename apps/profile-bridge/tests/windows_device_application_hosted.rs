@@ -9,7 +9,7 @@ use profile_platform_primitives::{ActorId, CorrelationId, DeviceId, TenantId, Un
 use sha2::{Digest, Sha256};
 use std::fs;
 use std::time::{SystemTime, UNIX_EPOCH};
-use windows_device_key::PersistedP256Key;
+use windows_device_key::{KeyDisposition, PersistedP256Key};
 
 #[test]
 fn shipping_cng_request_proof_survives_process_restart() -> Result<(), Box<dyn std::error::Error>> {
@@ -39,10 +39,16 @@ fn shipping_cng_request_proof_survives_process_restart() -> Result<(), Box<dyn s
         assert_eq!(binding.actor_id(), &actor_id);
         assert_eq!(binding.device_id(), &device_id);
 
+        // Enrollment creates the device key; normal launch may only reopen it.
+        let enrolled = PersistedP256Key::open_or_create(&cleanup_key_name)?;
+        assert_eq!(enrolled.disposition(), KeyDisposition::Created);
+        let enrolled_spki = enrolled.public_key_spki_der()?;
+        drop(enrolled);
         let mut first =
             WindowsDeviceApplication::from_system("https://control.example.invalid", binding)?;
         let first_handle = first.ensure_key_handle(&device_id)?;
-        let first_key = PersistedP256Key::open_or_create(&first_handle)?;
+        let first_key = PersistedP256Key::open_existing(&first_handle)?;
+        assert_eq!(first_key.public_key_spki_der()?, enrolled_spki);
         first_key.require_non_exportable()?;
         assert!(first_key.private_key_export_blocked()?);
         let public_key = first_key.public_key_spki_der()?;
@@ -90,7 +96,7 @@ fn shipping_cng_request_proof_survives_process_restart() -> Result<(), Box<dyn s
         )?;
         let restarted_handle = restarted.ensure_key_handle(&device_id)?;
         assert_eq!(restarted_handle, first_handle);
-        let restarted_key = PersistedP256Key::open_or_create(&restarted_handle)?;
+        let restarted_key = PersistedP256Key::open_existing(&restarted_handle)?;
         restarted_key.require_non_exportable()?;
         assert_eq!(restarted_key.public_key_spki_der()?, public_key);
         assert!(restarted_key.verify_sha256_message(&message, &signature)?);
@@ -100,8 +106,53 @@ fn shipping_cng_request_proof_survives_process_restart() -> Result<(), Box<dyn s
     })();
 
     let _ = fs::remove_file(&binding_path);
-    if let Ok(key) = PersistedP256Key::open_or_create(&cleanup_key_name) {
+    if let Ok(key) = PersistedP256Key::open_existing(&cleanup_key_name) {
         let _ = key.delete();
     }
     proof_result
+}
+
+#[test]
+fn installed_binding_never_recreates_missing_cng_identity() -> Result<(), Box<dyn std::error::Error>>
+{
+    let unique = SystemTime::now().duration_since(UNIX_EPOCH)?.as_nanos();
+    let tenant_id = TenantId::parse(format!("tenant_missing_{unique}"))?;
+    let actor_id = ActorId::parse(format!("actor_missing_{unique}"))?;
+    let device_id = DeviceId::parse(format!("device_missing_{unique}"))?;
+    let key_name = format!("part-crm.device.{}", device_id.as_str());
+    let binding_path = std::env::temp_dir().join(format!(
+        "part-crm-device-missing-key-{}-{unique}.json",
+        std::process::id()
+    ));
+    let original = format!(
+        r#"{{"tenantId":"{}","actorId":"{}","deviceId":"{}"}}"#,
+        tenant_id.as_str(),
+        actor_id.as_str(),
+        device_id.as_str()
+    );
+    fs::write(&binding_path, &original)?;
+    let test = (|| -> Result<(), Box<dyn std::error::Error>> {
+        assert!(PersistedP256Key::open_existing(&key_name).is_err());
+        let binding = WindowsDeviceApplicationBinding::open(&binding_path)?;
+        let mut application =
+            WindowsDeviceApplication::from_system("https://control.example.invalid", binding)?;
+        assert!(application.ensure_key_handle(&device_id).is_err());
+        assert!(PersistedP256Key::open_existing(&key_name).is_err());
+        assert_eq!(fs::read_to_string(&binding_path)?, original);
+
+        // A lost key after enrollment must not be silently replaced.
+        let key = PersistedP256Key::open_or_create(&key_name)?;
+        assert_eq!(key.disposition(), KeyDisposition::Created);
+        assert!(application.ensure_key_handle(&device_id).is_ok());
+        key.delete()?;
+        assert!(application.ensure_key_handle(&device_id).is_err());
+        assert!(PersistedP256Key::open_existing(&key_name).is_err());
+        assert_eq!(fs::read_to_string(&binding_path)?, original);
+        Ok(())
+    })();
+    let _ = fs::remove_file(&binding_path);
+    if let Ok(key) = PersistedP256Key::open_existing(&key_name) {
+        let _ = key.delete();
+    }
+    test
 }
