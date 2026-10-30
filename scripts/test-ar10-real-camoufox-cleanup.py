@@ -718,6 +718,95 @@ def prove_external_windows_gui_close(
 
 
 
+class DisposableWindowsProcessJob:
+    """Kernel-owned lifetime for the CI fixture only; no shipping process supervisor.
+
+    Unlike a PID sweep, Job Object kill-on-close covers grandchildren even
+    after a parent has exited, and never mistakes a reused PID for ownership.
+    """
+
+    def __init__(self, pid: int) -> None:
+        from ctypes import wintypes
+
+        kernel = ctypes.WinDLL("kernel32", use_last_error=True)
+        self.kernel = kernel
+        self.close_handle = kernel.CloseHandle
+        self.close_handle.argtypes = [wintypes.HANDLE]
+        self.close_handle.restype = wintypes.BOOL
+
+        class BasicLimits(ctypes.Structure):
+            _fields_ = [
+                ("PerProcessUserTimeLimit", ctypes.c_longlong),
+                ("PerJobUserTimeLimit", ctypes.c_longlong),
+                ("LimitFlags", wintypes.DWORD),
+                ("MinimumWorkingSetSize", ctypes.c_size_t),
+                ("MaximumWorkingSetSize", ctypes.c_size_t),
+                ("ActiveProcessLimit", wintypes.DWORD),
+                ("Affinity", ctypes.c_size_t),
+                ("PriorityClass", wintypes.DWORD),
+                ("SchedulingClass", wintypes.DWORD),
+            ]
+
+        class IoCounters(ctypes.Structure):
+            _fields_ = [
+                (field, ctypes.c_ulonglong)
+                for field in (
+                    "ReadOperationCount", "WriteOperationCount", "OtherOperationCount",
+                    "ReadTransferCount", "WriteTransferCount", "OtherTransferCount",
+                )
+            ]
+
+        class ExtendedLimits(ctypes.Structure):
+            _fields_ = [
+                ("BasicLimitInformation", BasicLimits),
+                ("IoInfo", IoCounters),
+                ("ProcessMemoryLimit", ctypes.c_size_t),
+                ("JobMemoryLimit", ctypes.c_size_t),
+                ("PeakProcessMemoryUsed", ctypes.c_size_t),
+                ("PeakJobMemoryUsed", ctypes.c_size_t),
+            ]
+
+        create = kernel.CreateJobObjectW
+        create.argtypes = [wintypes.LPVOID, wintypes.LPCWSTR]
+        create.restype = wintypes.HANDLE
+        set_info = kernel.SetInformationJobObject
+        set_info.argtypes = [wintypes.HANDLE, ctypes.c_int, wintypes.LPVOID, wintypes.DWORD]
+        set_info.restype = wintypes.BOOL
+        assign = kernel.AssignProcessToJobObject
+        assign.argtypes = [wintypes.HANDLE, wintypes.HANDLE]
+        assign.restype = wintypes.BOOL
+        open_process = kernel.OpenProcess
+        open_process.argtypes = [wintypes.DWORD, wintypes.BOOL, wintypes.DWORD]
+        open_process.restype = wintypes.HANDLE
+
+        self.handle = create(None, None)
+        if not self.handle:
+            raise AssertionError(f"Windows disposable Job Object unavailable: {ctypes.get_last_error()}")
+        try:
+            limits = ExtendedLimits()
+            limits.BasicLimitInformation.LimitFlags = 0x00002000  # KILL_ON_JOB_CLOSE
+            if not set_info(self.handle, 9, ctypes.byref(limits), ctypes.sizeof(limits)):
+                raise AssertionError(f"Windows fixture Job limit rejected: {ctypes.get_last_error()}")
+            process = open_process(0x00000101, False, pid)  # SET_QUOTA | TERMINATE
+            if not process:
+                raise AssertionError(f"Windows fixture child handle unavailable: {ctypes.get_last_error()}")
+            try:
+                if not assign(self.handle, process):
+                    raise AssertionError(f"Windows fixture Job assign rejected: {ctypes.get_last_error()}")
+            finally:
+                self.close_handle(process)
+        except BaseException:
+            self.close()
+            raise
+
+    def close(self) -> None:
+        handle = getattr(self, "handle", None)
+        if handle:
+            self.handle = None
+            if not self.close_handle(handle):
+                raise AssertionError(f"Windows disposable Job close failed: {ctypes.get_last_error()}")
+
+
 def prove_forced_windows_browser_termination_is_not_controlled(
     python: Path,
     camouhost: Path,
@@ -725,20 +814,20 @@ def prove_forced_windows_browser_termination_is_not_controlled(
     runtime: ModuleType,
     root: Path,
 ) -> None:
-    """Real Windows negative: a browser-main kill is never a controlled Close.
-
-    The fixture retains exact OS handles to its disposable browser/Playwright
-    descendants before injection. After the negative observation only the
-    fixture, not shipping Bridge, cleans surviving subprocesses. Never delete
-    Firefox state/lock files as a substitute for proven process exit.
-    """
+    """Main-PID crash must fail closed; native Job covers disposable descendants."""
     if os.name != "nt":
         return
     from ctypes import wintypes
 
     process = start_runtime(python, camouhost, env)
+    # Attach BEFORE browser launch. This OS kernel boundary, not a best-effort
+    # PID scan, guarantees fixture cleanup if the browser root dies first.
+    try:
+        job = DisposableWindowsProcessJob(process.pid)
+    except BaseException:
+        stop_runtime(process)
+        raise
     witness = None
-    owned_handles: dict[int, int] = {}
     kernel = ctypes.WinDLL("kernel32", use_last_error=True)
     open_process = kernel.OpenProcess
     open_process.argtypes = [wintypes.DWORD, wintypes.BOOL, wintypes.DWORD]
@@ -752,7 +841,6 @@ def prove_forced_windows_browser_termination_is_not_controlled(
     close = kernel.CloseHandle
     close.argtypes = [wintypes.HANDLE]
     close.restype = wintypes.BOOL
-
     try:
         assert exchange(process, f"hello|{IPC_VERSION}") == f"hello_ack|{IPC_VERSION}"
         assert exchange(process, f"launch|{SESSION}") == f"ready|{SESSION}"
@@ -764,54 +852,36 @@ def prove_forced_windows_browser_termination_is_not_controlled(
         )
         witness = runtime.WindowsBrowserExitWitness(process.pid)
         assert len(witness.pids) == 1, "browser main process identity is ambiguous"
-
-        # Preserve handles before force-killing the main browser PID: Windows
-        # reparenting/fast PID reuse must not redirect fixture cleanup at a
-        # different process, and content children can outlive the killed main.
-        for pid in witness.owned_pids:
-            handle = open_process(0x00100001, False, pid)  # SYNCHRONIZE | TERMINATE
-            if handle:
-                owned_handles[pid] = handle
-        main_pid = witness.pids[0]
-        assert main_pid in owned_handles, "exact browser main process handle missing"
-        assert terminate(owned_handles[main_pid], 19), "native Windows main kill rejected"
-
-        deadline = time.monotonic() + 12
-        while time.monotonic() < deadline and wait(owned_handles[main_pid], 0) != 0:
-            time.sleep(0.05)
-        assert wait(owned_handles[main_pid], 0) == 0, "browser main termination unconfirmed"
-        assert not witness.safely_exited(), "forced browser main death accepted as normal code zero"
-
+        pid = witness.pids[0]
+        handle = open_process(0x00100001, False, pid)  # SYNCHRONIZE | TERMINATE
+        assert handle, "cannot open exact browser-main handle for negative proof"
+        try:
+            assert terminate(handle, 19), "Windows refused main-PID fault injection"
+            assert wait(handle, 12000) == 0, "browser-main death not observed"
+        finally:
+            close(handle)
+        assert not witness.safely_exited(), "forced browser death looked like normal exit zero"
         observed = None
         for _ in range(4):
             try:
                 observed = exchange(process, f"observe_close|{SESSION}", 10)
             except AssertionError:
-                assert process.poll() is not None, "Camouhost stalled after main browser death"
+                assert process.poll() is not None, "Camouhost stalled after browser main kill"
                 break
             assert observed != f"close_observed|{SESSION}|true", (
-                "forced browser main kill was mistaken for controlled Close"
+                "forced browser-main termination was mistaken for controlled Close"
             )
             if observed == "error|runtime":
                 break
             time.sleep(0.2)
         assert observed != f"close_observed|{SESSION}|true"
     finally:
-        stop_runtime(process)
-        # The negative scenario may leave Firefox content processes alive.
-        # Never make the test pass by removing parent.lock or user_data.
-        # Exact retained OS handles make cleanup safe on the disposable host.
         try:
-            for pid, handle in owned_handles.items():
-                if wait(handle, 0) == 0x102:  # WAIT_TIMEOUT (still alive)
-                    if not terminate(handle, 29):
-                        raise AssertionError(f"fixture descendant {pid} could not be stopped")
-            for pid, handle in owned_handles.items():
-                if wait(handle, 10000) != 0:
-                    raise AssertionError(f"fixture descendant {pid} survived cleanup")
+            stop_runtime(process)
         finally:
-            for handle in owned_handles.values():
-                close(handle)
+            # The Windows kernel, not a race-prone hand-coded PID walk, closes
+            # all remaining Firefox/driver children of this disposable job.
+            job.close()
             if witness is not None:
                 witness.close()
 
@@ -819,7 +889,7 @@ def prove_forced_windows_browser_termination_is_not_controlled(
     while time.monotonic() < deadline and runtime.firefox_writer_active(root):
         time.sleep(0.1)
     assert_writer_quiescent(runtime, root, "forced Windows browser main death")
-    print("native_windows_main_kill never_controls_close_and_fixture_tree_quiescent PASS", flush=True)
+    print("native_windows_main_kill fails_closed_and_disposable_job_released PASS", flush=True)
 
 
 def prove_ipc_timeout_contract() -> None:

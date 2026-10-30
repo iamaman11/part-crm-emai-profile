@@ -133,8 +133,9 @@ test data. An identical `D1 READY` projection is not a live Coordinator
 authority witness. The hosted Windows acceptance also forces the exact disposable Camoufox
 browser-main PID to exit abnormally and requires fail-closed classification.
 After capturing the negative result, **the hosted disposable fixture only**
-releases surviving Playwright/Firefox child processes through retained native
-OS handles (never by deleting working profile files or locks),
+releases surviving Playwright/Firefox child processes through a native Windows
+Job Object with kill-on-close (never through a hand-coded PID sweep and never by
+deleting working profile files or locks),
 while normal GUI Window Close remains a positive witness. This does not
 replace the original-machine process-tree/Coordinator incident analysis.
 In particular, investigate the Bridge534 forced-PID-close
