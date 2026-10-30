@@ -2300,6 +2300,9 @@ mod direct_native_checkpoint_tests {
             mutate: None,
         };
         persist_local_unsynced_intent(&fixture.root, &source, &fixture.lease)?;
+        let lone = inspect_all_pending_for_s1(&fixture.root)?;
+        assert_eq!(lone.lone_local_unsynced, 1);
+        assert_eq!(lone.exact_checkpoints, 0);
         persist_streaming_exact_save_attempt_from_native(
             &fixture.root,
             &source,
@@ -2390,6 +2393,23 @@ mod direct_native_checkpoint_tests {
             fs::read(source.path().join("prefs.js"))?,
             b"native preferences"
         );
+        Ok(())
+    }
+
+    #[test]
+    fn s1_rejects_torn_or_foreign_pending_without_removing_it()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let fixture = Fixture::new()?;
+        assert_eq!(
+            inspect_all_pending_for_s1(&fixture.root)?,
+            super::S1PendingInventory::default()
+        );
+        let file = fixture.root.path().join(
+            ".profile-save-attempt-v1-corrupt.pending-unknown",
+        );
+        fs::write(&file, b"keep-unreconciled-bytes")?;
+        assert!(inspect_all_pending_for_s1(&fixture.root).is_err());
+        assert_eq!(fs::read(&file)?, b"keep-unreconciled-bytes");
         Ok(())
     }
 
