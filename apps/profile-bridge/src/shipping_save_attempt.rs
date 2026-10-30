@@ -1348,6 +1348,7 @@ pub(crate) fn classify_scoped_pending_save_evidence(
 
 /// S1 summary of every on-disk P3 pending identity under the original root.
 /// Counts are evidence only: neither checkpoint nor intent authorizes cloud commit.
+#[cfg(any(windows, test))]
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Serialize)]
 pub(crate) struct S1PendingInventory {
     pub(crate) exact_checkpoints: u64,
@@ -1361,6 +1362,7 @@ pub(crate) struct S1PendingInventory {
 ///
 /// Reuse the existing scope-aware owner to reject torn/foreign siblings and
 /// verify encrypted BPAT in a streaming manner. No lease, migration or write.
+#[cfg(any(windows, test))]
 pub(crate) fn inspect_all_pending_for_s1(
     root: &MaterializationRoot,
 ) -> Result<S1PendingInventory, SaveAttemptEvidenceError> {
