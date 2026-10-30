@@ -416,6 +416,32 @@ mod tests {
     }
 
     #[test]
+    fn s1_read_only_command_requires_two_absolute_paths_without_extra_effect_args()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let tmp = std::env::temp_dir();
+        let bundle = tmp.join("new-signed-bundle").to_string_lossy().into_owned();
+        let root = tmp.join("original-install").to_string_lossy().into_owned();
+        let parsed = parse_command([
+            "profile-bridge".to_owned(),
+            super::S1_OBSERVE_ARGUMENT.to_owned(),
+            bundle.clone(),
+            root.clone(),
+        ])?;
+        assert!(matches!(parsed, BridgeCommand::ReadOnlyS1(..)));
+        for args in [
+            vec![super::S1_OBSERVE_ARGUMENT.to_owned(), bundle.clone()],
+            vec![super::S1_OBSERVE_ARGUMENT.to_owned(), "relative".to_owned(), root.clone()],
+            vec![super::S1_OBSERVE_ARGUMENT.to_owned(), bundle.clone(), "relative".to_owned()],
+            vec![super::S1_OBSERVE_ARGUMENT.to_owned(), bundle, root, "--delivery-prepare".to_owned()],
+        ] {
+            assert!(parse_command(
+                std::iter::once("profile-bridge".to_owned()).chain(args),
+            ).is_err());
+        }
+        Ok(())
+    }
+
+    #[test]
     fn installer_preparation_requires_exactly_two_absolute_machine_paths()
     -> Result<(), Box<dyn std::error::Error>> {
         let directory = std::env::temp_dir();
