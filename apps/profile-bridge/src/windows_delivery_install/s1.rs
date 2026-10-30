@@ -11,14 +11,17 @@ use crate::windows_delivery_signature::WindowsCmsSignatureVerifier;
 use crate::windows_delivery_store::DeliveryStateStore;
 use crate::windows_device_application::WindowsDeviceApplicationBinding;
 use serde::Serialize;
-use std::fs;
-use std::path::Path;
+use sha2::{Digest, Sha256};
+use std::fs::{self, File};
+use std::io::Read;
+use std::path::{Path, PathBuf};
 use windows_device_key::PersistedP256Key;
 
 const MAX_FILES: u64 = 500_000;
 
 #[derive(Debug, Default, Serialize)]
 struct ProfileObservation {
+    content_manifest_sha256: String,
     files: u64,
     directories: u64,
     bytes: u64,
@@ -189,6 +192,7 @@ fn inspect(bundle_directory: &Path, root: &Path, result: &mut S1Observation) {
 fn inventory(root: &MaterializationRoot) -> Result<ProfileObservation, &'static str> {
     let mut answer = ProfileObservation::default();
     let mut sidecars = Vec::new();
+    let mut files: Vec<PathBuf> = Vec::new();
     let mut stack = vec![root.path().to_path_buf()];
     while let Some(directory) = stack.pop() {
         let children = fs::read_dir(directory).map_err(|_| "READ_DIRECTORY")?;
@@ -209,6 +213,7 @@ fn inventory(root: &MaterializationRoot) -> Result<ProfileObservation, &'static 
             } else if metadata.is_file() {
                 answer.files = answer.files.checked_add(1).ok_or("COUNT_LIMIT")?;
                 answer.bytes = answer.bytes.checked_add(metadata.len()).ok_or("SIZE_LIMIT")?;
+                files.push(child.path());
                 if name.ends_with("-wal") {
                     answer.sqlite_wal_files += 1;
                 }
@@ -227,6 +232,39 @@ fn inventory(root: &MaterializationRoot) -> Result<ProfileObservation, &'static 
             }
         }
     }
+    // Full content evidence includes WAL/N+1. Never open a SQLite connection or
+    // checkpoint a database. Hash only regular files with bounded streaming reads.
+    files.sort();
+    let mut manifest = Sha256::new();
+    let mut buffer = [0u8; 64 * 1024];
+    for path in files {
+        let relative = path.strip_prefix(root.path()).map_err(|_| "RELATIVE_PATH")?;
+        let relative = relative.to_str().ok_or("PATH_ENCODING")?;
+        let mut file = File::open(&path).map_err(|_| "OPEN_FILE")?;
+        let before = file.metadata().map_err(|_| "FILE_METADATA")?;
+        manifest.update((relative.len() as u64).to_be_bytes());
+        manifest.update(relative.as_bytes());
+        manifest.update(before.len().to_be_bytes());
+        let mut file_hash = Sha256::new();
+        loop {
+            let bytes = file.read(&mut buffer).map_err(|_| "READ_FILE")?;
+            if bytes == 0 {
+                break;
+            }
+            file_hash.update(&buffer[..bytes]);
+        }
+        let after = file.metadata().map_err(|_| "FILE_METADATA")?;
+        if after.len() != before.len() || after.modified().ok() != before.modified().ok() {
+            return Err("CONCURRENT_MODIFICATION");
+        }
+        manifest.update(file_hash.finalize());
+    }
+    answer.content_manifest_sha256 = manifest
+        .finalize()
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect();
+
     for sidecar in sidecars {
         // A sidecar is not a WORKING certificate. Validate its canonical
         // generation binding and original inventory without repairing it.
@@ -301,6 +339,8 @@ mod tests {
         fs::write(&pending, b"pending-local-data")?;
         let before = fs::read(&wal)?;
         let observation = inventory(&root)?;
+        assert_eq!(observation.content_manifest_sha256.len(), 64);
+        assert_eq!(observation.content_manifest_sha256, inventory(&root)?.content_manifest_sha256);
         assert_eq!(observation.firefox_user_data_directories, 1);
         assert_eq!(observation.sqlite_wal_files, 1);
         assert_eq!(observation.pending_named_files, 1);
