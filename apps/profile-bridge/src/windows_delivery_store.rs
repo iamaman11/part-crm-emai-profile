@@ -290,7 +290,21 @@ impl DeliveryStateStore {
 
     pub fn open(root: impl AsRef<Path>) -> Result<Self, DeliveryStateStoreError> {
         let root = validated_existing_root(root.as_ref())?;
-        let loaded = load_chain(&root)?;
+        let loaded = load_chain(&root, true)?;
+        Ok(Self {
+            root,
+            revision: loaded.revision,
+            snapshot_sha256: loaded.snapshot_sha256,
+            state: loaded.state,
+            handoff: loaded.handoff,
+        })
+    }
+
+    /// S1 observation: never finalize a pending delivery journal, even when its
+    /// contents are valid. Retain all evidence for the normal recovery owner.
+    pub fn open_read_only(root: impl AsRef<Path>) -> Result<Self, DeliveryStateStoreError> {
+        let root = validated_existing_root(root.as_ref())?;
+        let loaded = load_chain(&root, false)?;
         Ok(Self {
             root,
             revision: loaded.revision,
@@ -409,7 +423,10 @@ fn validated_existing_root(root: &Path) -> Result<PathBuf, DeliveryStateStoreErr
     Ok(root)
 }
 
-fn load_chain(root: &Path) -> Result<LoadedState, DeliveryStateStoreError> {
+fn load_chain(
+    root: &Path,
+    allow_pending_finalization: bool,
+) -> Result<LoadedState, DeliveryStateStoreError> {
     let mut finals = Vec::new();
     let mut pending = Vec::new();
     for entry in fs::read_dir(root).map_err(|_| DeliveryStateStoreError::Io)? {
@@ -439,6 +456,9 @@ fn load_chain(root: &Path) -> Result<LoadedState, DeliveryStateStoreError> {
     let mut loaded = load_final_chain(&finals)?;
 
     if !pending.is_empty() {
+        if !allow_pending_finalization {
+            return Err(DeliveryStateStoreError::PendingRecoveryRequired);
+        }
         if pending.len() != 1 {
             return Err(DeliveryStateStoreError::AmbiguousState);
         }
@@ -612,6 +632,7 @@ pub enum DeliveryStateStoreError {
     MissingState,
     AlreadyInitialized,
     AmbiguousState,
+    PendingRecoveryRequired,
     CorruptState,
     RevisionExhausted,
     Serialization,
@@ -627,6 +648,9 @@ impl fmt::Display for DeliveryStateStoreError {
             Self::MissingState => "Windows delivery state is missing",
             Self::AlreadyInitialized => "Windows delivery state is already initialized",
             Self::AmbiguousState => "Windows delivery state journal is ambiguous",
+            Self::PendingRecoveryRequired => {
+                "Windows delivery journal contains pending recovery evidence"
+            }
             Self::CorruptState => "Windows delivery state journal is corrupt",
             Self::RevisionExhausted => "Windows delivery state revision is exhausted",
             Self::Serialization => "Windows delivery state serialization failed",
@@ -803,6 +827,48 @@ mod tests {
             DeliveryStateStore::open(&root),
             Err(DeliveryStateStoreError::CorruptState)
         );
+        Ok(())
+    }
+
+    #[test]
+    fn s1_read_only_open_retains_valid_pending_snapshot_without_finalizing() -> TestResult {
+        let directory = TestDirectory::create("s1-pending-read-only")?;
+        let root = directory.state_root();
+        let store = DeliveryStateStore::initialize(&root)?;
+        let envelope = PersistedStateEnvelope::new(
+            2,
+            Some(store.snapshot_sha256().to_owned()),
+            store.state().clone(),
+            None,
+        )?;
+        let bytes = serde_json::to_vec(&envelope)?;
+        let digest = sha256_hex(&bytes);
+        let pending_path = root.join(snapshot_name(PENDING_PREFIX, 2, &digest));
+        fs::write(&pending_path, &bytes)?;
+        let previous = store.snapshot_sha256().to_owned();
+        assert_eq!(
+            DeliveryStateStore::open_read_only(&root),
+            Err(DeliveryStateStoreError::PendingRecoveryRequired)
+        );
+        assert_eq!(fs::read(&pending_path)?, bytes);
+        assert!(!root.join(snapshot_name(FINAL_PREFIX, 2, &digest)).exists());
+        assert_eq!(store.snapshot_sha256(), previous);
+        // The normal recovery owner retains its existing behavior.
+        let recovered = DeliveryStateStore::open(&root)?;
+        assert_eq!(recovered.revision(), 2);
+        assert!(!pending_path.exists());
+        Ok(())
+    }
+
+    #[test]
+    fn s1_read_only_open_never_initializes_missing_state() -> TestResult {
+        let directory = TestDirectory::create("s1-missing-read-only")?;
+        let root = directory.state_root();
+        assert_eq!(
+            DeliveryStateStore::open_read_only(&root),
+            Err(DeliveryStateStoreError::MissingState)
+        );
+        assert!(!root.exists());
         Ok(())
     }
 

@@ -22,8 +22,8 @@ use profile_bridge::windows_delivery_handoff::{
     FIRST_INSTALL_ARGUMENT, HANDOFF_ACTIVATE_ARGUMENT, HANDOFF_ARRIVAL_ARGUMENT,
 };
 use profile_bridge::windows_delivery_install::{
-    NativeInstallerError, PREPARE_INSTALL_ARGUMENT, PREPARED_DIRECTORY_PREFIX,
-    run_install_preparation,
+    NativeInstallerError, PREPARE_INSTALL_ARGUMENT, PREPARED_DIRECTORY_PREFIX, S1_OBSERVE_ARGUMENT,
+    run_install_preparation, run_s1_observation,
 };
 use std::env;
 use std::fmt;
@@ -35,6 +35,12 @@ fn main() -> ExitCode {
     match run(env::args()) {
         Ok(()) => ExitCode::SUCCESS,
         Err(error) => {
+            // S1 outcomes are machine-readable and fail closed without showing a
+            // desktop dialog or writing a normal runtime diagnostic report.
+            if matches!(error, BridgeCliError::S1NotReady) {
+                eprintln!("BRIDGE_S1_NOT_READY");
+                return ExitCode::from(3);
+            }
             if let BridgeCliError::LaunchFailed(ShippingCompositionError::Operator(owner)) = error {
                 // This closed typed outcome contains no claims, paths, credentials or profile data.
                 eprintln!("BRIDGE_OPERATOR_OUTCOME={owner:?}");
@@ -56,7 +62,9 @@ where
         _ => None,
     };
     let stage = match &command {
-        BridgeCommand::PrepareInstallation(..) => Stage::InstallPrepare,
+        BridgeCommand::PrepareInstallation(..) | BridgeCommand::ReadOnlyS1(..) => {
+            Stage::InstallPrepare
+        }
         BridgeCommand::InitialProfile(_) | BridgeCommand::Claim(_) => Stage::OpenRequested,
         BridgeCommand::VerifyHistoricalCandidate(_) => Stage::LocalRecovery,
         BridgeCommand::PairingStart(_) | BridgeCommand::PairingComplete(_) => Stage::Pairing,
@@ -66,7 +74,10 @@ where
         }
         BridgeCommand::CopyDiagnostics => Stage::Delivery,
     };
-    let report_operation = !matches!(&command, BridgeCommand::CopyDiagnostics);
+    let report_operation = !matches!(
+        &command,
+        BridgeCommand::CopyDiagnostics | BridgeCommand::ReadOnlyS1(..)
+    );
     let observe = |outcome, cause, elapsed| {
         if let Some(root) = &installation_root {
             report::record_at(root, stage, outcome, Cloud::Unknown, cause, elapsed);
@@ -79,6 +90,24 @@ where
     }
     let start = Instant::now();
     let result = match command {
+        BridgeCommand::ReadOnlyS1(bundle, root, copy_root) => {
+            let observation = run_s1_observation(&bundle, &root, copy_root.as_deref());
+            let ready = serde_json::from_str::<serde_json::Value>(&observation)
+                .ok()
+                .and_then(|report| {
+                    report
+                        .get("verdict")
+                        .and_then(serde_json::Value::as_str)
+                        .map(|verdict| verdict == "READY")
+                })
+                .unwrap_or(false);
+            println!("{observation}");
+            if ready {
+                Ok(())
+            } else {
+                Err(BridgeCliError::S1NotReady)
+            }
+        }
         BridgeCommand::PrepareInstallation(bundle, root) => {
             let result = run_install_preparation(&bundle, &root);
             if let Ok(directory) = &result {
@@ -189,6 +218,7 @@ fn copy_diagnostics() -> Result<(), BridgeCliError> {
 
 enum BridgeCommand {
     PrepareInstallation(PathBuf, PathBuf),
+    ReadOnlyS1(PathBuf, PathBuf, Option<PathBuf>),
     Claim(ClaimUri),
     VerifyHistoricalCandidate(ClaimUri),
     InitialProfile(InitialProfileOpen),
@@ -211,6 +241,27 @@ where
             .next()
             .ok_or(BridgeCliError::MissingLaunchArgument)?,
     );
+    if argument.as_str() == S1_OBSERVE_ARGUMENT {
+        let bundle = PathBuf::from(
+            arguments
+                .next()
+                .ok_or(BridgeCliError::InvalidInstallationArgument)?,
+        );
+        let root = PathBuf::from(
+            arguments
+                .next()
+                .ok_or(BridgeCliError::InvalidInstallationArgument)?,
+        );
+        let copy_root = arguments.next().map(PathBuf::from);
+        if arguments.next().is_some()
+            || !bundle.is_absolute()
+            || !root.is_absolute()
+            || copy_root.as_ref().is_some_and(|path| !path.is_absolute())
+        {
+            return Err(BridgeCliError::InvalidInstallationArgument);
+        }
+        return Ok(BridgeCommand::ReadOnlyS1(bundle, root, copy_root));
+    }
     if argument.as_str() == PREPARE_INSTALL_ARGUMENT {
         let bundle = PathBuf::from(
             arguments
@@ -286,6 +337,7 @@ enum BridgeCliError {
     PairingFailed(DevicePairingBootstrapError),
     DeliveryFailed(ShippingCompositionError),
     DiagnosticsUnavailable,
+    S1NotReady,
 }
 
 impl BridgeCliError {
@@ -293,7 +345,7 @@ impl BridgeCliError {
         match self {
             Self::InstallationFailed(error) => UserDiagnostic::Installation(error),
             Self::MissingLaunchArgument => UserDiagnostic::StartFromApplication,
-            Self::DiagnosticsUnavailable => UserDiagnostic::ReportUnavailable,
+            Self::DiagnosticsUnavailable | Self::S1NotReady => UserDiagnostic::ReportUnavailable,
             Self::UnexpectedArgument
             | Self::InvalidClaimUri
             | Self::InvalidPairingUri
@@ -391,6 +443,67 @@ mod tests {
         let error = BridgeCliError::PairingFailed(super::DevicePairingBootstrapError::Rejected);
         assert!(!error.to_string().contains(&pairing));
         assert!(!error.to_string().contains(&challenge));
+        Ok(())
+    }
+
+    #[test]
+    fn s1_read_only_command_requires_two_absolute_paths_without_extra_effect_args()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let tmp = std::env::temp_dir();
+        let bundle = tmp.join("new-signed-bundle").to_string_lossy().into_owned();
+        let root = tmp.join("original-install").to_string_lossy().into_owned();
+        let parsed = parse_command([
+            "profile-bridge".to_owned(),
+            super::S1_OBSERVE_ARGUMENT.to_owned(),
+            bundle.clone(),
+            root.clone(),
+        ])?;
+        assert!(matches!(parsed, BridgeCommand::ReadOnlyS1(_, _, None)));
+        let copy = tmp
+            .join("verified-external-copy")
+            .to_string_lossy()
+            .into_owned();
+        let with_copy = parse_command([
+            "profile-bridge".to_owned(),
+            super::S1_OBSERVE_ARGUMENT.to_owned(),
+            bundle.clone(),
+            root.clone(),
+            copy.clone(),
+        ])?;
+        assert!(matches!(
+            with_copy,
+            BridgeCommand::ReadOnlyS1(_, _, Some(_))
+        ));
+        for args in [
+            vec![super::S1_OBSERVE_ARGUMENT.to_owned(), bundle.clone()],
+            vec![
+                super::S1_OBSERVE_ARGUMENT.to_owned(),
+                "relative".to_owned(),
+                root.clone(),
+            ],
+            vec![
+                super::S1_OBSERVE_ARGUMENT.to_owned(),
+                bundle.clone(),
+                "relative".to_owned(),
+            ],
+            vec![
+                super::S1_OBSERVE_ARGUMENT.to_owned(),
+                bundle.clone(),
+                root.clone(),
+                "--delivery-prepare".to_owned(),
+            ],
+            vec![
+                super::S1_OBSERVE_ARGUMENT.to_owned(),
+                bundle,
+                root,
+                copy,
+                "extra".to_owned(),
+            ],
+        ] {
+            assert!(
+                parse_command(std::iter::once("profile-bridge".to_owned()).chain(args),).is_err()
+            );
+        }
         Ok(())
     }
 

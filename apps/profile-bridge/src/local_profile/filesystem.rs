@@ -30,6 +30,37 @@ pub struct MaterializationRoot {
 }
 
 impl MaterializationRoot {
+    /// S1 inspector: require an already initialized root, never create its marker
+    /// or any directory. This is deliberately distinct from open_or_create.
+    pub fn open_existing(path: impl Into<PathBuf>) -> Result<Self, LocalProfileError> {
+        let path = path.into();
+        if !path.is_absolute() {
+            return Err(LocalProfileError::RootMustBeAbsolute);
+        }
+        for ancestor in path.ancestors() {
+            let metadata = fs::symlink_metadata(ancestor)?;
+            if metadata.file_type().is_symlink() {
+                return Err(LocalProfileError::RootIsSymlink);
+            }
+            #[cfg(windows)]
+            {
+                use std::os::windows::fs::MetadataExt;
+                if metadata.file_attributes() & 0x0400 != 0 {
+                    return Err(LocalProfileError::RootIsSymlink);
+                }
+            }
+            if !metadata.is_dir() {
+                return Err(LocalProfileError::RootIsNotDirectory);
+            }
+        }
+        if read_control_text(&path.join(ROOT_MARKER))? != ROOT_MARKER_CONTENT {
+            return Err(LocalProfileError::RootMarkerMismatch);
+        }
+        Ok(Self {
+            canonical_path: fs::canonicalize(path)?,
+        })
+    }
+
     pub fn open_or_create(path: impl Into<PathBuf>) -> Result<Self, LocalProfileError> {
         let path = path.into();
         if !path.is_absolute() {
@@ -902,6 +933,44 @@ mod tests {
 
         assert!(!workspace.path().exists());
         let _ = crate::test_support::remove_test_root(&path);
+        Ok(())
+    }
+}
+
+#[cfg(test)]
+mod s1_open_existing_tests {
+    use super::MaterializationRoot;
+    use std::fs;
+
+    #[test]
+    fn read_only_root_open_refuses_missing_or_invalid_marker_without_creating_anything()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let directory = std::env::temp_dir().join(format!(
+            "s1-existing-root-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)?
+                .as_nanos()
+        ));
+        assert!(MaterializationRoot::open_existing(&directory).is_err());
+        assert!(!directory.exists());
+        let working = MaterializationRoot::open_or_create(&directory)?;
+        let expected = fs::read(directory.join(".profile-platform-root"))?;
+        assert_eq!(
+            MaterializationRoot::open_existing(&directory)?.path(),
+            working.path()
+        );
+        assert_eq!(
+            fs::read(directory.join(".profile-platform-root"))?,
+            expected
+        );
+        fs::write(directory.join(".profile-platform-root"), b"wrong marker")?;
+        assert!(MaterializationRoot::open_existing(&directory).is_err());
+        assert_eq!(
+            fs::read(directory.join(".profile-platform-root"))?,
+            b"wrong marker"
+        );
+        fs::remove_dir_all(directory)?;
         Ok(())
     }
 }

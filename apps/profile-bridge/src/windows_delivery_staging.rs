@@ -124,6 +124,18 @@ pub struct DeliveryStagingRoot {
 }
 
 impl DeliveryStagingRoot {
+    /// Existing immutable stage only: S1 must never create a releases directory.
+    pub fn open_existing(path: impl AsRef<Path>) -> Result<Self, DeliveryStagingError> {
+        let path = path.as_ref();
+        if !path.is_absolute() {
+            return Err(DeliveryStagingError::InvalidRoot);
+        }
+        validate_directory_path(path)?;
+        Ok(Self {
+            path: path.to_path_buf(),
+        })
+    }
+
     pub fn open_or_create(path: impl AsRef<Path>) -> Result<Self, DeliveryStagingError> {
         let path = path.as_ref();
         if !path.is_absolute() {
