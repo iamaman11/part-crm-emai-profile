@@ -113,3 +113,50 @@ fn failed_native_activation_does_not_publish_connection_settings()
     assert!(String::from_utf8(output.stderr)?.contains("BRIDGE_INSTALLATION_INCOMPLETE"));
     Ok(())
 }
+
+#[cfg(windows)]
+#[test]
+fn s1_shipping_executable_is_read_only_for_missing_original_profile_root()
+-> Result<(), Box<dyn std::error::Error>> {
+    use std::fs;
+    let parent = std::env::temp_dir().join(format!(
+        "s1-shipping-no-effects-{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)?
+            .as_nanos()
+    ));
+    let original = parent.join("installed");
+    let bundle = parent.join("candidate-inputs");
+    fs::create_dir_all(&original)?;
+    fs::create_dir(&bundle)?;
+    let sentinel = original.join("do-not-change-original.txt");
+    fs::write(&sentinel, b"original-only-copy")?;
+    let original_path = original.to_str().ok_or("invalid original path")?;
+    let bundle_path = bundle.to_str().ok_or("invalid bundle path")?;
+
+    let output = captured(&["--s1-observe", bundle_path, original_path])?;
+    assert_eq!(output.status.code(), Some(3));
+    let report: serde_json::Value = serde_json::from_slice(&output.stdout)?;
+    assert_eq!(report["verdict"], "UNKNOWN");
+    assert!(report["reason_codes"]
+        .as_array()
+        .is_some_and(|reasons| reasons.iter().any(|r| r == "PROFILE_ROOT_UNVERIFIED")));
+    assert!(String::from_utf8(output.stderr)?.contains("BRIDGE_S1_NOT_READY"));
+    assert!(!original.join("profiles").exists());
+    assert!(!original.join("state").exists());
+    assert!(!original.join("releases").exists());
+    assert_eq!(fs::read(&sentinel)?, b"original-only-copy");
+
+    let copy = parent.join("not-existing-isolated-copy");
+    let copy_path = copy.to_str().ok_or("invalid copy path")?;
+    let output = captured(&["--s1-observe", bundle_path, original_path, copy_path])?;
+    assert_eq!(output.status.code(), Some(3));
+    assert!(!copy.exists());
+    assert_eq!(fs::read(&sentinel)?, b"original-only-copy");
+    let bytes = fs::read_dir(&original)?.collect::<Result<Vec<_>, _>>()?;
+    assert_eq!(bytes.len(), 1, "read-only CLI created unexpected original data");
+
+    fs::remove_dir_all(parent)?;
+    Ok(())
+}
