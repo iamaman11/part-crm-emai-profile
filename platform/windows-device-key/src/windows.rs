@@ -27,6 +27,26 @@ pub struct PersistedP256Key {
 }
 
 impl PersistedP256Key {
+    /// S1 observation only: never creates or replaces a missing device key.
+    ///
+    /// In particular, do not implement pre-installation checks using open_or_create:
+    /// a lost CNG key is recovery evidence, not permission to mint a new identity.
+    pub fn open_existing(key_name: &str) -> Result<Self, WindowsDeviceKeyError> {
+        validate_key_name(key_name)?;
+        let provider = ffi::ProviderHandle::open()
+            .map_err(|status| WindowsDeviceKeyError::cng("NCryptOpenStorageProvider", status))?;
+        let key = ffi::KeyHandle::open(&provider, key_name)
+            .map_err(|status| WindowsDeviceKeyError::cng("NCryptOpenKey", status))?;
+        let result = Self {
+            _provider: provider,
+            key,
+            disposition: KeyDisposition::OpenedExisting,
+        };
+        result.require_non_exportable()?;
+        result.public_key_spki_der()?;
+        Ok(result)
+    }
+
     pub fn open_or_create(key_name: &str) -> Result<Self, WindowsDeviceKeyError> {
         validate_key_name(key_name)?;
         let provider = ffi::ProviderHandle::open()
@@ -242,3 +262,51 @@ impl fmt::Display for WindowsDeviceKeyError {
 }
 
 impl std::error::Error for WindowsDeviceKeyError {}
+
+#[cfg(test)]
+mod s1_tests {
+    use super::{KeyDisposition, PersistedP256Key, WindowsDeviceKeyError};
+
+    #[test]
+    fn s1_does_not_create_a_missing_cng_key() -> Result<(), Box<dyn std::error::Error>> {
+        let name = format!(
+            "part-crm.s1.missing.{}.{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)?
+                .as_nanos()
+        );
+        let missing = PersistedP256Key::open_existing(&name);
+        assert!(matches!(
+            missing,
+            Err(WindowsDeviceKeyError::Cng {
+                operation: "NCryptOpenKey",
+                ..
+            })
+        ));
+        // No key was created by the read-only probe; a second open must fail too.
+        assert!(PersistedP256Key::open_existing(&name).is_err());
+        Ok(())
+    }
+
+    #[test]
+    fn s1_existing_key_identity_stays_unchanged() -> Result<(), Box<dyn std::error::Error>> {
+        let name = format!(
+            "part-crm.s1.fixture.{}.{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)?
+                .as_nanos()
+        );
+        let owned = PersistedP256Key::open_or_create(&name)?;
+        assert_eq!(owned.disposition(), KeyDisposition::Created);
+        let original_public = owned.public_key_spki_der()?;
+        let existing = PersistedP256Key::open_existing(&name)?;
+        assert_eq!(existing.disposition(), KeyDisposition::OpenedExisting);
+        assert_eq!(existing.public_key_spki_der()?, original_public);
+        drop(existing);
+        owned.delete()?;
+        assert!(PersistedP256Key::open_existing(&name).is_err());
+        Ok(())
+    }
+}
