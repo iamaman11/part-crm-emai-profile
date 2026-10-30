@@ -22,7 +22,7 @@ RELEASE = "release-set-v3-sha256-" + "a" * 64
 def wait_source() -> str:
     source = WORKFLOW.read_text(encoding="utf-8")
     assert source.count(BEGIN) == 1 and source.count(END) == 1
-    content = source.split(BEGIN, 1)[1].split(END, 1)[0]
+    content = source.split(BEGIN, 1)[1].split("\n", 1)[1].split(END, 1)[0]
     assert "max_attempts=96" in content
     assert "timeout 45s gh api --paginate" in content
     assert "D1_RELEASE_DISCOVERY_FAILED" in content
