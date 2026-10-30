@@ -116,7 +116,7 @@ fn inspect(bundle_directory: &Path, root: &Path, result: &mut S1Observation) {
         Err(_) => result.reason_codes.push("PROFILE_INVENTORY_UNVERIFIED"),
     }
 
-    let state = match DeliveryStateStore::open(root.join("state")) {
+    let state = match DeliveryStateStore::open_read_only(root.join("state")) {
         Ok(state) => {
             if state.state().active().is_some() && state.state().active_health_confirmed() {
                 result.installed_delivery = "ACTIVE_HEALTHY_STATE";
