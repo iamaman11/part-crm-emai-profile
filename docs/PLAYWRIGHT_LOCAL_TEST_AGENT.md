@@ -130,7 +130,11 @@ Close→Coordinator-confirmed Save→fresh Open; exact persistent test data on
 three independent profiles; two concurrent profiles and one-writer conflict;
 and separate verified crash vs controlled-close semantics on disposable
 test data. An identical `D1 READY` projection is not a live Coordinator
-authority witness. In particular, investigate the Bridge534 forced-PID-close
+authority witness. The hosted Windows acceptance also forces the exact disposable Camoufox
+browser-main PID to exit abnormally and requires fail-closed classification,
+while normal GUI Window Close remains a positive witness. This does not
+replace the original-machine process-tree/Coordinator incident analysis.
+In particular, investigate the Bridge534 forced-PID-close
 observation [#802 comment 6515653455](https://github.com/iamaman11/part-crm-emai-profile/issues/802#issuecomment-6515653455)
 before declaring crash/Save acceptance.
 

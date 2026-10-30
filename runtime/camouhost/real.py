@@ -1082,7 +1082,121 @@ def close_context(manager: Any, _context: Any, root: Path) -> None:
     wait_for_browser_quiescence(root)
 
 
-def install_controlled_close_observation(context: Any) -> dict[str, Any]:
+class WindowsBrowserExitWitness:
+    """Native Windows browser-PID exit witness; held handles defeat PID reuse.
+
+    The real Camoufox browser is a descendant of this Camouhost's Playwright
+    driver. Only its root process (not worker/content children) determines
+    whether all user windows ended with a normal browser process exit.
+    """
+
+    def __init__(self, owner_pid: int) -> None:
+        if os.name != "nt":
+            raise RuntimeContractError("Windows browser exit witness requested on non-Windows host")
+        import ctypes
+        from ctypes import wintypes
+
+        self.ctypes = ctypes
+        self.kernel = ctypes.WinDLL("kernel32", use_last_error=True)
+
+        class ProcessEntry(ctypes.Structure):
+            _fields_ = [
+                ("dwSize", wintypes.DWORD),
+                ("cntUsage", wintypes.DWORD),
+                ("th32ProcessID", wintypes.DWORD),
+                ("th32DefaultHeapID", ctypes.c_void_p),
+                ("th32ModuleID", wintypes.DWORD),
+                ("cntThreads", wintypes.DWORD),
+                ("th32ParentProcessID", wintypes.DWORD),
+                ("pcPriClassBase", wintypes.LONG),
+                ("dwFlags", wintypes.DWORD),
+                ("szExeFile", wintypes.WCHAR * 260),
+            ]
+
+        snapshot_api = self.kernel.CreateToolhelp32Snapshot
+        snapshot_api.argtypes = [wintypes.DWORD, wintypes.DWORD]
+        snapshot_api.restype = wintypes.HANDLE
+        first = self.kernel.Process32FirstW
+        next_entry = self.kernel.Process32NextW
+        first.argtypes = next_entry.argtypes = [wintypes.HANDLE, ctypes.POINTER(ProcessEntry)]
+        first.restype = next_entry.restype = wintypes.BOOL
+        self.close_handle = self.kernel.CloseHandle
+        self.close_handle.argtypes = [wintypes.HANDLE]
+        self.close_handle.restype = wintypes.BOOL
+
+        snapshot = snapshot_api(0x00000002, 0)  # TH32CS_SNAPPROCESS
+        if snapshot == ctypes.c_void_p(-1).value:
+            raise RuntimeContractError("Windows process snapshot unavailable")
+        entries: dict[int, tuple[int, str]] = {}
+        try:
+            entry = ProcessEntry()
+            entry.dwSize = ctypes.sizeof(entry)
+            if not first(snapshot, ctypes.byref(entry)):
+                raise RuntimeContractError("Windows process enumeration unavailable")
+            while True:
+                entries[int(entry.th32ProcessID)] = (
+                    int(entry.th32ParentProcessID), str(entry.szExeFile).lower()
+                )
+                if not next_entry(snapshot, ctypes.byref(entry)):
+                    break
+        finally:
+            self.close_handle(snapshot)
+
+        def belongs_to_camouhost(pid: int) -> bool:
+            visited: set[int] = set()
+            while pid in entries and pid not in visited:
+                visited.add(pid)
+                parent = entries[pid][0]
+                if parent == owner_pid:
+                    return True
+                pid = parent
+            return False
+
+        browser_names = {"camoufox.exe", "firefox.exe"}
+        descendants = {
+            pid for pid, (_parent, executable) in entries.items()
+            if executable in browser_names and belongs_to_camouhost(pid)
+        }
+        roots = sorted(pid for pid in descendants if entries[pid][0] not in descendants)
+        if len(roots) != 1:
+            raise RuntimeContractError("Camoufox browser main PID is missing or ambiguous")
+
+        open_process = self.kernel.OpenProcess
+        open_process.argtypes = [wintypes.DWORD, wintypes.BOOL, wintypes.DWORD]
+        open_process.restype = wintypes.HANDLE
+        self.wait = self.kernel.WaitForSingleObject
+        self.wait.argtypes = [wintypes.HANDLE, wintypes.DWORD]
+        self.wait.restype = wintypes.DWORD
+        self.get_exit = self.kernel.GetExitCodeProcess
+        self.get_exit.argtypes = [wintypes.HANDLE, ctypes.POINTER(wintypes.DWORD)]
+        self.get_exit.restype = wintypes.BOOL
+        self.pids = roots
+        self.handles = []
+        for pid in roots:
+            handle = open_process(0x00101000, False, pid)  # SYNCHRONIZE | QUERY_LIMITED
+            if not handle:
+                self.close()
+                raise RuntimeContractError("Cannot retain Camoufox browser process witness")
+            self.handles.append(handle)
+
+    def safely_exited(self) -> bool:
+        # A page-close callback is NOT proof. The exact browser root must have
+        # finished with exit code zero, never STILL_ACTIVE, killed or unknown.
+        for handle in self.handles:
+            if self.wait(handle, 0) != 0:
+                return False
+            code = self.ctypes.wintypes.DWORD()
+            if not self.get_exit(handle, self.ctypes.byref(code)) or code.value != 0:
+                return False
+        return bool(self.handles)
+
+    def close(self) -> None:
+        for handle in getattr(self, "handles", []):
+            self.close_handle(handle)
+        self.handles = []
+
+
+def install_controlled_close_observation(context: Any, owner_pid: int | None = None) -> dict[str, Any]:
     """Observe user page/window closure without mutating browser lifecycle.
 
     A candidate is publishable only when every page observed by this live context emitted its
@@ -1093,6 +1207,11 @@ def install_controlled_close_observation(context: Any) -> dict[str, Any]:
         "tracked_pages": set(),
         "closed_pages": set(),
         "crashed": False,
+        "browser_exit": (
+            WindowsBrowserExitWitness(owner_pid)
+            if os.name == "nt" and owner_pid is not None
+            else None
+        ),
     }
 
     def track_page(page: Any) -> None:
@@ -1114,7 +1233,10 @@ def controlled_close_candidate(state: dict[str, Any] | None) -> bool:
     if state is None or state["crashed"]:
         return False
     tracked = state["tracked_pages"]
-    return bool(tracked) and tracked == state["closed_pages"]
+    if not tracked or tracked != state["closed_pages"]:
+        return False
+    witness = state.get("browser_exit")
+    return witness is None or witness.safely_exited()
 
 
 def observe_controlled_close(context: Any, state: dict[str, Any] | None) -> bool:
@@ -1501,7 +1623,7 @@ def run_ipc() -> int:
             ):
                 try:
                     manager, context = launch_verified_context(lock, root, config, expected_probe)
-                    close_observation = install_controlled_close_observation(context)
+                    close_observation = install_controlled_close_observation(context, owner_pid=os.getpid())
                 except BaseException as error:
                     report_runtime_failure("launch", error)
                     emit("error|runtime")
@@ -1627,6 +1749,8 @@ def run_ipc() -> int:
     finally:
         if agent is not None:
             agent.close()
+        if close_observation is not None and close_observation.get("browser_exit") is not None:
+            close_observation["browser_exit"].close()
         if manager is not None and context is not None:
             try:
                 close_context(manager, context, root)

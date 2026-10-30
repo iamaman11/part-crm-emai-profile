@@ -97,6 +97,19 @@ def prove_controlled_close_dispatch_contract(runtime: ModuleType) -> None:
     assert runtime.observe_controlled_close(context, witness)
     assert context.pumps == 3
 
+    class AbnormalBrowser:
+        def safely_exited(self) -> bool:
+            return False
+
+    exited_without_normal_status = Page()
+    context = Context([exited_without_normal_status])
+    witness = runtime.install_controlled_close_observation(context)
+    witness["browser_exit"] = AbnormalBrowser()
+    context.next_observation = lambda: exited_without_normal_status.fire("close")
+    assert not runtime.observe_controlled_close(context, witness), (
+        "browser process failure was accepted as a controlled page-close"
+    )
+
     crashed = Page()
     context = Context([crashed])
     witness = runtime.install_controlled_close_observation(context)
@@ -704,6 +717,81 @@ def prove_external_windows_gui_close(
     assert_writer_quiescent(runtime, root, "external native WM_CLOSE")
 
 
+
+def prove_forced_windows_browser_termination_is_not_controlled(
+    python: Path,
+    camouhost: Path,
+    env: dict[str, str],
+    runtime: ModuleType,
+    root: Path,
+) -> None:
+    """Real Windows negative: TerminateProcess(main PID) never proves normal Close.
+
+    Disposable test generation only. No cloud Save/Commit and no physical user data.
+    """
+    if os.name != "nt":
+        return
+    from ctypes import wintypes
+
+    process = start_runtime(python, camouhost, env)
+    try:
+        assert exchange(process, f"hello|{IPC_VERSION}") == f"hello_ack|{IPC_VERSION}"
+        assert exchange(process, f"launch|{SESSION}") == f"ready|{SESSION}"
+        assert exchange(process, f"observe_browser_visible|{SESSION}").startswith(
+            f"browser_visible|{SESSION}|"
+        )
+        assert exchange(process, f"admit_navigation|{SESSION}|") == (
+            f"navigation_admitted|{SESSION}"
+        )
+        witness = runtime.WindowsBrowserExitWitness(process.pid)
+        try:
+            assert len(witness.pids) == 1, "browser process identity is ambiguous"
+            kernel = ctypes.WinDLL("kernel32", use_last_error=True)
+            open_process = kernel.OpenProcess
+            open_process.argtypes = [wintypes.DWORD, wintypes.BOOL, wintypes.DWORD]
+            open_process.restype = wintypes.HANDLE
+            terminate = kernel.TerminateProcess
+            terminate.argtypes = [wintypes.HANDLE, wintypes.UINT]
+            terminate.restype = wintypes.BOOL
+            close = kernel.CloseHandle
+            close.argtypes = [wintypes.HANDLE]
+            close.restype = wintypes.BOOL
+            handle = open_process(0x0001, False, witness.pids[0])  # PROCESS_TERMINATE
+            assert handle, "cannot obtain exact browser main process for negative test"
+            try:
+                assert terminate(handle, 19), "Windows refused terminating the disposable browser"
+            finally:
+                close(handle)
+            # The retained OS handle, not a guessed window/PID/title, confirms
+            # the target process actually exited abnormally.
+            deadline = time.monotonic() + 12
+            while time.monotonic() < deadline and witness.wait(witness.handles[0], 0) != 0:
+                time.sleep(0.05)
+            assert not witness.safely_exited(), "forced browser death looked like clean code 0"
+            observed = None
+            for _ in range(4):
+                try:
+                    observed = exchange(process, f"observe_close|{SESSION}", 10)
+                except AssertionError:
+                    assert process.poll() is not None, (
+                        "Camouhost stalled without reporting browser failure"
+                    )
+                    break
+                assert observed != f"close_observed|{SESSION}|true", (
+                    "forced browser main kill was mistaken for controlled Close"
+                )
+                if observed == "error|runtime":
+                    break
+                time.sleep(0.2)
+            assert observed != f"close_observed|{SESSION}|true"
+        finally:
+            witness.close()
+    finally:
+        stop_runtime(process)
+    assert_writer_quiescent(runtime, root, "forced Windows browser main death")
+    print("native_windows_main_kill never_controls_close PASS", flush=True)
+
+
 def prove_ipc_timeout_contract() -> None:
     """A silent child must fail quickly without a pipe-read deadlock."""
     with tempfile.TemporaryFile(mode="w+t", encoding="utf-8") as diagnostics:
@@ -905,6 +993,9 @@ def main() -> int:
         )
         if os.name == "nt" and args.headless == "false":
             prove_external_windows_gui_close(python, camouhost, env, runtime, root)
+            prove_forced_windows_browser_termination_is_not_controlled(
+                python, camouhost, env, runtime, root
+            )
 
     print(
         "AR-10 real Camoufox post-launch cleanup, Firefox native prior-tabs restore and close, immediate relaunch and GUI-close evidence passed."
