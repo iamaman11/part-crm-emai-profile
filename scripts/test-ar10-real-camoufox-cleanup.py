@@ -375,20 +375,20 @@ def prove_owned_playwright_agent(
         base = Path(temporary).resolve()
         script = base / "browser-actions.py"
         script.write_text(
-            "from pathlib import Path\\n"
-            "page = context.pages[0] if context.pages else context.new_page()\\n"
-            "context.tracing.start(screenshots=True, snapshots=True, sources=True)\\n"
-            "try:\\n"
-            "    page.goto('about:blank')\\n"
-            "    page.set_content('<!doctype html><input id=agent-input><p id=proof>agent-owned</p>')\\n"
-            "    page.locator('#agent-input').fill('full-playwright-control')\\n"
-            "    assert page.locator('#agent-input').input_value() == 'full-playwright-control'\\n"
-            "    assert page.locator('#proof').inner_text() == 'agent-owned'\\n"
-            "    page.screenshot(path=str(agent_artifacts_dir / 'page.png'))\\n"
+            "from pathlib import Path\n"
+            "page = context.pages[0] if context.pages else context.new_page()\n"
+            "context.tracing.start(screenshots=True, snapshots=True, sources=True)\n"
+            "try:\n"
+            "    page.goto('about:blank')\n"
+            "    page.set_content('<!doctype html><input id=agent-input><p id=proof>agent-owned</p>')\n"
+            "    page.locator('#agent-input').fill('full-playwright-control')\n"
+            "    assert page.locator('#agent-input').input_value() == 'full-playwright-control'\n"
+            "    assert page.locator('#proof').inner_text() == 'agent-owned'\n"
+            "    page.screenshot(path=str(agent_artifacts_dir / 'page.png'))\n"
             "    result = {'url': page.url, 'html': page.content(), "
-            "'value': page.locator('#agent-input').input_value()}\\n"
-            "finally:\\n"
-            "    context.tracing.stop(path=str(agent_artifacts_dir / 'trace.zip'))\\n",
+            "'value': page.locator('#agent-input').input_value()}\n"
+            "finally:\n"
+            "    context.tracing.stop(path=str(agent_artifacts_dir / 'trace.zip'))\n",
             encoding="utf-8",
         )
         agent_env = dict(env, CAMOUHOST_AGENT_DIRECTORY=str(base))
