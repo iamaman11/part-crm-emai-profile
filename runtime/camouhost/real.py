@@ -14,11 +14,9 @@ import hashlib
 import importlib.metadata
 import json
 import os
-import queue
 import re
 import secrets
 import sys
-import threading
 import time
 import traceback
 from pathlib import Path
@@ -1340,19 +1338,75 @@ class LocalPlaywrightAgent:
             pass
 
 
-def bridge_command_queue() -> queue.Queue[str | None]:
-    """Move only stdin reading to a helper thread; all Playwright stays on this thread."""
-    commands: queue.Queue[str | None] = queue.Queue()
+class BridgeInputPoller:
+    """Nonblocking framed stdin, used only in explicit test mode on the owner thread.
 
-    def read() -> None:
-        try:
-            for line in sys.stdin:
-                commands.put(line)
-        finally:
-            commands.put(None)
+    Do not use a second stdin thread on Windows: it can prevent the Camoufox
+    launch handshake from reaching Ready. The normal blocking path is untouched.
+    Use raw os.read rather than TextIO.readline so Python cannot retain frames
+    in an invisible internal buffer after the OS pipe has become empty.
+    """
 
-    threading.Thread(target=read, name="camouhost-bridge-stdin", daemon=True).start()
-    return commands
+    def __init__(self) -> None:
+        self.fd = sys.stdin.fileno()
+        self.pending = bytearray()
+        self.eof = False
+        self.peek = None
+        self.handle = None
+        if os.name == "nt":
+            import ctypes
+            import msvcrt
+
+            self.ctypes = ctypes
+            self.handle = ctypes.c_void_p(msvcrt.get_osfhandle(self.fd))
+            self.peek = ctypes.WinDLL("kernel32", use_last_error=True).PeekNamedPipe
+            self.peek.argtypes = [
+                ctypes.c_void_p, ctypes.c_void_p, ctypes.c_uint32,
+                ctypes.c_void_p, ctypes.POINTER(ctypes.c_uint32), ctypes.c_void_p,
+            ]
+            self.peek.restype = ctypes.c_int
+
+    def read(self) -> str | None:
+        """Return one complete line, empty string on EOF, or None when idle."""
+        while True:
+            end = self.pending.find(b"\\n")
+            if end >= 0:
+                if end + 1 > MAX_FRAME_LENGTH:
+                    raise RuntimeContractError("agent stdin frame exceeded protocol limit")
+                raw = bytes(self.pending[:end + 1])
+                del self.pending[:end + 1]
+                return raw.decode("utf-8")
+            if len(self.pending) > MAX_FRAME_LENGTH:
+                raise RuntimeContractError("agent stdin frame exceeded protocol limit")
+            if self.eof:
+                if self.pending:
+                    raw = bytes(self.pending)
+                    self.pending.clear()
+                    return raw.decode("utf-8")  # Missing newline fails valid_frame.
+                return ""
+            if os.name == "nt":
+                assert self.peek is not None and self.handle is not None
+                available = self.ctypes.c_uint32()
+                if not self.peek(self.handle, None, 0, None, self.ctypes.byref(available), None):
+                    error = self.ctypes.get_last_error()
+                    if error in (6, 109, 233):  # Invalid/broken/disconnected pipe.
+                        self.eof = True
+                        continue
+                    raise OSError(error, "PeekNamedPipe failed")
+                if available.value == 0:
+                    time.sleep(0.05)
+                    return None
+                chunk = os.read(self.fd, min(available.value, 4096))
+            else:
+                import select
+
+                if not select.select([self.fd], [], [], 0.05)[0]:
+                    return None
+                chunk = os.read(self.fd, 4096)
+            if not chunk:
+                self.eof = True
+            else:
+                self.pending.extend(chunk)
 
 
 def run_ipc() -> int:
@@ -1382,29 +1436,29 @@ def run_ipc() -> int:
     navigation_admitted = False
     post_navigation_browser_visible_observed = False
     agent: LocalPlaywrightAgent | None = None
-    # Preserve the unchanged blocking Bridge IPC path for EVERY ordinary
-    # user launch. Only explicitly opted-in agent test runs require polling.
-    commands = bridge_command_queue() if os.environ.get(AGENT_DIRECTORY_ENV) else None
+    # Normal user launches retain the original blocking stdin path. In local
+    # test mode the SAME thread polls the Bridge pipe and services agent jobs.
+    poller = BridgeInputPoller() if os.environ.get(AGENT_DIRECTORY_ENV) else None
 
     try:
         while True:
-            if commands is None:
+            if poller is None:
                 raw = sys.stdin.readline()
-                if not raw:
-                    break
             else:
                 try:
-                    raw = commands.get(timeout=0.1)
-                except queue.Empty:
+                    raw = poller.read()
+                except (OSError, UnicodeError, RuntimeContractError):
+                    emit("error|protocol")
+                    return 2
+                if raw is None:
                     if agent is not None and context is not None and navigation_admitted:
                         try:
                             agent.run_one(context)
                         except OSError:
-                            # Diagnostics never override the existing browser/save authority.
                             print("camouhost_agent_io_failure", file=sys.stderr, flush=True)
                     continue
-                if raw is None:
-                    break
+            if not raw:
+                break
             if not valid_frame(raw):
                 emit("error|protocol")
                 return 2

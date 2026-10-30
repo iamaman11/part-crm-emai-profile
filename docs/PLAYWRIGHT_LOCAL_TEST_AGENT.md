@@ -75,9 +75,9 @@ executing trusted local Python as the currently logged-in Windows user.
 - Bridge remains the **only** owner of claim redemption, lease, exclusive
   generation writer, Close/Save/Commit and recovery. The agent does not invent
   an alternative authority or cloud API.
-- The Bridge stdin reader may run on a helper thread; **all Playwright calls
-  run on the original Camouhost main owner thread**, serialized with Bridge
-  protocol work. There is no CDP port, second Playwright browser connection,
+- In explicit local test mode, Camouhost polls its existing Bridge stdin pipe
+  without a helper reader thread; **all Playwright and IPC dispatch run on the
+  original Camouhost owner thread**. Normal sessions retain blocking stdin. There is no CDP port, second Playwright browser connection,
   sidecar daemon, headless replacement, or new server.
 - The atomic request rename prevents execution of incomplete scripts; each
   completed request is claimed once and has a retained result. Only an
@@ -87,9 +87,12 @@ executing trusted local Python as the currently logged-in Windows user.
   callback is **not** by itself proof that Save/Commit or crash recovery passed.
   Use the normal Bridge Close and verify the authoritative Coordinator result.
 - A long/blocking synchronous agent script occupies the single Playwright
-  thread. Its duration must be planned around Bridge's existing bounded
-  observation timeouts; if close observation becomes uncertain the existing
-  Bridge recovery rules apply. Never force-kill the real original profile
+  thread. Python cannot safely preempt arbitrary synchronous Playwright calls;
+  therefore a CLI timeout is **unconfirmed**, not cancellation or permission to
+  retry. If the Camouhost descriptor disappears without a result, the CLI
+  returns UNCONFIRMED; the original job/source remains on disk for examination.
+  Use short scripts for interactive work. Bridge's existing bounded response
+  timeouts and recovery remain authoritative; never force-kill the real profile
   merely to recover an agent script.
 - Windows UI Automation is **not** an acceptance gate for web pages. Playwright
   can verify restored browser tabs, actual navigation/DOM/content/storage,

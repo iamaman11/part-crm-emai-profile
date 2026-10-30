@@ -121,9 +121,35 @@ def prove_agent() -> None:
         assert (agent.results / f"{token}.json").exists(), "test artifacts must outlive browser"
 
 
+def prove_owner_thread_polling() -> None:
+    """Real pipe on Windows/POSIX: one reader, partial lines, buffered burst and EOF."""
+    source = ROOT / "runtime" / "camouhost" / "real.py"
+    probe = (
+        "import importlib.util, sys, time\\n"
+        f"spec = importlib.util.spec_from_file_location('agent_pipe_probe', {str(source)!r})\\n"
+        "module = importlib.util.module_from_spec(spec)\\n"
+        "spec.loader.exec_module(module)\\n"
+        "pump = module.BridgeInputPoller()\\n"
+        "lines = []\\n"
+        "deadline = time.monotonic() + 8\\n"
+        "while len(lines) < 3 and time.monotonic() < deadline:\\n"
+        "    line = pump.read()\\n"
+        "    if line is None: continue\\n"
+        "    lines.append(line)\\n"
+        "print(repr(lines), flush=True)\\n"
+    )
+    completed = subprocess.run(
+        [sys.executable, "-u", "-c", probe],
+        input="hello|a\\nclose|b\\n", text=True, capture_output=True, timeout=15,
+    )
+    assert completed.returncode == 0, completed.stderr
+    assert "['hello|a\\\\n', 'close|b\\\\n', '']" in completed.stdout, completed.stdout
+
+
 def main() -> int:
     prove_agent()
-    print("Owned Playwright agent: opt-in, atomic jobs, full data, single context and replay guard PASS.")
+    prove_owner_thread_polling()
+    print("Owned Playwright agent: owner-thread pipe, atomic jobs, full data, single context and replay guard PASS.")
     return 0
 
 

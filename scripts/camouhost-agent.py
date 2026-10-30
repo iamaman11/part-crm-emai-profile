@@ -81,10 +81,24 @@ def run() -> int:
     os.replace(staging, committed)
     print(f"PLAYWRIGHT_AGENT_JOB={job_id}", flush=True)
     status = results / f"{job_id}.json"
+    descriptor = directory / f"active-{candidates[0]['pid']}.json"
     deadline = None if arguments.timeout == 0 else time.monotonic() + arguments.timeout
     while not status.is_file():
+        if not descriptor.is_file():
+            print(
+                "PLAYWRIGHT_AGENT_UNCONFIRMED: session ended without a result; "
+                "do not replay this job automatically",
+                file=sys.stderr,
+            )
+            return 125
         if deadline is not None and time.monotonic() >= deadline:
-            print("PLAYWRIGHT_AGENT_PENDING: result remains in agent directory", file=sys.stderr)
+            claimed = requests / f"{job_id}.running"
+            stage = "RUNNING" if claimed.exists() else "QUEUED"
+            print(
+                f"PLAYWRIGHT_AGENT_PENDING_{stage}: no confirmed result; "
+                "do not replay automatically",
+                file=sys.stderr,
+            )
             return 124
         time.sleep(0.1)
     details = json.loads(status.read_text(encoding="utf-8"))
