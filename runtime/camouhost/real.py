@@ -1369,7 +1369,7 @@ class BridgeInputPoller:
     def read(self) -> str | None:
         """Return one complete line, empty string on EOF, or None when idle."""
         while True:
-            end = self.pending.find(b"\\n")
+            end = self.pending.find(b"\n")
             if end >= 0:
                 if end + 1 > MAX_FRAME_LENGTH:
                     raise RuntimeContractError("agent stdin frame exceeded protocol limit")
