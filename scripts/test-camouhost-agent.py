@@ -34,10 +34,25 @@ class Page:
     def goto(self, url: str) -> None:
         self.url = url
 
+    def title(self) -> str:
+        return "Existing tab"
+
+    def content(self) -> str:
+        return "<html>fake restored</html>"
+
+    def evaluate(self, _script: str) -> dict[str, object]:
+        return {"local": {"marker": "saved"}, "session": {}}
+
+    def screenshot(self, *, path: str) -> None:
+        Path(path).write_bytes(b"PNG-test-evidence")
+
 
 class Context:
     def __init__(self) -> None:
         self.pages = [Page()]
+
+    def cookies(self) -> list[dict[str, str]]:
+        return [{"name": "test_cookie", "value": "full-value"}]
 
 
 def committed_request(requests: Path, script: str) -> str:
@@ -115,6 +130,61 @@ def prove_agent() -> None:
             assert len(submitted) == 1, "local client did not return from active context"
             assert submitted[0].returncode == 0, submitted[0].stderr
             assert '"same_context": "https://example.test' in submitted[0].stdout
+
+            # The listing and selector must never resurrect a stale Camouhost
+            # descriptor after an unclean exit. No manual deletion is needed.
+            stale = base / "active--1.json"
+            stale.write_text(json.dumps({"pid": -1, "run": str(agent.run)}), encoding="utf-8")
+            listing = subprocess.run(
+                [sys.executable, str(ROOT / "scripts" / "camouhost-agent.py"),
+                 "--directory", str(base), "--list"],
+                capture_output=True, text=True, timeout=10,
+            )
+            assert listing.returncode == 0 and '"pid": -1' not in listing.stdout
+            assert '"pid": ' + str(os.getpid()) in listing.stdout
+            assert stale.is_file(), "stale evidence was silently deleted"
+
+            # A queued script which never reaches the owner is PENDING, not a
+            # successful browser operation. It remains intact for examination.
+            waiting = subprocess.run(
+                [*command[:-3], "--script", str(sample), "--timeout", "0.2"],
+                capture_output=True, text=True, timeout=10,
+            )
+            assert waiting.returncode == 124, waiting.stderr
+            assert "PENDING_QUEUED" in waiting.stderr
+            queued = waiting.stdout.split("PLAYWRIGHT_AGENT_JOB=")[1].splitlines()[0]
+            assert (agent.requests / f"{queued}.py").exists()
+
+            # An already-claimed but response-less job must NOT be replayed,
+            # even if it took an action in the browser before Camouhost died.
+            claimed = committed_request(agent.requests, "raise AssertionError('do not replay')")
+            os.replace(agent.requests / f"{claimed}.py", agent.requests / f"{claimed}.running")
+            running = agent.requests / f"{claimed}.running"
+            assert running.exists()
+            assert not agent.run_one(fake) or not running.exists()  # queued CLI request may complete
+            assert running.exists() and not (agent.results / f"{claimed}.json").exists()
+
+            # Invalid timeout values cannot mean "wait forever" by accident.
+            for invalid in ("nan", "inf", "-1"):
+                rejected = subprocess.run(
+                    [*command[:-3], "--script", str(sample), "--timeout", invalid],
+                    capture_output=True, text=True, timeout=10,
+                )
+                assert rejected.returncode == 2, rejected.stderr
+
+            # Read-only B7 capture: exactly the original page set, URLs, DOM
+            # and cookies; no navigation, new page, browser close or Save.
+            snapshot = committed_request(
+                agent.requests,
+                (ROOT / "scripts" / "b7-playwright-observe.py").read_text(encoding="utf-8"),
+            )
+            assert agent.run_one(fake)
+            capture = json.loads((agent.results / "b7-first-restore.json").read_text(encoding="utf-8"))
+            assert capture["count_before"] == capture["count_after"] == 1
+            assert capture["pages"][0]["url"] == private_content
+            assert capture["pages"][0]["html"] == "<html>fake restored</html>"
+            assert capture["cookies"] == [{"name": "test_cookie", "value": "full-value"}]
+            assert not capture["errors"] and (agent.results / f"{snapshot}.json").exists()
         finally:
             agent.close()
         assert not agent.descriptor.exists()

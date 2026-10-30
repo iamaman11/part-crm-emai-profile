@@ -80,8 +80,15 @@ executing trusted local Python as the currently logged-in Windows user.
   original Camouhost owner thread**. Normal sessions retain blocking stdin. There is no CDP port, second Playwright browser connection,
   sidecar daemon, headless replacement, or new server.
 - The atomic request rename prevents execution of incomplete scripts; each
-  completed request is claimed once and has a retained result. Only an
-  explicitly selected active Camouhost is targeted.
+  request is claimed at most once. Raw stdout/stderr are flushed and fsynced
+  before the result is published atomically. If storage fails or Camouhost dies,
+  a claimed request can remain `.running` with **no confirmed result**; never
+  assume exactly-once completed effects or blindly retry.
+- The CLI checks the OS process is live before listing/choosing a session and
+  while awaiting its result; stale PID descriptors after an abrupt process death
+  are not treated as live. A timestamp-free reused PID is not independent
+  authorization; the random per-run directory and existing Bridge ownership
+  still determine which session may act.
 - The agent can freely change browser state because all profiles here are
   the operator's test environment. The fact of an observed page or Close
   callback is **not** by itself proof that Save/Commit or crash recovery passed.
@@ -97,6 +104,23 @@ executing trusted local Python as the currently logged-in Windows user.
 - Windows UI Automation is **not** an acceptance gate for web pages. Playwright
   can verify restored browser tabs, actual navigation/DOM/content/storage,
   but not every native Firefox toolbar/dialog element.
+
+## First-operation read-only restoration evidence
+
+Run `scripts/b7-playwright-observe.py` as the **first** agent script after a
+normal authorized Open, before navigation, page creation, or modification.
+It takes a read-only snapshot of the currently restored Playwright pages,
+including their URL, title, DOM, origin storage (when accessible), screenshots,
+full context cookies and a machine-readable local artifact. It does not create
+tabs, change cookies, navigate, close, or invoke Save. If an observation fails,
+its error is kept in the artifact and the script fails, rather than claiming
+restoration passed. The snapshot is evidence **only**: compare URLs, DOM and
+known test markers against the prior saved state and separately prove exact
+Coordinator Save/Reopen and crash classification.
+
+```powershell
+python scripts/camouhost-agent.py --directory $agentDir --pid <CamouhostPID> --script scripts/b7-playwright-observe.py
+```
 
 ## Required physical Windows acceptance
 

@@ -1254,6 +1254,16 @@ def report_runtime_stage(phase: str, step: str) -> None:
 
 
 
+def durable_agent_directory(path: Path) -> None:
+    """Persist file creation/rename on Unix; Windows file contents are fsynced separately."""
+    if os.name == "posix":
+        descriptor = os.open(path, os.O_RDONLY)
+        try:
+            os.fsync(descriptor)
+        finally:
+            os.close(descriptor)
+
+
 class LocalPlaywrightAgent:
     """Explicitly opted-in local test runner; the live Camouhost thread owns Playwright.
 
@@ -1276,11 +1286,12 @@ class LocalPlaywrightAgent:
         self.results.mkdir(mode=0o700)
         self.descriptor = base / f"active-{os.getpid()}.json"
         descriptor_temp = base / f".active-{os.getpid()}-{secrets.token_hex(8)}.tmp"
-        descriptor_temp.write_text(
-            json.dumps({"pid": os.getpid(), "session": session_id, "run": str(self.run)}),
-            encoding="utf-8",
-        )
+        with descriptor_temp.open("x", encoding="utf-8") as output:
+            output.write(json.dumps({"pid": os.getpid(), "session": session_id, "run": str(self.run)}))
+            output.flush()
+            os.fsync(output.fileno())
         os.replace(descriptor_temp, self.descriptor)
+        durable_agent_directory(base)
 
     def run_one(self, context: Any) -> bool:
         # Never accept half-written jobs. The agent commits a request by atomic rename.
@@ -1291,7 +1302,10 @@ class LocalPlaywrightAgent:
             claimed = self.requests / f"{job_id}.running"
             try:
                 os.replace(request, claimed)
+                durable_agent_directory(self.requests)
             except OSError:
+                # A failed/doubtful claim must never execute Python or be replayed.
+                print("camouhost_agent_claim_unconfirmed", file=sys.stderr, flush=True)
                 continue
             stdout_path = self.results / f"{job_id}.stdout.txt"
             stderr_path = self.results / f"{job_id}.stderr.txt"
@@ -1317,10 +1331,19 @@ class LocalPlaywrightAgent:
                 except BaseException:
                     traceback.print_exc(file=stderr)
                     outcome["status"] = "error"
+                # A success cannot be confirmed before raw evidence is durable.
+                stdout.flush()
+                stderr.flush()
+                os.fsync(stdout.fileno())
+                os.fsync(stderr.fileno())
             staging = self.results / f"{job_id}.part"
             try:
-                staging.write_text(json.dumps(outcome, ensure_ascii=False, default=str), encoding="utf-8")
+                with staging.open("x", encoding="utf-8") as output:
+                    output.write(json.dumps(outcome, ensure_ascii=False, default=str))
+                    output.flush()
+                    os.fsync(output.fileno())
                 os.replace(staging, status_path)
+                durable_agent_directory(self.results)
             except OSError:
                 # An unavailable diagnostic store cannot become an invented success
                 # or a second owner of browser lifecycle.

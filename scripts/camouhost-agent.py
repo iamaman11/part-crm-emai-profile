@@ -17,11 +17,54 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import os
 import secrets
 import sys
 import time
 from pathlib import Path
+
+
+def process_alive(pid: object) -> bool:
+    """Check actual process liveness before presenting a descriptor as a live session."""
+    if not isinstance(pid, int) or isinstance(pid, bool) or pid <= 0:
+        return False
+    if os.name == "nt":
+        import ctypes
+        from ctypes import wintypes
+
+        kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+        open_process = kernel32.OpenProcess
+        open_process.argtypes = [wintypes.DWORD, wintypes.BOOL, wintypes.DWORD]
+        open_process.restype = wintypes.HANDLE
+        wait = kernel32.WaitForSingleObject
+        wait.argtypes = [wintypes.HANDLE, wintypes.DWORD]
+        wait.restype = wintypes.DWORD
+        close = kernel32.CloseHandle
+        close.argtypes = [wintypes.HANDLE]
+        close.restype = wintypes.BOOL
+        handle = open_process(0x00100000, False, pid)  # SYNCHRONIZE only.
+        if not handle:
+            return False  # Access denied/unknown must not become "active".
+        try:
+            return wait(handle, 0) == 0x00000102  # WAIT_TIMEOUT = still running.
+        finally:
+            close(handle)
+    try:
+        os.kill(pid, 0)
+    except (OSError, OverflowError):
+        return False
+    return True
+
+
+def durable_directory(path: Path) -> None:
+    """On Unix, sync the parent entry after the atomic inbox publication."""
+    if os.name == "posix":
+        descriptor = os.open(path, os.O_RDONLY)
+        try:
+            os.fsync(descriptor)
+        finally:
+            os.close(descriptor)
 
 
 def sessions(directory: Path) -> list[dict[str, object]]:
@@ -35,6 +78,8 @@ def sessions(directory: Path) -> list[dict[str, object]]:
             if not run.is_absolute() or run.is_symlink() or not run.is_dir():
                 continue
             if run.parent != directory:
+                continue
+            if entry.name != f"active-{details.get('pid')}.json" or not process_alive(details.get("pid")):
                 continue
             if not (run / "requests").is_dir() or not (run / "results").is_dir():
                 continue
@@ -53,16 +98,18 @@ def run() -> int:
     parser.add_argument("--timeout", type=float, default=180.0,
                         help="Wait for completion in seconds; 0 means no time limit")
     arguments = parser.parse_args()
+    if not arguments.directory.is_absolute() or arguments.directory.is_symlink():
+        parser.error("agent directory must be absolute and cannot be a symlink")
     directory = arguments.directory.resolve(strict=True)
-    if not directory.is_dir() or directory.is_symlink():
+    if not directory.is_dir():
         parser.error("agent directory must be an existing regular directory")
     available = sessions(directory)
     if arguments.list:
         for item in available:
             print(json.dumps(item, ensure_ascii=False))
         return 0
-    if arguments.script is None or arguments.timeout < 0:
-        parser.error("--script is required and --timeout must be nonnegative")
+    if arguments.script is None or not math.isfinite(arguments.timeout) or arguments.timeout < 0:
+        parser.error("--script is required and --timeout must be a finite nonnegative number")
     candidates = [x for x in available
                   if arguments.pid is None or x.get("pid") == arguments.pid]
     if len(candidates) != 1:
@@ -79,12 +126,13 @@ def run() -> int:
         output.flush()
         os.fsync(output.fileno())
     os.replace(staging, committed)
+    durable_directory(requests)
     print(f"PLAYWRIGHT_AGENT_JOB={job_id}", flush=True)
     status = results / f"{job_id}.json"
     descriptor = directory / f"active-{candidates[0]['pid']}.json"
     deadline = None if arguments.timeout == 0 else time.monotonic() + arguments.timeout
     while not status.is_file():
-        if not descriptor.is_file():
+        if not descriptor.is_file() or not process_alive(candidates[0].get("pid")):
             print(
                 "PLAYWRIGHT_AGENT_UNCONFIRMED: session ended without a result; "
                 "do not replay this job automatically",
@@ -101,7 +149,11 @@ def run() -> int:
             )
             return 124
         time.sleep(0.1)
-    details = json.loads(status.read_text(encoding="utf-8"))
+    try:
+        details = json.loads(status.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        print("PLAYWRIGHT_AGENT_UNCONFIRMED: unreadable result; do not retry automatically", file=sys.stderr)
+        return 125
     for extension, target in (("stdout.txt", sys.stdout), ("stderr.txt", sys.stderr)):
         log = results / f"{job_id}.{extension}"
         if log.is_file():
