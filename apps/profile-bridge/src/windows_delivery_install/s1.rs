@@ -198,19 +198,14 @@ fn inspect(bundle_directory: &Path, root: &Path, result: &mut S1Observation) {
                         binding.device_id().as_str()
                     );
                     let proof = key.sign_sha256_message(challenge.as_bytes());
-                    let usable = proof
-                        .as_ref()
-                        .ok()
-                        .and_then(|signature| {
-                            key.verify_sha256_message(challenge.as_bytes(), signature)
-                                .ok()
-                        })
-                        == Some(true);
+                    let usable = proof.as_ref().ok().and_then(|signature| {
+                        key.verify_sha256_message(challenge.as_bytes(), signature)
+                            .ok()
+                    }) == Some(true);
                     match (usable, key.public_key_spki_der()) {
                         (true, Ok(spki)) => {
                             result.existing_key = "EXISTING_NONEXPORTABLE_LOCAL_SIGN_VERIFY";
-                            result.existing_key_public_spki_sha256 =
-                                Some(sha256_lower_hex(&spki));
+                            result.existing_key_public_spki_sha256 = Some(sha256_lower_hex(&spki));
                         }
                         _ => result.reason_codes.push("EXISTING_CNG_KEY_UNUSABLE"),
                     }
