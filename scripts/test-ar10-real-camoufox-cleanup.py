@@ -363,6 +363,72 @@ def prove_session_restore_startup(
 
 
 
+
+def prove_owned_playwright_agent(
+    python: Path,
+    camouhost: Path,
+    env: dict[str, str],
+    root: Path,
+) -> None:
+    """Actual browser integration: same owned context, full trace, no UIA/second writer."""
+    with tempfile.TemporaryDirectory(prefix="ar10-owned-playwright-agent-") as temporary:
+        base = Path(temporary).resolve()
+        script = base / "browser-actions.py"
+        script.write_text(
+            "from pathlib import Path\\n"
+            "page = context.pages[0] if context.pages else context.new_page()\\n"
+            "context.tracing.start(screenshots=True, snapshots=True, sources=True)\\n"
+            "try:\\n"
+            "    page.goto('about:blank')\\n"
+            "    page.set_content('<!doctype html><input id=agent-input><p id=proof>agent-owned</p>')\\n"
+            "    page.locator('#agent-input').fill('full-playwright-control')\\n"
+            "    assert page.locator('#agent-input').input_value() == 'full-playwright-control'\\n"
+            "    assert page.locator('#proof').inner_text() == 'agent-owned'\\n"
+            "    page.screenshot(path=str(agent_artifacts_dir / 'page.png'))\\n"
+            "    result = {'url': page.url, 'html': page.content(), "
+            "'value': page.locator('#agent-input').input_value()}\\n"
+            "finally:\\n"
+            "    context.tracing.stop(path=str(agent_artifacts_dir / 'trace.zip'))\\n",
+            encoding="utf-8",
+        )
+        agent_env = dict(env, CAMOUHOST_AGENT_DIRECTORY=str(base))
+        process = start_runtime(python, camouhost, agent_env)
+        try:
+            assert exchange(process, f"hello|{IPC_VERSION}", 15) == f"hello_ack|{IPC_VERSION}"
+            assert exchange(process, f"launch|{SESSION}", 120) == f"ready|{SESSION}"
+            assert exchange(process, f"observe_browser_visible|{SESSION}", 30).startswith(
+                f"browser_visible|{SESSION}|"
+            )
+            assert exchange(process, f"admit_navigation|{SESSION}|", 30) == (
+                f"navigation_admitted|{SESSION}"
+            )
+            client = [
+                sys.executable, str(Path(__file__).with_name("camouhost-agent.py")),
+                "--directory", str(base), "--pid", str(process.pid),
+                "--script", str(script), "--timeout", "120",
+            ]
+            command = subprocess.run(client, capture_output=True, text=True, timeout=130)
+            assert command.returncode == 0, command.stderr
+            assert "full-playwright-control" in command.stdout
+            manifest = json.loads((base / f"active-{process.pid}.json").read_text(encoding="utf-8"))
+            results = Path(manifest["run"]) / "results"
+            assert (results / "trace.zip").is_file()
+            assert (results / "trace.zip").stat().st_size > 0
+            assert (results / "page.png").is_file()
+            assert exchange(process, f"observe_close|{SESSION}", 10) == (
+                f"close_observed|{SESSION}|false"
+            ), "agent-driven web actions must not forge browser closure"
+            assert exchange(process, f"close|{SESSION}", 45) == f"closed|{SESSION}|true"
+            assert process.wait(timeout=30) == 0
+            assert not (base / f"active-{process.pid}.json").exists(), (
+                "live agent descriptor survived owned Camouhost termination"
+            )
+        finally:
+            stop_runtime(process)
+    print("native_playwright_agent proof=real_context_dom_screenshot_trace_and_close PASS", flush=True)
+
+
+
 def prove_preexisting_tabs_restored(
     python: Path,
     camouhost: Path,
@@ -831,6 +897,7 @@ def main() -> int:
         prove_protocol_failure_cleanup(python, camouhost, env, runtime, root)
         prove_immediate_relaunch_after_cleanup(python, camouhost, env, runtime, root)
         prove_session_restore_startup(python, camouhost, env, runtime, root)
+        prove_owned_playwright_agent(python, camouhost, env, root)
         prove_preexisting_tabs_restored(
             python, camouhost, runtime_lock, args.headless, Path(temporary) / "restore-tabs"
         )
