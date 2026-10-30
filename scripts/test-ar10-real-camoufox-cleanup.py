@@ -725,15 +725,34 @@ def prove_forced_windows_browser_termination_is_not_controlled(
     runtime: ModuleType,
     root: Path,
 ) -> None:
-    """Real Windows negative: TerminateProcess(main PID) never proves normal Close.
+    """Real Windows negative: a browser-main kill is never a controlled Close.
 
-    Disposable test generation only. No cloud Save/Commit and no physical user data.
+    The fixture retains exact OS handles to its disposable browser/Playwright
+    descendants before injection. After the negative observation only the
+    fixture, not shipping Bridge, cleans surviving subprocesses. Never delete
+    Firefox state/lock files as a substitute for proven process exit.
     """
     if os.name != "nt":
         return
     from ctypes import wintypes
 
     process = start_runtime(python, camouhost, env)
+    witness = None
+    owned_handles: dict[int, int] = {}
+    kernel = ctypes.WinDLL("kernel32", use_last_error=True)
+    open_process = kernel.OpenProcess
+    open_process.argtypes = [wintypes.DWORD, wintypes.BOOL, wintypes.DWORD]
+    open_process.restype = wintypes.HANDLE
+    terminate = kernel.TerminateProcess
+    terminate.argtypes = [wintypes.HANDLE, wintypes.UINT]
+    terminate.restype = wintypes.BOOL
+    wait = kernel.WaitForSingleObject
+    wait.argtypes = [wintypes.HANDLE, wintypes.DWORD]
+    wait.restype = wintypes.DWORD
+    close = kernel.CloseHandle
+    close.argtypes = [wintypes.HANDLE]
+    close.restype = wintypes.BOOL
+
     try:
         assert exchange(process, f"hello|{IPC_VERSION}") == f"hello_ack|{IPC_VERSION}"
         assert exchange(process, f"launch|{SESSION}") == f"ready|{SESSION}"
@@ -744,52 +763,63 @@ def prove_forced_windows_browser_termination_is_not_controlled(
             f"navigation_admitted|{SESSION}"
         )
         witness = runtime.WindowsBrowserExitWitness(process.pid)
-        try:
-            assert len(witness.pids) == 1, "browser process identity is ambiguous"
-            kernel = ctypes.WinDLL("kernel32", use_last_error=True)
-            open_process = kernel.OpenProcess
-            open_process.argtypes = [wintypes.DWORD, wintypes.BOOL, wintypes.DWORD]
-            open_process.restype = wintypes.HANDLE
-            terminate = kernel.TerminateProcess
-            terminate.argtypes = [wintypes.HANDLE, wintypes.UINT]
-            terminate.restype = wintypes.BOOL
-            close = kernel.CloseHandle
-            close.argtypes = [wintypes.HANDLE]
-            close.restype = wintypes.BOOL
-            handle = open_process(0x0001, False, witness.pids[0])  # PROCESS_TERMINATE
-            assert handle, "cannot obtain exact browser main process for negative test"
+        assert len(witness.pids) == 1, "browser main process identity is ambiguous"
+
+        # Preserve handles before force-killing the main browser PID: Windows
+        # reparenting/fast PID reuse must not redirect fixture cleanup at a
+        # different process, and content children can outlive the killed main.
+        for pid in witness.owned_pids:
+            handle = open_process(0x00100001, False, pid)  # SYNCHRONIZE | TERMINATE
+            if handle:
+                owned_handles[pid] = handle
+        main_pid = witness.pids[0]
+        assert main_pid in owned_handles, "exact browser main process handle missing"
+        assert terminate(owned_handles[main_pid], 19), "native Windows main kill rejected"
+
+        deadline = time.monotonic() + 12
+        while time.monotonic() < deadline and wait(owned_handles[main_pid], 0) != 0:
+            time.sleep(0.05)
+        assert wait(owned_handles[main_pid], 0) == 0, "browser main termination unconfirmed"
+        assert not witness.safely_exited(), "forced browser main death accepted as normal code zero"
+
+        observed = None
+        for _ in range(4):
             try:
-                assert terminate(handle, 19), "Windows refused terminating the disposable browser"
-            finally:
-                close(handle)
-            # The retained OS handle, not a guessed window/PID/title, confirms
-            # the target process actually exited abnormally.
-            deadline = time.monotonic() + 12
-            while time.monotonic() < deadline and witness.wait(witness.handles[0], 0) != 0:
-                time.sleep(0.05)
-            assert not witness.safely_exited(), "forced browser death looked like clean code 0"
-            observed = None
-            for _ in range(4):
-                try:
-                    observed = exchange(process, f"observe_close|{SESSION}", 10)
-                except AssertionError:
-                    assert process.poll() is not None, (
-                        "Camouhost stalled without reporting browser failure"
-                    )
-                    break
-                assert observed != f"close_observed|{SESSION}|true", (
-                    "forced browser main kill was mistaken for controlled Close"
-                )
-                if observed == "error|runtime":
-                    break
-                time.sleep(0.2)
-            assert observed != f"close_observed|{SESSION}|true"
-        finally:
-            witness.close()
+                observed = exchange(process, f"observe_close|{SESSION}", 10)
+            except AssertionError:
+                assert process.poll() is not None, "Camouhost stalled after main browser death"
+                break
+            assert observed != f"close_observed|{SESSION}|true", (
+                "forced browser main kill was mistaken for controlled Close"
+            )
+            if observed == "error|runtime":
+                break
+            time.sleep(0.2)
+        assert observed != f"close_observed|{SESSION}|true"
     finally:
         stop_runtime(process)
+        # The negative scenario may leave Firefox content processes alive.
+        # Never make the test pass by removing parent.lock or user_data.
+        # Exact retained OS handles make cleanup safe on the disposable host.
+        try:
+            for pid, handle in owned_handles.items():
+                if wait(handle, 0) == 0x102:  # WAIT_TIMEOUT (still alive)
+                    if not terminate(handle, 29):
+                        raise AssertionError(f"fixture descendant {pid} could not be stopped")
+            for pid, handle in owned_handles.items():
+                if wait(handle, 10000) != 0:
+                    raise AssertionError(f"fixture descendant {pid} survived cleanup")
+        finally:
+            for handle in owned_handles.values():
+                close(handle)
+            if witness is not None:
+                witness.close()
+
+    deadline = time.monotonic() + 15
+    while time.monotonic() < deadline and runtime.firefox_writer_active(root):
+        time.sleep(0.1)
     assert_writer_quiescent(runtime, root, "forced Windows browser main death")
-    print("native_windows_main_kill never_controls_close PASS", flush=True)
+    print("native_windows_main_kill never_controls_close_and_fixture_tree_quiescent PASS", flush=True)
 
 
 def prove_ipc_timeout_contract() -> None:

@@ -1153,6 +1153,11 @@ class WindowsBrowserExitWitness:
             return False
 
         browser_names = {"camoufox.exe", "firefox.exe"}
+        # Expose the exact disposable process tree to the *hosted fixture*.
+        # Shipping code does not terminate any browser/driver descendants.
+        self.owned_pids = sorted(
+            pid for pid in entries if pid != owner_pid and belongs_to_camouhost(pid)
+        )
         descendants = {
             pid for pid, (_parent, executable) in entries.items()
             if executable in browser_names and belongs_to_camouhost(pid)
