@@ -4,6 +4,7 @@ use super::bundle::{InstallBundle, validate_directory_tree};
 use crate::browser_execution::load_materialization_binding;
 use crate::installed_connection::InstalledConnection;
 use crate::local_profile::{DeliveryActivationGuard, LocalProfileError, MaterializationRoot};
+use crate::shipping_save_attempt::{S1PendingInventory, inspect_all_pending_for_s1};
 use crate::windows_delivery::verify_delivery_candidate;
 use crate::windows_delivery_coordinator::accepted_floor;
 use crate::windows_delivery_signature::WindowsCmsSignatureVerifier;
@@ -43,6 +44,8 @@ struct S1Observation {
     signed_delivery: &'static str,
     installed_delivery: &'static str,
     profile_inventory: &'static str,
+    pending_evidence: &'static str,
+    pending_counts: Option<S1PendingInventory>,
     generation_authority: &'static str,
     independent_recovery: &'static str,
     inventory: Option<ProfileObservation>,
@@ -62,6 +65,8 @@ pub(super) fn observe(bundle_directory: &Path, installation_root: &Path) -> Stri
         signed_delivery: "UNKNOWN",
         installed_delivery: "UNKNOWN",
         profile_inventory: "UNKNOWN",
+        pending_evidence: "UNKNOWN",
+        pending_counts: None,
         generation_authority: "UNKNOWN",
         independent_recovery: "UNKNOWN",
         inventory: None,
@@ -114,6 +119,15 @@ fn inspect(bundle_directory: &Path, root: &Path, result: &mut S1Observation) {
             result.inventory = Some(inventory);
         }
         Err(_) => result.reason_codes.push("PROFILE_INVENTORY_UNVERIFIED"),
+    }
+    match inspect_all_pending_for_s1(&workspace) {
+        Ok(pending) => {
+            result.pending_evidence = "SCOPED_CHECKPOINTS_AND_UNSYNCED_VERIFIED";
+            result.pending_counts = Some(pending);
+        }
+        Err(_) => {
+            result.reason_codes.push("PENDING_SAVE_EVIDENCE_UNVERIFIED");
+        }
     }
 
     let state = match DeliveryStateStore::open_read_only(root.join("state")) {
