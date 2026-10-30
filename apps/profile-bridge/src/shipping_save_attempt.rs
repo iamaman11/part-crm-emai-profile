@@ -1346,6 +1346,102 @@ pub(crate) fn classify_scoped_pending_save_evidence(
     })
 }
 
+/// S1 summary of every on-disk P3 pending identity under the original root.
+/// Counts are evidence only: neither checkpoint nor intent authorizes cloud commit.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub(crate) struct S1PendingInventory {
+    pub(crate) exact_checkpoints: u64,
+    pub(crate) lone_local_unsynced: u64,
+    pub(crate) intents_attached_to_exact: u64,
+}
+
+/// Root-wide discovery is necessary because an interrupted N+1 may have no
+/// materialization sidecar. Do not infer the set of pending profiles from the
+/// list of successfully reopened browser bindings.
+///
+/// Reuse the existing scope-aware owner to reject torn/foreign siblings and
+/// verify encrypted BPAT in a streaming manner. No lease, migration or write.
+pub(crate) fn inspect_all_pending_for_s1(
+    root: &MaterializationRoot,
+) -> Result<S1PendingInventory, SaveAttemptEvidenceError> {
+    use std::collections::BTreeSet;
+    let mut scopes = BTreeSet::new();
+    let mut inspected = 0usize;
+    for entry in fs::read_dir(root.path())? {
+        let entry = entry?;
+        inspected = inspected.checked_add(1).ok_or(SaveAttemptEvidenceError::Unavailable)?;
+        if inspected > 100_000 {
+            return Err(SaveAttemptEvidenceError::Unavailable);
+        }
+        let name = entry.file_name();
+        let Some(name) = name.to_str() else {
+            return Err(SaveAttemptEvidenceError::Invalid);
+        };
+        if !name.starts_with(".profile-save-attempt-v1-") {
+            continue;
+        }
+        let path = entry.path();
+        let (tenant, profile) = if name.ends_with("-local-unsynced-v1.intent") {
+            let intent = read_local_unsynced(&path)?;
+            let tenant = TenantId::parse(intent.tenant)
+                .map_err(|_| SaveAttemptEvidenceError::Invalid)?;
+            let profile = ProfileId::parse(intent.profile)
+                .map_err(|_| SaveAttemptEvidenceError::Invalid)?;
+            if path != local_unsynced_path(root, &tenant, &profile) {
+                return Err(SaveAttemptEvidenceError::Invalid);
+            }
+            (tenant, profile)
+        } else if name.ends_with(".bin") {
+            let header = read_bounded_attempt_header(&path)?;
+            let tenant = TenantId::parse(header.tenant)
+                .map_err(|_| SaveAttemptEvidenceError::Invalid)?;
+            let profile = ProfileId::parse(header.profile)
+                .map_err(|_| SaveAttemptEvidenceError::Invalid)?;
+            let successor = GenerationId::parse(header.successor)
+                .map_err(|_| SaveAttemptEvidenceError::Invalid)?;
+            if path != attempt_path(root, &tenant, &profile, &successor) {
+                return Err(SaveAttemptEvidenceError::Invalid);
+            }
+            (tenant, profile)
+        } else {
+            // Unknown staged or torn names MUST remain visible and block a
+            // positive integrity verdict, without deleting their evidence.
+            return Err(SaveAttemptEvidenceError::Invalid);
+        };
+        scopes.insert((tenant.as_str().to_owned(), profile.as_str().to_owned()));
+    }
+
+    let mut summary = S1PendingInventory::default();
+    for (tenant_text, profile_text) in scopes {
+        let tenant = TenantId::parse(tenant_text)
+            .map_err(|_| SaveAttemptEvidenceError::Invalid)?;
+        let profile = ProfileId::parse(profile_text)
+            .map_err(|_| SaveAttemptEvidenceError::Invalid)?;
+        let (candidate, intent) = scan_scoped_pending_candidate(root, &tenant, &profile)?;
+        if let Some(successor) = candidate {
+            let checkpoint = inspect_streaming_exact_save_attempt(root, &tenant, &profile, &successor)?
+                .ok_or(SaveAttemptEvidenceError::Changed)?;
+            if intent && !matching_local_unsynced_for_header(root, &tenant, &profile, &checkpoint.header)? {
+                return Err(SaveAttemptEvidenceError::Changed);
+            }
+            summary.exact_checkpoints += 1;
+            if intent {
+                summary.intents_attached_to_exact += 1;
+            }
+        } else if intent {
+            match classify_scoped_pending_save_evidence(root, &tenant, &profile)? {
+                ScopedPendingSaveEvidence::LocalUnsynced { .. } => {
+                    summary.lone_local_unsynced += 1;
+                }
+                _ => return Err(SaveAttemptEvidenceError::Changed),
+            }
+        } else {
+            return Err(SaveAttemptEvidenceError::Changed);
+        }
+    }
+    Ok(summary)
+}
+
 /// Find the same single durable BPAT without allocating its ciphertext.
 /// Observation is read-only: no fresh lease, PUT, or commit is granted.
 #[allow(dead_code)] // Used by K2 streaming cutover.
@@ -2079,7 +2175,8 @@ fn hex(bytes: &[u8]) -> String {
 #[cfg(test)]
 mod direct_native_checkpoint_tests {
     use super::{
-        SaveAttemptEvidenceError, attempt_path, discover_unresolved_streaming_exact_save_attempt,
+        SaveAttemptEvidenceError, attempt_path, inspect_all_pending_for_s1,
+        discover_unresolved_streaming_exact_save_attempt,
         inspect_streaming_exact_save_attempt, persist_local_unsynced_intent,
         persist_streaming_exact_save_attempt_from_native,
     };
@@ -2211,6 +2308,10 @@ mod direct_native_checkpoint_tests {
             &mut keys,
         )?;
         assert_eq!(keys.calls, 1);
+        let s1 = inspect_all_pending_for_s1(&fixture.root)?;
+        assert_eq!(s1.exact_checkpoints, 1);
+        assert_eq!(s1.intents_attached_to_exact, 1);
+        assert_eq!(s1.lone_local_unsynced, 0);
         let discovered = discover_unresolved_streaming_exact_save_attempt(
             &fixture.root,
             &fixture.tenant,
@@ -2276,6 +2377,7 @@ mod direct_native_checkpoint_tests {
             super::scope_file_prefix(&fixture.tenant, &fixture.profile),
         ));
         fs::write(&sibling, b"torn foreign checkpoint")?;
+        assert!(inspect_all_pending_for_s1(&fixture.root).is_err());
         assert!(
             discover_unresolved_streaming_exact_save_attempt(
                 &fixture.root,
