@@ -139,9 +139,11 @@ fn s1_shipping_executable_is_read_only_for_missing_original_profile_root()
     assert_eq!(output.status.code(), Some(3));
     let report: serde_json::Value = serde_json::from_slice(&output.stdout)?;
     assert_eq!(report["verdict"], "UNKNOWN");
-    assert!(report["reason_codes"]
-        .as_array()
-        .is_some_and(|reasons| reasons.iter().any(|r| r == "PROFILE_ROOT_UNVERIFIED")));
+    assert!(
+        report["reason_codes"]
+            .as_array()
+            .is_some_and(|reasons| reasons.iter().any(|r| r == "PROFILE_ROOT_UNVERIFIED"))
+    );
     assert!(String::from_utf8(output.stderr)?.contains("BRIDGE_S1_NOT_READY"));
     assert!(!original.join("profiles").exists());
     assert!(!original.join("state").exists());
@@ -155,7 +157,11 @@ fn s1_shipping_executable_is_read_only_for_missing_original_profile_root()
     assert!(!copy.exists());
     assert_eq!(fs::read(&sentinel)?, b"original-only-copy");
     let bytes = fs::read_dir(&original)?.collect::<Result<Vec<_>, _>>()?;
-    assert_eq!(bytes.len(), 1, "read-only CLI created unexpected original data");
+    assert_eq!(
+        bytes.len(),
+        1,
+        "read-only CLI created unexpected original data"
+    );
 
     fs::remove_dir_all(parent)?;
     Ok(())
