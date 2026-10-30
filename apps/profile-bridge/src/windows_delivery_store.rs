@@ -423,7 +423,10 @@ fn validated_existing_root(root: &Path) -> Result<PathBuf, DeliveryStateStoreErr
     Ok(root)
 }
 
-fn load_chain(root: &Path, allow_pending_finalization: bool) -> Result<LoadedState, DeliveryStateStoreError> {
+fn load_chain(
+    root: &Path,
+    allow_pending_finalization: bool,
+) -> Result<LoadedState, DeliveryStateStoreError> {
     let mut finals = Vec::new();
     let mut pending = Vec::new();
     for entry in fs::read_dir(root).map_err(|_| DeliveryStateStoreError::Io)? {
@@ -645,7 +648,9 @@ impl fmt::Display for DeliveryStateStoreError {
             Self::MissingState => "Windows delivery state is missing",
             Self::AlreadyInitialized => "Windows delivery state is already initialized",
             Self::AmbiguousState => "Windows delivery state journal is ambiguous",
-            Self::PendingRecoveryRequired => "Windows delivery journal contains pending recovery evidence",
+            Self::PendingRecoveryRequired => {
+                "Windows delivery journal contains pending recovery evidence"
+            }
             Self::CorruptState => "Windows delivery state journal is corrupt",
             Self::RevisionExhausted => "Windows delivery state revision is exhausted",
             Self::Serialization => "Windows delivery state serialization failed",

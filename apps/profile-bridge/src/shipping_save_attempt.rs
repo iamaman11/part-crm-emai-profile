@@ -1369,7 +1369,9 @@ pub(crate) fn inspect_all_pending_for_s1(
     let mut inspected = 0usize;
     for entry in fs::read_dir(root.path())? {
         let entry = entry?;
-        inspected = inspected.checked_add(1).ok_or(SaveAttemptEvidenceError::Unavailable)?;
+        inspected = inspected
+            .checked_add(1)
+            .ok_or(SaveAttemptEvidenceError::Unavailable)?;
         if inspected > 100_000 {
             return Err(SaveAttemptEvidenceError::Unavailable);
         }
@@ -1383,20 +1385,20 @@ pub(crate) fn inspect_all_pending_for_s1(
         let path = entry.path();
         let (tenant, profile) = if name.ends_with("-local-unsynced-v1.intent") {
             let intent = read_local_unsynced(&path)?;
-            let tenant = TenantId::parse(intent.tenant)
-                .map_err(|_| SaveAttemptEvidenceError::Invalid)?;
-            let profile = ProfileId::parse(intent.profile)
-                .map_err(|_| SaveAttemptEvidenceError::Invalid)?;
+            let tenant =
+                TenantId::parse(intent.tenant).map_err(|_| SaveAttemptEvidenceError::Invalid)?;
+            let profile =
+                ProfileId::parse(intent.profile).map_err(|_| SaveAttemptEvidenceError::Invalid)?;
             if path != local_unsynced_path(root, &tenant, &profile) {
                 return Err(SaveAttemptEvidenceError::Invalid);
             }
             (tenant, profile)
         } else if name.ends_with(".bin") {
             let header = read_bounded_attempt_header(&path)?;
-            let tenant = TenantId::parse(header.tenant)
-                .map_err(|_| SaveAttemptEvidenceError::Invalid)?;
-            let profile = ProfileId::parse(header.profile)
-                .map_err(|_| SaveAttemptEvidenceError::Invalid)?;
+            let tenant =
+                TenantId::parse(header.tenant).map_err(|_| SaveAttemptEvidenceError::Invalid)?;
+            let profile =
+                ProfileId::parse(header.profile).map_err(|_| SaveAttemptEvidenceError::Invalid)?;
             let successor = GenerationId::parse(header.successor)
                 .map_err(|_| SaveAttemptEvidenceError::Invalid)?;
             if path != attempt_path(root, &tenant, &profile, &successor) {
@@ -1413,15 +1415,17 @@ pub(crate) fn inspect_all_pending_for_s1(
 
     let mut summary = S1PendingInventory::default();
     for (tenant_text, profile_text) in scopes {
-        let tenant = TenantId::parse(tenant_text)
-            .map_err(|_| SaveAttemptEvidenceError::Invalid)?;
-        let profile = ProfileId::parse(profile_text)
-            .map_err(|_| SaveAttemptEvidenceError::Invalid)?;
+        let tenant = TenantId::parse(tenant_text).map_err(|_| SaveAttemptEvidenceError::Invalid)?;
+        let profile =
+            ProfileId::parse(profile_text).map_err(|_| SaveAttemptEvidenceError::Invalid)?;
         let (candidate, intent) = scan_scoped_pending_candidate(root, &tenant, &profile)?;
         if let Some(successor) = candidate {
-            let checkpoint = inspect_streaming_exact_save_attempt(root, &tenant, &profile, &successor)?
-                .ok_or(SaveAttemptEvidenceError::Changed)?;
-            if intent && !matching_local_unsynced_for_header(root, &tenant, &profile, &checkpoint.header)? {
+            let checkpoint =
+                inspect_streaming_exact_save_attempt(root, &tenant, &profile, &successor)?
+                    .ok_or(SaveAttemptEvidenceError::Changed)?;
+            if intent
+                && !matching_local_unsynced_for_header(root, &tenant, &profile, &checkpoint.header)?
+            {
                 return Err(SaveAttemptEvidenceError::Changed);
             }
             summary.exact_checkpoints += 1;
@@ -2175,10 +2179,9 @@ fn hex(bytes: &[u8]) -> String {
 #[cfg(test)]
 mod direct_native_checkpoint_tests {
     use super::{
-        SaveAttemptEvidenceError, attempt_path, inspect_all_pending_for_s1,
-        discover_unresolved_streaming_exact_save_attempt,
-        inspect_streaming_exact_save_attempt, persist_local_unsynced_intent,
-        persist_streaming_exact_save_attempt_from_native,
+        SaveAttemptEvidenceError, attempt_path, discover_unresolved_streaming_exact_save_attempt,
+        inspect_all_pending_for_s1, inspect_streaming_exact_save_attempt,
+        persist_local_unsynced_intent, persist_streaming_exact_save_attempt_from_native,
     };
     use crate::dirty_generation::{GenerationSealingMaterial, GenerationSealingMaterialPort};
     use crate::local_profile::{GenerationWorkspace, MaterializationRoot};
@@ -2404,9 +2407,10 @@ mod direct_native_checkpoint_tests {
             inspect_all_pending_for_s1(&fixture.root)?,
             super::S1PendingInventory::default()
         );
-        let file = fixture.root.path().join(
-            ".profile-save-attempt-v1-corrupt.pending-unknown",
-        );
+        let file = fixture
+            .root
+            .path()
+            .join(".profile-save-attempt-v1-corrupt.pending-unknown");
         fs::write(&file, b"keep-unreconciled-bytes")?;
         assert!(inspect_all_pending_for_s1(&fixture.root).is_err());
         assert_eq!(fs::read(&file)?, b"keep-unreconciled-bytes");

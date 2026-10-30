@@ -27,6 +27,8 @@ This first source slice:
 - Acquires the same root-exclusive native activation lock and uses the existing
   per-generation native Firefox lock check; retained inert Bridge markers are not
   deleted or mistaken for an active OS writer.
+- Uses a separate no-repair delivery-journal reader that refuses pending recovery evidence without moving or finalizing it.
+- Inspects every scoped BPAT / LOCAL_UNSYNCED in the original root, including N+1 without a browser-sidecar, and rejects torn or foreign pending siblings without cleanup.
 - Enumerates and streams SHA-256 over every regular file in the original local
   profiles, including WAL and pending candidates, under that exclusion boundary;
   refuses links, unreadable entries, unstable files and oversized inventories.
