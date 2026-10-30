@@ -227,8 +227,10 @@ def exchange(process: subprocess.Popen[str], frame: str, seconds: int = 120) -> 
             response.put("")
 
     threading.Thread(target=read_one, daemon=True).start()
-    process.stdin.write(frame + "\n")
-    process.stdin.flush()
+    # Send the exact Bridge wire bytes. Windows TextIOWrapper.write("\\n")
+    # otherwise translates LF to CRLF; the real Bridge IPC rejects CR.
+    process.stdin.buffer.write((frame + "\n").encode("utf-8"))
+    process.stdin.buffer.flush()
     try:
         result = response.get(timeout=seconds)
     except queue.Empty as error:
