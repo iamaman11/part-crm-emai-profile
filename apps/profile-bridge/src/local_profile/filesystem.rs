@@ -936,3 +936,32 @@ mod tests {
         Ok(())
     }
 }
+
+#[cfg(test)]
+mod s1_open_existing_tests {
+    use super::MaterializationRoot;
+    use std::fs;
+
+    #[test]
+    fn read_only_root_open_refuses_missing_or_invalid_marker_without_creating_anything()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let directory = std::env::temp_dir().join(format!(
+            "s1-existing-root-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)?
+                .as_nanos()
+        ));
+        assert!(MaterializationRoot::open_existing(&directory).is_err());
+        assert!(!directory.exists());
+        let working = MaterializationRoot::open_or_create(&directory)?;
+        let expected = fs::read(directory.join(".profile-platform-root"))?;
+        assert_eq!(MaterializationRoot::open_existing(&directory)?.path(), working.path());
+        assert_eq!(fs::read(directory.join(".profile-platform-root"))?, expected);
+        fs::write(directory.join(".profile-platform-root"), b"wrong marker")?;
+        assert!(MaterializationRoot::open_existing(&directory).is_err());
+        assert_eq!(fs::read(directory.join(".profile-platform-root"))?, b"wrong marker");
+        fs::remove_dir_all(directory)?;
+        Ok(())
+    }
+}
