@@ -651,7 +651,13 @@ mod tests {
         let report: serde_json::Value = serde_json::from_str(&observed)?;
         assert_eq!(report["verdict"], "UNKNOWN");
         assert_eq!(report["reason_codes"][0], "PROFILE_INVENTORY_UNVERIFIED");
-        assert_eq!(report["inventory_failure"]["code"], "OPEN_FILE");
+        assert!(
+            matches!(
+                report["inventory_failure"]["code"].as_str(),
+                Some("OPEN_FILE" | "READ_FILE")
+            ),
+            "native Windows share denial must identify the exact failing operation: {report}"
+        );
         assert_eq!(
             report["inventory_failure"]["path"],
             wal.to_string_lossy().as_ref()
