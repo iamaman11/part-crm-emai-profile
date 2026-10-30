@@ -61,6 +61,7 @@ jobs:
           python scripts/d1-cloudflare-read.py self-test
           python scripts/d1-prepare.py self-test
           python scripts/deployment-identity-ar11.py --self-test
+          python scripts/test-d1-release-wait.py
           python - <<'PY'
           import re
           from pathlib import Path
@@ -170,7 +171,7 @@ jobs:
     if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
     needs: contract
     runs-on: ubuntu-24.04
-    timeout-minutes: 30
+    timeout-minutes: 45
     environment: staging
     permissions:
       contents: read
@@ -869,20 +870,35 @@ jobs:
           test -x "$opsctl"
           python scripts/d1-prepare.py self-test
 
+          # BEGIN D1_RELEASE_WAIT — Release Set is published asynchronously on accepted main.
+          # Read-only wait: fail closed when no single published immutable exact-source release exists.
           target_release=''
-          for _ in $(seq 1 48); do
-            mapfile -t releases < <(gh api --paginate "repos/$GITHUB_REPOSITORY/releases?per_page=100" --jq ".[] | select(.target_commitish == \"$SOURCE_SHA\" and (.tag_name | startswith(\"release-set-v3-sha256-\")) and .draft == false and .prerelease == false) | .tag_name")
+          max_attempts=96
+          echo "::notice::D1_RELEASE_WAIT source=$SOURCE_SHA max_attempts=$max_attempts interval_seconds=15"
+          for attempt in $(seq 1 "$max_attempts"); do
+            release_poll_file="$root/release-tags-attempt.txt"
+            if ! timeout 45s gh api --paginate "repos/$GITHUB_REPOSITORY/releases?per_page=100" --jq ".[] | select(.target_commitish == \"$SOURCE_SHA\" and (.tag_name | startswith(\"release-set-v3-sha256-\")) and .draft == false and .prerelease == false) | .tag_name" > "$release_poll_file"; then
+              echo "::error::D1_RELEASE_DISCOVERY_FAILED attempt=$attempt; GitHub release listing failed or timed out" >&2
+              exit 1
+            fi
+            mapfile -t releases < "$release_poll_file"
+            rm -f "$release_poll_file"
             if [ "${#releases[@]}" -gt 1 ]; then
-              printf 'multiple immutable Release Sets target exact current source: %s\n' "${releases[*]}" >&2
+              echo "::error::D1_RELEASE_AMBIGUOUS source=$SOURCE_SHA candidates=${#releases[@]}" >&2
               exit 1
             fi
             if [ "${#releases[@]}" -eq 1 ]; then
               target_release="${releases[0]}"
+              echo "::notice::D1_RELEASE_READY attempt=$attempt release=$target_release"
               break
             fi
-            sleep 15
+            if [ "$attempt" -lt "$max_attempts" ]; then sleep 15; fi
           done
-          test -n "$target_release"
+          if [ -z "$target_release" ]; then
+            echo "::error::D1_RELEASE_NOT_PUBLISHED source=$SOURCE_SHA attempts=$max_attempts" >&2
+            exit 1
+          fi
+          # END D1_RELEASE_WAIT
 
           download_release_assets() {
             local release_tag="$1"
@@ -899,7 +915,7 @@ jobs:
               asset_url="$(jq -er '.browser_download_url | select(type == "string" and length > 0)' <<<"$asset_json")"
               asset_digest="$(jq -er '.digest | select(type == "string" and test("^sha256:[0-9a-f]{64}$"))' <<<"$asset_json")"
               curl --fail --location --silent --show-error \
-                --retry 5 --retry-delay 2 --retry-all-errors \
+                --connect-timeout 10 --max-time 90 --retry 5 --retry-delay 2 --retry-all-errors \
                 --output "$output_dir/$asset_name" "$asset_url"
               actual_digest="sha256:$(sha256sum "$output_dir/$asset_name" | awk '{print $1}')"
               test "$actual_digest" = "$asset_digest"
