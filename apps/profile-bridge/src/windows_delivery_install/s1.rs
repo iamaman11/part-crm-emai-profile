@@ -21,6 +21,7 @@ use std::path::{Path, PathBuf};
 use windows_device_key::PersistedP256Key;
 
 const MAX_FILES: u64 = 500_000;
+const ROOT_ADMISSION_MARKER: &str = ".profile-platform-root";
 
 /// One actionable, original-device read-only failure. Keep exact OS errors and
 /// original paths for local diagnostics: never turn an unknown failure into READY.
@@ -425,6 +426,11 @@ fn inventory(root: &MaterializationRoot) -> Result<ProfileObservation, Inventory
     let mut files: Vec<PathBuf> = Vec::new();
     let mut directories: Vec<PathBuf> = Vec::new();
     let mut stack = vec![root.path().to_path_buf()];
+    // The existing materialization root owner verified this exact marker before
+    // DeliveryActivationGuard exclusively locked it. Windows LockFileEx can
+    // reject even our own second read. Do not re-open or re-hash that *control*
+    // file from a separate handle while holding the admission lock.
+    let admission_marker = root.path().join(ROOT_ADMISSION_MARKER);
     while let Some(directory) = stack.pop() {
         let children = read_at(fs::read_dir(&directory), "READ_DIRECTORY", &directory)?;
         for child in children {
@@ -458,7 +464,9 @@ fn inventory(root: &MaterializationRoot) -> Result<ProfileObservation, Inventory
                     .bytes
                     .checked_add(metadata.len())
                     .ok_or_else(|| InventoryFailure::at("SIZE_LIMIT", &child.path()))?;
-                files.push(child.path());
+                if child.path() != admission_marker {
+                    files.push(child.path());
+                }
                 if name.ends_with("-wal") {
                     answer.sqlite_wal_files += 1;
                 }
@@ -613,6 +621,39 @@ mod tests {
         assert_eq!(observation.pending_named_files, 1);
         assert_eq!(fs::read(&wal)?, before);
         assert_eq!(fs::read(&pending)?, b"pending-local-data");
+        fs::remove_dir_all(directory)?;
+        Ok(())
+    }
+
+    #[test]
+    fn s1_exclusive_root_admission_does_not_block_its_own_inventory()
+    -> Result<(), Box<dyn std::error::Error>> {
+        use crate::local_profile::DeliveryActivationGuard;
+        let directory = std::env::temp_dir().join(format!(
+            "s1-self-locked-root-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)?
+                .as_nanos()
+        ));
+        let root = MaterializationRoot::open_or_create(directory.join("profiles"))?;
+        let marker = root.path().join(super::ROOT_ADMISSION_MARKER);
+        let before = fs::read(&marker)?;
+        let data = root.path().join("user_data");
+        fs::create_dir(&data)?;
+        let wal = data.join("cookies.sqlite-wal");
+        fs::write(&wal, b"original WAL preserved during root lock")?;
+
+        let guard = DeliveryActivationGuard::acquire(&root)?;
+        let first = inventory(&root)?;
+        let second = inventory(&root)?;
+        assert_eq!(first.content_manifest_sha256, second.content_manifest_sha256);
+        assert_eq!(first.sqlite_wal_files, 1);
+        assert!(first.files >= 2); // marker counted; its verified bytes not redundantly reopened
+        drop(guard);
+
+        assert_eq!(fs::read(&marker)?, before);
+        assert_eq!(fs::read(&wal)?, b"original WAL preserved during root lock");
         fs::remove_dir_all(directory)?;
         Ok(())
     }

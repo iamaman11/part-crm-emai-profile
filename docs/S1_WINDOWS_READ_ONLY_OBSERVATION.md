@@ -39,8 +39,14 @@ materialization sidecars are listed in `inventory.sidecar_failures` with the
 exact path and reason. An invalid optional isolated copy is reported in
 `isolated_copy_failure`. These are **observations, never repair commands**.
 All ordinary Windows filenames are hashed as native UTF-16LE names, even when
-the file name cannot be represented as UTF-8. No copy, key, lock, pending item
-or profile is changed to produce the diagnostics.
+the file name cannot be represented as UTF-8. The root admission marker
+`.profile-platform-root` is verified by `MaterializationRoot::open_existing`
+**before** S1 obtains its exclusive native OS lock. The inventory counts it
+but does not open or hash its bytes again while that lock is held: on Windows,
+`LockFileEx` may reject a second read by the same process. This fixes a
+self-induced `READ_FILE` failure; it does not omit any browser, WAL or pending
+content. No copy, key, lock, pending item or profile is changed to produce the
+diagnostics.
 
 This first source slice:
 - Opens the existing materialization root, Windows device CNG key and installed
