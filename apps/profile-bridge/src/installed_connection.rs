@@ -112,7 +112,7 @@ impl InstalledConnection {
         }
     }
 
-    fn open(root: &Path) -> Result<Self, InstalledConnectionError> {
+    pub(crate) fn open(root: &Path) -> Result<Self, InstalledConnectionError> {
         validate_root(root)?;
         let path = root.join(SETTINGS_FILE);
         let metadata =
