@@ -1382,22 +1382,29 @@ def run_ipc() -> int:
     navigation_admitted = False
     post_navigation_browser_visible_observed = False
     agent: LocalPlaywrightAgent | None = None
-    commands = bridge_command_queue()
+    # Preserve the unchanged blocking Bridge IPC path for EVERY ordinary
+    # user launch. Only explicitly opted-in agent test runs require polling.
+    commands = bridge_command_queue() if os.environ.get(AGENT_DIRECTORY_ENV) else None
 
     try:
         while True:
-            try:
-                raw = commands.get(timeout=0.1)
-            except queue.Empty:
-                if agent is not None and context is not None and navigation_admitted:
-                    try:
-                        agent.run_one(context)
-                    except OSError:
-                        # Diagnostics never override the existing browser/save authority.
-                        print("camouhost_agent_io_failure", file=sys.stderr, flush=True)
-                continue
-            if raw is None:
-                break
+            if commands is None:
+                raw = sys.stdin.readline()
+                if not raw:
+                    break
+            else:
+                try:
+                    raw = commands.get(timeout=0.1)
+                except queue.Empty:
+                    if agent is not None and context is not None and navigation_admitted:
+                        try:
+                            agent.run_one(context)
+                        except OSError:
+                            # Diagnostics never override the existing browser/save authority.
+                            print("camouhost_agent_io_failure", file=sys.stderr, flush=True)
+                    continue
+                if raw is None:
+                    break
             if not valid_frame(raw):
                 emit("error|protocol")
                 return 2
