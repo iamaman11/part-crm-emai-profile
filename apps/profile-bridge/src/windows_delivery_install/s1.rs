@@ -16,10 +16,66 @@ use serde::Serialize;
 use sha2::{Digest, Sha256};
 use std::fs::{self, File};
 use std::io::Read;
+use std::os::windows::ffi::OsStrExt;
 use std::path::{Path, PathBuf};
 use windows_device_key::PersistedP256Key;
 
 const MAX_FILES: u64 = 500_000;
+
+/// One actionable, original-device read-only failure. Keep exact OS errors and
+/// original paths for local diagnostics: never turn an unknown failure into READY.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+struct InventoryFailure {
+    code: &'static str,
+    path: String,
+    detail: Option<String>,
+    os_error: Option<i32>,
+}
+
+impl InventoryFailure {
+    fn at(code: &'static str, path: &Path) -> Self {
+        Self {
+            code,
+            path: path.to_string_lossy().into_owned(),
+            detail: None,
+            os_error: None,
+        }
+    }
+
+    fn io(code: &'static str, path: &Path, error: std::io::Error) -> Self {
+        Self {
+            code,
+            path: path.to_string_lossy().into_owned(),
+            os_error: error.raw_os_error(),
+            detail: Some(error.to_string()),
+        }
+    }
+}
+
+impl std::fmt::Display for InventoryFailure {
+    fn fmt(&self, out: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(out, "{} at {}: {:?}", self.code, self.path, self.detail)
+    }
+}
+
+impl std::error::Error for InventoryFailure {}
+
+fn read_at<T>(
+    result: std::io::Result<T>,
+    code: &'static str,
+    path: &Path,
+) -> Result<T, InventoryFailure> {
+    result.map_err(|error| InventoryFailure::io(code, path, error))
+}
+
+/// File-system identity on Windows is UTF-16, not necessarily valid UTF-8.
+/// Hash the original relative Windows name without lossy Unicode conversion.
+fn native_path_bytes(path: &Path) -> Vec<u8> {
+    path.as_os_str()
+        .encode_wide()
+        .flat_map(u16::to_le_bytes)
+        .collect()
+}
 
 #[derive(Debug, Default, Eq, PartialEq, Serialize)]
 struct ProfileObservation {
@@ -32,6 +88,7 @@ struct ProfileObservation {
     materialization_sidecars: u64,
     materializations_verified: u64,
     pending_named_files: u64,
+    sidecar_failures: Vec<InventoryFailure>,
 }
 
 #[derive(Debug, Serialize)]
@@ -52,6 +109,8 @@ struct S1Observation {
     previous_delivery_rollback: &'static str,
     independent_recovery: &'static str,
     inventory: Option<ProfileObservation>,
+    inventory_failure: Option<InventoryFailure>,
+    isolated_copy_failure: Option<InventoryFailure>,
     reason_codes: Vec<&'static str>,
 }
 
@@ -80,6 +139,8 @@ pub(super) fn observe(
         previous_delivery_rollback: "UNKNOWN",
         independent_recovery: "UNKNOWN",
         inventory: None,
+        inventory_failure: None,
+        isolated_copy_failure: None,
         reason_codes: Vec::new(),
     };
     inspect(bundle_directory, installation_root, copy_root, &mut result);
@@ -131,9 +192,15 @@ fn inspect(
                 } else {
                     "STRUCTURE_ONLY"
                 };
+            if !inventory.sidecar_failures.is_empty() {
+                result.reason_codes.push("MATERIALIZATION_BINDINGS_UNVERIFIED");
+            }
             result.inventory = Some(inventory);
         }
-        Err(_) => result.reason_codes.push("PROFILE_INVENTORY_UNVERIFIED"),
+        Err(failure) => {
+            result.reason_codes.push("PROFILE_INVENTORY_UNVERIFIED");
+            result.inventory_failure = Some(failure);
+        }
     }
     if let Some(copy_root) = copy_root {
         match result
@@ -151,7 +218,12 @@ fn inspect(
                 result.isolated_copy = "CONTENT_MISMATCH";
                 result.reason_codes.push("ISOLATED_COPY_MISMATCH");
             }
-            _ => {
+            Some(Err(failure)) => {
+                result.isolated_copy = "UNVERIFIED";
+                result.isolated_copy_failure = Some(failure);
+                result.reason_codes.push("ISOLATED_COPY_UNVERIFIED");
+            }
+            None => {
                 result.isolated_copy = "UNVERIFIED";
                 result.reason_codes.push("ISOLATED_COPY_UNVERIFIED");
             }
@@ -310,19 +382,28 @@ fn compare_isolated_copy(
     original: &MaterializationRoot,
     copy_root: &Path,
     expected: &ProfileObservation,
-) -> Result<bool, &'static str> {
-    let installed = fs::canonicalize(installed_root).map_err(|_| "ORIGINAL_ROOT")?;
+) -> Result<bool, InventoryFailure> {
+    let installed = read_at(
+        fs::canonicalize(installed_root),
+        "ORIGINAL_ROOT",
+        installed_root,
+    )?;
     // Check every path component before canonicalization; a reparse or
     // symlink alias must never be treated as an independent recovery copy.
     let copy = MaterializationRoot::open_existing(copy_root.to_path_buf())
-        .map_err(|_| "BACKUP_INVALID")?;
+        .map_err(|error| InventoryFailure {
+            code: "BACKUP_INVALID",
+            path: copy_root.to_string_lossy().into_owned(),
+            detail: Some(error.to_string()),
+            os_error: None,
+        })?;
     let backup = copy.path();
     if backup.starts_with(&installed)
         || installed.starts_with(&backup)
         || original.path().starts_with(&backup)
         || backup.starts_with(original.path())
     {
-        return Err("BACKUP_MUST_BE_ISOLATED");
+        return Err(InventoryFailure::at("BACKUP_MUST_BE_ISOLATED", copy_root));
     }
     let observed = inventory(&copy)?;
     Ok(&observed == expected)
@@ -335,35 +416,45 @@ fn sha256_lower_hex(bytes: &[u8]) -> String {
         .collect()
 }
 
-fn inventory(root: &MaterializationRoot) -> Result<ProfileObservation, &'static str> {
+fn inventory(root: &MaterializationRoot) -> Result<ProfileObservation, InventoryFailure> {
     let mut answer = ProfileObservation::default();
     let mut sidecars = Vec::new();
     let mut files: Vec<PathBuf> = Vec::new();
     let mut directories: Vec<PathBuf> = Vec::new();
     let mut stack = vec![root.path().to_path_buf()];
     while let Some(directory) = stack.pop() {
-        let children = fs::read_dir(directory).map_err(|_| "READ_DIRECTORY")?;
+        let children = read_at(fs::read_dir(&directory), "READ_DIRECTORY", &directory)?;
         for child in children {
-            let child = child.map_err(|_| "READ_ENTRY")?;
-            let metadata = fs::symlink_metadata(child.path()).map_err(|_| "READ_METADATA")?;
+            let child = read_at(child, "READ_ENTRY", &directory)?;
+            let metadata = read_at(
+                fs::symlink_metadata(child.path()),
+                "READ_METADATA",
+                &child.path(),
+            )?;
             if metadata.file_type().is_symlink() || is_reparse(&metadata) {
-                return Err("LINK_REJECTED");
+                return Err(InventoryFailure::at("LINK_REJECTED", &child.path()));
             }
             let name = child.file_name();
-            let name = name.to_str().ok_or("NAME_INVALID")?;
+            let name = name.to_string_lossy();
             if metadata.is_dir() {
-                answer.directories = answer.directories.checked_add(1).ok_or("COUNT_LIMIT")?;
+                answer.directories = answer
+                    .directories
+                    .checked_add(1)
+                    .ok_or_else(|| InventoryFailure::at("COUNT_LIMIT", &child.path()))?;
                 if name == "user_data" {
                     answer.firefox_user_data_directories += 1;
                 }
                 directories.push(child.path());
                 stack.push(child.path());
             } else if metadata.is_file() {
-                answer.files = answer.files.checked_add(1).ok_or("COUNT_LIMIT")?;
+                answer.files = answer
+                    .files
+                    .checked_add(1)
+                    .ok_or_else(|| InventoryFailure::at("COUNT_LIMIT", &child.path()))?;
                 answer.bytes = answer
                     .bytes
                     .checked_add(metadata.len())
-                    .ok_or("SIZE_LIMIT")?;
+                    .ok_or_else(|| InventoryFailure::at("SIZE_LIMIT", &child.path()))?;
                 files.push(child.path());
                 if name.ends_with("-wal") {
                     answer.sqlite_wal_files += 1;
@@ -376,10 +467,10 @@ fn inventory(root: &MaterializationRoot) -> Result<ProfileObservation, &'static 
                     answer.pending_named_files += 1;
                 }
             } else {
-                return Err("SPECIAL_ENTRY");
+                return Err(InventoryFailure::at("SPECIAL_ENTRY", &child.path()));
             }
             if answer.files + answer.directories > MAX_FILES {
-                return Err("COUNT_LIMIT");
+                return Err(InventoryFailure::at("COUNT_LIMIT", &child.path()));
             }
         }
     }
@@ -391,35 +482,35 @@ fn inventory(root: &MaterializationRoot) -> Result<ProfileObservation, &'static 
     for directory in directories {
         let relative = directory
             .strip_prefix(root.path())
-            .map_err(|_| "RELATIVE_DIR")?;
-        let relative = relative.to_str().ok_or("PATH_ENCODING")?;
+            .map_err(|_| InventoryFailure::at("RELATIVE_DIR", &directory))?;
+        let bytes = native_path_bytes(relative);
         manifest.update(b"directory:");
-        manifest.update((relative.len() as u64).to_be_bytes());
-        manifest.update(relative.as_bytes());
+        manifest.update((bytes.len() as u64).to_be_bytes());
+        manifest.update(&bytes);
     }
     let mut buffer = [0u8; 64 * 1024];
     for path in files {
         let relative = path
             .strip_prefix(root.path())
-            .map_err(|_| "RELATIVE_PATH")?;
-        let relative = relative.to_str().ok_or("PATH_ENCODING")?;
+            .map_err(|_| InventoryFailure::at("RELATIVE_PATH", &path))?;
+        let relative_bytes = native_path_bytes(relative);
         manifest.update(b"file:");
-        let mut file = File::open(&path).map_err(|_| "OPEN_FILE")?;
-        let before = file.metadata().map_err(|_| "FILE_METADATA")?;
-        manifest.update((relative.len() as u64).to_be_bytes());
-        manifest.update(relative.as_bytes());
+        let mut file = read_at(File::open(&path), "OPEN_FILE", &path)?;
+        let before = read_at(file.metadata(), "FILE_METADATA", &path)?;
+        manifest.update((relative_bytes.len() as u64).to_be_bytes());
+        manifest.update(&relative_bytes);
         manifest.update(before.len().to_be_bytes());
         let mut file_hash = Sha256::new();
         loop {
-            let bytes = file.read(&mut buffer).map_err(|_| "READ_FILE")?;
+            let bytes = read_at(file.read(&mut buffer), "READ_FILE", &path)?;
             if bytes == 0 {
                 break;
             }
             file_hash.update(&buffer[..bytes]);
         }
-        let after = file.metadata().map_err(|_| "FILE_METADATA")?;
+        let after = read_at(file.metadata(), "FILE_METADATA", &path)?;
         if after.len() != before.len() || after.modified().ok() != before.modified().ok() {
-            return Err("CONCURRENT_MODIFICATION");
+            return Err(InventoryFailure::at("CONCURRENT_MODIFICATION", &path));
         }
         manifest.update(file_hash.finalize());
     }
@@ -432,8 +523,11 @@ fn inventory(root: &MaterializationRoot) -> Result<ProfileObservation, &'static 
     for sidecar in sidecars {
         // A sidecar is not a WORKING certificate. Validate its canonical
         // generation binding and original inventory without repairing it.
-        if validate_sidecar(root, &sidecar).is_ok() {
-            answer.materializations_verified += 1;
+        match validate_sidecar(root, &sidecar) {
+            Ok(()) => answer.materializations_verified += 1,
+            Err(code) => answer
+                .sidecar_failures
+                .push(InventoryFailure::at(code, &sidecar)),
         }
     }
     Ok(answer)
