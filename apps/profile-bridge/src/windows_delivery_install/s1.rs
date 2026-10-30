@@ -2,6 +2,8 @@
  //! network operation or browser launch is permitted in this module.
 use super::bundle::{InstallBundle, validate_directory_tree};
 use crate::installed_connection::InstalledConnection;
+use crate::browser_execution::load_materialization_binding;
+use profile_platform_primitives::{GenerationId, ProfileId, TenantId};
 use crate::local_profile::{DeliveryActivationGuard, LocalProfileError, MaterializationRoot};
 use crate::windows_delivery::verify_delivery_candidate;
 use crate::windows_delivery_coordinator::accepted_floor;
@@ -23,6 +25,7 @@ struct ProfileObservation {
     firefox_user_data_directories: u64,
     sqlite_wal_files: u64,
     materialization_sidecars: u64,
+    materializations_verified: u64,
     pending_named_files: u64,
 }
 
@@ -96,9 +99,15 @@ fn inspect(bundle_directory: &Path, root: &Path, result: &mut S1Observation) {
             return;
         }
     };
-    match inventory(workspace.path()) {
+    match inventory(&workspace) {
         Ok(inventory) => {
-            result.profile_inventory = "STRUCTURE_OBSERVED";
+            result.profile_inventory = if inventory.materialization_sidecars
+                == inventory.materializations_verified
+            {
+                "STRUCTURE_AND_EXISTING_BINDINGS_VERIFIED"
+            } else {
+                "STRUCTURE_ONLY"
+            };
             result.inventory = Some(inventory);
         }
         Err(_) => result.reason_codes.push("PROFILE_INVENTORY_UNVERIFIED"),
@@ -177,9 +186,10 @@ fn inspect(bundle_directory: &Path, root: &Path, result: &mut S1Observation) {
     result.reason_codes.push("INDEPENDENT_RECOVERY_NOT_YET_PROVEN");
 }
 
-fn inventory(root: &Path) -> Result<ProfileObservation, &'static str> {
+fn inventory(root: &MaterializationRoot) -> Result<ProfileObservation, &'static str> {
     let mut answer = ProfileObservation::default();
-    let mut stack = vec![root.to_path_buf()];
+    let mut sidecars = Vec::new();
+    let mut stack = vec![root.path().to_path_buf()];
     while let Some(directory) = stack.pop() {
         let children = fs::read_dir(directory).map_err(|_| "READ_DIRECTORY")?;
         for child in children {
@@ -204,6 +214,7 @@ fn inventory(root: &Path) -> Result<ProfileObservation, &'static str> {
                 }
                 if name.ends_with(".materialization") {
                     answer.materialization_sidecars += 1;
+                    sidecars.push(child.path());
                 }
                 if name.contains("unsynced") || name.starts_with(".pending-") {
                     answer.pending_named_files += 1;
@@ -216,7 +227,48 @@ fn inventory(root: &Path) -> Result<ProfileObservation, &'static str> {
             }
         }
     }
+    for sidecar in sidecars {
+        // A sidecar is not a WORKING certificate. Validate its canonical
+        // generation binding and original inventory without repairing it.
+        if validate_sidecar(root, &sidecar).is_ok() {
+            answer.materializations_verified += 1;
+        }
+    }
     Ok(answer)
+}
+
+fn validate_sidecar(root: &MaterializationRoot, path: &Path) -> Result<(), &'static str> {
+    let metadata = fs::symlink_metadata(path).map_err(|_| "SIDECAR_UNREADABLE")?;
+    if !metadata.is_file() || metadata.len() > 4096 || metadata.len() == 0 {
+        return Err("SIDECAR_INVALID");
+    }
+    let content = fs::read_to_string(path).map_err(|_| "SIDECAR_INVALID")?;
+    let value = |key: &str| -> Result<&str, &'static str> {
+        let prefix = format!("{key}=");
+        content.lines()
+            .find_map(|line| line.strip_prefix(&prefix))
+            .ok_or("SIDECAR_MISSING_ID")
+    };
+    let tenant = TenantId::parse(value("tenant_id")?).map_err(|_| "SIDECAR_TENANT")?;
+    let profile = ProfileId::parse(value("profile_id")?).map_err(|_| "SIDECAR_PROFILE")?;
+    let generation = GenerationId::parse(value("generation_id")?)
+        .map_err(|_| "SIDECAR_GENERATION")?;
+    if path.file_name().and_then(|v| v.to_str())
+        != Some(format!(".{}.materialization", generation.as_str()).as_str())
+    {
+        return Err("SIDECAR_NAME_MISMATCH");
+    }
+    let workspace = root
+        .open_generation(&tenant, &profile, &generation)
+        .map_err(|_| "SIDECAR_WORKSPACE")?;
+    let binding = load_materialization_binding(&workspace, &tenant, &profile, &generation)
+        .map_err(|_| "SIDECAR_BINDING")?;
+    if workspace.materialization_inventory_digest().map_err(|_| "SIDECAR_DIGEST")?
+        != binding.materialized_inventory_digest()
+    {
+        return Err("SIDECAR_DIGEST_MISMATCH");
+    }
+    Ok(())
 }
 
 #[cfg(windows)]
@@ -228,6 +280,7 @@ fn is_reparse(metadata: &fs::Metadata) -> bool {
 #[cfg(test)]
 mod tests {
     use super::inventory;
+    use crate::local_profile::MaterializationRoot;
     use std::fs;
 
     #[test]
@@ -239,18 +292,20 @@ mod tests {
                 .duration_since(std::time::UNIX_EPOCH)?
                 .as_nanos()
         ));
-        fs::create_dir(&directory)?;
-        let data = directory.join("user_data");
+        let root = MaterializationRoot::open_or_create(directory.join("profiles"))?;
+        let data = root.path().join("user_data");
         fs::create_dir(&data)?;
-        fs::write(data.join("cookies.sqlite-wal"), b"uncheckpointed-data")?;
-        fs::write(directory.join(".pending-bpgw-test"), b"pending-local-data")?;
-        let before = fs::read(data.join("cookies.sqlite-wal"))?;
-        let observation = inventory(&directory)?;
+        let wal = data.join("cookies.sqlite-wal");
+        let pending = root.path().join(".pending-bpgw-test");
+        fs::write(&wal, b"uncheckpointed-data")?;
+        fs::write(&pending, b"pending-local-data")?;
+        let before = fs::read(&wal)?;
+        let observation = inventory(&root)?;
         assert_eq!(observation.firefox_user_data_directories, 1);
         assert_eq!(observation.sqlite_wal_files, 1);
         assert_eq!(observation.pending_named_files, 1);
-        assert_eq!(fs::read(data.join("cookies.sqlite-wal"))?, before);
-        assert_eq!(fs::read(directory.join(".pending-bpgw-test"))?, b"pending-local-data");
+        assert_eq!(fs::read(&wal)?, before);
+        assert_eq!(fs::read(&pending)?, b"pending-local-data");
         fs::remove_dir_all(directory)?;
         Ok(())
     }
@@ -326,6 +381,6 @@ mod tests {
         let missing = std::env::temp_dir().join(format!(
             "s1-unavailable-{}-missing", std::process::id()
         ));
-        assert!(inventory(&missing).is_err());
+        assert!(MaterializationRoot::open_existing(&missing).is_err());
     }
 }
