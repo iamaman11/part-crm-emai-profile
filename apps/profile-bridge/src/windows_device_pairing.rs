@@ -99,6 +99,25 @@ fn existing_binding_return(
     if binding.tenant_id() != tenant {
         return Err(PairingError::ExistingBinding);
     }
+    // A binding file alone cannot prove the originally enrolled CNG key is usable.
+    // Never create another key under the server-registered device identity.
+    let name = key_name(binding.device_id()).map_err(|_| PairingError::DeviceKey)?;
+    let key = PersistedP256Key::open_existing(&name).map_err(|_| PairingError::DeviceKey)?;
+    let challenge = format!(
+        "profile-bridge-existing-device-v1:{}:{}:{}",
+        binding.tenant_id().as_str(),
+        binding.actor_id().as_str(),
+        binding.device_id().as_str()
+    );
+    let proof = key
+        .sign_sha256_message(challenge.as_bytes())
+        .map_err(|_| PairingError::DeviceKey)?;
+    if !key
+        .verify_sha256_message(challenge.as_bytes(), &proof)
+        .map_err(|_| PairingError::DeviceKey)?
+    {
+        return Err(PairingError::DeviceKey);
+    }
     Ok(Some(format!(
         "{origin}/devices?tenant={}#connected={}",
         tenant.as_str(),
@@ -653,27 +672,70 @@ mod tests {
     }
 
     #[test]
-    fn existing_connection_returns_stored_device_without_repairing_or_rebinding()
+    fn existing_connection_requires_usable_key_and_never_rebinds()
     -> Result<(), Box<dyn std::error::Error>> {
+        use profile_platform_primitives::{ActorId, DeviceId, TenantId};
+        use windows_device_key::{KeyDisposition, PersistedP256Key};
+
         let root = temp_root("existing-return")?;
         let path = root.join("binding.json");
-        let uri = completion_uri()?;
+        let tenant = TenantId::parse("tenant_01JPAIR")?;
+        let actor = ActorId::parse("actor_01JPAIR")?;
+        let device = DeviceId::parse(format!(
+            "device_pair_{}_{}",
+            std::process::id(),
+            TEST_SEQUENCE.fetch_add(1, Ordering::Relaxed)
+        ))?;
+        let original = format!(
+            r#"{{"tenantId":"{}","actorId":"{}","deviceId":"{}"}}"#,
+            tenant.as_str(),
+            actor.as_str(),
+            device.as_str()
+        );
         assert_eq!(
-            super::existing_binding_return(&path, "https://control.example.com", uri.tenant_id())?,
+            super::existing_binding_return(&path, "https://control.example.com", &tenant)?,
             None
         );
-        persist_binding(&path, &uri)?;
-        let before = fs::read(&path)?;
-        assert_eq!(super::existing_binding_return(&path, "https://control.example.com", uri.tenant_id())?, Some("https://control.example.com/devices?tenant=tenant_01JPAIR#connected=device_01JPAIR".to_owned()));
-        let foreign = profile_platform_primitives::TenantId::parse("tenant_another")?;
+        fs::write(&path, &original)?;
+        let key_name = format!("part-crm.device.{}", device.as_str());
+
+        // A copied binding without its Windows key must never show "connected".
+        assert_eq!(
+            super::existing_binding_return(&path, "https://control.example.com", &tenant),
+            Err(DevicePairingBootstrapError::DeviceKey)
+        );
+        assert!(PersistedP256Key::open_existing(&key_name).is_err());
+        assert_eq!(fs::read_to_string(&path)?, original);
+
+        let key = PersistedP256Key::open_or_create(&key_name)?;
+        assert_eq!(key.disposition(), KeyDisposition::Created);
+        let public_key = key.public_key_spki_der()?;
+        assert_eq!(
+            super::existing_binding_return(&path, "https://control.example.com", &tenant)?,
+            Some(format!(
+                "https://control.example.com/devices?tenant=tenant_01JPAIR#connected={}",
+                device.as_str()
+            ))
+        );
+        let reopened = PersistedP256Key::open_existing(&key_name)?;
+        assert_eq!(reopened.public_key_spki_der()?, public_key);
+        drop(reopened);
+        let foreign = TenantId::parse("tenant_another")?;
         assert_eq!(
             super::existing_binding_return(&path, "https://control.example.com", &foreign),
             Err(DevicePairingBootstrapError::ExistingBinding)
         );
-        assert_eq!(fs::read(&path)?, before);
+        assert_eq!(fs::read_to_string(&path)?, original);
+
+        key.delete()?;
+        assert_eq!(
+            super::existing_binding_return(&path, "https://control.example.com", &tenant),
+            Err(DevicePairingBootstrapError::DeviceKey)
+        );
+        assert!(PersistedP256Key::open_existing(&key_name).is_err());
         fs::write(&path, b"corrupt")?;
         assert_eq!(
-            super::existing_binding_return(&path, "https://control.example.com", uri.tenant_id()),
+            super::existing_binding_return(&path, "https://control.example.com", &tenant),
             Err(DevicePairingBootstrapError::BindingStorage)
         );
         assert_eq!(fs::read(&path)?, b"corrupt");

@@ -151,7 +151,7 @@ impl DeviceKeyPort for WindowsDeviceApplication {
         if device_id != self.binding.device_id() {
             return Err(BridgePortError::InvalidResponse);
         }
-        let key = PersistedP256Key::open_or_create(&self.key_name)
+        let key = PersistedP256Key::open_existing(&self.key_name)
             .map_err(|_| BridgePortError::Unavailable)?;
         key.require_non_exportable()
             .map_err(|_| BridgePortError::InvalidResponse)?;
@@ -213,7 +213,7 @@ impl WindowsApplicationSessionHttp {
     }
 
     fn renew_application_session(&self) -> Result<InMemoryApplicationSession, BridgePortError> {
-        let key = PersistedP256Key::open_or_create(&self.key_name)
+        let key = PersistedP256Key::open_existing(&self.key_name)
             .map_err(|_| BridgePortError::Unavailable)?;
         key.require_non_exportable()
             .map_err(|_| BridgePortError::InvalidResponse)?;
@@ -466,7 +466,7 @@ impl MachineHttpPort for WindowsApplicationSessionHttp {
             expires_at,
         )
         .map_err(|_| BridgePortError::InvalidResponse)?;
-        let key = PersistedP256Key::open_or_create(&self.key_name)
+        let key = PersistedP256Key::open_existing(&self.key_name)
             .map_err(|_| BridgePortError::Unavailable)?;
         key.require_non_exportable()
             .map_err(|_| BridgePortError::InvalidResponse)?;
