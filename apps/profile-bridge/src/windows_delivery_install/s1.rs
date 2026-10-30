@@ -58,7 +58,11 @@ struct S1Observation {
 /// Run from the *new* unpacked Bridge executable, with bundled signed release inputs
 /// in a scratch directory. Returns a structured observation, never a clearance to install.
 /// The installer must independently reacquire its exclusive admission immediately at activation.
-pub(super) fn observe(bundle_directory: &Path, installation_root: &Path, copy_root: Option<&Path>) -> String {
+pub(super) fn observe(
+    bundle_directory: &Path,
+    installation_root: &Path,
+    copy_root: Option<&Path>,
+) -> String {
     let mut result = S1Observation {
         schema_version: 1,
         kind: "PROFILE_BRIDGE_S1_READ_ONLY_OBSERVATION",
@@ -84,7 +88,12 @@ pub(super) fn observe(bundle_directory: &Path, installation_root: &Path, copy_ro
     })
 }
 
-fn inspect(bundle_directory: &Path, root: &Path, copy_root: Option<&Path>, result: &mut S1Observation) {
+fn inspect(
+    bundle_directory: &Path,
+    root: &Path,
+    copy_root: Option<&Path>,
+    result: &mut S1Observation,
+) {
     if validate_directory_tree(root, false).is_err() {
         result.reason_codes.push("INSTALLATION_ROOT_INVALID");
         return;
@@ -127,9 +136,11 @@ fn inspect(bundle_directory: &Path, root: &Path, copy_root: Option<&Path>, resul
         Err(_) => result.reason_codes.push("PROFILE_INVENTORY_UNVERIFIED"),
     }
     if let Some(copy_root) = copy_root {
-        match result.inventory.as_ref().map(|original| {
-            compare_isolated_copy(root, &workspace, copy_root, original)
-        }) {
+        match result
+            .inventory
+            .as_ref()
+            .map(|original| compare_isolated_copy(root, &workspace, copy_root, original))
+        {
             Some(Ok(true)) => {
                 result.isolated_copy = "BYTE_EXACT_ON_THIS_HOST_REOPEN_NOT_PROVEN";
                 // A byte-identical second directory is a useful independent
@@ -285,7 +296,9 @@ fn inspect(bundle_directory: &Path, root: &Path, copy_root: Option<&Path>, resul
             .reason_codes
             .push("INDEPENDENT_PROFILE_BACKUP_NOT_YET_PROVEN");
     } else {
-        result.reason_codes.push("ISOLATED_COPY_REOPEN_NOT_YET_PROVEN");
+        result
+            .reason_codes
+            .push("ISOLATED_COPY_REOPEN_NOT_YET_PROVEN");
     }
 }
 
@@ -299,7 +312,11 @@ fn compare_isolated_copy(
     expected: &ProfileObservation,
 ) -> Result<bool, &'static str> {
     let installed = fs::canonicalize(installed_root).map_err(|_| "ORIGINAL_ROOT")?;
-    let backup = fs::canonicalize(copy_root).map_err(|_| "BACKUP_MISSING")?;
+    // Check every path component before canonicalization; a reparse or
+    // symlink alias must never be treated as an independent recovery copy.
+    let copy = MaterializationRoot::open_existing(copy_root.to_path_buf())
+        .map_err(|_| "BACKUP_INVALID")?;
+    let backup = copy.path();
     if backup.starts_with(&installed)
         || installed.starts_with(&backup)
         || original.path().starts_with(&backup)
@@ -307,9 +324,7 @@ fn compare_isolated_copy(
     {
         return Err("BACKUP_MUST_BE_ISOLATED");
     }
-    let root = MaterializationRoot::open_existing(backup)
-        .map_err(|_| "BACKUP_INVALID")?;
-    let observed = inventory(&root)?;
+    let observed = inventory(&copy)?;
     Ok(&observed == expected)
 }
 
@@ -374,7 +389,9 @@ fn inventory(root: &MaterializationRoot) -> Result<ProfileObservation, &'static 
     directories.sort();
     let mut manifest = Sha256::new();
     for directory in directories {
-        let relative = directory.strip_prefix(root.path()).map_err(|_| "RELATIVE_DIR")?;
+        let relative = directory
+            .strip_prefix(root.path())
+            .map_err(|_| "RELATIVE_DIR")?;
         let relative = relative.to_str().ok_or("PATH_ENCODING")?;
         manifest.update(b"directory:");
         manifest.update((relative.len() as u64).to_be_bytes());
@@ -535,7 +552,11 @@ mod tests {
             .share_mode(0)
             .open(&native_lock)?;
 
-        let result = observe(&installation.join("nonexistent-bundle"), &installation, None);
+        let result = observe(
+            &installation.join("nonexistent-bundle"),
+            &installation,
+            None,
+        );
         assert!(result.contains("\"verdict\":\"BLOCKED\""), "{result}");
         assert!(result.contains("NATIVE_WRITER_LOCK_BUSY"), "{result}");
         assert_eq!(fs::read(&bridge_marker)?, b"original-bridge-marker");
@@ -545,7 +566,11 @@ mod tests {
         drop(handle);
         assert_eq!(fs::read(&native_lock)?, b"original-native-marker");
 
-        let next = observe(&installation.join("nonexistent-bundle"), &installation, None);
+        let next = observe(
+            &installation.join("nonexistent-bundle"),
+            &installation,
+            None,
+        );
         assert!(
             next.contains("NO_ACTIVE_WRITER_DURING_OBSERVATION"),
             "{next}"
@@ -603,17 +628,35 @@ mod tests {
         fs::create_dir(&copy_data)?;
         let backup_file = copy_data.join("cookies.sqlite-wal");
         fs::write(&backup_file, b"uncheckpointed original bytes")?;
-        assert!(compare_isolated_copy(&installed, &source, backup.path(), &expected)?);
+        assert!(compare_isolated_copy(
+            &installed,
+            &source,
+            backup.path(),
+            &expected
+        )?);
         assert!(compare_isolated_copy(&installed, &source, source.path(), &expected).is_err());
         assert!(compare_isolated_copy(&installed, &source, &outer, &expected).is_err());
+        let missing = outer.join("missing-copy");
+        assert!(compare_isolated_copy(&installed, &source, &missing, &expected).is_err());
+        assert!(!missing.exists());
         assert_eq!(fs::read(&original_file)?, b"uncheckpointed original bytes");
 
         // A copy's mutated WAL cannot be promoted into recovery evidence.
         fs::write(&backup_file, b"mutated original checkpoint bytes")?;
-        assert!(!compare_isolated_copy(&installed, &source, backup.path(), &expected)?);
+        assert!(!compare_isolated_copy(
+            &installed,
+            &source,
+            backup.path(),
+            &expected
+        )?);
         fs::write(&backup_file, b"uncheckpointed original bytes")?;
         fs::create_dir(copy_data.join("unmatched-empty-dir"))?;
-        assert!(!compare_isolated_copy(&installed, &source, backup.path(), &expected)?);
+        assert!(!compare_isolated_copy(
+            &installed,
+            &source,
+            backup.path(),
+            &expected
+        )?);
         assert_eq!(fs::read(&original_file)?, b"uncheckpointed original bytes");
         fs::remove_dir_all(outer)?;
         Ok(())

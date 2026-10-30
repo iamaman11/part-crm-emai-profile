@@ -459,7 +459,10 @@ mod tests {
             root.clone(),
         ])?;
         assert!(matches!(parsed, BridgeCommand::ReadOnlyS1(_, _, None)));
-        let copy = tmp.join("verified-external-copy").to_string_lossy().into_owned();
+        let copy = tmp
+            .join("verified-external-copy")
+            .to_string_lossy()
+            .into_owned();
         let with_copy = parse_command([
             "profile-bridge".to_owned(),
             super::S1_OBSERVE_ARGUMENT.to_owned(),
@@ -467,7 +470,10 @@ mod tests {
             root.clone(),
             copy.clone(),
         ])?;
-        assert!(matches!(with_copy, BridgeCommand::ReadOnlyS1(_, _, Some(_))));
+        assert!(matches!(
+            with_copy,
+            BridgeCommand::ReadOnlyS1(_, _, Some(_))
+        ));
         for args in [
             vec![super::S1_OBSERVE_ARGUMENT.to_owned(), bundle.clone()],
             vec![
