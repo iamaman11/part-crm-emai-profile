@@ -90,8 +90,8 @@ where
     }
     let start = Instant::now();
     let result = match command {
-        BridgeCommand::ReadOnlyS1(bundle, root) => {
-            let observation = run_s1_observation(&bundle, &root);
+        BridgeCommand::ReadOnlyS1(bundle, root, copy_root) => {
+            let observation = run_s1_observation(&bundle, &root, copy_root.as_deref());
             let ready = serde_json::from_str::<serde_json::Value>(&observation)
                 .ok()
                 .and_then(|report| {
@@ -218,7 +218,7 @@ fn copy_diagnostics() -> Result<(), BridgeCliError> {
 
 enum BridgeCommand {
     PrepareInstallation(PathBuf, PathBuf),
-    ReadOnlyS1(PathBuf, PathBuf),
+    ReadOnlyS1(PathBuf, PathBuf, Option<PathBuf>),
     Claim(ClaimUri),
     VerifyHistoricalCandidate(ClaimUri),
     InitialProfile(InitialProfileOpen),
@@ -252,10 +252,15 @@ where
                 .next()
                 .ok_or(BridgeCliError::InvalidInstallationArgument)?,
         );
-        if arguments.next().is_some() || !bundle.is_absolute() || !root.is_absolute() {
+        let copy_root = arguments.next().map(PathBuf::from);
+        if arguments.next().is_some()
+            || !bundle.is_absolute()
+            || !root.is_absolute()
+            || copy_root.as_ref().is_some_and(|path| !path.is_absolute())
+        {
             return Err(BridgeCliError::InvalidInstallationArgument);
         }
-        return Ok(BridgeCommand::ReadOnlyS1(bundle, root));
+        return Ok(BridgeCommand::ReadOnlyS1(bundle, root, copy_root));
     }
     if argument.as_str() == PREPARE_INSTALL_ARGUMENT {
         let bundle = PathBuf::from(
@@ -453,7 +458,16 @@ mod tests {
             bundle.clone(),
             root.clone(),
         ])?;
-        assert!(matches!(parsed, BridgeCommand::ReadOnlyS1(..)));
+        assert!(matches!(parsed, BridgeCommand::ReadOnlyS1(_, _, None)));
+        let copy = tmp.join("verified-external-copy").to_string_lossy().into_owned();
+        let with_copy = parse_command([
+            "profile-bridge".to_owned(),
+            super::S1_OBSERVE_ARGUMENT.to_owned(),
+            bundle.clone(),
+            root.clone(),
+            copy.clone(),
+        ])?;
+        assert!(matches!(with_copy, BridgeCommand::ReadOnlyS1(_, _, Some(_))));
         for args in [
             vec![super::S1_OBSERVE_ARGUMENT.to_owned(), bundle.clone()],
             vec![
@@ -468,9 +482,16 @@ mod tests {
             ],
             vec![
                 super::S1_OBSERVE_ARGUMENT.to_owned(),
+                bundle.clone(),
+                root.clone(),
+                "--delivery-prepare".to_owned(),
+            ],
+            vec![
+                super::S1_OBSERVE_ARGUMENT.to_owned(),
                 bundle,
                 root,
-                "--delivery-prepare".to_owned(),
+                copy,
+                "extra".to_owned(),
             ],
         ] {
             assert!(

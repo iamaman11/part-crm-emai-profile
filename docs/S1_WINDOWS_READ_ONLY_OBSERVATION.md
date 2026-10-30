@@ -5,8 +5,16 @@ This is an **observation interface, not an installer, rollback operation or B7 a
 ## Command (Windows, new candidate Bridge executable, outside the installed app)
 
 ```powershell
-profile-bridge.exe --s1-observe "<extracted signed installer inputs>" "<existing installation root>"
+profile-bridge.exe --s1-observe "<extracted signed installer inputs>" "<existing installation root>" ["<existing isolated profile-copy root>"]
 ```
+
+An optional third argument names an **already-existing**, byte-for-byte isolated
+copy of the `profiles` root **outside the installation tree**. S1 never makes
+this copy. It compares the full relative directory and file names, contents
+(including WAL and pending N+1), and materialization evidence under the live
+OS-backed original root lock. A mismatch is UNKNOWN and preserves both copies.
+An exact match is useful independent byte evidence, but **not** a Firefox
+reopen/WORKING certificate and does not by itself grant READY.
 
 The first argument must be an existing scratch directory with the exact installer-owned
 `installation.json`, `windows-delivery-manifest.json`, and

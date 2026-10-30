@@ -21,7 +21,7 @@ use windows_device_key::PersistedP256Key;
 
 const MAX_FILES: u64 = 500_000;
 
-#[derive(Debug, Default, Serialize)]
+#[derive(Debug, Default, Eq, PartialEq, Serialize)]
 struct ProfileObservation {
     content_manifest_sha256: String,
     files: u64,
@@ -45,6 +45,7 @@ struct S1Observation {
     signed_delivery: &'static str,
     installed_delivery: &'static str,
     profile_inventory: &'static str,
+    isolated_copy: &'static str,
     pending_evidence: &'static str,
     pending_counts: Option<S1PendingInventory>,
     generation_authority: &'static str,
@@ -57,7 +58,7 @@ struct S1Observation {
 /// Run from the *new* unpacked Bridge executable, with bundled signed release inputs
 /// in a scratch directory. Returns a structured observation, never a clearance to install.
 /// The installer must independently reacquire its exclusive admission immediately at activation.
-pub(super) fn observe(bundle_directory: &Path, installation_root: &Path) -> String {
+pub(super) fn observe(bundle_directory: &Path, installation_root: &Path, copy_root: Option<&Path>) -> String {
     let mut result = S1Observation {
         schema_version: 1,
         kind: "PROFILE_BRIDGE_S1_READ_ONLY_OBSERVATION",
@@ -68,6 +69,7 @@ pub(super) fn observe(bundle_directory: &Path, installation_root: &Path) -> Stri
         signed_delivery: "UNKNOWN",
         installed_delivery: "UNKNOWN",
         profile_inventory: "UNKNOWN",
+        isolated_copy: "NOT_PROVIDED",
         pending_evidence: "UNKNOWN",
         pending_counts: None,
         generation_authority: "UNKNOWN",
@@ -76,13 +78,13 @@ pub(super) fn observe(bundle_directory: &Path, installation_root: &Path) -> Stri
         inventory: None,
         reason_codes: Vec::new(),
     };
-    inspect(bundle_directory, installation_root, &mut result);
+    inspect(bundle_directory, installation_root, copy_root, &mut result);
     serde_json::to_string(&result).unwrap_or_else(|_| {
         String::from("{\"schema_version\":1,\"kind\":\"PROFILE_BRIDGE_S1_READ_ONLY_OBSERVATION\",\"verdict\":\"UNKNOWN\",\"reason_codes\":[\"SERIALIZATION_FAILED\"]}")
     })
 }
 
-fn inspect(bundle_directory: &Path, root: &Path, result: &mut S1Observation) {
+fn inspect(bundle_directory: &Path, root: &Path, copy_root: Option<&Path>, result: &mut S1Observation) {
     if validate_directory_tree(root, false).is_err() {
         result.reason_codes.push("INSTALLATION_ROOT_INVALID");
         return;
@@ -123,6 +125,26 @@ fn inspect(bundle_directory: &Path, root: &Path, result: &mut S1Observation) {
             result.inventory = Some(inventory);
         }
         Err(_) => result.reason_codes.push("PROFILE_INVENTORY_UNVERIFIED"),
+    }
+    if let Some(copy_root) = copy_root {
+        match result.inventory.as_ref().map(|original| {
+            compare_isolated_copy(root, &workspace, copy_root, original)
+        }) {
+            Some(Ok(true)) => {
+                result.isolated_copy = "BYTE_EXACT_ON_THIS_HOST_REOPEN_NOT_PROVEN";
+                // A byte-identical second directory is a useful independent
+                // copy but not a proven browser reopen or CURRENT/LKG authority.
+                result.independent_recovery = "BYTE_IDENTICAL_COPY_REOPEN_UNVERIFIED";
+            }
+            Some(Ok(false)) => {
+                result.isolated_copy = "CONTENT_MISMATCH";
+                result.reason_codes.push("ISOLATED_COPY_MISMATCH");
+            }
+            _ => {
+                result.isolated_copy = "UNVERIFIED";
+                result.reason_codes.push("ISOLATED_COPY_UNVERIFIED");
+            }
+        }
     }
     match inspect_all_pending_for_s1(&workspace) {
         Ok(pending) => {
@@ -258,9 +280,37 @@ fn inspect(bundle_directory: &Path, root: &Path, result: &mut S1Observation) {
     result
         .reason_codes
         .push("GENERATION_AUTHORITY_NOT_YET_PROVEN");
-    result
-        .reason_codes
-        .push("INDEPENDENT_PROFILE_BACKUP_NOT_YET_PROVEN");
+    if result.independent_recovery == "UNKNOWN" {
+        result
+            .reason_codes
+            .push("INDEPENDENT_PROFILE_BACKUP_NOT_YET_PROVEN");
+    } else {
+        result.reason_codes.push("ISOLATED_COPY_REOPEN_NOT_YET_PROVEN");
+    }
+}
+
+/// Compare the source against an already-existing isolated copy. This routine
+/// only reads both trees; copying/launching the backup is a separate operator
+/// action outside this command and never touches the original installation.
+fn compare_isolated_copy(
+    installed_root: &Path,
+    original: &MaterializationRoot,
+    copy_root: &Path,
+    expected: &ProfileObservation,
+) -> Result<bool, &'static str> {
+    let installed = fs::canonicalize(installed_root).map_err(|_| "ORIGINAL_ROOT")?;
+    let backup = fs::canonicalize(copy_root).map_err(|_| "BACKUP_MISSING")?;
+    if backup.starts_with(&installed)
+        || installed.starts_with(&backup)
+        || original.path().starts_with(&backup)
+        || backup.starts_with(original.path())
+    {
+        return Err("BACKUP_MUST_BE_ISOLATED");
+    }
+    let root = MaterializationRoot::open_existing(backup)
+        .map_err(|_| "BACKUP_INVALID")?;
+    let observed = inventory(&root)?;
+    Ok(&observed == expected)
 }
 
 fn sha256_lower_hex(bytes: &[u8]) -> String {
@@ -274,6 +324,7 @@ fn inventory(root: &MaterializationRoot) -> Result<ProfileObservation, &'static 
     let mut answer = ProfileObservation::default();
     let mut sidecars = Vec::new();
     let mut files: Vec<PathBuf> = Vec::new();
+    let mut directories: Vec<PathBuf> = Vec::new();
     let mut stack = vec![root.path().to_path_buf()];
     while let Some(directory) = stack.pop() {
         let children = fs::read_dir(directory).map_err(|_| "READ_DIRECTORY")?;
@@ -290,6 +341,7 @@ fn inventory(root: &MaterializationRoot) -> Result<ProfileObservation, &'static 
                 if name == "user_data" {
                     answer.firefox_user_data_directories += 1;
                 }
+                directories.push(child.path());
                 stack.push(child.path());
             } else if metadata.is_file() {
                 answer.files = answer.files.checked_add(1).ok_or("COUNT_LIMIT")?;
@@ -319,13 +371,22 @@ fn inventory(root: &MaterializationRoot) -> Result<ProfileObservation, &'static 
     // Full content evidence includes WAL/N+1. Never open a SQLite connection or
     // checkpoint a database. Hash only regular files with bounded streaming reads.
     files.sort();
+    directories.sort();
     let mut manifest = Sha256::new();
+    for directory in directories {
+        let relative = directory.strip_prefix(root.path()).map_err(|_| "RELATIVE_DIR")?;
+        let relative = relative.to_str().ok_or("PATH_ENCODING")?;
+        manifest.update(b"directory:");
+        manifest.update((relative.len() as u64).to_be_bytes());
+        manifest.update(relative.as_bytes());
+    }
     let mut buffer = [0u8; 64 * 1024];
     for path in files {
         let relative = path
             .strip_prefix(root.path())
             .map_err(|_| "RELATIVE_PATH")?;
         let relative = relative.to_str().ok_or("PATH_ENCODING")?;
+        manifest.update(b"file:");
         let mut file = File::open(&path).map_err(|_| "OPEN_FILE")?;
         let before = file.metadata().map_err(|_| "FILE_METADATA")?;
         manifest.update((relative.len() as u64).to_be_bytes());
@@ -474,7 +535,7 @@ mod tests {
             .share_mode(0)
             .open(&native_lock)?;
 
-        let result = observe(&installation.join("nonexistent-bundle"), &installation);
+        let result = observe(&installation.join("nonexistent-bundle"), &installation, None);
         assert!(result.contains("\"verdict\":\"BLOCKED\""), "{result}");
         assert!(result.contains("NATIVE_WRITER_LOCK_BUSY"), "{result}");
         assert_eq!(fs::read(&bridge_marker)?, b"original-bridge-marker");
@@ -484,7 +545,7 @@ mod tests {
         drop(handle);
         assert_eq!(fs::read(&native_lock)?, b"original-native-marker");
 
-        let next = observe(&installation.join("nonexistent-bundle"), &installation);
+        let next = observe(&installation.join("nonexistent-bundle"), &installation, None);
         assert!(
             next.contains("NO_ACTIVE_WRITER_DURING_OBSERVATION"),
             "{next}"
@@ -506,7 +567,7 @@ mod tests {
                 .as_nanos()
         ));
         fs::create_dir(&installation)?;
-        let result = observe(&installation.join("no-bundle"), &installation);
+        let result = observe(&installation.join("no-bundle"), &installation, None);
         assert!(result.contains("PROFILE_ROOT_UNVERIFIED"), "{result}");
         let parsed: serde_json::Value = serde_json::from_str(&result)?;
         assert_eq!(parsed["previous_delivery_rollback"], "UNKNOWN");
@@ -515,6 +576,46 @@ mod tests {
         assert!(!installation.join("profiles").exists());
         assert!(!installation.join("state").exists());
         fs::remove_dir(installation)?;
+        Ok(())
+    }
+
+    #[test]
+    fn isolated_backup_must_match_original_wal_and_tree_without_writing()
+    -> Result<(), Box<dyn std::error::Error>> {
+        use super::compare_isolated_copy;
+        let outer = std::env::temp_dir().join(format!(
+            "s1-copy-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)?
+                .as_nanos()
+        ));
+        let installed = outer.join("installed");
+        let source = MaterializationRoot::open_or_create(installed.join("profiles"))?;
+        let original_data = source.path().join("user_data");
+        fs::create_dir(&original_data)?;
+        let original_file = original_data.join("cookies.sqlite-wal");
+        fs::write(&original_file, b"uncheckpointed original bytes")?;
+        let expected = inventory(&source)?;
+
+        let backup = MaterializationRoot::open_or_create(outer.join("isolated-copy"))?;
+        let copy_data = backup.path().join("user_data");
+        fs::create_dir(&copy_data)?;
+        let backup_file = copy_data.join("cookies.sqlite-wal");
+        fs::write(&backup_file, b"uncheckpointed original bytes")?;
+        assert!(compare_isolated_copy(&installed, &source, backup.path(), &expected)?);
+        assert!(compare_isolated_copy(&installed, &source, source.path(), &expected).is_err());
+        assert!(compare_isolated_copy(&installed, &source, &outer, &expected).is_err());
+        assert_eq!(fs::read(&original_file)?, b"uncheckpointed original bytes");
+
+        // A copy's mutated WAL cannot be promoted into recovery evidence.
+        fs::write(&backup_file, b"mutated original checkpoint bytes")?;
+        assert!(!compare_isolated_copy(&installed, &source, backup.path(), &expected)?);
+        fs::write(&backup_file, b"uncheckpointed original bytes")?;
+        fs::create_dir(copy_data.join("unmatched-empty-dir"))?;
+        assert!(!compare_isolated_copy(&installed, &source, backup.path(), &expected)?);
+        assert_eq!(fs::read(&original_file)?, b"uncheckpointed original bytes");
+        fs::remove_dir_all(outer)?;
         Ok(())
     }
 

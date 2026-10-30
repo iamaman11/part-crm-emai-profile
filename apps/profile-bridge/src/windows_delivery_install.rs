@@ -13,14 +13,14 @@ mod s1;
 
 /// Operator-only no-effect observation. Output is JSON with its own verdict;
 /// a successful command execution is NOT an installation authorization.
-pub fn run_s1_observation(bundle: &Path, root: &Path) -> String {
+pub fn run_s1_observation(bundle: &Path, root: &Path, copy_root: Option<&Path>) -> String {
     #[cfg(windows)]
     {
-        s1::observe(bundle, root)
+        s1::observe(bundle, root, copy_root)
     }
     #[cfg(not(windows))]
     {
-        let _ = (bundle, root);
+        let _ = (bundle, root, copy_root);
         String::from(
             "{\"schema_version\":1,\"kind\":\"PROFILE_BRIDGE_S1_READ_ONLY_OBSERVATION\",\"verdict\":\"UNKNOWN\",\"reason_codes\":[\"WINDOWS_REQUIRED\"]}",
         )
