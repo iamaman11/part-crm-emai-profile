@@ -35,6 +35,12 @@ fn main() -> ExitCode {
     match run(env::args()) {
         Ok(()) => ExitCode::SUCCESS,
         Err(error) => {
+            // S1 outcomes are machine-readable and fail closed without showing a
+            // desktop dialog or writing a normal runtime diagnostic report.
+            if matches!(error, BridgeCliError::S1NotReady) {
+                eprintln!("BRIDGE_S1_NOT_READY");
+                return ExitCode::from(3);
+            }
             if let BridgeCliError::LaunchFailed(ShippingCompositionError::Operator(owner)) = error {
                 // This closed typed outcome contains no claims, paths, credentials or profile data.
                 eprintln!("BRIDGE_OPERATOR_OUTCOME={owner:?}");
@@ -80,8 +86,21 @@ where
     let start = Instant::now();
     let result = match command {
         BridgeCommand::ReadOnlyS1(bundle, root) => {
-            println!("{}", run_s1_observation(&bundle, &root));
-            Ok(())
+            let observation = run_s1_observation(&bundle, &root);
+            let ready = serde_json::from_str::<serde_json::Value>(&observation)
+                .ok()
+                .and_then(|report| {
+                    report.get("verdict")
+                        .and_then(serde_json::Value::as_str)
+                        .map(|verdict| verdict == "READY")
+                })
+                .unwrap_or(false);
+            println!("{observation}");
+            if ready {
+                Ok(())
+            } else {
+                Err(BridgeCliError::S1NotReady)
+            }
         }
         BridgeCommand::PrepareInstallation(bundle, root) => {
             let result = run_install_preparation(&bundle, &root);
@@ -307,6 +326,7 @@ enum BridgeCliError {
     PairingFailed(DevicePairingBootstrapError),
     DeliveryFailed(ShippingCompositionError),
     DiagnosticsUnavailable,
+    S1NotReady,
 }
 
 impl BridgeCliError {
@@ -314,7 +334,7 @@ impl BridgeCliError {
         match self {
             Self::InstallationFailed(error) => UserDiagnostic::Installation(error),
             Self::MissingLaunchArgument => UserDiagnostic::StartFromApplication,
-            Self::DiagnosticsUnavailable => UserDiagnostic::ReportUnavailable,
+            Self::DiagnosticsUnavailable | Self::S1NotReady => UserDiagnostic::ReportUnavailable,
             Self::UnexpectedArgument
             | Self::InvalidClaimUri
             | Self::InvalidPairingUri
