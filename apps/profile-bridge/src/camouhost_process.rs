@@ -521,8 +521,12 @@ impl ProcessControlPort for ManagedCamouhostProcess {
         let stdin = child.stdin.take().ok_or(BridgePortError::Unavailable)?;
         let stdout = child.stdout.take().ok_or(BridgePortError::Unavailable)?;
         let stderr = child.stderr.take().ok_or(BridgePortError::Unavailable)?;
-        let raw_diagnostics = local_agent_directory()?
-            .map(|directory| directory.join(format!("camouhost-{}.stderr.log", child.id())));
+        let stamp = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map_or(0, |elapsed| elapsed.as_nanos());
+        let raw_diagnostics = local_agent_directory()?.map(|directory| {
+            directory.join(format!("camouhost-{}-{stamp}.stderr.log", child.id()))
+        });
         spawn_camouhost_diagnostic_reader(stderr, raw_diagnostics);
         state.stdin = Some(stdin);
         state.responses = Some(spawn_response_reader(stdout));
@@ -946,14 +950,21 @@ fn local_agent_directory() -> Result<Option<PathBuf>, BridgePortError> {
 }
 
 fn spawn_camouhost_diagnostic_reader(stderr: ChildStderr, raw_path: Option<PathBuf>) {
-    // Drain stderr continuously to prevent a filled OS pipe from blocking the
-    // real browser. Oversized/unrecognised lines are discarded, never retained.
+    // Drain stderr continuously to avoid blocking the browser. Full raw bytes
+    // are retained for explicitly opted-in local tests. The ordinary UI summary
+    // still applies its independent bounded safe vocabulary.
     thread::spawn(move || {
         let mut reader = BufReader::new(stderr);
         // Full stderr belongs to the local agent test run, not the compact
         // allowlisted end-user report. Do not truncate, redact or profile-filter it.
         let mut raw = raw_path.and_then(|path| {
-            fs::OpenOptions::new().write(true).create_new(true).open(path).ok()
+            match fs::OpenOptions::new().write(true).create_new(true).open(path) {
+                Ok(file) => Some(file),
+                Err(error) => {
+                    eprintln!("CAMOUHOST_AGENT_RAW_DIAGNOSTIC_OPEN_FAILED category={:?}", error.kind());
+                    None
+                }
+            }
         });
         let mut line = Vec::with_capacity(MAX_CAMOUHOST_DIAGNOSTIC_BYTES);
         let mut oversized = false;
