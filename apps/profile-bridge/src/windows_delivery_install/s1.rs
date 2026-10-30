@@ -193,7 +193,9 @@ fn inspect(
                     "STRUCTURE_ONLY"
                 };
             if !inventory.sidecar_failures.is_empty() {
-                result.reason_codes.push("MATERIALIZATION_BINDINGS_UNVERIFIED");
+                result
+                    .reason_codes
+                    .push("MATERIALIZATION_BINDINGS_UNVERIFIED");
             }
             result.inventory = Some(inventory);
         }
@@ -390,13 +392,14 @@ fn compare_isolated_copy(
     )?;
     // Check every path component before canonicalization; a reparse or
     // symlink alias must never be treated as an independent recovery copy.
-    let copy = MaterializationRoot::open_existing(copy_root.to_path_buf())
-        .map_err(|error| InventoryFailure {
+    let copy = MaterializationRoot::open_existing(copy_root.to_path_buf()).map_err(|error| {
+        InventoryFailure {
             code: "BACKUP_INVALID",
             path: copy_root.to_string_lossy().into_owned(),
             detail: Some(error.to_string()),
             os_error: None,
-        })?;
+        }
+    })?;
     let backup = copy.path();
     if backup.starts_with(&installed)
         || installed.starts_with(&backup)
@@ -614,7 +617,6 @@ mod tests {
         Ok(())
     }
 
-
     #[test]
     fn opened_exclusive_file_reports_exact_inventory_failure_without_change()
     -> Result<(), Box<dyn std::error::Error>> {
@@ -637,7 +639,12 @@ mod tests {
         let error = super::inventory(&root).expect_err("locked original must fail");
         assert_eq!(error.code, "OPEN_FILE");
         assert_eq!(error.path, wal.to_string_lossy());
-        assert!(error.detail.as_ref().is_some_and(|detail| !detail.is_empty()));
+        assert!(
+            error
+                .detail
+                .as_ref()
+                .is_some_and(|detail| !detail.is_empty())
+        );
         assert!(error.os_error.is_some());
 
         let observed = observe(&directory.join("missing-bundle"), &directory, None);
@@ -645,7 +652,10 @@ mod tests {
         assert_eq!(report["verdict"], "UNKNOWN");
         assert_eq!(report["reason_codes"][0], "PROFILE_INVENTORY_UNVERIFIED");
         assert_eq!(report["inventory_failure"]["code"], "OPEN_FILE");
-        assert_eq!(report["inventory_failure"]["path"], wal.to_string_lossy().as_ref());
+        assert_eq!(
+            report["inventory_failure"]["path"],
+            wal.to_string_lossy().as_ref()
+        );
         assert!(report["inventory_failure"]["detail"].as_str().is_some());
         assert!(report["inventory_failure"]["os_error"].as_i64().is_some());
         assert!(report["inventory"].is_null());
