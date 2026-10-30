@@ -30,6 +30,37 @@ pub struct MaterializationRoot {
 }
 
 impl MaterializationRoot {
+    /// S1 inspector: require an already initialized root, never create its marker
+    /// or any directory. This is deliberately distinct from open_or_create.
+    pub fn open_existing(path: impl Into<PathBuf>) -> Result<Self, LocalProfileError> {
+        let path = path.into();
+        if !path.is_absolute() {
+            return Err(LocalProfileError::RootMustBeAbsolute);
+        }
+        for ancestor in path.ancestors() {
+            let metadata = fs::symlink_metadata(ancestor)?;
+            if metadata.file_type().is_symlink() {
+                return Err(LocalProfileError::RootIsSymlink);
+            }
+            #[cfg(windows)]
+            {
+                use std::os::windows::fs::MetadataExt;
+                if metadata.file_attributes() & 0x0400 != 0 {
+                    return Err(LocalProfileError::RootIsSymlink);
+                }
+            }
+            if !metadata.is_dir() {
+                return Err(LocalProfileError::RootIsNotDirectory);
+            }
+        }
+        if read_control_text(&path.join(ROOT_MARKER))? != ROOT_MARKER_CONTENT {
+            return Err(LocalProfileError::RootMarkerMismatch);
+        }
+        Ok(Self {
+            canonical_path: fs::canonicalize(path)?,
+        })
+    }
+
     pub fn open_or_create(path: impl Into<PathBuf>) -> Result<Self, LocalProfileError> {
         let path = path.into();
         if !path.is_absolute() {
