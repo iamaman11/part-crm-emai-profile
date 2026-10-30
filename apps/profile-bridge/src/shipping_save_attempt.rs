@@ -1348,7 +1348,7 @@ pub(crate) fn classify_scoped_pending_save_evidence(
 
 /// S1 summary of every on-disk P3 pending identity under the original root.
 /// Counts are evidence only: neither checkpoint nor intent authorizes cloud commit.
-#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Serialize)]
 pub(crate) struct S1PendingInventory {
     pub(crate) exact_checkpoints: u64,
     pub(crate) lone_local_unsynced: u64,
