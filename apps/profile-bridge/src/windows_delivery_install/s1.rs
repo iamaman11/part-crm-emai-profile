@@ -1,16 +1,16 @@
 //! Operator-only S1 observation. No installation, recovery, snapshot, key creation,
- //! network operation or browser launch is permitted in this module.
+//! network operation or browser launch is permitted in this module.
 use super::bundle::{InstallBundle, validate_directory_tree};
-use crate::installed_connection::InstalledConnection;
 use crate::browser_execution::load_materialization_binding;
-use profile_platform_primitives::{GenerationId, ProfileId, TenantId};
+use crate::installed_connection::InstalledConnection;
 use crate::local_profile::{DeliveryActivationGuard, LocalProfileError, MaterializationRoot};
 use crate::windows_delivery::verify_delivery_candidate;
 use crate::windows_delivery_coordinator::accepted_floor;
 use crate::windows_delivery_signature::WindowsCmsSignatureVerifier;
-use crate::windows_delivery_store::DeliveryStateStore;
 use crate::windows_delivery_staging::{DeliveryStagingRoot, reopen_staged_delivery};
+use crate::windows_delivery_store::DeliveryStateStore;
 use crate::windows_device_application::WindowsDeviceApplicationBinding;
+use profile_platform_primitives::{GenerationId, ProfileId, TenantId};
 use serde::Serialize;
 use sha2::{Digest, Sha256};
 use std::fs::{self, File};
@@ -105,13 +105,12 @@ fn inspect(bundle_directory: &Path, root: &Path, result: &mut S1Observation) {
     };
     match inventory(&workspace) {
         Ok(inventory) => {
-            result.profile_inventory = if inventory.materialization_sidecars
-                == inventory.materializations_verified
-            {
-                "STRUCTURE_AND_EXISTING_BINDINGS_VERIFIED"
-            } else {
-                "STRUCTURE_ONLY"
-            };
+            result.profile_inventory =
+                if inventory.materialization_sidecars == inventory.materializations_verified {
+                    "STRUCTURE_AND_EXISTING_BINDINGS_VERIFIED"
+                } else {
+                    "STRUCTURE_ONLY"
+                };
             result.inventory = Some(inventory);
         }
         Err(_) => result.reason_codes.push("PROFILE_INVENTORY_UNVERIFIED"),
@@ -128,7 +127,9 @@ fn inspect(bundle_directory: &Path, root: &Path, result: &mut S1Observation) {
             state
         }
         Err(_) => {
-            result.reason_codes.push("INSTALLED_DELIVERY_STATE_UNVERIFIED");
+            result
+                .reason_codes
+                .push("INSTALLED_DELIVERY_STATE_UNVERIFIED");
             return;
         }
     };
@@ -140,7 +141,9 @@ fn inspect(bundle_directory: &Path, root: &Path, result: &mut S1Observation) {
             return;
         }
     };
-    if state.state().active()
+    if state
+        .state()
+        .active()
         .is_none_or(|active| reopen_staged_delivery(&staging, active).is_err())
     {
         result.installed_delivery = "ACTIVE_COMPONENT_HASHES_UNVERIFIED";
@@ -152,7 +155,9 @@ fn inspect(bundle_directory: &Path, root: &Path, result: &mut S1Observation) {
         if reopen_staged_delivery(&staging, lkg).is_ok() {
             result.independent_recovery = "PREVIOUS_DELIVERY_COMPONENTS_VERIFIED";
         } else {
-            result.reason_codes.push("PREVIOUS_DELIVERY_BYTES_UNVERIFIED");
+            result
+                .reason_codes
+                .push("PREVIOUS_DELIVERY_BYTES_UNVERIFIED");
         }
     } else {
         result.independent_recovery = "ACTIVE_DELIVERY_ONLY";
@@ -212,8 +217,12 @@ fn inspect(bundle_directory: &Path, root: &Path, result: &mut S1Observation) {
     // File enumeration is not authoritative proof of the CURRENT / WORKING / LKG
     // generation mapping or an independent restorable backup. Never silently
     // promote a structurally readable directory into a verified Save.
-    result.reason_codes.push("GENERATION_AUTHORITY_NOT_YET_PROVEN");
-    result.reason_codes.push("INDEPENDENT_PROFILE_BACKUP_NOT_YET_PROVEN");
+    result
+        .reason_codes
+        .push("GENERATION_AUTHORITY_NOT_YET_PROVEN");
+    result
+        .reason_codes
+        .push("INDEPENDENT_PROFILE_BACKUP_NOT_YET_PROVEN");
 }
 
 fn inventory(root: &MaterializationRoot) -> Result<ProfileObservation, &'static str> {
@@ -239,7 +248,10 @@ fn inventory(root: &MaterializationRoot) -> Result<ProfileObservation, &'static 
                 stack.push(child.path());
             } else if metadata.is_file() {
                 answer.files = answer.files.checked_add(1).ok_or("COUNT_LIMIT")?;
-                answer.bytes = answer.bytes.checked_add(metadata.len()).ok_or("SIZE_LIMIT")?;
+                answer.bytes = answer
+                    .bytes
+                    .checked_add(metadata.len())
+                    .ok_or("SIZE_LIMIT")?;
                 files.push(child.path());
                 if name.ends_with("-wal") {
                     answer.sqlite_wal_files += 1;
@@ -265,7 +277,9 @@ fn inventory(root: &MaterializationRoot) -> Result<ProfileObservation, &'static 
     let mut manifest = Sha256::new();
     let mut buffer = [0u8; 64 * 1024];
     for path in files {
-        let relative = path.strip_prefix(root.path()).map_err(|_| "RELATIVE_PATH")?;
+        let relative = path
+            .strip_prefix(root.path())
+            .map_err(|_| "RELATIVE_PATH")?;
         let relative = relative.to_str().ok_or("PATH_ENCODING")?;
         let mut file = File::open(&path).map_err(|_| "OPEN_FILE")?;
         let before = file.metadata().map_err(|_| "FILE_METADATA")?;
@@ -310,14 +324,15 @@ fn validate_sidecar(root: &MaterializationRoot, path: &Path) -> Result<(), &'sta
     let content = fs::read_to_string(path).map_err(|_| "SIDECAR_INVALID")?;
     let value = |key: &str| -> Result<&str, &'static str> {
         let prefix = format!("{key}=");
-        content.lines()
+        content
+            .lines()
             .find_map(|line| line.strip_prefix(&prefix))
             .ok_or("SIDECAR_MISSING_ID")
     };
     let tenant = TenantId::parse(value("tenant_id")?).map_err(|_| "SIDECAR_TENANT")?;
     let profile = ProfileId::parse(value("profile_id")?).map_err(|_| "SIDECAR_PROFILE")?;
-    let generation = GenerationId::parse(value("generation_id")?)
-        .map_err(|_| "SIDECAR_GENERATION")?;
+    let generation =
+        GenerationId::parse(value("generation_id")?).map_err(|_| "SIDECAR_GENERATION")?;
     if path.file_name().and_then(|v| v.to_str())
         != Some(format!(".{}.materialization", generation.as_str()).as_str())
     {
@@ -328,7 +343,9 @@ fn validate_sidecar(root: &MaterializationRoot, path: &Path) -> Result<(), &'sta
         .map_err(|_| "SIDECAR_WORKSPACE")?;
     let binding = load_materialization_binding(&workspace, &tenant, &profile, &generation)
         .map_err(|_| "SIDECAR_BINDING")?;
-    if workspace.materialization_inventory_digest().map_err(|_| "SIDECAR_DIGEST")?
+    if workspace
+        .materialization_inventory_digest()
+        .map_err(|_| "SIDECAR_DIGEST")?
         != binding.materialized_inventory_digest()
     {
         return Err("SIDECAR_DIGEST_MISMATCH");
@@ -367,7 +384,10 @@ mod tests {
         let before = fs::read(&wal)?;
         let observation = inventory(&root)?;
         assert_eq!(observation.content_manifest_sha256.len(), 64);
-        assert_eq!(observation.content_manifest_sha256, inventory(&root)?.content_manifest_sha256);
+        assert_eq!(
+            observation.content_manifest_sha256,
+            inventory(&root)?.content_manifest_sha256
+        );
         assert_eq!(observation.firefox_user_data_directories, 1);
         assert_eq!(observation.sqlite_wal_files, 1);
         assert_eq!(observation.pending_named_files, 1);
@@ -417,7 +437,10 @@ mod tests {
         drop(handle);
 
         let next = observe(&installation.join("nonexistent-bundle"), &installation);
-        assert!(next.contains("NO_ACTIVE_WRITER_DURING_OBSERVATION"), "{next}");
+        assert!(
+            next.contains("NO_ACTIVE_WRITER_DURING_OBSERVATION"),
+            "{next}"
+        );
         assert!(next.contains("\"verdict\":\"UNKNOWN\""), "{next}");
         assert_eq!(fs::read(&bridge_marker)?, b"original-bridge-marker");
         fs::remove_dir_all(installation)?;
@@ -445,9 +468,8 @@ mod tests {
 
     #[test]
     fn inventory_rejects_unreadable_or_missing_root() {
-        let missing = std::env::temp_dir().join(format!(
-            "s1-unavailable-{}-missing", std::process::id()
-        ));
+        let missing =
+            std::env::temp_dir().join(format!("s1-unavailable-{}-missing", std::process::id()));
         assert!(MaterializationRoot::open_existing(&missing).is_err());
     }
 }

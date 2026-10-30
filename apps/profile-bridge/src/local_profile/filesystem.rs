@@ -956,11 +956,20 @@ mod s1_open_existing_tests {
         assert!(!directory.exists());
         let working = MaterializationRoot::open_or_create(&directory)?;
         let expected = fs::read(directory.join(".profile-platform-root"))?;
-        assert_eq!(MaterializationRoot::open_existing(&directory)?.path(), working.path());
-        assert_eq!(fs::read(directory.join(".profile-platform-root"))?, expected);
+        assert_eq!(
+            MaterializationRoot::open_existing(&directory)?.path(),
+            working.path()
+        );
+        assert_eq!(
+            fs::read(directory.join(".profile-platform-root"))?,
+            expected
+        );
         fs::write(directory.join(".profile-platform-root"), b"wrong marker")?;
         assert!(MaterializationRoot::open_existing(&directory).is_err());
-        assert_eq!(fs::read(directory.join(".profile-platform-root"))?, b"wrong marker");
+        assert_eq!(
+            fs::read(directory.join(".profile-platform-root"))?,
+            b"wrong marker"
+        );
         fs::remove_dir_all(directory)?;
         Ok(())
     }

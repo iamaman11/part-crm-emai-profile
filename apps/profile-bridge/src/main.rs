@@ -22,8 +22,8 @@ use profile_bridge::windows_delivery_handoff::{
     FIRST_INSTALL_ARGUMENT, HANDOFF_ACTIVATE_ARGUMENT, HANDOFF_ARRIVAL_ARGUMENT,
 };
 use profile_bridge::windows_delivery_install::{
-    NativeInstallerError, PREPARE_INSTALL_ARGUMENT, PREPARED_DIRECTORY_PREFIX,
-    S1_OBSERVE_ARGUMENT, run_install_preparation, run_s1_observation,
+    NativeInstallerError, PREPARE_INSTALL_ARGUMENT, PREPARED_DIRECTORY_PREFIX, S1_OBSERVE_ARGUMENT,
+    run_install_preparation, run_s1_observation,
 };
 use std::env;
 use std::fmt;
@@ -62,7 +62,9 @@ where
         _ => None,
     };
     let stage = match &command {
-        BridgeCommand::PrepareInstallation(..) | BridgeCommand::ReadOnlyS1(..) => Stage::InstallPrepare,
+        BridgeCommand::PrepareInstallation(..) | BridgeCommand::ReadOnlyS1(..) => {
+            Stage::InstallPrepare
+        }
         BridgeCommand::InitialProfile(_) | BridgeCommand::Claim(_) => Stage::OpenRequested,
         BridgeCommand::VerifyHistoricalCandidate(_) => Stage::LocalRecovery,
         BridgeCommand::PairingStart(_) | BridgeCommand::PairingComplete(_) => Stage::Pairing,
@@ -72,7 +74,10 @@ where
         }
         BridgeCommand::CopyDiagnostics => Stage::Delivery,
     };
-    let report_operation = !matches!(&command, BridgeCommand::CopyDiagnostics | BridgeCommand::ReadOnlyS1(..));
+    let report_operation = !matches!(
+        &command,
+        BridgeCommand::CopyDiagnostics | BridgeCommand::ReadOnlyS1(..)
+    );
     let observe = |outcome, cause, elapsed| {
         if let Some(root) = &installation_root {
             report::record_at(root, stage, outcome, Cloud::Unknown, cause, elapsed);
@@ -90,7 +95,8 @@ where
             let ready = serde_json::from_str::<serde_json::Value>(&observation)
                 .ok()
                 .and_then(|report| {
-                    report.get("verdict")
+                    report
+                        .get("verdict")
                         .and_then(serde_json::Value::as_str)
                         .map(|verdict| verdict == "READY")
                 })
@@ -450,13 +456,26 @@ mod tests {
         assert!(matches!(parsed, BridgeCommand::ReadOnlyS1(..)));
         for args in [
             vec![super::S1_OBSERVE_ARGUMENT.to_owned(), bundle.clone()],
-            vec![super::S1_OBSERVE_ARGUMENT.to_owned(), "relative".to_owned(), root.clone()],
-            vec![super::S1_OBSERVE_ARGUMENT.to_owned(), bundle.clone(), "relative".to_owned()],
-            vec![super::S1_OBSERVE_ARGUMENT.to_owned(), bundle, root, "--delivery-prepare".to_owned()],
+            vec![
+                super::S1_OBSERVE_ARGUMENT.to_owned(),
+                "relative".to_owned(),
+                root.clone(),
+            ],
+            vec![
+                super::S1_OBSERVE_ARGUMENT.to_owned(),
+                bundle.clone(),
+                "relative".to_owned(),
+            ],
+            vec![
+                super::S1_OBSERVE_ARGUMENT.to_owned(),
+                bundle,
+                root,
+                "--delivery-prepare".to_owned(),
+            ],
         ] {
-            assert!(parse_command(
-                std::iter::once("profile-bridge".to_owned()).chain(args),
-            ).is_err());
+            assert!(
+                parse_command(std::iter::once("profile-bridge".to_owned()).chain(args),).is_err()
+            );
         }
         Ok(())
     }

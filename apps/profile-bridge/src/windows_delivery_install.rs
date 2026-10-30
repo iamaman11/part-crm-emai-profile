@@ -21,7 +21,9 @@ pub fn run_s1_observation(bundle: &Path, root: &Path) -> String {
     #[cfg(not(windows))]
     {
         let _ = (bundle, root);
-        String::from("{\"schema_version\":1,\"kind\":\"PROFILE_BRIDGE_S1_READ_ONLY_OBSERVATION\",\"verdict\":\"UNKNOWN\",\"reason_codes\":[\"WINDOWS_REQUIRED\"]}")
+        String::from(
+            "{\"schema_version\":1,\"kind\":\"PROFILE_BRIDGE_S1_READ_ONLY_OBSERVATION\",\"verdict\":\"UNKNOWN\",\"reason_codes\":[\"WINDOWS_REQUIRED\"]}",
+        )
     }
 }
 
