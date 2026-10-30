@@ -47,4 +47,4 @@ with artifact.open("x", encoding="utf-8") as output:
 result = {"artifact": str(artifact), "before": report["count_before"],
           "after": report["count_after"], "errors": report["errors"]}
 if report["errors"]:
-    raise AssertionError(f"B7 first-open observation incomplete: {len(report['errors'])} errors; see {artifact}")
+    raise AssertionError(f"B7 first-open observation incomplete: errors={report['errors']!r}; see {artifact}")

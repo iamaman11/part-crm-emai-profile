@@ -11,6 +11,7 @@ import sys
 import tempfile
 import threading
 import time
+from unittest.mock import patch
 from pathlib import Path
 
 
@@ -216,6 +217,26 @@ def prove_agent() -> None:
                 assert len(list(agent.results.glob("b7-first-restore-*.json"))) == 2
             finally:
                 fake.pages[0].screenshot = original
+
+            # A disk-full/fsync failure AFTER Python has executed cannot
+            # invent successful completion. The claimed script and its raw
+            # local stdout remain for diagnosis; automatic replay is forbidden.
+            durability_job = committed_request(
+                agent.requests,
+                "context.pages[0].goto('about:durability-failure')\nresult = 'executed'\n",
+            )
+            with patch.object(runtime, "durable_agent_directory", lambda _path: None), \
+                    patch.object(runtime.os, "fsync", side_effect=OSError("simulated disk full")):
+                try:
+                    agent.run_one(fake)
+                except OSError as error:
+                    assert "disk full" in str(error)
+                else:
+                    raise AssertionError("fsync failure silently confirmed a result")
+            assert fake.pages[0].url == "about:durability-failure"
+            assert not (agent.results / f"{durability_job}.json").exists()
+            assert (agent.requests / f"{durability_job}.running").exists()
+            assert not agent.run_one(fake), "uncertain already-claimed request was replayed"
 
             # If the live locator disappears while a submitted job is still
             # awaiting dispatch, the CLI returns UNCONFIRMED, not Saved/OK.
