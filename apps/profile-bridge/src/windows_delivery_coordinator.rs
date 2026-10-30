@@ -180,7 +180,7 @@ impl PreparedWindowsDelivery {
     }
 }
 
-fn accepted_floor(state: &DeliveryState) -> Option<AcceptedDeliveryFloor> {
+pub(crate) fn accepted_floor(state: &DeliveryState) -> Option<AcceptedDeliveryFloor> {
     highest_accepted_identity(state).map(AcceptedDeliveryFloor::from_identity)
 }
 
