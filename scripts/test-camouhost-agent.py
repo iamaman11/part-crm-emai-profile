@@ -140,10 +140,10 @@ def prove_owner_thread_polling() -> None:
     )
     completed = subprocess.run(
         [sys.executable, "-u", "-c", probe],
-        input="hello|a\nclose|b\n", text=True, capture_output=True, timeout=15,
+        input=b"hello|a\nclose|b\n", capture_output=True, timeout=15,
     )
     assert completed.returncode == 0, completed.stderr
-    assert "['hello|a\\n', 'close|b\\n', '']" in completed.stdout, completed.stdout
+    assert "['hello|a\\n', 'close|b\\n', '']" in completed.stdout.decode("utf-8"), completed.stdout
 
 
 def main() -> int:
