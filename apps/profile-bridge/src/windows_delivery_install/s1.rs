@@ -432,9 +432,12 @@ mod tests {
         let result = observe(&installation.join("nonexistent-bundle"), &installation);
         assert!(result.contains("\"verdict\":\"BLOCKED\""), "{result}");
         assert!(result.contains("NATIVE_WRITER_LOCK_BUSY"), "{result}");
-        assert_eq!(fs::read(&native_lock)?, b"original-native-marker");
         assert_eq!(fs::read(&bridge_marker)?, b"original-bridge-marker");
+        // Windows share_mode(0) deliberately prevents a second file open,
+        // including this test's own fs::read. Inspect the original bytes only
+        // after the simulated native writer releases its exclusive handle.
         drop(handle);
+        assert_eq!(fs::read(&native_lock)?, b"original-native-marker");
 
         let next = observe(&installation.join("nonexistent-bundle"), &installation);
         assert!(
