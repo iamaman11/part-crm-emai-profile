@@ -8,6 +8,24 @@ use std::path::Path;
 
 #[cfg(any(windows, test))]
 mod bundle;
+#[cfg(windows)]
+mod s1;
+
+/// Operator-only no-effect observation. Output is JSON with its own verdict;
+/// a successful command execution is NOT an installation authorization.
+pub fn run_s1_observation(bundle: &Path, root: &Path) -> String {
+    #[cfg(windows)]
+    {
+        s1::observe(bundle, root)
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = (bundle, root);
+        String::from("{\"schema_version\":1,\"kind\":\"PROFILE_BRIDGE_S1_READ_ONLY_OBSERVATION\",\"verdict\":\"UNKNOWN\",\"reason_codes\":[\"WINDOWS_REQUIRED\"]}")
+    }
+}
+
+pub const S1_OBSERVE_ARGUMENT: &str = "--s1-observe";
 
 pub const PREPARE_INSTALL_ARGUMENT: &str = "--delivery-prepare";
 /// Versioned installer-only locator; the native staging owner chooses the directory.
