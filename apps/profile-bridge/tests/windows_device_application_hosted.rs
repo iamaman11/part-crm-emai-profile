@@ -113,8 +113,8 @@ fn shipping_cng_request_proof_survives_process_restart() -> Result<(), Box<dyn s
 }
 
 #[test]
-fn installed_binding_never_recreates_missing_cng_identity()
--> Result<(), Box<dyn std::error::Error>> {
+fn installed_binding_never_recreates_missing_cng_identity() -> Result<(), Box<dyn std::error::Error>>
+{
     let unique = SystemTime::now().duration_since(UNIX_EPOCH)?.as_nanos();
     let tenant_id = TenantId::parse(format!("tenant_missing_{unique}"))?;
     let actor_id = ActorId::parse(format!("actor_missing_{unique}"))?;
