@@ -15,8 +15,10 @@ import importlib.metadata
 import json
 import os
 import re
+import secrets
 import sys
 import time
+import traceback
 from pathlib import Path
 from typing import Any
 
@@ -40,6 +42,8 @@ EXPECTED_CONFIG_SHA256_ENV = "CAMOUHOST_EXPECTED_CONFIG_SHA256"
 EXPECTED_PROBE_SHA256_ENV = "CAMOUHOST_EXPECTED_PROBE_SHA256"
 HEADLESS_MODE_ENV = "CAMOUHOST_HEADLESS_MODE"
 PROXY_CONFIG_ENV = "CAMOUHOST_PROXY_CONFIG_PATH"
+AGENT_DIRECTORY_ENV = "CAMOUHOST_AGENT_DIRECTORY"
+AGENT_REQUEST_PATTERN = re.compile(r"[0-9a-f]{32}\.py\Z")
 
 FINGERPRINT_PROBE = """
 () => ({
@@ -1078,7 +1082,126 @@ def close_context(manager: Any, _context: Any, root: Path) -> None:
     wait_for_browser_quiescence(root)
 
 
-def install_controlled_close_observation(context: Any) -> dict[str, Any]:
+class WindowsBrowserExitWitness:
+    """Native Windows browser-PID exit witness; held handles defeat PID reuse.
+
+    The real Camoufox browser is a descendant of this Camouhost's Playwright
+    driver. Only its root process (not worker/content children) determines
+    whether all user windows ended with a normal browser process exit.
+    """
+
+    def __init__(self, owner_pid: int) -> None:
+        if os.name != "nt":
+            raise RuntimeContractError("Windows browser exit witness requested on non-Windows host")
+        import ctypes
+        from ctypes import wintypes
+
+        self.ctypes = ctypes
+        self.kernel = ctypes.WinDLL("kernel32", use_last_error=True)
+
+        class ProcessEntry(ctypes.Structure):
+            _fields_ = [
+                ("dwSize", wintypes.DWORD),
+                ("cntUsage", wintypes.DWORD),
+                ("th32ProcessID", wintypes.DWORD),
+                ("th32DefaultHeapID", ctypes.c_void_p),
+                ("th32ModuleID", wintypes.DWORD),
+                ("cntThreads", wintypes.DWORD),
+                ("th32ParentProcessID", wintypes.DWORD),
+                ("pcPriClassBase", wintypes.LONG),
+                ("dwFlags", wintypes.DWORD),
+                ("szExeFile", wintypes.WCHAR * 260),
+            ]
+
+        snapshot_api = self.kernel.CreateToolhelp32Snapshot
+        snapshot_api.argtypes = [wintypes.DWORD, wintypes.DWORD]
+        snapshot_api.restype = wintypes.HANDLE
+        first = self.kernel.Process32FirstW
+        next_entry = self.kernel.Process32NextW
+        first.argtypes = next_entry.argtypes = [wintypes.HANDLE, ctypes.POINTER(ProcessEntry)]
+        first.restype = next_entry.restype = wintypes.BOOL
+        self.close_handle = self.kernel.CloseHandle
+        self.close_handle.argtypes = [wintypes.HANDLE]
+        self.close_handle.restype = wintypes.BOOL
+
+        snapshot = snapshot_api(0x00000002, 0)  # TH32CS_SNAPPROCESS
+        if snapshot == ctypes.c_void_p(-1).value:
+            raise RuntimeContractError("Windows process snapshot unavailable")
+        entries: dict[int, tuple[int, str]] = {}
+        try:
+            entry = ProcessEntry()
+            entry.dwSize = ctypes.sizeof(entry)
+            if not first(snapshot, ctypes.byref(entry)):
+                raise RuntimeContractError("Windows process enumeration unavailable")
+            while True:
+                entries[int(entry.th32ProcessID)] = (
+                    int(entry.th32ParentProcessID), str(entry.szExeFile).lower()
+                )
+                if not next_entry(snapshot, ctypes.byref(entry)):
+                    break
+        finally:
+            self.close_handle(snapshot)
+
+        def belongs_to_camouhost(pid: int) -> bool:
+            visited: set[int] = set()
+            while pid in entries and pid not in visited:
+                visited.add(pid)
+                parent = entries[pid][0]
+                if parent == owner_pid:
+                    return True
+                pid = parent
+            return False
+
+        browser_names = {"camoufox.exe", "firefox.exe"}
+        # Expose the exact disposable process tree to the *hosted fixture*.
+        # Shipping code does not terminate any browser/driver descendants.
+        self.owned_pids = sorted(
+            pid for pid in entries if pid != owner_pid and belongs_to_camouhost(pid)
+        )
+        descendants = {
+            pid for pid, (_parent, executable) in entries.items()
+            if executable in browser_names and belongs_to_camouhost(pid)
+        }
+        roots = sorted(pid for pid in descendants if entries[pid][0] not in descendants)
+        if len(roots) != 1:
+            raise RuntimeContractError("Camoufox browser main PID is missing or ambiguous")
+
+        open_process = self.kernel.OpenProcess
+        open_process.argtypes = [wintypes.DWORD, wintypes.BOOL, wintypes.DWORD]
+        open_process.restype = wintypes.HANDLE
+        self.wait = self.kernel.WaitForSingleObject
+        self.wait.argtypes = [wintypes.HANDLE, wintypes.DWORD]
+        self.wait.restype = wintypes.DWORD
+        self.get_exit = self.kernel.GetExitCodeProcess
+        self.get_exit.argtypes = [wintypes.HANDLE, ctypes.POINTER(wintypes.DWORD)]
+        self.get_exit.restype = wintypes.BOOL
+        self.pids = roots
+        self.handles = []
+        for pid in roots:
+            handle = open_process(0x00101000, False, pid)  # SYNCHRONIZE | QUERY_LIMITED
+            if not handle:
+                self.close()
+                raise RuntimeContractError("Cannot retain Camoufox browser process witness")
+            self.handles.append(handle)
+
+    def safely_exited(self) -> bool:
+        # A page-close callback is NOT proof. The exact browser root must have
+        # finished with exit code zero, never STILL_ACTIVE, killed or unknown.
+        for handle in self.handles:
+            if self.wait(handle, 0) != 0:
+                return False
+            code = self.ctypes.wintypes.DWORD()
+            if not self.get_exit(handle, self.ctypes.byref(code)) or code.value != 0:
+                return False
+        return bool(self.handles)
+
+    def close(self) -> None:
+        for handle in getattr(self, "handles", []):
+            self.close_handle(handle)
+        self.handles = []
+
+
+def install_controlled_close_observation(context: Any, owner_pid: int | None = None) -> dict[str, Any]:
     """Observe user page/window closure without mutating browser lifecycle.
 
     A candidate is publishable only when every page observed by this live context emitted its
@@ -1089,6 +1212,11 @@ def install_controlled_close_observation(context: Any) -> dict[str, Any]:
         "tracked_pages": set(),
         "closed_pages": set(),
         "crashed": False,
+        "browser_exit": (
+            WindowsBrowserExitWitness(owner_pid)
+            if os.name == "nt" and owner_pid is not None
+            else None
+        ),
     }
 
     def track_page(page: Any) -> None:
@@ -1110,7 +1238,10 @@ def controlled_close_candidate(state: dict[str, Any] | None) -> bool:
     if state is None or state["crashed"]:
         return False
     tracked = state["tracked_pages"]
-    return bool(tracked) and tracked == state["closed_pages"]
+    if not tracked or tracked != state["closed_pages"]:
+        return False
+    witness = state.get("browser_exit")
+    return witness is None or witness.safely_exited()
 
 
 def observe_controlled_close(context: Any, state: dict[str, Any] | None) -> bool:
@@ -1249,6 +1380,185 @@ def report_runtime_stage(phase: str, step: str) -> None:
         print(f"camouhost_stage phase={phase} step={step}", file=sys.stderr, flush=True)
 
 
+
+def durable_agent_directory(path: Path) -> None:
+    """Persist file creation/rename on Unix; Windows file contents are fsynced separately."""
+    if os.name == "posix":
+        descriptor = os.open(path, os.O_RDONLY)
+        try:
+            os.fsync(descriptor)
+        finally:
+            os.close(descriptor)
+
+
+class LocalPlaywrightAgent:
+    """Explicitly opted-in local test runner; the live Camouhost thread owns Playwright.
+
+    Files are an operator-controlled, on-machine command inbox, not a browser port,
+    a second browser writer, or a server-side control plane. Source and raw output
+    are deliberately retained for full-fidelity test diagnostics.
+    """
+
+    def __init__(self, directory: str, session_id: str) -> None:
+        base = Path(directory)
+        if not base.is_absolute() or base.is_symlink() or not base.is_dir():
+            raise RuntimeContractError("local agent directory must exist and be a regular absolute directory")
+        self.base = base
+        self.session_id = session_id
+        self.run = base / f"camouhost-{os.getpid()}-{secrets.token_hex(12)}"
+        self.run.mkdir(mode=0o700)
+        self.requests = self.run / "requests"
+        self.results = self.run / "results"
+        self.requests.mkdir(mode=0o700)
+        self.results.mkdir(mode=0o700)
+        self.descriptor = base / f"active-{os.getpid()}.json"
+        descriptor_temp = base / f".active-{os.getpid()}-{secrets.token_hex(8)}.tmp"
+        with descriptor_temp.open("x", encoding="utf-8") as output:
+            output.write(json.dumps({"pid": os.getpid(), "session": session_id, "run": str(self.run)}))
+            output.flush()
+            os.fsync(output.fileno())
+        os.replace(descriptor_temp, self.descriptor)
+        durable_agent_directory(base)
+
+    def run_one(self, context: Any) -> bool:
+        # Never accept half-written jobs. The agent commits a request by atomic rename.
+        for request in sorted(self.requests.glob("*.py")):
+            if not AGENT_REQUEST_PATTERN.fullmatch(request.name) or request.is_symlink():
+                continue
+            job_id = request.stem
+            claimed = self.requests / f"{job_id}.running"
+            try:
+                os.replace(request, claimed)
+                durable_agent_directory(self.requests)
+            except OSError:
+                # A failed/doubtful claim must never execute Python or be replayed.
+                print("camouhost_agent_claim_unconfirmed", file=sys.stderr, flush=True)
+                continue
+            stdout_path = self.results / f"{job_id}.stdout.txt"
+            stderr_path = self.results / f"{job_id}.stderr.txt"
+            status_path = self.results / f"{job_id}.json"
+            outcome: dict[str, Any] = {"status": "ok"}
+            with stdout_path.open("w", encoding="utf-8") as stdout, \
+                    stderr_path.open("w", encoding="utf-8") as stderr:
+                try:
+                    # This is deliberately unrestricted local Python for the owner's
+                    # TEST environment: all existing profiles and Playwright APIs
+                    # are available. Only the already-owned context is supplied.
+                    scope: dict[str, Any] = {
+                        "__name__": "__camouhost_agent__",
+                        "context": context,
+                        "pages": context.pages,
+                        "session_id": self.session_id,
+                        "agent_artifacts_dir": self.results,
+                        "result": None,
+                    }
+                    with contextlib.redirect_stdout(stdout), contextlib.redirect_stderr(stderr):
+                        exec(compile(claimed.read_text(encoding="utf-8"), str(claimed), "exec"), scope)
+                    outcome["result"] = scope.get("result")
+                except BaseException:
+                    traceback.print_exc(file=stderr)
+                    outcome["status"] = "error"
+                # A success cannot be confirmed before raw evidence is durable.
+                stdout.flush()
+                stderr.flush()
+                os.fsync(stdout.fileno())
+                os.fsync(stderr.fileno())
+            staging = self.results / f"{job_id}.part"
+            try:
+                with staging.open("x", encoding="utf-8") as output:
+                    output.write(json.dumps(outcome, ensure_ascii=False, default=str))
+                    output.flush()
+                    os.fsync(output.fileno())
+                os.replace(staging, status_path)
+                durable_agent_directory(self.results)
+            except OSError:
+                # An unavailable diagnostic store cannot become an invented success
+                # or a second owner of browser lifecycle.
+                print("camouhost_agent_result_write_failed", file=sys.stderr, flush=True)
+            return True
+        return False
+
+    def close(self) -> None:
+        # The complete test evidence remains. Only the live-session locator is retired.
+        try:
+            current = json.loads(self.descriptor.read_text(encoding="utf-8"))
+            if current.get("run") == str(self.run):
+                self.descriptor.unlink()
+        except (OSError, ValueError, AttributeError):
+            pass
+
+
+class BridgeInputPoller:
+    """Nonblocking framed stdin, used only in explicit test mode on the owner thread.
+
+    Do not use a second stdin thread on Windows: it can prevent the Camoufox
+    launch handshake from reaching Ready. The normal blocking path is untouched.
+    Use raw os.read rather than TextIO.readline so Python cannot retain frames
+    in an invisible internal buffer after the OS pipe has become empty.
+    """
+
+    def __init__(self) -> None:
+        self.fd = sys.stdin.fileno()
+        self.pending = bytearray()
+        self.eof = False
+        self.peek = None
+        self.handle = None
+        if os.name == "nt":
+            import ctypes
+            import msvcrt
+
+            self.ctypes = ctypes
+            self.handle = ctypes.c_void_p(msvcrt.get_osfhandle(self.fd))
+            self.peek = ctypes.WinDLL("kernel32", use_last_error=True).PeekNamedPipe
+            self.peek.argtypes = [
+                ctypes.c_void_p, ctypes.c_void_p, ctypes.c_uint32,
+                ctypes.c_void_p, ctypes.POINTER(ctypes.c_uint32), ctypes.c_void_p,
+            ]
+            self.peek.restype = ctypes.c_int
+
+    def read(self) -> str | None:
+        """Return one complete line, empty string on EOF, or None when idle."""
+        while True:
+            end = self.pending.find(b"\n")
+            if end >= 0:
+                if end + 1 > MAX_FRAME_LENGTH:
+                    raise RuntimeContractError("agent stdin frame exceeded protocol limit")
+                raw = bytes(self.pending[:end + 1])
+                del self.pending[:end + 1]
+                return raw.decode("utf-8")
+            if len(self.pending) > MAX_FRAME_LENGTH:
+                raise RuntimeContractError("agent stdin frame exceeded protocol limit")
+            if self.eof:
+                if self.pending:
+                    raw = bytes(self.pending)
+                    self.pending.clear()
+                    return raw.decode("utf-8")  # Missing newline fails valid_frame.
+                return ""
+            if os.name == "nt":
+                assert self.peek is not None and self.handle is not None
+                available = self.ctypes.c_uint32()
+                if not self.peek(self.handle, None, 0, None, self.ctypes.byref(available), None):
+                    error = self.ctypes.get_last_error()
+                    if error in (6, 109, 233):  # Invalid/broken/disconnected pipe.
+                        self.eof = True
+                        continue
+                    raise OSError(error, "PeekNamedPipe failed")
+                if available.value == 0:
+                    time.sleep(0.05)
+                    return None
+                chunk = os.read(self.fd, min(available.value, 4096))
+            else:
+                import select
+
+                if not select.select([self.fd], [], [], 0.05)[0]:
+                    return None
+                chunk = os.read(self.fd, 4096)
+            if not chunk:
+                self.eof = True
+            else:
+                self.pending.extend(chunk)
+
+
 def run_ipc() -> int:
     report_runtime_stage("startup", "begin")
     try:
@@ -1275,9 +1585,30 @@ def run_ipc() -> int:
     browser_visible_observed = False
     navigation_admitted = False
     post_navigation_browser_visible_observed = False
+    agent: LocalPlaywrightAgent | None = None
+    # Normal user launches retain the original blocking stdin path. In local
+    # test mode the SAME thread polls the Bridge pipe and services agent jobs.
+    poller = BridgeInputPoller() if os.environ.get(AGENT_DIRECTORY_ENV) else None
 
     try:
-        for raw in sys.stdin:
+        while True:
+            if poller is None:
+                raw = sys.stdin.readline()
+            else:
+                try:
+                    raw = poller.read()
+                except (OSError, UnicodeError, RuntimeContractError):
+                    emit("error|protocol")
+                    return 2
+                if raw is None:
+                    if agent is not None and context is not None and navigation_admitted:
+                        try:
+                            agent.run_one(context)
+                        except OSError:
+                            print("camouhost_agent_io_failure", file=sys.stderr, flush=True)
+                    continue
+            if not raw:
+                break
             if not valid_frame(raw):
                 emit("error|protocol")
                 return 2
@@ -1297,12 +1628,21 @@ def run_ipc() -> int:
             ):
                 try:
                     manager, context = launch_verified_context(lock, root, config, expected_probe)
-                    close_observation = install_controlled_close_observation(context)
+                    close_observation = install_controlled_close_observation(context, owner_pid=os.getpid())
                 except BaseException as error:
                     report_runtime_failure("launch", error)
                     emit("error|runtime")
                     return 5
                 active_session = parts[1]
+                # Only an explicitly opted-in local test Bridge publishes an agent
+                # directory. Ordinary user sessions have no executable-script inbox.
+                if os.environ.get(AGENT_DIRECTORY_ENV):
+                    try:
+                        agent = LocalPlaywrightAgent(os.environ[AGENT_DIRECTORY_ENV], active_session)
+                    except (OSError, RuntimeContractError) as error:
+                        report_runtime_failure("launch", error)
+                        emit("error|runtime")
+                        return 5
                 report_runtime_stage("launch", "ready")
                 emit(f"ready|{active_session}")
                 continue
@@ -1412,6 +1752,10 @@ def run_ipc() -> int:
 
         return 3 if negotiated or active_session is not None else 0
     finally:
+        if agent is not None:
+            agent.close()
+        if close_observation is not None and close_observation.get("browser_exit") is not None:
+            close_observation["browser_exit"].close()
         if manager is not None and context is not None:
             try:
                 close_context(manager, context, root)

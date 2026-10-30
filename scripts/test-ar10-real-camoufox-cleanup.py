@@ -97,6 +97,19 @@ def prove_controlled_close_dispatch_contract(runtime: ModuleType) -> None:
     assert runtime.observe_controlled_close(context, witness)
     assert context.pumps == 3
 
+    class AbnormalBrowser:
+        def safely_exited(self) -> bool:
+            return False
+
+    exited_without_normal_status = Page()
+    context = Context([exited_without_normal_status])
+    witness = runtime.install_controlled_close_observation(context)
+    witness["browser_exit"] = AbnormalBrowser()
+    context.next_observation = lambda: exited_without_normal_status.fire("close")
+    assert not runtime.observe_controlled_close(context, witness), (
+        "browser process failure was accepted as a controlled page-close"
+    )
+
     crashed = Page()
     context = Context([crashed])
     witness = runtime.install_controlled_close_observation(context)
@@ -227,8 +240,10 @@ def exchange(process: subprocess.Popen[str], frame: str, seconds: int = 120) -> 
             response.put("")
 
     threading.Thread(target=read_one, daemon=True).start()
-    process.stdin.write(frame + "\n")
-    process.stdin.flush()
+    # Send the exact Bridge wire bytes. Windows TextIOWrapper.write("\\n")
+    # otherwise translates LF to CRLF; the real Bridge IPC rejects CR.
+    process.stdin.buffer.write((frame + "\n").encode("utf-8"))
+    process.stdin.buffer.flush()
     try:
         result = response.get(timeout=seconds)
     except queue.Empty as error:
@@ -360,6 +375,72 @@ def prove_session_restore_startup(
         stop_runtime(process)
     assert 'user_pref("browser.startup.page", 3);' in prefs.read_text(encoding="utf-8")
     assert_writer_quiescent(runtime, root, "Firefox session restore startup")
+
+
+
+
+def prove_owned_playwright_agent(
+    python: Path,
+    camouhost: Path,
+    env: dict[str, str],
+    root: Path,
+) -> None:
+    """Actual browser integration: same owned context, full trace, no UIA/second writer."""
+    with tempfile.TemporaryDirectory(prefix="ar10-owned-playwright-agent-") as temporary:
+        base = Path(temporary).resolve()
+        script = base / "browser-actions.py"
+        script.write_text(
+            "from pathlib import Path\n"
+            "page = context.pages[0] if context.pages else context.new_page()\n"
+            "context.tracing.start(screenshots=True, snapshots=True, sources=True)\n"
+            "try:\n"
+            "    page.goto('about:blank')\n"
+            "    page.set_content('<!doctype html><input id=agent-input><p id=proof>agent-owned</p>')\n"
+            "    page.locator('#agent-input').fill('full-playwright-control')\n"
+            "    assert page.locator('#agent-input').input_value() == 'full-playwright-control'\n"
+            "    assert page.locator('#proof').inner_text() == 'agent-owned'\n"
+            "    page.screenshot(path=str(agent_artifacts_dir / 'page.png'))\n"
+            "    result = {'url': page.url, 'html': page.content(), "
+            "'value': page.locator('#agent-input').input_value()}\n"
+            "finally:\n"
+            "    context.tracing.stop(path=str(agent_artifacts_dir / 'trace.zip'))\n",
+            encoding="utf-8",
+        )
+        agent_env = dict(env, CAMOUHOST_AGENT_DIRECTORY=str(base))
+        process = start_runtime(python, camouhost, agent_env)
+        try:
+            assert exchange(process, f"hello|{IPC_VERSION}", 15) == f"hello_ack|{IPC_VERSION}"
+            assert exchange(process, f"launch|{SESSION}", 120) == f"ready|{SESSION}"
+            assert exchange(process, f"observe_browser_visible|{SESSION}", 30).startswith(
+                f"browser_visible|{SESSION}|"
+            )
+            assert exchange(process, f"admit_navigation|{SESSION}|", 30) == (
+                f"navigation_admitted|{SESSION}"
+            )
+            client = [
+                sys.executable, str(Path(__file__).with_name("camouhost-agent.py")),
+                "--directory", str(base), "--pid", str(process.pid),
+                "--script", str(script), "--timeout", "120",
+            ]
+            command = subprocess.run(client, capture_output=True, text=True, timeout=130)
+            assert command.returncode == 0, command.stderr
+            assert "full-playwright-control" in command.stdout
+            manifest = json.loads((base / f"active-{process.pid}.json").read_text(encoding="utf-8"))
+            results = Path(manifest["run"]) / "results"
+            assert (results / "trace.zip").is_file()
+            assert (results / "trace.zip").stat().st_size > 0
+            assert (results / "page.png").is_file()
+            assert exchange(process, f"observe_close|{SESSION}", 10) == (
+                f"close_observed|{SESSION}|false"
+            ), "agent-driven web actions must not forge browser closure"
+            assert exchange(process, f"close|{SESSION}", 45) == f"closed|{SESSION}|true"
+            assert process.wait(timeout=30) == 0
+            assert not (base / f"active-{process.pid}.json").exists(), (
+                "live agent descriptor survived owned Camouhost termination"
+            )
+        finally:
+            stop_runtime(process)
+    print("native_playwright_agent proof=real_context_dom_screenshot_trace_and_close PASS", flush=True)
 
 
 
@@ -636,6 +717,181 @@ def prove_external_windows_gui_close(
     assert_writer_quiescent(runtime, root, "external native WM_CLOSE")
 
 
+
+class DisposableWindowsProcessJob:
+    """Kernel-owned lifetime for the CI fixture only; no shipping process supervisor.
+
+    Unlike a PID sweep, Job Object kill-on-close covers grandchildren even
+    after a parent has exited, and never mistakes a reused PID for ownership.
+    """
+
+    def __init__(self, pid: int) -> None:
+        from ctypes import wintypes
+
+        kernel = ctypes.WinDLL("kernel32", use_last_error=True)
+        self.kernel = kernel
+        self.close_handle = kernel.CloseHandle
+        self.close_handle.argtypes = [wintypes.HANDLE]
+        self.close_handle.restype = wintypes.BOOL
+
+        class BasicLimits(ctypes.Structure):
+            _fields_ = [
+                ("PerProcessUserTimeLimit", ctypes.c_longlong),
+                ("PerJobUserTimeLimit", ctypes.c_longlong),
+                ("LimitFlags", wintypes.DWORD),
+                ("MinimumWorkingSetSize", ctypes.c_size_t),
+                ("MaximumWorkingSetSize", ctypes.c_size_t),
+                ("ActiveProcessLimit", wintypes.DWORD),
+                ("Affinity", ctypes.c_size_t),
+                ("PriorityClass", wintypes.DWORD),
+                ("SchedulingClass", wintypes.DWORD),
+            ]
+
+        class IoCounters(ctypes.Structure):
+            _fields_ = [
+                (field, ctypes.c_ulonglong)
+                for field in (
+                    "ReadOperationCount", "WriteOperationCount", "OtherOperationCount",
+                    "ReadTransferCount", "WriteTransferCount", "OtherTransferCount",
+                )
+            ]
+
+        class ExtendedLimits(ctypes.Structure):
+            _fields_ = [
+                ("BasicLimitInformation", BasicLimits),
+                ("IoInfo", IoCounters),
+                ("ProcessMemoryLimit", ctypes.c_size_t),
+                ("JobMemoryLimit", ctypes.c_size_t),
+                ("PeakProcessMemoryUsed", ctypes.c_size_t),
+                ("PeakJobMemoryUsed", ctypes.c_size_t),
+            ]
+
+        create = kernel.CreateJobObjectW
+        create.argtypes = [wintypes.LPVOID, wintypes.LPCWSTR]
+        create.restype = wintypes.HANDLE
+        set_info = kernel.SetInformationJobObject
+        set_info.argtypes = [wintypes.HANDLE, ctypes.c_int, wintypes.LPVOID, wintypes.DWORD]
+        set_info.restype = wintypes.BOOL
+        assign = kernel.AssignProcessToJobObject
+        assign.argtypes = [wintypes.HANDLE, wintypes.HANDLE]
+        assign.restype = wintypes.BOOL
+        open_process = kernel.OpenProcess
+        open_process.argtypes = [wintypes.DWORD, wintypes.BOOL, wintypes.DWORD]
+        open_process.restype = wintypes.HANDLE
+
+        self.handle = create(None, None)
+        if not self.handle:
+            raise AssertionError(f"Windows disposable Job Object unavailable: {ctypes.get_last_error()}")
+        try:
+            limits = ExtendedLimits()
+            limits.BasicLimitInformation.LimitFlags = 0x00002000  # KILL_ON_JOB_CLOSE
+            if not set_info(self.handle, 9, ctypes.byref(limits), ctypes.sizeof(limits)):
+                raise AssertionError(f"Windows fixture Job limit rejected: {ctypes.get_last_error()}")
+            process = open_process(0x00000101, False, pid)  # SET_QUOTA | TERMINATE
+            if not process:
+                raise AssertionError(f"Windows fixture child handle unavailable: {ctypes.get_last_error()}")
+            try:
+                if not assign(self.handle, process):
+                    raise AssertionError(f"Windows fixture Job assign rejected: {ctypes.get_last_error()}")
+            finally:
+                self.close_handle(process)
+        except BaseException:
+            self.close()
+            raise
+
+    def close(self) -> None:
+        handle = getattr(self, "handle", None)
+        if handle:
+            self.handle = None
+            if not self.close_handle(handle):
+                raise AssertionError(f"Windows disposable Job close failed: {ctypes.get_last_error()}")
+
+
+def prove_forced_windows_browser_termination_is_not_controlled(
+    python: Path,
+    camouhost: Path,
+    env: dict[str, str],
+    runtime: ModuleType,
+    root: Path,
+) -> None:
+    """Main-PID crash must fail closed; native Job covers disposable descendants."""
+    if os.name != "nt":
+        return
+    from ctypes import wintypes
+
+    process = start_runtime(python, camouhost, env)
+    # Attach BEFORE browser launch. This OS kernel boundary, not a best-effort
+    # PID scan, guarantees fixture cleanup if the browser root dies first.
+    try:
+        job = DisposableWindowsProcessJob(process.pid)
+    except BaseException:
+        stop_runtime(process)
+        raise
+    witness = None
+    kernel = ctypes.WinDLL("kernel32", use_last_error=True)
+    open_process = kernel.OpenProcess
+    open_process.argtypes = [wintypes.DWORD, wintypes.BOOL, wintypes.DWORD]
+    open_process.restype = wintypes.HANDLE
+    terminate = kernel.TerminateProcess
+    terminate.argtypes = [wintypes.HANDLE, wintypes.UINT]
+    terminate.restype = wintypes.BOOL
+    wait = kernel.WaitForSingleObject
+    wait.argtypes = [wintypes.HANDLE, wintypes.DWORD]
+    wait.restype = wintypes.DWORD
+    close = kernel.CloseHandle
+    close.argtypes = [wintypes.HANDLE]
+    close.restype = wintypes.BOOL
+    try:
+        assert exchange(process, f"hello|{IPC_VERSION}") == f"hello_ack|{IPC_VERSION}"
+        assert exchange(process, f"launch|{SESSION}") == f"ready|{SESSION}"
+        assert exchange(process, f"observe_browser_visible|{SESSION}").startswith(
+            f"browser_visible|{SESSION}|"
+        )
+        assert exchange(process, f"admit_navigation|{SESSION}|") == (
+            f"navigation_admitted|{SESSION}"
+        )
+        witness = runtime.WindowsBrowserExitWitness(process.pid)
+        assert len(witness.pids) == 1, "browser main process identity is ambiguous"
+        pid = witness.pids[0]
+        handle = open_process(0x00100001, False, pid)  # SYNCHRONIZE | TERMINATE
+        assert handle, "cannot open exact browser-main handle for negative proof"
+        try:
+            assert terminate(handle, 19), "Windows refused main-PID fault injection"
+            assert wait(handle, 12000) == 0, "browser-main death not observed"
+        finally:
+            close(handle)
+        assert not witness.safely_exited(), "forced browser death looked like normal exit zero"
+        observed = None
+        for _ in range(4):
+            try:
+                observed = exchange(process, f"observe_close|{SESSION}", 10)
+            except AssertionError:
+                assert process.poll() is not None, "Camouhost stalled after browser main kill"
+                break
+            assert observed != f"close_observed|{SESSION}|true", (
+                "forced browser-main termination was mistaken for controlled Close"
+            )
+            if observed == "error|runtime":
+                break
+            time.sleep(0.2)
+        assert observed != f"close_observed|{SESSION}|true"
+    finally:
+        try:
+            stop_runtime(process)
+        finally:
+            # The Windows kernel, not a race-prone hand-coded PID walk, closes
+            # all remaining Firefox/driver children of this disposable job.
+            job.close()
+            if witness is not None:
+                witness.close()
+
+    deadline = time.monotonic() + 15
+    while time.monotonic() < deadline and runtime.firefox_writer_active(root):
+        time.sleep(0.1)
+    assert_writer_quiescent(runtime, root, "forced Windows browser main death")
+    print("native_windows_main_kill fails_closed_and_disposable_job_released PASS", flush=True)
+
+
 def prove_ipc_timeout_contract() -> None:
     """A silent child must fail quickly without a pipe-read deadlock."""
     with tempfile.TemporaryFile(mode="w+t", encoding="utf-8") as diagnostics:
@@ -831,11 +1087,15 @@ def main() -> int:
         prove_protocol_failure_cleanup(python, camouhost, env, runtime, root)
         prove_immediate_relaunch_after_cleanup(python, camouhost, env, runtime, root)
         prove_session_restore_startup(python, camouhost, env, runtime, root)
+        prove_owned_playwright_agent(python, camouhost, env, root)
         prove_preexisting_tabs_restored(
             python, camouhost, runtime_lock, args.headless, Path(temporary) / "restore-tabs"
         )
         if os.name == "nt" and args.headless == "false":
             prove_external_windows_gui_close(python, camouhost, env, runtime, root)
+            prove_forced_windows_browser_termination_is_not_controlled(
+                python, camouhost, env, runtime, root
+            )
 
     print(
         "AR-10 real Camoufox post-launch cleanup, Firefox native prior-tabs restore and close, immediate relaunch and GUI-close evidence passed."

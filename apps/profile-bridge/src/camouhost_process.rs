@@ -48,6 +48,7 @@ const HELLO_RESPONSE_TIMEOUT: Duration = Duration::from_secs(10);
 const LAUNCH_RESPONSE_TIMEOUT: Duration = Duration::from_secs(120);
 // Child stderr is untrusted. Only small, fixed-vocabulary diagnostics may reach Bridge logs.
 const MAX_CAMOUHOST_DIAGNOSTIC_BYTES: usize = 128;
+const LOCAL_AGENT_DIRECTORY_ENV: &str = "PROFILE_BRIDGE_AGENT_DIRECTORY";
 const BROWSER_VISIBLE_RESPONSE_TIMEOUT: Duration = Duration::from_secs(30);
 const NAVIGATION_RESPONSE_TIMEOUT: Duration = Duration::from_secs(120);
 const OBSERVE_CLOSE_RESPONSE_TIMEOUT: Duration = Duration::from_secs(5);
@@ -493,6 +494,11 @@ impl ManagedCamouhostProcess {
             command.env("CAMOUHOST_PROXY_CONFIG_PATH", path);
         }
         inherit_runtime_environment(&mut command);
+        if let Some(directory) = local_agent_directory()? {
+            // Explicitly opted-in TEST sessions only. No arbitrary browser endpoint
+            // is exposed on a network interface or in ordinary GUI launches.
+            command.env("CAMOUHOST_AGENT_DIRECTORY", directory);
+        }
         let child = command.spawn().map_err(|_| BridgePortError::Unavailable)?;
         if child.id() == 0 || session_id.as_str().is_empty() {
             return Err(BridgePortError::InvalidResponse);
@@ -511,11 +517,20 @@ impl ProcessControlPort for ManagedCamouhostProcess {
         if state.child.is_some() || state.active_session.is_some() {
             return Err(BridgePortError::Unavailable);
         }
+        // Validate test diagnostics BEFORE spawning: a path error must never
+        // strand an orphan browser child or its profile writer lock.
+        let agent_directory = local_agent_directory()?;
         let mut child = self.launch_child(session_id, &binding)?;
         let stdin = child.stdin.take().ok_or(BridgePortError::Unavailable)?;
         let stdout = child.stdout.take().ok_or(BridgePortError::Unavailable)?;
         let stderr = child.stderr.take().ok_or(BridgePortError::Unavailable)?;
-        spawn_camouhost_diagnostic_reader(stderr);
+        let stamp = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map_or(0, |elapsed| elapsed.as_nanos());
+        let raw_diagnostics = agent_directory.map(|directory| {
+            directory.join(format!("camouhost-{}-{stamp}.stderr.log", child.id()))
+        });
+        spawn_camouhost_diagnostic_reader(stderr, raw_diagnostics);
         state.stdin = Some(stdin);
         state.responses = Some(spawn_response_reader(stdout));
         state.active_session = Some(session_id.clone());
@@ -926,11 +941,41 @@ fn record_allowlisted_runtime_stage(message: &str) {
     report::record_current(stage, outcome, Cloud::Unknown, cause, 0);
 }
 
-fn spawn_camouhost_diagnostic_reader(stderr: ChildStderr) {
-    // Drain stderr continuously to prevent a filled OS pipe from blocking the
-    // real browser. Oversized/unrecognised lines are discarded, never retained.
+fn local_agent_directory() -> Result<Option<PathBuf>, BridgePortError> {
+    let Some(value) = env::var_os(LOCAL_AGENT_DIRECTORY_ENV) else {
+        return Ok(None);
+    };
+    let path = PathBuf::from(value);
+    if !path.is_absolute() || path.is_symlink() || !path.is_dir() {
+        return Err(BridgePortError::InvalidResponse);
+    }
+    Ok(Some(path))
+}
+
+fn spawn_camouhost_diagnostic_reader(stderr: ChildStderr, raw_path: Option<PathBuf>) {
+    // Drain stderr continuously to avoid blocking the browser. Full raw bytes
+    // are retained for explicitly opted-in local tests. The ordinary UI summary
+    // still applies its independent bounded safe vocabulary.
     thread::spawn(move || {
         let mut reader = BufReader::new(stderr);
+        // Full stderr belongs to the local agent test run, not the compact
+        // allowlisted end-user report. Do not truncate, redact or profile-filter it.
+        let mut raw = raw_path.and_then(|path| {
+            match fs::OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .open(path)
+            {
+                Ok(file) => Some(file),
+                Err(error) => {
+                    eprintln!(
+                        "CAMOUHOST_AGENT_RAW_DIAGNOSTIC_OPEN_FAILED category={:?}",
+                        error.kind()
+                    );
+                    None
+                }
+            }
+        });
         let mut line = Vec::with_capacity(MAX_CAMOUHOST_DIAGNOSTIC_BYTES);
         let mut oversized = false;
         loop {
@@ -940,6 +985,12 @@ fn spawn_camouhost_diagnostic_reader(stderr: ChildStderr) {
             };
             let end = available.iter().position(|byte| *byte == b'\n');
             let consumed = end.map_or(available.len(), |index| index + 1);
+            if let Some(output) = raw.as_mut()
+                && output.write_all(&available[..consumed]).is_err()
+            {
+                eprintln!("CAMOUHOST_AGENT_RAW_DIAGNOSTIC_WRITE_FAILED");
+                raw = None;
+            }
             if !oversized {
                 if line.len().saturating_add(consumed) > MAX_CAMOUHOST_DIAGNOSTIC_BYTES {
                     line.clear();
