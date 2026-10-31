@@ -375,8 +375,8 @@ def prove_claim_denial_and_windows_owner_preflight() -> None:
                 "--script", str(source), "--timeout", "1",
             ]
             before = set(agent.requests.iterdir())
-            with patch.object(cli, "inbox_owner_matches_process", return_value=False), \\
-                    patch.object(sys, "argv", args), \\
+            with patch.object(cli, "inbox_owner_matches_process", return_value=False), \
+                    patch.object(sys, "argv", args), \
                     contextlib.redirect_stderr(io.StringIO()) as error_out:
                 assert cli.run() == 126
                 assert "SECURITY_CONTEXT_MISMATCH" in error_out.getvalue()
@@ -391,7 +391,7 @@ def prove_claim_denial_and_windows_owner_preflight() -> None:
                     raise PermissionError(13, "unusable Windows ACL")
                 actual_replace(src, dst)
 
-            with patch.object(runtime.os, "replace", side_effect=fail_claim_only), \\
+            with patch.object(runtime.os, "replace", side_effect=fail_claim_only), \
                     contextlib.redirect_stderr(io.StringIO()) as error_out:
                 assert agent.run_one(fake) is False
                 assert "phase=claim_rename" in error_out.getvalue()
