@@ -9,9 +9,9 @@ use std::path::Path;
 #[cfg(any(windows, test))]
 mod bundle;
 #[cfg(windows)]
-mod s1;
-#[cfg(windows)]
 mod rescue;
+#[cfg(windows)]
+mod s1;
 
 /// Operator-only no-effect observation. Output is JSON with its own verdict;
 /// a successful command execution is NOT an installation authorization.
@@ -58,9 +58,9 @@ mod windows {
     };
     use crate::installed_connection::InstalledConnection;
     use crate::local_profile::{DeliveryActivationGuard, MaterializationRoot};
+    use crate::windows_delivery::verify_delivery_candidate;
     use crate::windows_delivery_archive::WindowsDeliveryArchiveReader;
     use crate::windows_delivery_coordinator::{WindowsDeliveryCoordinator, accepted_floor};
-    use crate::windows_delivery::verify_delivery_candidate;
     use crate::windows_delivery_download::{DeliveryDownloadRoot, WindowsReleaseAssetFetcher};
     use crate::windows_delivery_handoff::DeliveryHandoffCoordinator;
     use crate::windows_delivery_signature::WindowsCmsSignatureVerifier;
