@@ -520,7 +520,26 @@ mod tests {
             &other_profile,
             &other_generation,
         )?;
+        let live_digest_before = live.materialization_inventory_digest()?;
         let live_writer = BridgeWorkspaceLock::acquire(&live, &device, 10)?;
+        assert_eq!(
+            live.materialization_inventory_digest()?,
+            live_digest_before,
+            "OS admission must not affect materialization identity"
+        );
+        // Windows exclusive byte locks on this immutable identity would stop
+        // normal read/write code even inside our own Bridge process.
+        assert_eq!(
+            fs::read(live.path().join(".profile-generation"))?,
+            b"profile-platform-generation-v1\n"
+        );
+        assert!(
+            live.inventory()?
+                .entries()
+                .iter()
+                .all(|entry| entry.relative_path() != ".profile-platform.writer-admission"),
+            "OS-only admission marker must not leak into encrypted snapshot"
+        );
 
         let user_data = crashed.path().join("user_data");
         fs::create_dir(&user_data)?;
