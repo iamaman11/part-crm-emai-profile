@@ -35,8 +35,16 @@ fn io<T>(x: std::io::Result<T>, reason: &'static str) -> Result<T, RescueError> 
 }
 
 fn regular_dir(path: &Path) -> Result<(), RescueError> {
-    super::bundle::validate_directory_tree(path, false)
-        .map_err(|_| RescueError::new("unsafe destination or reparse path"))
+    // The installer already validates every installation-root ancestor before
+    // acquiring its OS lock. Rescue checks EACH owned directory, not all of
+    // its ancestors again: Windows runner / per-user parents can be legitimate
+    // junctions, and their ambient layout is not part of rescue ownership.
+    // Children are checked before copying and cannot be reparse points.
+    let metadata = io(fs::symlink_metadata(path), "rescue directory unreadable")?;
+    if !regular_directory(&metadata) {
+        return Err(RescueError::new("rescue directory is a reparse or special entry"));
+    }
+    Ok(())
 }
 fn regular_file(meta: &fs::Metadata) -> bool {
     #[cfg(windows)]
