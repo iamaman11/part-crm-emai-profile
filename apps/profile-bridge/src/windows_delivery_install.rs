@@ -103,10 +103,13 @@ mod windows {
         // connection, staging or activation change. This never claims remote
         // Coordinator or browser-WORKING authority.
         let rescue = super::rescue::ensure_rescue(root, &workspace).map_err(|error| {
-            eprintln!("BRIDGE_RESCUE_FAILED: {error}");
+            // Inno Setup treats ANY stderr as a hard installation failure.
+            // Use its existing closed BRIDGE_* stdout code admission instead.
+            println!("BRIDGE_RESCUE_FAILED: {error}");
             NativeInstallerError::Rescue
         })?;
-        eprintln!("BRIDGE_RESCUE_OK: {rescue}");
+        // Only closed symbolic status values, never paths, cookies or keys.
+        println!("PROFILE_BRIDGE_RESCUE_STATUS_V1={rescue}");
         // The canonical delivery store exists only now. Installation observations
         // may start here; a rejected/corrupt store is never modified for diagnosis.
         crate::user_diagnostics::report::record_at(
