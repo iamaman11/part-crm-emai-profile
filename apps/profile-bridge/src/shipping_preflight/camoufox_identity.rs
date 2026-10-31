@@ -4,7 +4,8 @@ use browser_execution_domain::browser_visible_observation::{
     canonical_font_set_sha256, canonical_font_spacing_seed_sha256,
     canonical_navigator_languages_sha256, canonical_shader_precision_sha256,
     canonical_speech_voices_sha256, canonical_webgl_extensions_sha256,
-    canonical_webgl_parameters_sha256, canonical_webgl2_parameters_sha256,
+    canonical_webgl_parameters_sha256, canonical_webgl2_disabled_sha256,
+    canonical_webgl2_parameters_sha256,
 };
 use browser_execution_domain::{
     BrowserIdentityManifest, BrowserOsIdentity, DisplayIdentity, FontIdentity, GraphicsIdentity,
@@ -83,13 +84,33 @@ pub fn profile_stable_identity_from_config_bytes(
 
     let user_agent = required_string(object, "navigator.userAgent")?;
     let webgl_extensions = required_string_list(object, "webGl:supportedExtensions")?;
-    let webgl2_extensions = required_string_list(object, "webGl2:supportedExtensions")?;
+    // Pinned Camoufox legitimately disables WebGL2 on some generated profiles.
+    // Either *all* WebGL2 config surfaces exist or none may exist; partial
+    // materialization cannot be accepted as a disabled browser capability.
+    let webgl2_enabled = object.keys().any(|key| key.starts_with("webGl2:"));
+    let webgl2_extensions = if webgl2_enabled {
+        required_string_list(object, "webGl2:supportedExtensions")?
+    } else {
+        Vec::new()
+    };
     let webgl_parameters = required_key_values(object, "webGl:parameters")?;
-    let webgl2_parameters = required_key_values(object, "webGl2:parameters")?;
+    let webgl2_parameters = if webgl2_enabled {
+        required_key_values(object, "webGl2:parameters")?
+    } else {
+        Vec::new()
+    };
     let webgl_shader = required_key_values(object, "webGl:shaderPrecisionFormats")?;
-    let webgl2_shader = required_key_values(object, "webGl2:shaderPrecisionFormats")?;
+    let webgl2_shader = if webgl2_enabled {
+        required_key_values(object, "webGl2:shaderPrecisionFormats")?
+    } else {
+        Vec::new()
+    };
     let webgl_context = required_key_values(object, "webGl:contextAttributes")?;
-    let webgl2_context = required_key_values(object, "webGl2:contextAttributes")?;
+    let webgl2_context = if webgl2_enabled {
+        required_key_values(object, "webGl2:contextAttributes")?
+    } else {
+        Vec::new()
+    };
     let fonts = required_string_list(object, "fonts")?;
     let languages = required_string_list(object, "navigator.languages")?;
     let speech_voices = optional_speech_voices(object)?;
@@ -128,8 +149,12 @@ pub fn profile_stable_identity_from_config_bytes(
                 .ok_or(CamoufoxIdentityProjectionError::InvalidMaterialization)?,
             canonical_webgl_parameters_sha256(&webgl_parameters, &mut digester)
                 .ok_or(CamoufoxIdentityProjectionError::InvalidMaterialization)?,
-            canonical_webgl2_parameters_sha256(&webgl2_parameters, &mut digester)
-                .ok_or(CamoufoxIdentityProjectionError::InvalidMaterialization)?,
+            if webgl2_enabled {
+                canonical_webgl2_parameters_sha256(&webgl2_parameters, &mut digester)
+            } else {
+                canonical_webgl2_disabled_sha256(&mut digester)
+            }
+            .ok_or(CamoufoxIdentityProjectionError::InvalidMaterialization)?,
             canonical_shader_precision_sha256(&webgl_shader, &webgl2_shader, &mut digester)
                 .ok_or(CamoufoxIdentityProjectionError::InvalidMaterialization)?,
             canonical_context_attributes_sha256(&webgl_context, &webgl2_context, &mut digester)
@@ -504,5 +529,40 @@ mod tests {
             profile_stable_identity_from_config_bytes(malformed.as_bytes()),
             Err(CamoufoxIdentityProjectionError::InvalidMaterialization)
         );
+    }
+    #[test]
+    fn disabled_webgl2_is_valid_only_when_every_webgl2_surface_is_absent()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let original = config("1");
+        let enabled = profile_stable_identity_from_config_bytes(original.as_bytes())?;
+        let mut disabled: serde_json::Value = serde_json::from_str(&original)?;
+        let object = disabled.as_object_mut().ok_or("invalid test config")?;
+        for name in [
+            "webGl2:supportedExtensions",
+            "webGl2:parameters",
+            "webGl2:shaderPrecisionFormats",
+            "webGl2:contextAttributes",
+        ] {
+            assert!(
+                object.remove(name).is_some(),
+                "missing test fixture field {name}"
+            );
+        }
+        let valid_disabled = serde_json::to_vec(&disabled)?;
+        let stable = profile_stable_identity_from_config_bytes(&valid_disabled)?;
+        assert_ne!(
+            stable.graphics().webgl2_parameters_sha256(),
+            enabled.graphics().webgl2_parameters_sha256()
+        );
+
+        // A partly materialized WebGL2 context must fail closed, not be
+        // interpreted as a deliberately disabled context.
+        let object = disabled.as_object_mut().ok_or("invalid test config")?;
+        object.insert("webGl2:parameters".to_owned(), serde_json::json!({}));
+        assert_eq!(
+            profile_stable_identity_from_config_bytes(&serde_json::to_vec(&disabled)?),
+            Err(CamoufoxIdentityProjectionError::InvalidMaterialization)
+        );
+        Ok(())
     }
 }
