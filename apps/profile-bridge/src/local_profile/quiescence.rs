@@ -27,7 +27,7 @@ impl BridgeWorkspaceLock {
         let root = workspace_root(workspace)?;
         let admission = open_root_marker(root)?;
         admission.try_lock_shared().map_err(map_try_lock_error)?;
-        let generation = open_generation_marker(workspace)?;
+        let generation = open_generation_admission(workspace)?;
         generation.try_lock().map_err(map_try_lock_error)?;
         let inner = filesystem::BridgeWorkspaceLock::acquire(workspace, device_id, epoch)?;
         Ok(Self {
@@ -125,10 +125,25 @@ fn workspace_root(workspace: &GenerationWorkspace) -> Result<&Path, LocalProfile
         .ok_or(LocalProfileError::UnsafeRelativePath)
 }
 
-fn open_generation_marker(workspace: &GenerationWorkspace) -> Result<File, LocalProfileError> {
-    // This immutable generation identity exists before any browser admission and
-    // survives Bridge process loss; it is NOT the replaceable writer marker.
-    let marker = workspace.path().join(".profile-generation");
+fn open_generation_admission(workspace: &GenerationWorkspace) -> Result<File, LocalProfileError> {
+    // A stable, empty OS-only lock file. Never lock .profile-generation itself:
+    // Windows byte-range locks would block its ordinary identity reads during
+    // Save/Close. This file is not a generation snapshot, state or authorization.
+    let marker = workspace.path().join(".profile-platform.writer-admission");
+    match fs::symlink_metadata(&marker) {
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            match OpenOptions::new().read(true).write(true).create_new(true).open(&marker) {
+                Ok(file) => {
+                    file.sync_all()?;
+                    return Ok(file);
+                }
+                Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {}
+                Err(error) => return Err(error.into()),
+            }
+        }
+        Err(error) => return Err(error.into()),
+        Ok(_) => {}
+    }
     let metadata = fs::symlink_metadata(&marker)?;
     if metadata.file_type().is_symlink() {
         return Err(LocalProfileError::SymbolicLinkRejected);
