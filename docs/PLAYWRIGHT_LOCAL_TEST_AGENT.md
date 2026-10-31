@@ -1,51 +1,35 @@
 # Playwright local test agent — Bridge/Camouhost (#802)
 
-**Test-only operator mode**, never a second browser or profile writer. The agent
-executes Python Playwright commands **on the same thread and BrowserContext**
-that the shipping Camouhost already owns. Ordinary installed browser launches
-are unchanged unless the operator explicitly opts in to the local agent.
+**Built-in local inspection for every browser profile.** The installed Bridge
+always creates a user-local agent inbox and passes it to its existing Camouhost.
+Playwright commands execute on the **same owning thread and BrowserContext**
+as the real running Camoufox. No modes, enable files, environment switches,
+separate browser instances, sidecar services or per-profile limitations.
 
-## One-time local setup on the interactive Windows test host
+## Normal workflow on Windows
 
-**Normal Windows frontend Launch (recommended).** Opt in once, under the same
-Windows account that owns the installed Bridge:
-
-```powershell
-$agentDir = Join-Path $env:LOCALAPPDATA 'ProfileBridgeAgentTests'
-New-Item -ItemType Directory -Path $agentDir -Force | Out-Null
-New-Item -ItemType File -Path (Join-Path $agentDir 'playwright-enabled') -Force | Out-Null
-```
-
-Then open the **ordinary authorized frontend** and press **Launch** for a
-profile that is independently granted to this user. A `profilebridge://`
-Windows protocol handler is a *new process*: it does not inherit environment
-variables set in an unrelated PowerShell window. The explicit user-local marker
-lets the installed Bridge find the test inbox anyway. No test URL/claim needs to
-be copied into PowerShell, and no new server or browser writer is created.
-
-The directory alone does **not** enable scripts (old diagnostic artifacts are
-not opt-in). To turn off tests for subsequent launches without destroying
-evidence, remove **only** the `playwright-enabled` file, after the current
-test session has finished. Closing a Camoufox window does not magically disable
-the mode for future launches while this file exists.
-
-**Direct developer/CI launch (existing alternative).** An explicit per-process
-environment setting remains supported and takes precedence over the marker:
+1. Install and open the ordinary application. The inbox is created automatically
+   in `%LOCALAPPDATA%\ProfileBridgeAgentTests` under the current Windows user.
+2. In an authorized frontend session choose a profile and press **Launch**.
+   The server still issues a fresh launch intent, and the registered
+   `profilebridge://` handler starts Bridge normally. No URI copying or
+   additional test startup step is needed.
+3. The local agent sees that existing Camouhost process. Run the CLI from the
+   repository checkout **under the same Windows account**:
 
 ```powershell
 $agentDir = Join-Path $env:LOCALAPPDATA 'ProfileBridgeAgentTests'
-New-Item -ItemType Directory -Path $agentDir -Force | Out-Null
-$env:PROFILE_BRIDGE_AGENT_DIRECTORY = $agentDir
-# Launch the installed Bridge from this same environment with a fresh,
-# normally server-issued profilebridge:// URI when such a launch is allowed.
+python scripts/camouhost-agent.py --directory $agentDir --list
 ```
 
-Both methods change **only** local Playwright test diagnostics. Neither creates
-a server launch intent, grants profile access, bypasses Cloudflare Access or
-Coordinator, changes a browser fingerprint, or disables the normal writer lock,
-Save/Commit and recovery. If the execution environment prohibits operating a
-browser, this opt-in does not override that policy: stop and record that
-external blocker rather than creating or replaying a launch claim.
+For each test, select the live Camouhost PID. The agent has full access to
+all local test-profile pages, cookies, DOM, storage, screenshots, traces and
+browser actions; it does not censor their content or require special profile
+IDs. It does not create launch intents or bypass the ordinary Cloudflare
+Access, profile authorization, Coordinator or single-writer rules. In an
+environment where interactive browser automation is prohibited externally,
+the code cannot override that policy; the restriction must be reported as
+a test-environment blocker rather than a product failure.
 
 When Bridge has started Camouhost, inspect the available live sessions:
 
@@ -86,7 +70,7 @@ Result/status and full stdout/stderr are retained under the run's
 `results` directory. The original submitted source remains in
 `requests/*.running`. Playwright traces, screenshots, network logs and other
 artifacts created by the script remain on disk after Camouhost exits.
-The explicitly opted-in Bridge also writes the **complete raw Camouhost stderr**
+The Bridge also writes the **complete raw Camouhost stderr**
 to a PID-scoped file under the agent directory; the small user-facing
 diagnostic summary remains independent.
 
@@ -100,9 +84,9 @@ executing trusted local Python as the currently logged-in Windows user.
 - Bridge remains the **only** owner of claim redemption, lease, exclusive
   generation writer, Close/Save/Commit and recovery. The agent does not invent
   an alternative authority or cloud API.
-- In explicit local test mode, Camouhost polls its existing Bridge stdin pipe
+- Camouhost polls its existing Bridge stdin pipe
   without a helper reader thread; **all Playwright and IPC dispatch run on the
-  original Camouhost owner thread**. Normal sessions retain blocking stdin. There is no CDP port, second Playwright browser connection,
+  original Camouhost owner thread**. There is no CDP port, second Playwright browser connection,
   sidecar daemon, headless replacement, or new server.
 - The atomic request rename prevents execution of incomplete scripts; each
   request is claimed at most once. Raw stdout/stderr are flushed and fsynced
