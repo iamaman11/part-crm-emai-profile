@@ -3545,7 +3545,7 @@ mod tests {
         let next_epoch = old_epoch.checked_add(1).ok_or("epoch overflow")?;
         let marker = workspace.path().join(".profile-platform.lock");
         let original_marker = format!(
-            "profile-platform-bridge-lock-v1\\n{}\\n{old_epoch}\\n",
+            "profile-platform-bridge-lock-v1\n{}\n{old_epoch}\n",
             fixture.device_id.as_str()
         );
         fs::write(&marker, &original_marker)?;
@@ -3575,7 +3575,7 @@ mod tests {
         assert_eq!(
             fs::read_to_string(&marker)?,
             format!(
-                "profile-platform-bridge-lock-v1\\n{}\\n{next_epoch}\\n",
+                "profile-platform-bridge-lock-v1\n{}\n{next_epoch}\n",
                 fixture.device_id.as_str()
             )
         );
@@ -3609,7 +3609,7 @@ mod tests {
                 fixture.device_id.clone()
             };
             let blocked_marker = format!(
-                "profile-platform-bridge-lock-v1\\n{}\\n{}\\n",
+                "profile-platform-bridge-lock-v1\n{}\n{}\n",
                 marker_owner.as_str(),
                 if foreign_device { old_epoch } else { next_epoch }
             );
