@@ -48,7 +48,7 @@ impl BridgeWorkspaceLock {
     ) -> Result<Self, LocalProfileError> {
         let admission = open_root_marker(workspace_root(workspace)?)?;
         admission.try_lock_shared().map_err(map_try_lock_error)?;
-        let generation = open_generation_marker(workspace)?;
+        let generation = open_generation_admission(workspace)?;
         generation.try_lock().map_err(map_try_lock_error)?;
 
         // A stale Windows parent.lock file is permitted only when the actual
