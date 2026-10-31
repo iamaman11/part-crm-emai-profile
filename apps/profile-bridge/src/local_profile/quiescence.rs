@@ -708,7 +708,7 @@ mod tests {
         assert_eq!(fs::read(&wal)?, b"unsaved-wal-must-survive");
         assert_eq!(
             fs::read_to_string(live.path().join(BRIDGE_LOCK_FILE))?,
-            format!("profile-platform-bridge-lock-v1\n{}\n10\n", device.as_str())
+            format!("profile-platform-bridge-lock-v2\n{}\n10\n", device.as_str())
         );
         assert!(matches!(
             DeliveryActivationGuard::acquire(&root),
