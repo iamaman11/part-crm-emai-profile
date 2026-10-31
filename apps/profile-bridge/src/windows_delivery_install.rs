@@ -97,7 +97,9 @@ mod windows {
             accepted_floor(store.state()).as_ref(),
             &mut signature,
         )
-        .map_err(|_| NativeInstallerError::Signature)?;
+        .map_err(|error| {
+            NativeInstallerError::Preparation(WindowsDeliveryCoordinatorError::Policy(error))
+        })?;
         // The original and future Bridge writer share this OS root lock.
         // Protect all SQLite/WAL/unsynced material before ANY delivery-state,
         // connection, staging or activation change. This never claims remote
@@ -160,7 +162,6 @@ pub enum NativeInstallerError {
     InputIo,
     Filesystem,
     ActivationGuard,
-    Signature,
     Rescue,
     PlatformUnavailable,
     StateStore(DeliveryStateStoreError),
