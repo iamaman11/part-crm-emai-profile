@@ -1332,6 +1332,19 @@ def prove_forced_windows_camouhost_termination_recovers_same_workspace(
                 stop_runtime(interrupted)
             finally:
                 interrupted_job.close()
+        # Closing a Windows KILL_ON_JOB_CLOSE handle requests asynchronous
+        # process teardown. Kernel handle/Firefox lock release may lag the
+        # parent wait by a few scheduler ticks. Observe the actual OS writer,
+        # bounded as in the browser-main crash fixture; NEVER delete a lock,
+        # forge an exit receipt, or start a second writer while still active.
+        deadline = time.monotonic() + 15
+        while runtime.firefox_writer_active(root):
+            if time.monotonic() >= deadline:
+                raise AssertionError(
+                    "Firefox writer survived Camouhost death and 15s bounded "
+                    "Windows Job child teardown"
+                )
+            time.sleep(0.1)
         assert_writer_quiescent(runtime, root, "forced Camouhost and descendants death")
 
         restored, restored_job = launch()
