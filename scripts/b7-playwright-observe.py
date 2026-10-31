@@ -12,6 +12,7 @@ from pathlib import Path
 # tabs cannot be silently promoted to proof that Firefox restored a session.
 observed = tuple(context.pages)
 urls_before = [page.url for page in observed]
+capture_id = secrets.token_hex(8)
 report = {
     "session": session_id, "count_before": len(observed),
     "urls_before": urls_before, "pages": [], "cookies": None,
@@ -49,7 +50,7 @@ for index, page in enumerate(observed):
                     "page": index, "operation": field, "error": repr(error),
                 })
     try:
-        screenshot = f"b7-restore-{index}.png"
+        screenshot = f"b7-restore-{capture_id}-{index}.png"
         page.screenshot(path=str(agent_artifacts_dir / screenshot))
         entry["screenshot"] = screenshot
     except Exception as error:
@@ -76,7 +77,7 @@ elif not any(url != "about:blank" for url in urls_before):
 else:
     report["restore_stage"] = "URLS_OBSERVED_COMPLETENESS_NOT_PROVEN"
 
-artifact = Path(agent_artifacts_dir) / f"b7-first-restore-{secrets.token_hex(8)}.json"
+artifact = Path(agent_artifacts_dir) / f"b7-first-restore-{capture_id}.json"
 # Keep full results on disk, not truncated by the compact UI status.
 with artifact.open("x", encoding="utf-8") as output:
     json.dump(report, output, ensure_ascii=False, default=str)
