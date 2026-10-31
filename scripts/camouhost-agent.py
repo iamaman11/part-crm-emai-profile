@@ -231,12 +231,27 @@ def run() -> int:
     job_id = secrets.token_hex(16)
     staging = requests / f".{job_id}.part"
     committed = requests / f"{job_id}.py"
-    with staging.open("xb") as output:
-        output.write(script)
-        output.flush()
-        os.fsync(output.fileno())
-    os.replace(staging, committed)
-    durable_directory(requests)
+    submit_phase = "request_stage"
+    try:
+        with staging.open("xb") as output:
+            output.write(script)
+            output.flush()
+            os.fsync(output.fileno())
+        submit_phase = "request_publish"
+        os.replace(staging, committed)
+        submit_phase = "request_directory_sync"
+        durable_directory(requests)
+    except OSError as error:
+        # The rename may have applied even if confirmation was lost. Never
+        # retry this job automatically, and keep its source/evidence on disk.
+        print(
+            f"PLAYWRIGHT_AGENT_SUBMIT_UNCONFIRMED phase={submit_phase} "
+            f"job={job_id} errno={error.errno} "
+            f"winerror={getattr(error, 'winerror', None)}; "
+            "do not replay automatically",
+            file=sys.stderr, flush=True,
+        )
+        return 125
     print(f"PLAYWRIGHT_AGENT_JOB={job_id}", flush=True)
     status = results / f"{job_id}.json"
     descriptor = directory / f"active-{candidates[0]['pid']}.json"
