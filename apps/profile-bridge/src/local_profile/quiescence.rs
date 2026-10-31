@@ -271,6 +271,18 @@ fn bridge_writer_lock_present(root: &Path, depth: usize) -> Result<bool, LocalPr
                 Err(error) => return Err(error.into()),
             }
 
+            // During one-time Bridge543 adoption, a fresh generation
+            // admission lock is obtained under the old exclusive root lock.
+            // The legacy root handle is subsequently converted to shared
+            // admission; unlike Bridge543, the new writer already holds its
+            // per-generation OS lock. Check that lock as well: otherwise an
+            // installer could enter the root-lock handoff gap before Camoufox
+            // acquires parent.lock and falsely certify a quiescent workspace.
+            // A stale marker with no OS owner remains valid recovery evidence.
+            if generation_admission_held_at(root)? {
+                return Ok(true);
+            }
+
             // An orphaned live Firefox can outlast Bridge. Reuse the native
             // handle-based probe; unknown/unreadable locks block activation.
             return Ok(!matches!(
@@ -305,6 +317,37 @@ fn bridge_writer_lock_present(root: &Path, depth: usize) -> Result<bool, LocalPr
         }
     }
     Ok(false)
+}
+
+/// The installer holds the exclusive root lock before calling this. On
+/// Windows the legacy Bridge543 writer can briefly hand off that root lock
+/// while retaining this generation-scoped admission. Probe via a separate
+/// OS handle: a held lock rejects activation even before Firefox starts.
+#[cfg(windows)]
+fn generation_admission_held_at(workspace_path: &Path) -> Result<bool, LocalProfileError> {
+    use std::os::windows::fs::MetadataExt;
+
+    let path = workspace_path.join(".profile-platform.writer-admission");
+    let metadata = match fs::symlink_metadata(&path) {
+        Ok(value) => value,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(false),
+        Err(error) => return Err(error.into()),
+    };
+    if metadata.file_type().is_symlink() || metadata.file_attributes() & 0x0400 != 0 {
+        return Err(LocalProfileError::SymbolicLinkRejected);
+    }
+    if !metadata.is_file() {
+        return Err(LocalProfileError::SpecialFileRejected);
+    }
+    let handle = OpenOptions::new().read(true).write(true).open(path)?;
+    match handle.try_lock() {
+        Ok(()) => {
+            handle.unlock()?;
+            Ok(false)
+        }
+        Err(TryLockError::WouldBlock) => Ok(true),
+        Err(TryLockError::Error(error)) => Err(error.into()),
+    }
 }
 
 fn map_try_lock_error(error: TryLockError) -> LocalProfileError {
@@ -445,6 +488,36 @@ mod tests {
         assert_eq!(fs::read(&wal)?, b"original-uncheckpointed-wal");
         assert_eq!(fs::read(&pending)?, b"encrypted-original-n-plus-one");
         drop(guard);
+        Ok(())
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn installer_rejects_live_generation_admission_during_legacy_root_handoff()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let (_test_root, root, workspace, _device) = fixture("legacy-root-handoff")?;
+        fs::create_dir(workspace.path().join("user_data"))?;
+        let wal = workspace.path().join("user_data/cookies.sqlite-wal");
+        fs::write(&wal, b"unpublished-generation-dirty-wal")?;
+
+        // Model the precise Bridge543 -> generation admission handoff:
+        // the writer has taken its generation OS lock, but momentarily no
+        // shared root lock is held. Firefox has not yet acquired parent.lock.
+        let generation = super::open_generation_admission(&workspace)?;
+        generation.try_lock()?;
+        assert!(matches!(
+            DeliveryActivationGuard::acquire(&root),
+            Err(LocalProfileError::LockBusy)
+        ), "installation cannot pass when the active generation OS lock is held");
+        assert_eq!(fs::read(&wal)?, b"unpublished-generation-dirty-wal");
+
+        generation.unlock()?;
+        drop(generation);
+        assert!(
+            DeliveryActivationGuard::acquire(&root)?.confirms_quiescence(),
+            "stale admission file without a live OS lock is not a writer"
+        );
+        assert_eq!(fs::read(&wal)?, b"unpublished-generation-dirty-wal");
         Ok(())
     }
 
