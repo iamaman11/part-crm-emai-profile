@@ -59,7 +59,8 @@ mod windows {
     use crate::installed_connection::InstalledConnection;
     use crate::local_profile::{DeliveryActivationGuard, MaterializationRoot};
     use crate::windows_delivery_archive::WindowsDeliveryArchiveReader;
-    use crate::windows_delivery_coordinator::WindowsDeliveryCoordinator;
+    use crate::windows_delivery_coordinator::{WindowsDeliveryCoordinator, accepted_floor};
+    use crate::windows_delivery::verify_delivery_candidate;
     use crate::windows_delivery_download::{DeliveryDownloadRoot, WindowsReleaseAssetFetcher};
     use crate::windows_delivery_handoff::DeliveryHandoffCoordinator;
     use crate::windows_delivery_signature::WindowsCmsSignatureVerifier;
@@ -86,6 +87,26 @@ mod windows {
             Err(_) => return Err(NativeInstallerError::Filesystem),
         }
         .map_err(NativeInstallerError::StateStore)?;
+        // Reject unsigned/downgrade/incompatible delivery *before* spending
+        // disk and time creating the independent exact-byte local rescue.
+        let mut signature = WindowsCmsSignatureVerifier;
+        verify_delivery_candidate(
+            &bundle.manifest,
+            &bundle.signature,
+            &bundle.trust,
+            accepted_floor(store.state()).as_ref(),
+            &mut signature,
+        )
+        .map_err(|_| NativeInstallerError::Signature)?;
+        // The original and future Bridge writer share this OS root lock.
+        // Protect all SQLite/WAL/unsynced material before ANY delivery-state,
+        // connection, staging or activation change. This never claims remote
+        // Coordinator or browser-WORKING authority.
+        let rescue = super::rescue::ensure_rescue(root, &workspace).map_err(|error| {
+            eprintln!("BRIDGE_RESCUE_FAILED: {error}");
+            NativeInstallerError::Rescue
+        })?;
+        eprintln!("BRIDGE_RESCUE_OK: {rescue}");
         // The canonical delivery store exists only now. Installation observations
         // may start here; a rejected/corrupt store is never modified for diagnosis.
         crate::user_diagnostics::report::record_at(
@@ -117,18 +138,6 @@ mod windows {
                 &mut reader,
             )
             .map_err(NativeInstallerError::Preparation)?;
-        // The trusted installer owns the original OS lock through this call.
-        // A signed *binary* update must not depend on browser cloud Coordinator
-        // availability, but it must protect the exact existing profile bytes.
-        // Rescue is independent and immutable; it does not grant cloud Save,
-        // generation authority or a browser-WORKING certificate.
-        let rescue = super::rescue::ensure_rescue(root, &workspace).map_err(|error| {
-            // Precise owner-classified failure, with no profile bytes or secrets,
-            // retained in the local installer log; no false install success.
-            eprintln!("BRIDGE_RESCUE_FAILED: {error}");
-            NativeInstallerError::Rescue
-        })?;
-        eprintln!("BRIDGE_RESCUE_OK: {rescue}");
         // This command deliberately does not activate another process or claim runtime health.
         // The wizard next starts the exact staged executable with --delivery-install-staged.
         prepared
@@ -148,6 +157,7 @@ pub enum NativeInstallerError {
     InputIo,
     Filesystem,
     ActivationGuard,
+    Signature,
     Rescue,
     PlatformUnavailable,
     StateStore(DeliveryStateStoreError),
