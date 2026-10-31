@@ -26,7 +26,7 @@ const ROOT_ADMISSION_MARKER: &str = ".profile-platform-root";
 /// One actionable, original-device read-only failure. Keep exact OS errors and
 /// original paths for local diagnostics: never turn an unknown failure into READY.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
-struct InventoryFailure {
+pub(super) struct InventoryFailure {
     code: &'static str,
     path: String,
     detail: Option<String>,
@@ -79,10 +79,10 @@ fn native_path_bytes(path: &Path) -> Vec<u8> {
 }
 
 #[derive(Debug, Default, Eq, PartialEq, Serialize)]
-struct ProfileObservation {
-    content_manifest_sha256: String,
-    files: u64,
-    directories: u64,
+pub(super) struct ProfileObservation {
+    pub(super) content_manifest_sha256: String,
+    pub(super) files: u64,
+    pub(super) directories: u64,
     bytes: u64,
     firefox_user_data_directories: u64,
     sqlite_wal_files: u64,
@@ -420,7 +420,7 @@ fn sha256_lower_hex(bytes: &[u8]) -> String {
         .collect()
 }
 
-fn inventory(root: &MaterializationRoot) -> Result<ProfileObservation, InventoryFailure> {
+pub(super) fn inventory(root: &MaterializationRoot) -> Result<ProfileObservation, InventoryFailure> {
     let mut answer = ProfileObservation::default();
     let mut sidecars = Vec::new();
     let mut files: Vec<PathBuf> = Vec::new();
