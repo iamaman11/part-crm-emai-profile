@@ -411,7 +411,8 @@ fn save_control_reason<S>(
         GenerationSuccessorControlError::ControlPlane(error) => match error {
             ShippingControlPlaneError::Transport => Reason::ControlTransport,
             ShippingControlPlaneError::HttpServerUncertain => Reason::ControlEffectUncertain,
-            ShippingControlPlaneError::HttpStatus | ShippingControlPlaneError::LaunchLeaseConflict => Reason::ControlRejected,
+            ShippingControlPlaneError::HttpStatus
+            | ShippingControlPlaneError::LaunchLeaseConflict => Reason::ControlRejected,
             ShippingControlPlaneError::InvalidResponse => Reason::ControlInvalidResponse,
             ShippingControlPlaneError::Clock => Reason::ControlClock,
         },
@@ -513,7 +514,9 @@ impl OperatorFlowError {
     pub const fn stage(&self) -> Option<OperatorFailureStage> {
         match self {
             Self::Busy | Self::CleanupRequired => None,
-            Self::EnrollmentConflict | Self::EnrollmentServiceUncertain => Some(OperatorFailureStage::Enrollment),
+            Self::EnrollmentConflict | Self::EnrollmentServiceUncertain => {
+                Some(OperatorFailureStage::Enrollment)
+            }
             Self::GenerationSave { .. } | Self::FreshAuthorizedOpenRequired => {
                 Some(OperatorFailureStage::GenerationSave)
             }
@@ -840,8 +843,12 @@ where
             .redeem_claim(claim, &device_id, now)
             .map_err(|error| match E::classify_error(&error) {
                 EnrollmentFailureKind::LeaseConflict => OperatorFlowError::EnrollmentConflict,
-                EnrollmentFailureKind::ServiceUncertain => OperatorFlowError::EnrollmentServiceUncertain,
-                EnrollmentFailureKind::Other => OperatorFlowError::Stage(OperatorFailureStage::Enrollment),
+                EnrollmentFailureKind::ServiceUncertain => {
+                    OperatorFlowError::EnrollmentServiceUncertain
+                }
+                EnrollmentFailureKind::Other => {
+                    OperatorFlowError::Stage(OperatorFailureStage::Enrollment)
+                }
             })?;
         let lease = self
             .coordinator
@@ -992,8 +999,12 @@ where
             .redeem_claim(claim, &device_id, now)
             .map_err(|error| match E::classify_error(&error) {
                 EnrollmentFailureKind::LeaseConflict => OperatorFlowError::EnrollmentConflict,
-                EnrollmentFailureKind::ServiceUncertain => OperatorFlowError::EnrollmentServiceUncertain,
-                EnrollmentFailureKind::Other => OperatorFlowError::Stage(OperatorFailureStage::Enrollment),
+                EnrollmentFailureKind::ServiceUncertain => {
+                    OperatorFlowError::EnrollmentServiceUncertain
+                }
+                EnrollmentFailureKind::Other => {
+                    OperatorFlowError::Stage(OperatorFailureStage::Enrollment)
+                }
             })?;
         let lease = self
             .coordinator
@@ -1855,7 +1866,8 @@ where
                     ShippingControlPlaneError::HttpServerUncertain => {
                         GenerationSaveFailureReason::ControlEffectUncertain
                     }
-                    ShippingControlPlaneError::HttpStatus | ShippingControlPlaneError::LaunchLeaseConflict => {
+                    ShippingControlPlaneError::HttpStatus
+                    | ShippingControlPlaneError::LaunchLeaseConflict => {
                         GenerationSaveFailureReason::ControlRejected
                     }
                     ShippingControlPlaneError::InvalidResponse => {

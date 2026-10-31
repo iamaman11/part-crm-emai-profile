@@ -125,7 +125,8 @@ impl From<ShippingControlPlaneError> for crate::generation_reopen::GenerationReo
         match reason {
             ShippingControlPlaneError::Transport => Reopen::Transport,
             ShippingControlPlaneError::HttpServerUncertain => Reopen::ServiceTemporarilyUnavailable,
-            ShippingControlPlaneError::HttpStatus | ShippingControlPlaneError::LaunchLeaseConflict => Reopen::HttpStatus,
+            ShippingControlPlaneError::HttpStatus
+            | ShippingControlPlaneError::LaunchLeaseConflict => Reopen::HttpStatus,
             ShippingControlPlaneError::InvalidResponse => Reopen::InvalidResponse,
             ShippingControlPlaneError::Clock => Reopen::Clock,
         }
@@ -152,7 +153,10 @@ where
     fn classify_error(error: &Self::Error) -> EnrollmentFailureKind {
         match error {
             ShippingControlPlaneError::LaunchLeaseConflict => EnrollmentFailureKind::LeaseConflict,
-            ShippingControlPlaneError::Transport | ShippingControlPlaneError::HttpServerUncertain => EnrollmentFailureKind::ServiceUncertain,
+            ShippingControlPlaneError::Transport
+            | ShippingControlPlaneError::HttpServerUncertain => {
+                EnrollmentFailureKind::ServiceUncertain
+            }
             _ => EnrollmentFailureKind::Other,
         }
     }
@@ -198,7 +202,11 @@ where
             );
         }
         let response = accepted_response(response).map_err(|error| {
-            if known_conflict { Self::Error::LaunchLeaseConflict } else { error }
+            if known_conflict {
+                Self::Error::LaunchLeaseConflict
+            } else {
+                error
+            }
         })?;
         let projection =
             serde_json::from_slice::<BridgeProfileLaunchRedemptionProjection>(response.body())
@@ -1596,35 +1604,42 @@ mod tests {
     }
 
     #[test]
-    fn only_correlated_409_lease_conflict_is_launch_busy()
-    -> Result<(), Box<dyn std::error::Error>> {
+    fn only_correlated_409_lease_conflict_is_launch_busy() -> Result<(), Box<dyn std::error::Error>>
+    {
         use crate::operator_flow::EnrollmentFailureKind;
         let corr = CorrelationId::parse("corr_enroll_lease_01")?;
         let other = CorrelationId::parse("corr_enroll_other_01")?;
-        let valid = MachineHttpResponse::new(409, serde_json::to_vec(
-            &control_plane_contract::public_api::ProblemPayload {
+        let valid = MachineHttpResponse::new(
+            409,
+            serde_json::to_vec(&control_plane_contract::public_api::ProblemPayload {
                 problem_type: "urn:part-crm:problem:lease-conflict".into(),
                 title: "Lease Conflict".into(),
                 status: 409,
                 code: "lease_conflict".into(),
                 correlation_id: corr.as_str().into(),
-            }
-        )?);
+            })?,
+        );
         assert!(super::is_verified_launch_lease_conflict(&valid, &corr));
         assert!(!super::is_verified_launch_lease_conflict(&valid, &other));
         assert!(!super::is_verified_launch_lease_conflict(
-            &MachineHttpResponse::new(403, valid.body().to_vec()), &corr
+            &MachineHttpResponse::new(403, valid.body().to_vec()),
+            &corr
         ));
         assert!(!super::is_verified_launch_lease_conflict(
-            &MachineHttpResponse::new(409, b"lease_conflict".to_vec()), &corr
+            &MachineHttpResponse::new(409, b"lease_conflict".to_vec()),
+            &corr
         ));
         type Enrollment = ControlPlaneEnrollment<FakeMachineHttp>;
         assert_eq!(
-            <Enrollment as EnrollmentPort>::classify_error(&ShippingControlPlaneError::LaunchLeaseConflict),
+            <Enrollment as EnrollmentPort>::classify_error(
+                &ShippingControlPlaneError::LaunchLeaseConflict
+            ),
             EnrollmentFailureKind::LeaseConflict
         );
         assert_eq!(
-            <Enrollment as EnrollmentPort>::classify_error(&ShippingControlPlaneError::HttpServerUncertain),
+            <Enrollment as EnrollmentPort>::classify_error(
+                &ShippingControlPlaneError::HttpServerUncertain
+            ),
             EnrollmentFailureKind::ServiceUncertain
         );
         assert_eq!(
