@@ -890,6 +890,124 @@ class DisposableWindowsProcessJob:
                 raise AssertionError(f"Windows disposable Job close failed: {ctypes.get_last_error()}")
 
 
+@contextlib.contextmanager
+def crash_storage_fixture(env: dict[str, str]):
+    """Disposably serve one real origin; use only the owning Camouhost agent."""
+    class PageHandler(BaseHTTPRequestHandler):
+        def do_GET(self) -> None:  # noqa: N802
+            body = b"<!doctype html><title>same generation crash storage proof</title>"
+            self.send_response(200)
+            self.send_header("Content-Type", "text/html; charset=utf-8")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+        def log_message(self, _format: str, *_args: object) -> None:
+            pass
+
+    with tempfile.TemporaryDirectory(prefix="ar10-crash-storage-") as directory:
+        with ThreadingHTTPServer(("127.0.0.1", 0), PageHandler) as server:
+            thread = threading.Thread(target=server.serve_forever, daemon=True)
+            thread.start()
+            origin = f"http://127.0.0.1:{server.server_address[1]}"
+            try:
+                yield (
+                    dict(env, CAMOUHOST_AGENT_DIRECTORY=str(Path(directory).resolve())),
+                    Path(directory),
+                    origin,
+                )
+            finally:
+                server.shutdown()
+                thread.join(timeout=10)
+
+
+_CRASH_STORAGE_JS = """
+async ({mode}) => {
+    const value = "crash-dirty-local-v1";
+    if (mode === "write") {
+        document.cookie = "b7_crash_cookie=" + value +
+            "; Path=/; Max-Age=3600; SameSite=Lax";
+        localStorage.setItem("b7_crash_local", value);
+    }
+    const req = indexedDB.open("b7-crash-storage", 1);
+    const db = await new Promise((resolve, reject) => {
+        req.onupgradeneeded = () => {
+            if (mode === "read") {
+                req.transaction.abort();
+                return;
+            }
+            req.result.createObjectStore("samples");
+        };
+        req.onsuccess = () => resolve(req.result);
+        req.onerror = () => reject(new Error("indexeddb open failed or missing"));
+    });
+    let indexed;
+    try {
+        indexed = await new Promise((resolve, reject) => {
+            const txn = db.transaction("samples", mode === "write" ? "readwrite" : "readonly");
+            const store = txn.objectStore("samples");
+            if (mode === "write") {
+                store.put(value, "state");
+            }
+            const get = store.get("state");
+            let observed;
+            get.onsuccess = () => { observed = get.result; };
+            txn.oncomplete = () => resolve(observed);
+            txn.onerror = () => reject(new Error("indexeddb transaction failed"));
+            txn.onabort = () => reject(new Error("indexeddb transaction aborted"));
+        });
+    } finally {
+        db.close();
+    }
+    return {
+        cookie: document.cookie,
+        local: localStorage.getItem("b7_crash_local"),
+        indexed,
+    };
+}
+"""
+
+
+def crash_storage_agent_readback(
+    agent_directory: Path, camouhost_pid: int, origin: str, phase: str,
+) -> None:
+    """No second context, native SQLite edit, shadow file or synthetic browser."""
+    assert phase in ("write", "read")
+    source = (
+        f"origin = {origin!r}\\n"
+        "initial_urls = [p.url for p in context.pages]\\n"
+        "page = context.pages[0] if context.pages else context.new_page()\\n"
+        "initial_cookies = {c['name']: c['value'] for c in context.cookies([origin])}\\n"
+        "page.goto(origin, wait_until='domcontentloaded')\\n"
+        f"observed = page.evaluate({_CRASH_STORAGE_JS!r}, {{'mode': {phase!r}}})\\n"
+        "assert observed['local'] == 'crash-dirty-local-v1', observed\\n"
+        "assert observed['indexed'] == 'crash-dirty-local-v1', observed\\n"
+        "assert 'b7_crash_cookie=crash-dirty-local-v1' in observed['cookie'], observed\\n"
+        "assert any(c['name'] == 'b7_crash_cookie' and "
+        "c['value'] == 'crash-dirty-local-v1' for c in context.cookies([origin]))\\n"
+        "if " + repr(phase) + " == 'read':\\n"
+        "    assert initial_cookies.get('b7_crash_cookie') == 'crash-dirty-local-v1'\\n"
+        "result = {'phase': " + repr(phase) + ", 'initial_urls': initial_urls, "
+        "'cookie': True, 'local_storage': True, 'indexed_db': True}\\n"
+    )
+    script = agent_directory / f"crash-storage-{phase}.py"
+    script.write_text(source, encoding="utf-8")
+    command = subprocess.run(
+        [
+            sys.executable, str(Path(__file__).with_name("camouhost-agent.py")),
+            "--directory", str(agent_directory), "--pid", str(camouhost_pid),
+            "--script", str(script), "--timeout", "90",
+        ],
+        capture_output=True, text=True, timeout=110,
+    )
+    assert command.returncode == 0, (
+        f"same-owner real-browser storage {phase} failed: "
+        f"status={command.returncode}; stderr_tail={command.stderr[-1000:]!r}"
+    )
+    assert "'cookie': True" in command.stdout or '"cookie": true' in command.stdout
+    print(f"native_windows_crash_storage stage={phase} real_cookie_local_indexed PASS", flush=True)
+
+
 def prove_forced_windows_browser_termination_is_not_controlled(
     python: Path,
     camouhost: Path,
@@ -902,119 +1020,122 @@ def prove_forced_windows_browser_termination_is_not_controlled(
         return
     from ctypes import wintypes
 
-    process = start_runtime(python, camouhost, env)
-    # Attach BEFORE browser launch. This OS kernel boundary, not a best-effort
-    # PID scan, guarantees fixture cleanup if the browser root dies first.
-    try:
-        job = DisposableWindowsProcessJob(process.pid)
-    except BaseException:
-        stop_runtime(process)
-        raise
-    witness = None
-    kernel = ctypes.WinDLL("kernel32", use_last_error=True)
-    open_process = kernel.OpenProcess
-    open_process.argtypes = [wintypes.DWORD, wintypes.BOOL, wintypes.DWORD]
-    open_process.restype = wintypes.HANDLE
-    terminate = kernel.TerminateProcess
-    terminate.argtypes = [wintypes.HANDLE, wintypes.UINT]
-    terminate.restype = wintypes.BOOL
-    wait = kernel.WaitForSingleObject
-    wait.argtypes = [wintypes.HANDLE, wintypes.DWORD]
-    wait.restype = wintypes.DWORD
-    close = kernel.CloseHandle
-    close.argtypes = [wintypes.HANDLE]
-    close.restype = wintypes.BOOL
-    try:
-        assert exchange(process, f"hello|{IPC_VERSION}") == f"hello_ack|{IPC_VERSION}"
-        assert exchange(process, f"launch|{SESSION}") == f"ready|{SESSION}"
-        assert exchange(process, f"observe_browser_visible|{SESSION}").startswith(
-            f"browser_visible|{SESSION}|"
-        )
-        assert exchange(process, f"admit_navigation|{SESSION}|") == (
-            f"navigation_admitted|{SESSION}"
-        )
-        witness = runtime.WindowsBrowserExitWitness(process.pid)
-        assert len(witness.pids) == 1, "browser main process identity is ambiguous"
-        pid = witness.pids[0]
-        handle = open_process(0x00100001, False, pid)  # SYNCHRONIZE | TERMINATE
-        assert handle, "cannot open exact browser-main handle for negative proof"
+    with crash_storage_fixture(env) as (crash_env, agent_base, origin):
+        process = start_runtime(python, camouhost, crash_env)
+        # Attach BEFORE browser launch. This OS kernel boundary, not a best-effort
+        # PID scan, guarantees fixture cleanup if the browser root dies first.
         try:
-            assert terminate(handle, 19), "Windows refused main-PID fault injection"
-            assert wait(handle, 12000) == 0, "browser-main death not observed"
-        finally:
-            close(handle)
-        assert not witness.safely_exited(), "forced browser death looked like normal exit zero"
-        observed = None
-        for _ in range(4):
-            try:
-                observed = exchange(process, f"observe_close|{SESSION}", 10)
-            except AssertionError:
-                assert process.poll() is not None, "Camouhost stalled after browser main kill"
-                break
-            assert observed != f"close_observed|{SESSION}|true", (
-                "forced browser-main termination was mistaken for controlled Close"
-            )
-            if observed == "error|runtime":
-                break
-            time.sleep(0.2)
-        assert observed != f"close_observed|{SESSION}|true"
-    finally:
-        try:
+            job = DisposableWindowsProcessJob(process.pid)
+        except BaseException:
             stop_runtime(process)
-        finally:
-            # The Windows kernel, not a race-prone hand-coded PID walk, closes
-            # all remaining Firefox/driver children of this disposable job.
-            job.close()
-            if witness is not None:
-                witness.close()
-
-    deadline = time.monotonic() + 15
-    while time.monotonic() < deadline and runtime.firefox_writer_active(root):
-        time.sleep(0.1)
-    assert_writer_quiescent(runtime, root, "forced Windows browser main death")
-
-    # FIX-01 native half of the crash recovery composition. Reuse the SAME
-    # on-disk Firefox user_data after its main PID was killed; no fresh profile,
-    # lock deletion, browser preference reset or alternate runtime permitted.
-    restarted = start_runtime(python, camouhost, env)
-    try:
-        # This disposable process has the same kernel-managed child-lifetime
-        # guarantee as the fault-injection half. No PID sweeps or manual lock
-        # deletion if the second launch fails partway through.
-        restarted_job = DisposableWindowsProcessJob(restarted.pid)
-    except BaseException:
-        stop_runtime(restarted)
-        raise
-    try:
-        assert exchange(restarted, f"hello|{IPC_VERSION}") == f"hello_ack|{IPC_VERSION}"
-        assert exchange(restarted, f"launch|{SESSION}") == f"ready|{SESSION}", (
-            "same Firefox workspace could not reach native Ready after main-PID death"
-        )
-        assert exchange(restarted, f"observe_browser_visible|{SESSION}").startswith(
-            f"browser_visible|{SESSION}|"
-        ), "native same-workspace post-crash browser-visible readiness not proven"
-        assert exchange(restarted, f"admit_navigation|{SESSION}|") == (
-            f"navigation_admitted|{SESSION}"
-        )
-        # The prior fixture erroneously called stop_runtime(), which KILLS
-        # Camouhost and may orphan its Firefox processes while SQLite is
-        # still open. This is normal controlled fixture teardown, not a
-        # second crash. Require the real IPC close and observed child exit.
-        assert exchange(restarted, f"close|{SESSION}", 45) == (
-            f"closed|{SESSION}|true"
-        ), "native post-crash reopen did not support ordinary close"
-        assert restarted.wait(timeout=30) == 0
-    finally:
+            raise
+        witness = None
+        kernel = ctypes.WinDLL("kernel32", use_last_error=True)
+        open_process = kernel.OpenProcess
+        open_process.argtypes = [wintypes.DWORD, wintypes.BOOL, wintypes.DWORD]
+        open_process.restype = wintypes.HANDLE
+        terminate = kernel.TerminateProcess
+        terminate.argtypes = [wintypes.HANDLE, wintypes.UINT]
+        terminate.restype = wintypes.BOOL
+        wait = kernel.WaitForSingleObject
+        wait.argtypes = [wintypes.HANDLE, wintypes.DWORD]
+        wait.restype = wintypes.DWORD
+        close = kernel.CloseHandle
+        close.argtypes = [wintypes.HANDLE]
+        close.restype = wintypes.BOOL
         try:
-            stop_runtime(restarted)
+            assert exchange(process, f"hello|{IPC_VERSION}") == f"hello_ack|{IPC_VERSION}"
+            assert exchange(process, f"launch|{SESSION}") == f"ready|{SESSION}"
+            assert exchange(process, f"observe_browser_visible|{SESSION}").startswith(
+                f"browser_visible|{SESSION}|"
+            )
+            assert exchange(process, f"admit_navigation|{SESSION}|") == (
+                f"navigation_admitted|{SESSION}"
+            )
+            crash_storage_agent_readback(agent_base, process.pid, origin, "write")
+            witness = runtime.WindowsBrowserExitWitness(process.pid)
+            assert len(witness.pids) == 1, "browser main process identity is ambiguous"
+            pid = witness.pids[0]
+            handle = open_process(0x00100001, False, pid)  # SYNCHRONIZE | TERMINATE
+            assert handle, "cannot open exact browser-main handle for negative proof"
+            try:
+                assert terminate(handle, 19), "Windows refused main-PID fault injection"
+                assert wait(handle, 12000) == 0, "browser-main death not observed"
+            finally:
+                close(handle)
+            assert not witness.safely_exited(), "forced browser death looked like normal exit zero"
+            observed = None
+            for _ in range(4):
+                try:
+                    observed = exchange(process, f"observe_close|{SESSION}", 10)
+                except AssertionError:
+                    assert process.poll() is not None, "Camouhost stalled after browser main kill"
+                    break
+                assert observed != f"close_observed|{SESSION}|true", (
+                    "forced browser-main termination was mistaken for controlled Close"
+                )
+                if observed == "error|runtime":
+                    break
+                time.sleep(0.2)
+            assert observed != f"close_observed|{SESSION}|true"
         finally:
-            restarted_job.close()
-    assert_writer_quiescent(runtime, root, "post-crash same-workspace native reopen")
-    print(
-        "native_windows_main_kill fails_closed_disposable_job_released_"
-        "and_same_workspace_native_reopen_ready PASS",
-        flush=True,
-    )
+            try:
+                stop_runtime(process)
+            finally:
+                # The Windows kernel, not a race-prone hand-coded PID walk, closes
+                # all remaining Firefox/driver children of this disposable job.
+                job.close()
+                if witness is not None:
+                    witness.close()
+
+        deadline = time.monotonic() + 15
+        while time.monotonic() < deadline and runtime.firefox_writer_active(root):
+            time.sleep(0.1)
+        assert_writer_quiescent(runtime, root, "forced Windows browser main death")
+
+        # FIX-01 native half of the crash recovery composition. Reuse the SAME
+        # on-disk Firefox user_data after its main PID was killed; no fresh profile,
+        # lock deletion, browser preference reset or alternate runtime permitted.
+        restarted = start_runtime(python, camouhost, crash_env)
+        try:
+            # This disposable process has the same kernel-managed child-lifetime
+            # guarantee as the fault-injection half. No PID sweeps or manual lock
+            # deletion if the second launch fails partway through.
+            restarted_job = DisposableWindowsProcessJob(restarted.pid)
+        except BaseException:
+            stop_runtime(restarted)
+            raise
+        try:
+            assert exchange(restarted, f"hello|{IPC_VERSION}") == f"hello_ack|{IPC_VERSION}"
+            assert exchange(restarted, f"launch|{SESSION}") == f"ready|{SESSION}", (
+                "same Firefox workspace could not reach native Ready after main-PID death"
+            )
+            assert exchange(restarted, f"observe_browser_visible|{SESSION}").startswith(
+                f"browser_visible|{SESSION}|"
+            ), "native same-workspace post-crash browser-visible readiness not proven"
+            assert exchange(restarted, f"admit_navigation|{SESSION}|") == (
+                f"navigation_admitted|{SESSION}"
+            )
+            crash_storage_agent_readback(agent_base, restarted.pid, origin, "read")
+            # The prior fixture erroneously called stop_runtime(), which KILLS
+            # Camouhost and may orphan its Firefox processes while SQLite is
+            # still open. This is normal controlled fixture teardown, not a
+            # second crash. Require the real IPC close and observed child exit.
+            assert exchange(restarted, f"close|{SESSION}", 45) == (
+                f"closed|{SESSION}|true"
+            ), "native post-crash reopen did not support ordinary close"
+            assert restarted.wait(timeout=30) == 0
+        finally:
+            try:
+                stop_runtime(restarted)
+            finally:
+                restarted_job.close()
+        assert_writer_quiescent(runtime, root, "post-crash same-workspace native reopen")
+        print(
+            "native_windows_main_kill fails_closed_disposable_job_released_"
+            "and_same_workspace_native_reopen_ready PASS",
+            flush=True,
+        )
 
 
 def prove_ipc_timeout_contract() -> None:
