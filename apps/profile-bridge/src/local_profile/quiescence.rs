@@ -58,7 +58,12 @@ impl BridgeWorkspaceLock {
         fresh_epoch: u64,
     ) -> Result<Self, LocalProfileError> {
         let root = workspace_root(workspace)?;
-        let legacy_generation = !generation_admission_exists(workspace)?;
+        // The admission file can be left behind by a failed new-version
+        // acquire while an old Bridge543 ROOT-only writer still owns v1.
+        // Only the current v2 marker proves generation-scoped ownership.
+        // V1 always requires exclusive root admission before adoption.
+        let legacy_generation = !generation_admission_exists(workspace)?
+            || !generation_scoped_marker_present(workspace)?;
         let root_lock = open_root_marker(root)?;
         if legacy_generation {
             // Bridge543 and all prior root-only writers hold this lock SHARED.
@@ -162,6 +167,26 @@ fn workspace_root(workspace: &GenerationWorkspace) -> Result<&Path, LocalProfile
         .ancestors()
         .nth(GENERATION_DEPTH_FROM_ROOT)
         .ok_or(LocalProfileError::UnsafeRelativePath)
+}
+
+/// Persistent marker version, not mere lock-file existence, distinguishes
+/// root-only Bridge543 from a generation-scoped writer. Corruption or an
+/// unreadable/symlinked marker may never authorize a weaker admission check.
+fn generation_scoped_marker_present(
+    workspace: &GenerationWorkspace,
+) -> Result<bool, LocalProfileError> {
+    let marker = workspace.path().join(BRIDGE_LOCK_FILE);
+    let metadata = fs::symlink_metadata(&marker)?;
+    if metadata.file_type().is_symlink() {
+        return Err(LocalProfileError::SymbolicLinkRejected);
+    }
+    if !metadata.is_file() {
+        return Err(LocalProfileError::SpecialFileRejected);
+    }
+    if metadata.len() > 512 {
+        return Err(LocalProfileError::LockBusy);
+    }
+    Ok(fs::read_to_string(marker)?.starts_with("profile-platform-bridge-lock-v2\n"))
 }
 
 fn generation_admission_exists(workspace: &GenerationWorkspace) -> Result<bool, LocalProfileError> {
@@ -742,6 +767,45 @@ mod tests {
             Err(LocalProfileError::LockBusy)
         ));
         new_writer.release()?;
+        Ok(())
+    }
+
+    #[test]
+    fn abandoned_generation_admission_never_upgrades_a_live_bridge543_writer()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let (_test_root, root, workspace, device) = fixture("orphaned-admission-v1")?;
+        let user_data = workspace.path().join("user_data");
+        fs::create_dir(&user_data)?;
+        let wal = user_data.join("cookies.sqlite-wal");
+        fs::write(&wal, b"unpublished-legacy-firefox-wal")?;
+        let marker = workspace.path().join(BRIDGE_LOCK_FILE);
+        let legacy = format!("profile-platform-bridge-lock-v1\n{}\n5\n", device.as_str());
+        fs::write(&marker, &legacy)?;
+
+        // A failed new-version acquire may have created this empty file
+        // while the old Bridge543 continued holding the shared root lock.
+        // File existence alone does NOT turn the old marker into a v2 owner.
+        let abandoned = super::open_generation_admission(&workspace)?;
+        drop(abandoned);
+        let old_writer = super::open_root_marker(root.path())?;
+        old_writer.try_lock_shared()?;
+        assert!(matches!(
+            BridgeWorkspaceLock::recover_interrupted_launch(&workspace, &device, 6),
+            Err(LocalProfileError::LockBusy)
+        ));
+        assert_eq!(fs::read_to_string(&marker)?, legacy);
+        assert_eq!(fs::read(&wal)?, b"unpublished-legacy-firefox-wal");
+        drop(old_writer);
+
+        // Once the old root-only writer really exits, the same fresh fence
+        // may adopt it. The replacement is v2 and the dirty WAL is untouched.
+        let recovered = BridgeWorkspaceLock::recover_interrupted_launch(&workspace, &device, 6)?;
+        assert_eq!(
+            fs::read_to_string(&marker)?,
+            format!("profile-platform-bridge-lock-v2\n{}\n6\n", device.as_str())
+        );
+        assert_eq!(fs::read(&wal)?, b"unpublished-legacy-firefox-wal");
+        recovered.release()?;
         Ok(())
     }
 

@@ -1061,7 +1061,7 @@ fn committed_then_crashed_writer_recovers_wal_and_cold_reopens_sole_successor()
     let before_epoch = state.borrow().epoch;
     assert_eq!(
         fs::read_to_string(&marker)?,
-        format!("profile-platform-bridge-lock-v1\n{}\n{before_epoch}\n", device.as_str()),
+        format!("profile-platform-bridge-lock-v2\n{}\n{before_epoch}\n", device.as_str()),
     );
 
     // Drop without Close/Save models process death: the OS admission handle
@@ -1099,7 +1099,7 @@ fn committed_then_crashed_writer_recovers_wal_and_cold_reopens_sole_successor()
     assert_eq!(recovered_epoch, before_epoch + 1);
     assert_eq!(
         fs::read_to_string(&marker)?,
-        format!("profile-platform-bridge-lock-v1\n{}\n{recovered_epoch}\n", device.as_str()),
+        format!("profile-platform-bridge-lock-v2\n{}\n{recovered_epoch}\n", device.as_str()),
     );
     assert_eq!(fs::read(&cookie_db)?, cookie_bytes);
     assert_eq!(fs::read(&wal)?, wal_bytes);

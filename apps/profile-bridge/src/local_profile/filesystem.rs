@@ -375,7 +375,7 @@ impl BridgeWorkspaceLock {
         }
         let lock_path = workspace.path().join(BRIDGE_LOCK_FILE);
         let ownership = format!(
-            "profile-platform-bridge-lock-v1\n{}\n{epoch}\n",
+            "profile-platform-bridge-lock-v2\n{}\n{epoch}\n",
             device_id.as_str()
         );
         let mut file = OpenOptions::new()
@@ -397,9 +397,9 @@ impl BridgeWorkspaceLock {
         })
     }
 
-    /// May be called only while the root's OS admission lock is held *exclusively*,
-    /// after the operator obtained a fresh coordinator claim for this exact device
-    /// and generation, and proved that no native Firefox writer still owns user_data.
+    /// Caller holds exclusive ROOT admission for legacy v1 markers, or exclusive
+    /// GENERATION admission plus shared root admission for new v2 markers.
+    /// It also proved a fresh same-device fence and no live native Firefox writer.
     /// The persistent marker is crash evidence, not proof of a surviving OS writer.
     pub(super) fn replace_interrupted(
         workspace: &GenerationWorkspace,
@@ -415,11 +415,21 @@ impl BridgeWorkspaceLock {
             return Err(LocalProfileError::LockBusy);
         }
         let previous = read_control_text(&lock_path)?;
-        let owner_prefix = format!("profile-platform-bridge-lock-v1\n{}\n", device_id.as_str());
-        let previous_epoch = previous
-            .strip_prefix(&owner_prefix)
-            .and_then(|suffix| suffix.strip_suffix('\n'))
-            .and_then(|value| value.parse::<u64>().ok())
+        // V1 is the root-only Bridge543 marker. V2 certifies that THIS
+        // marker was created while generation OS admission was held. Never
+        // infer that fact merely from an abandoned admission file.
+        let owner_prefixes = [
+            format!("profile-platform-bridge-lock-v2\n{}\n", device_id.as_str()),
+            format!("profile-platform-bridge-lock-v1\n{}\n", device_id.as_str()),
+        ];
+        let previous_epoch = owner_prefixes
+            .iter()
+            .find_map(|prefix| {
+                previous
+                    .strip_prefix(prefix)
+                    .and_then(|suffix| suffix.strip_suffix('\n'))
+                    .and_then(|value| value.parse::<u64>().ok())
+            })
             .ok_or(LocalProfileError::LockBusy)?;
         if previous_epoch == 0 || previous_epoch >= fresh_epoch {
             return Err(LocalProfileError::LockBusy);

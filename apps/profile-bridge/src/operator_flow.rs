@@ -3583,7 +3583,7 @@ mod tests {
         assert_eq!(
             fs::read_to_string(&marker)?,
             format!(
-                "profile-platform-bridge-lock-v1\n{}\n{next_epoch}\n",
+                "profile-platform-bridge-lock-v2\n{}\n{next_epoch}\n",
                 fixture.device_id.as_str()
             )
         );
