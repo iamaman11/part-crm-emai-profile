@@ -12,6 +12,7 @@ const ROOT_MARKER_CONTENT: &str = "profile-platform-local-root-v1\n";
 const GENERATION_MARKER: &str = ".profile-generation";
 const GENERATION_MARKER_CONTENT: &str = "profile-platform-generation-v1\n";
 const BRIDGE_LOCK_FILE: &str = ".profile-platform.lock";
+const GENERATION_ADMISSION_FILE: &str = ".profile-platform.writer-admission";
 pub(crate) const BROWSER_IDENTITY_RECORD_FILE: &str = ".profile-browser-identity-v1";
 const BROWSER_STATE_DIRECTORY: &str = "user_data";
 const FIREFOX_PARENT_LOCK_PATH: &str = "user_data/.parentlock";
@@ -770,7 +771,10 @@ fn normalized_relative_path(relative: &Path) -> Result<String, LocalProfileError
 }
 
 fn is_bridge_control_file(relative_path: &str) -> bool {
-    matches!(relative_path, GENERATION_MARKER | BRIDGE_LOCK_FILE)
+    matches!(
+        relative_path,
+        GENERATION_MARKER | BRIDGE_LOCK_FILE | GENERATION_ADMISSION_FILE
+    )
 }
 
 fn is_ephemeral_browser_lock(relative_path: &str) -> bool {
