@@ -10,6 +10,8 @@ use std::path::Path;
 mod bundle;
 #[cfg(windows)]
 mod s1;
+#[cfg(windows)]
+mod rescue;
 
 /// Operator-only no-effect observation. Output is JSON with its own verdict;
 /// a successful command execution is NOT an installation authorization.
@@ -115,6 +117,13 @@ mod windows {
                 &mut reader,
             )
             .map_err(NativeInstallerError::Preparation)?;
+        // The trusted installer owns the original OS lock through this call.
+        // A signed *binary* update must not depend on browser cloud Coordinator
+        // availability, but it must protect the exact existing profile bytes.
+        // Rescue is independent and immutable; it does not grant cloud Save,
+        // generation authority or a browser-WORKING certificate.
+        super::rescue::ensure_rescue(root, &workspace)
+            .map_err(|_| NativeInstallerError::Rescue)?;
         // This command deliberately does not activate another process or claim runtime health.
         // The wizard next starts the exact staged executable with --delivery-install-staged.
         prepared
@@ -134,6 +143,7 @@ pub enum NativeInstallerError {
     InputIo,
     Filesystem,
     ActivationGuard,
+    Rescue,
     PlatformUnavailable,
     StateStore(DeliveryStateStoreError),
     Preparation(WindowsDeliveryCoordinatorError),
