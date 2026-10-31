@@ -89,6 +89,9 @@ writer or Save/Commit is authorized. D1 `READY` alone is not proof.
    writer, CDP port, enable flag or test profile allowlist.
    The agent CLI must run with the SAME Windows security token/owner as
    Camouhost, normally an unelevated terminal started by that user.
+   The same interactive Windows logon session is also required: an
+   unrelated session with the same inbox owner SID is refused before
+   request publication (exit 126, SESSION_CONTEXT_MISMATCH or UNKNOWN).
    Same account name with elevated Administrator token is not equivalent:
    the CLI rejects incompatible inbox ownership BEFORE publishing a job
    (exit 126, `PLAYWRIGHT_AGENT_SECURITY_CONTEXT_MISMATCH`).

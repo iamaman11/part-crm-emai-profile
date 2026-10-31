@@ -112,6 +112,34 @@ def inbox_owner_matches_process(requests: Path) -> bool:
         close_handle(token)
 
 
+def owner_in_current_windows_session(owner_pid: int) -> bool:
+    """Refuse cross-logon-session dispatch even for a matching Windows SID.
+
+    The owner PID is obtained from a live Camouhost descriptor. Query OS
+    session identifiers rather than trusting a self-declared session label.
+    Unknown or inaccessible processes are not safe submission targets.
+    """
+    if os.name != "nt":
+        return True
+    import ctypes
+    from ctypes import wintypes
+
+    kernel = ctypes.WinDLL("kernel32", use_last_error=True)
+    current_pid = kernel.GetCurrentProcessId
+    current_pid.argtypes = []
+    current_pid.restype = wintypes.DWORD
+    process_session = kernel.ProcessIdToSessionId
+    process_session.argtypes = [wintypes.DWORD, ctypes.POINTER(wintypes.DWORD)]
+    process_session.restype = wintypes.BOOL
+    caller_session = wintypes.DWORD()
+    owner_session = wintypes.DWORD()
+    if not process_session(current_pid(), ctypes.byref(caller_session)):
+        raise OSError(ctypes.get_last_error(), "Windows caller session unavailable")
+    if not process_session(owner_pid, ctypes.byref(owner_session)):
+        raise OSError(ctypes.get_last_error(), "Windows Camouhost session unavailable")
+    return caller_session.value == owner_session.value
+
+
 def process_alive(pid: object) -> bool:
     """Check actual process liveness before presenting a descriptor as a live session."""
     if not isinstance(pid, int) or isinstance(pid, bool) or pid <= 0:
@@ -230,6 +258,22 @@ def run() -> int:
             "inbox safely. Run the CLI unelevated with the same token as "
             "Camouhost; do not manually change request ownership. "
             "No request was published.", file=sys.stderr,
+        )
+        return 126
+    try:
+        same_session = owner_in_current_windows_session(candidates[0]["pid"])
+    except OSError as error:
+        print(
+            f"PLAYWRIGHT_AGENT_SESSION_CONTEXT_UNKNOWN: phase=prepublish "
+            f"errno={error.errno} winerror={getattr(error, 'winerror', None)}; "
+            "no request published", file=sys.stderr,
+        )
+        return 126
+    if not same_session:
+        print(
+            "PLAYWRIGHT_AGENT_SESSION_CONTEXT_MISMATCH: phase=prepublish; "
+            "the CLI and Camouhost must run in the same interactive Windows "
+            "logon session. No request was published.", file=sys.stderr,
         )
         return 126
     script = arguments.script.read_bytes()  # No artificial source/content cap for test profiles.

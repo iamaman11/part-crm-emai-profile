@@ -442,6 +442,7 @@ def prove_claim_denial_and_windows_owner_preflight() -> None:
             # Native same-token owner can accept its own inbox, including on
             # hosted Windows. No Set-Acl or ownership mutation by this test.
             assert cli.inbox_owner_matches_process(agent.requests)
+            assert cli.owner_in_current_windows_session(os.getpid())
             source = base / "preflight-script.py"
             source.write_text("result = 123\n", encoding="utf-8")
             args = [
@@ -450,6 +451,24 @@ def prove_claim_denial_and_windows_owner_preflight() -> None:
                 "--script", str(source), "--timeout", "1",
             ]
             before = set(agent.requests.iterdir())
+            # Matching file ownership alone cannot authorize a different
+            # interactive logon session. Reject before publishing any request.
+            with patch.object(cli, "owner_in_current_windows_session", return_value=False), \
+                    patch.object(sys, "argv", args), \
+                    contextlib.redirect_stderr(io.StringIO()) as error_out:
+                assert cli.run() == 126
+                assert "SESSION_CONTEXT_MISMATCH" in error_out.getvalue()
+            assert set(agent.requests.iterdir()) == before
+
+            with patch.object(
+                cli, "owner_in_current_windows_session",
+                side_effect=OSError(5, "Windows session query denied"),
+            ), patch.object(sys, "argv", args), \
+                    contextlib.redirect_stderr(io.StringIO()) as error_out:
+                assert cli.run() == 126
+                assert "SESSION_CONTEXT_UNKNOWN" in error_out.getvalue()
+                assert "errno=5" in error_out.getvalue()
+            assert set(agent.requests.iterdir()) == before
             with patch.object(cli, "inbox_owner_matches_process", return_value=False), \
                     patch.object(sys, "argv", args), \
                     contextlib.redirect_stderr(io.StringIO()) as error_out:
