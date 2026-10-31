@@ -88,6 +88,8 @@ en.UnpackVerify=Unpacking components and verifying installed files.
 ru.UnpackVerify=Распаковка компонентов и проверка установленных файлов.
 en.StagedReady=Verified components staged for safe activation.
 ru.StagedReady=Проверенные компоненты подготовлены к безопасной активации.
+en.RescueChecked=Existing browser profile bytes are protected and verified.
+ru.RescueChecked=Файлы существующих профилей сохранены и проверены.
 
 [Code]
 const
@@ -96,6 +98,7 @@ const
   DownloadStagePrefix = 'PROFILE_BRIDGE_DOWNLOAD_STAGE_V1=';
   DownloadFailurePrefix = 'PROFILE_BRIDGE_DOWNLOAD_FAILURE_V1=';
   InstallStagePrefix = 'PROFILE_BRIDGE_INSTALL_STAGE_V1=';
+  RescueStatusPrefix = 'PROFILE_BRIDGE_RESCUE_STATUS_V1=';
 var
   BridgeOutputError: Boolean;
   BridgeLastLine: String;
@@ -265,7 +268,7 @@ end;
 
 procedure CaptureBridgeOutput(const S: String; const Error, FirstLine: Boolean);
 var
-  Directory: String;
+  Directory, RescueStatus: String;
 begin
   { Only bounded allowlisted download frames reach user-facing UI. Never
     display raw HTTP exceptions, URLs, proxy credentials or request payloads. }
@@ -279,6 +282,17 @@ begin
   end;
   if not Error and (Pos(InstallStagePrefix, S) = 1) then begin
     DisplayInstallStage(Copy(S, Length(InstallStagePrefix) + 1, Length(S)));
+    exit;
+  end;
+  if not Error and (Pos(RescueStatusPrefix, S) = 1) then begin
+    RescueStatus := Copy(S, Length(RescueStatusPrefix) + 1, Length(S));
+    if (RescueStatus = 'NEW_RESCUE_BYTES_VERIFIED') or
+       (RescueStatus = 'EXISTING_RESCUE_BYTES_VERIFIED') or
+       (RescueStatus = 'EMPTY_NEW_PROFILE_ROOT') then begin
+      Log('PROFILE_BRIDGE_RESCUE_STATUS_V1=' + RescueStatus);
+      InstallerProgress.SetText(CustomMessage('RescueChecked'), '');
+    end else
+      BridgeOutputError := True;
     exit;
   end;
   if not Error and (Pos(DownloadFailurePrefix, S) = 1) then begin
