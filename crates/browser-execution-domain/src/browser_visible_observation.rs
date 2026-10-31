@@ -310,10 +310,13 @@ impl ProfileStableIdentity {
             &observation.webgl_renderer,
             BrowserVisibleMismatch::WebGlRenderer,
         )?;
+        let webgl2_disabled = canonical_webgl2_disabled_sha256(digester).as_deref()
+            == Some(expected.webgl2_parameters_sha256());
         compare_extensions_digest(
             expected.webgl_extensions_sha256(),
             &observation.webgl_extensions,
             &observation.webgl2_extensions,
+            webgl2_disabled,
             digester,
         )?;
         compare_key_values_digest(
@@ -323,19 +326,26 @@ impl ProfileStableIdentity {
             BrowserVisibleMismatch::WebGlParameters,
             digester,
         )?;
-        compare_key_values_digest(
-            expected.webgl2_parameters_sha256(),
-            &observation.webgl2_parameters,
-            canonical_webgl2_parameters_sha256,
-            BrowserVisibleMismatch::WebGl2Parameters,
-            digester,
-        )?;
+        if webgl2_disabled {
+            if !matches!(observation.webgl2_parameters, Observed::Unavailable) {
+                return Err(BrowserVisibleMismatch::WebGl2Parameters);
+            }
+        } else {
+            compare_key_values_digest(
+                expected.webgl2_parameters_sha256(),
+                &observation.webgl2_parameters,
+                canonical_webgl2_parameters_sha256,
+                BrowserVisibleMismatch::WebGl2Parameters,
+                digester,
+            )?;
+        }
         compare_context_pair_digest(
             expected.shader_precision_sha256(),
             &observation.webgl_shader_precision,
             &observation.webgl2_shader_precision,
             canonical_shader_precision_sha256,
             BrowserVisibleMismatch::ShaderPrecision,
+            webgl2_disabled,
             digester,
         )?;
         compare_context_pair_digest(
@@ -344,6 +354,7 @@ impl ProfileStableIdentity {
             &observation.webgl2_context_attributes,
             canonical_context_attributes_sha256,
             BrowserVisibleMismatch::ContextAttributes,
+            webgl2_disabled,
             digester,
         )
     }
@@ -441,10 +452,16 @@ fn compare_extensions_digest<D: BrowserVisibleSha256Port>(
     expected: &str,
     webgl: &Observed<Vec<String>>,
     webgl2: &Observed<Vec<String>>,
+    webgl2_disabled: bool,
     digester: &mut D,
 ) -> Result<(), BrowserVisibleMismatch> {
-    let (Observed::Available(webgl), Observed::Available(webgl2)) = (webgl, webgl2) else {
+    let Observed::Available(webgl) = webgl else {
         return Err(BrowserVisibleMismatch::WebGlExtensions);
+    };
+    let webgl2 = match (webgl2_disabled, webgl2) {
+        (true, Observed::Unavailable) => &[][..],
+        (false, Observed::Available(values)) => values.as_slice(),
+        _ => return Err(BrowserVisibleMismatch::WebGlExtensions),
     };
     let Some(observed) = canonical_webgl_extensions_sha256(webgl, webgl2, digester) else {
         return Err(BrowserVisibleMismatch::WebGlExtensions);
@@ -483,14 +500,20 @@ fn compare_context_pair_digest<D, F>(
     webgl2: &Observed<Vec<BrowserKeyValueObservation>>,
     canonicalize: F,
     mismatch: BrowserVisibleMismatch,
+    webgl2_disabled: bool,
     digester: &mut D,
 ) -> Result<(), BrowserVisibleMismatch>
 where
     D: BrowserVisibleSha256Port,
     F: Fn(&[BrowserKeyValueObservation], &[BrowserKeyValueObservation], &mut D) -> Option<String>,
 {
-    let (Observed::Available(webgl), Observed::Available(webgl2)) = (webgl, webgl2) else {
+    let Observed::Available(webgl) = webgl else {
         return Err(mismatch);
+    };
+    let webgl2 = match (webgl2_disabled, webgl2) {
+        (true, Observed::Unavailable) => &[][..],
+        (false, Observed::Available(values)) => values.as_slice(),
+        _ => return Err(mismatch),
     };
     if canonicalize(webgl, webgl2, digester).as_deref() == Some(expected) {
         Ok(())
@@ -543,6 +566,14 @@ pub fn canonical_webgl2_parameters_sha256<D: BrowserVisibleSha256Port>(
     digester: &mut D,
 ) -> Option<String> {
     canonical_key_values_sha256("webgl2-parameters-v1", values, digester)
+}
+
+/// Domain-separated identity witness for a *deliberately disabled* WebGL2.
+/// A missing observation is permitted only if the generation owns this digest.
+pub fn canonical_webgl2_disabled_sha256<D: BrowserVisibleSha256Port>(
+    digester: &mut D,
+) -> Option<String> {
+    digest_canonical(&domain_bytes("webgl2-disabled-v1"), digester)
 }
 
 pub fn canonical_shader_precision_sha256<D: BrowserVisibleSha256Port>(
@@ -1177,4 +1208,63 @@ mod tests {
         }
         Ok(())
     }
+    #[test]
+    fn intentionally_disabled_webgl2_accepts_only_unavailable_browser_context()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let (enabled, mut observation) = fixture(Some(8), false)?;
+        let mut digester = TestSha256;
+        let extensions = vec!["EXT_beta".to_owned(), "EXT_alpha".to_owned()];
+        let stable = ProfileStableIdentity::new(
+            enabled.schema_version(),
+            enabled.browser_os().clone(),
+            enabled.hardware().clone(),
+            enabled.display().clone(),
+            GraphicsIdentity::new(
+                enabled.graphics().webgl_vendor(),
+                enabled.graphics().webgl_renderer(),
+                canonical_webgl_extensions_sha256(&extensions, &[], &mut digester)
+                    .ok_or("disabled extensions")?,
+                canonical_webgl_parameters_sha256(&key_values("webgl"), &mut digester)
+                    .ok_or("webgl params")?,
+                canonical_webgl2_disabled_sha256(&mut digester)
+                    .ok_or("disabled WebGL2 marker")?,
+                canonical_shader_precision_sha256(&key_values("shader"), &[], &mut digester)
+                    .ok_or("shader")?,
+                canonical_context_attributes_sha256(&key_values("context"), &[], &mut digester)
+                    .ok_or("context")?,
+            )?,
+            enabled.fonts().clone(),
+            enabled.origin_deterministic().clone(),
+            enabled.locale().clone(),
+        )?;
+        observation.graphics.webgl2_extensions = Observed::Unavailable;
+        observation.graphics.webgl2_parameters = Observed::Unavailable;
+        observation.graphics.webgl2_shader_precision = Observed::Unavailable;
+        observation.graphics.webgl2_context_attributes = Observed::Unavailable;
+        assert_eq!(
+            stable.compare_browser_visible(&observation, &mut TestSha256),
+            Ok(())
+        );
+        assert_eq!(
+            enabled.compare_browser_visible(&observation, &mut TestSha256),
+            Err(BrowserVisibleMismatch::WebGlExtensions)
+        );
+
+        let mut fake_webgl2 = observation.clone();
+        fake_webgl2.graphics.webgl2_parameters =
+            Observed::Available(key_values("webgl2"));
+        assert_eq!(
+            stable.compare_browser_visible(&fake_webgl2, &mut TestSha256),
+            Err(BrowserVisibleMismatch::WebGl2Parameters)
+        );
+        let mut fake_extensions = observation;
+        fake_extensions.graphics.webgl2_extensions =
+            Observed::Available(vec!["EXT_unexpected".to_owned()]);
+        assert_eq!(
+            stable.compare_browser_visible(&fake_extensions, &mut TestSha256),
+            Err(BrowserVisibleMismatch::WebGlExtensions)
+        );
+        Ok(())
+    }
+
 }
