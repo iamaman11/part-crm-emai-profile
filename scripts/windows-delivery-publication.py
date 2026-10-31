@@ -440,8 +440,13 @@ end;
         if (executed.returncode == 0 or 'Preparation(Policy(SignatureInvalid))' not in captured
                 or 'BRIDGE_INSTALLATION_ADMISSION_REJECTED' not in captured):
             fail(f"unsigned fixture did not stop at actual native CMS admission: exit={executed.returncode}\n{captured}")
+        # Fail-closed CMS admission now happens before creating the releases
+        # directory. A missing directory is the expected no-effect outcome;
+        # an existing nonempty or non-directory path remains a violation.
+        releases = installation / "releases"
         if ((installation / "connection.json").exists()
-                or any((installation / "releases").iterdir())):
+                or (releases.exists() and
+                    (not releases.is_dir() or any(releases.iterdir())))):
             fail("rejected installer published settings or staged a candidate")
     print("Actual Windows installer compiled; process success/failure capture and native CMS rejection proved.")
 

@@ -9,6 +9,8 @@ use std::path::Path;
 #[cfg(any(windows, test))]
 mod bundle;
 #[cfg(windows)]
+mod rescue;
+#[cfg(windows)]
 mod s1;
 
 /// Operator-only no-effect observation. Output is JSON with its own verdict;
@@ -56,8 +58,11 @@ mod windows {
     };
     use crate::installed_connection::InstalledConnection;
     use crate::local_profile::{DeliveryActivationGuard, MaterializationRoot};
+    use crate::windows_delivery::verify_delivery_candidate;
     use crate::windows_delivery_archive::WindowsDeliveryArchiveReader;
-    use crate::windows_delivery_coordinator::WindowsDeliveryCoordinator;
+    use crate::windows_delivery_coordinator::{
+        WindowsDeliveryCoordinator, WindowsDeliveryCoordinatorError, accepted_floor,
+    };
     use crate::windows_delivery_download::{DeliveryDownloadRoot, WindowsReleaseAssetFetcher};
     use crate::windows_delivery_handoff::DeliveryHandoffCoordinator;
     use crate::windows_delivery_signature::WindowsCmsSignatureVerifier;
@@ -84,6 +89,31 @@ mod windows {
             Err(_) => return Err(NativeInstallerError::Filesystem),
         }
         .map_err(NativeInstallerError::StateStore)?;
+        // Reject unsigned/downgrade/incompatible delivery *before* spending
+        // disk and time creating the independent exact-byte local rescue.
+        let mut signature = WindowsCmsSignatureVerifier;
+        verify_delivery_candidate(
+            &bundle.manifest,
+            &bundle.signature,
+            &bundle.trust,
+            accepted_floor(store.state()).as_ref(),
+            &mut signature,
+        )
+        .map_err(|error| {
+            NativeInstallerError::Preparation(WindowsDeliveryCoordinatorError::Policy(error))
+        })?;
+        // The original and future Bridge writer share this OS root lock.
+        // Protect all SQLite/WAL/unsynced material before ANY delivery-state,
+        // connection, staging or activation change. This never claims remote
+        // Coordinator or browser-WORKING authority.
+        let rescue = super::rescue::ensure_rescue(root, &workspace).map_err(|error| {
+            // Inno Setup treats ANY stderr as a hard installation failure.
+            // Use its existing closed BRIDGE_* stdout code admission instead.
+            println!("BRIDGE_RESCUE_FAILED: {error}");
+            NativeInstallerError::Rescue
+        })?;
+        // Only closed symbolic status values, never paths, cookies or keys.
+        println!("PROFILE_BRIDGE_RESCUE_STATUS_V1={rescue}");
         // The canonical delivery store exists only now. Installation observations
         // may start here; a rejected/corrupt store is never modified for diagnosis.
         crate::user_diagnostics::report::record_at(
@@ -134,6 +164,7 @@ pub enum NativeInstallerError {
     InputIo,
     Filesystem,
     ActivationGuard,
+    Rescue,
     PlatformUnavailable,
     StateStore(DeliveryStateStoreError),
     Preparation(WindowsDeliveryCoordinatorError),
