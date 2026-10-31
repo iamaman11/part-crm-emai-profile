@@ -818,20 +818,20 @@ mod tests {
         if std::env::var_os("PROFILE_BRIDGE_NATIVE_CRASH_CHILD").is_none() {
             return Ok(());
         }
-        let root = MaterializationRoot::open_or_create(std::env::var_os(
-            "PROFILE_BRIDGE_NATIVE_CRASH_ROOT",
-        ).ok_or("missing child root")?)?;
+        let root = MaterializationRoot::open_or_create(
+            std::env::var_os("PROFILE_BRIDGE_NATIVE_CRASH_ROOT").ok_or("missing child root")?,
+        )?;
         let tenant = TenantId::parse(std::env::var("PROFILE_BRIDGE_NATIVE_CRASH_TENANT")?)?;
         let profile = ProfileId::parse(std::env::var("PROFILE_BRIDGE_NATIVE_CRASH_PROFILE")?)?;
-        let generation = GenerationId::parse(std::env::var(
-            "PROFILE_BRIDGE_NATIVE_CRASH_GENERATION",
-        )?)?;
+        let generation =
+            GenerationId::parse(std::env::var("PROFILE_BRIDGE_NATIVE_CRASH_GENERATION")?)?;
         let device = DeviceId::parse(std::env::var("PROFILE_BRIDGE_NATIVE_CRASH_DEVICE")?)?;
         let workspace = root.open_generation(&tenant, &profile, &generation)?;
         let _live_owner = BridgeWorkspaceLock::acquire(&workspace, &device, 5)?;
-        let ready = PathBuf::from(std::env::var_os(
-            "PROFILE_BRIDGE_NATIVE_CRASH_READY",
-        ).ok_or("missing child readiness path")?);
+        let ready = PathBuf::from(
+            std::env::var_os("PROFILE_BRIDGE_NATIVE_CRASH_READY")
+                .ok_or("missing child readiness path")?,
+        );
         fs::write(ready, b"native-bridge-os-lock-held")?;
         // The parent deliberately terminates this process. A finite backup
         // bound ensures a failed parent cannot retain a writer indefinitely.
@@ -862,8 +862,14 @@ mod tests {
             ])
             .env("PROFILE_BRIDGE_NATIVE_CRASH_CHILD", "1")
             .env("PROFILE_BRIDGE_NATIVE_CRASH_ROOT", root.path())
-            .env("PROFILE_BRIDGE_NATIVE_CRASH_TENANT", workspace.tenant_id().as_str())
-            .env("PROFILE_BRIDGE_NATIVE_CRASH_PROFILE", workspace.profile_id().as_str())
+            .env(
+                "PROFILE_BRIDGE_NATIVE_CRASH_TENANT",
+                workspace.tenant_id().as_str(),
+            )
+            .env(
+                "PROFILE_BRIDGE_NATIVE_CRASH_PROFILE",
+                workspace.profile_id().as_str(),
+            )
             .env(
                 "PROFILE_BRIDGE_NATIVE_CRASH_GENERATION",
                 workspace.generation_id().as_str(),
@@ -881,7 +887,8 @@ mod tests {
                 if let Some(status) = child.try_wait()? {
                     return Err(format!(
                         "native Bridge lock owner terminated before admission: {status}"
-                    ).into());
+                    )
+                    .into());
                 }
                 if Instant::now() >= deadline {
                     return Err("native Bridge lock owner never confirmed admission".into());
@@ -889,20 +896,32 @@ mod tests {
                 std::thread::sleep(Duration::from_millis(50));
             }
             assert_eq!(fs::read(&ready)?, b"native-bridge-os-lock-held");
-            assert!(child.try_wait()?.is_none(), "child exited before writer proof");
-            assert!(matches!(
-                BridgeWorkspaceLock::recover_interrupted_launch(&workspace, &device, 6),
-                Err(LocalProfileError::LockBusy)
-            ), "second writer unexpectedly recovered a still-live Bridge");
-            assert!(matches!(
-                DeliveryActivationGuard::acquire(&root),
-                Err(LocalProfileError::LockBusy)
-            ), "installer bypassed a live Bridge process");
+            assert!(
+                child.try_wait()?.is_none(),
+                "child exited before writer proof"
+            );
+            assert!(
+                matches!(
+                    BridgeWorkspaceLock::recover_interrupted_launch(&workspace, &device, 6),
+                    Err(LocalProfileError::LockBusy)
+                ),
+                "second writer unexpectedly recovered a still-live Bridge"
+            );
+            assert!(
+                matches!(
+                    DeliveryActivationGuard::acquire(&root),
+                    Err(LocalProfileError::LockBusy)
+                ),
+                "installer bypassed a live Bridge process"
+            );
             assert_eq!(fs::read(&wal)?, b"native-bridge-kill-unsynced-wal");
             assert_eq!(fs::read(&pending)?, b"pending-encrypted-n-plus-one");
 
             child.kill()?; // Exact disposable test-owned child, not Firefox.
-            assert!(!child.wait()?.success(), "killed child claimed a clean exit");
+            assert!(
+                !child.wait()?.success(),
+                "killed child claimed a clean exit"
+            );
             let recovered =
                 BridgeWorkspaceLock::recover_interrupted_launch(&workspace, &device, 6)?;
             assert_eq!(
