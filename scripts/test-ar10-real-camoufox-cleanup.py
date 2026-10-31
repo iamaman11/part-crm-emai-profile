@@ -1207,6 +1207,151 @@ def prove_forced_windows_browser_termination_is_not_controlled(
 
 
 
+def crash_first_read_only_observer(agent_directory: Path, camouhost_pid: int) -> None:
+    """FIRST Playwright operation on this native Open: inspect without navigating."""
+    cli = Path(__file__).with_name("camouhost-agent.py")
+    observer = Path(__file__).with_name("b7-playwright-observe.py")
+    completed = subprocess.run(
+        [
+            sys.executable, str(cli), "--directory", str(agent_directory),
+            "--pid", str(camouhost_pid), "--script", str(observer),
+            "--timeout", "90",
+        ],
+        capture_output=True, text=True, timeout=110,
+    )
+    assert completed.returncode == 0, (
+        "first native Playwright observer failed before any mutation: "
+        f"exit={completed.returncode} stderr_tail={completed.stderr[-1000:]!r}"
+    )
+    outcome = json.loads(completed.stdout.splitlines()[-1])
+    assert outcome["status"] == "ok", "first observer did not complete"
+    artifact = json.loads(
+        Path(outcome["result"]["artifact"]).read_text(encoding="utf-8")
+    )
+    assert not artifact["errors"], "first observer contained native failures"
+    assert artifact["count_before"] == artifact["count_after"]
+    assert artifact["urls_before"] == artifact["urls_after"]
+    assert artifact["restore_stage"] in (
+        "BLANK_ONLY_RESTORE_NOT_PROVEN",
+        "URLS_OBSERVED_COMPLETENESS_NOT_PROVEN",
+    ), "first observer falsely proved full tab restoration"
+    print("native_crash_first_read_only_observer PASS", flush=True)
+
+
+def prove_forced_windows_camouhost_termination_recovers_same_workspace(
+    python: Path,
+    camouhost: Path,
+    env: dict[str, str],
+    runtime: ModuleType,
+    root: Path,
+) -> None:
+    """Kill the owner Camouhost itself; re-open original native Firefox bytes.
+
+    Unlike browser-main kill, this exercises the parent process-loss boundary.
+    The disposable Windows Job closes ONLY test-owned browser descendants.
+    No synthetic Coordinator/R2 state, local rescue substitution, WAL editing,
+    automatic cloud Saved acknowledgement, or extra Firefox writer is involved.
+    """
+    if os.name != "nt":
+        return
+    from ctypes import wintypes
+
+    with crash_storage_fixture(env) as (crash_env, agent_base, origin):
+        def launch() -> tuple[subprocess.Popen[str], DisposableWindowsProcessJob]:
+            process = start_runtime(python, camouhost, crash_env)
+            try:
+                job = DisposableWindowsProcessJob(process.pid)
+            except BaseException:
+                stop_runtime(process)
+                raise
+            return process, job
+
+        def ready(process: subprocess.Popen[str]) -> None:
+            assert exchange(process, f"hello|{IPC_VERSION}") == f"hello_ack|{IPC_VERSION}"
+            assert exchange(process, f"launch|{SESSION}") == f"ready|{SESSION}"
+            assert exchange(process, f"observe_browser_visible|{SESSION}").startswith(
+                f"browser_visible|{SESSION}|"
+            ), "original native Firefox context did not become browser-visible"
+            # Read-only observer FIRST, before any page navigation or storage write.
+            crash_first_read_only_observer(agent_base, process.pid)
+            assert exchange(process, f"admit_navigation|{SESSION}|") == (
+                f"navigation_admitted|{SESSION}"
+            )
+
+        baseline, baseline_job = launch()
+        try:
+            ready(baseline)
+            crash_storage_agent_readback(agent_base, baseline.pid, origin, "baseline")
+            assert exchange(baseline, f"close|{SESSION}", 45) == (
+                f"closed|{SESSION}|true"
+            )
+            assert baseline.wait(timeout=30) == 0
+        finally:
+            try:
+                stop_runtime(baseline)
+            finally:
+                baseline_job.close()
+        assert_writer_quiescent(runtime, root, "pre-Camouhost-crash confirmed native close")
+
+        interrupted, interrupted_job = launch()
+        try:
+            ready(interrupted)
+            crash_storage_agent_readback(agent_base, interrupted.pid, origin, "write")
+            kernel = ctypes.WinDLL("kernel32", use_last_error=True)
+            open_process = kernel.OpenProcess
+            open_process.argtypes = [wintypes.DWORD, wintypes.BOOL, wintypes.DWORD]
+            open_process.restype = wintypes.HANDLE
+            terminate = kernel.TerminateProcess
+            terminate.argtypes = [wintypes.HANDLE, wintypes.UINT]
+            terminate.restype = wintypes.BOOL
+            wait = kernel.WaitForSingleObject
+            wait.argtypes = [wintypes.HANDLE, wintypes.DWORD]
+            wait.restype = wintypes.DWORD
+            close = kernel.CloseHandle
+            close.argtypes = [wintypes.HANDLE]
+            close.restype = wintypes.BOOL
+            handle = open_process(0x00100001, False, interrupted.pid)
+            assert handle, "cannot obtain exact Camouhost process handle"
+            try:
+                assert terminate(handle, 19), "Camouhost crash injection was rejected"
+                assert wait(handle, 12000) == 0, "Camouhost process did not terminate"
+            finally:
+                close(handle)
+            assert interrupted.wait(timeout=10) != 0, (
+                "killed Camouhost unexpectedly exited successfully"
+            )
+            # Never send controlled Close to an already dead Camouhost.
+            # In particular, this process death must not acknowledge Save.
+        finally:
+            try:
+                stop_runtime(interrupted)
+            finally:
+                interrupted_job.close()
+        assert_writer_quiescent(runtime, root, "forced Camouhost and descendants death")
+
+        restored, restored_job = launch()
+        try:
+            ready(restored)
+            crash_storage_agent_readback(agent_base, restored.pid, origin, "read")
+            assert exchange(restored, f"close|{SESSION}", 45) == (
+                f"closed|{SESSION}|true"
+            ), "Camouhost crash recovery could not cleanly close original native workspace"
+            assert restored.wait(timeout=30) == 0
+        finally:
+            try:
+                stop_runtime(restored)
+            finally:
+                restored_job.close()
+        assert_writer_quiescent(runtime, root, "Camouhost crash native re-open and Close")
+        print(
+            "native_windows_camouhost_kill_same_workspace_"
+            "cookie_indexeddb_previous_close_and_unpublished_reopen PASS; "
+            "cloud_saved=NOT_CONFIRMED",
+            flush=True,
+        )
+
+
+
 def prove_three_independent_native_profiles_two_roundtrips(
     python: Path,
     camouhost: Path,
@@ -1648,6 +1793,9 @@ def main() -> int:
             )
             prove_external_windows_gui_close(python, camouhost, env, runtime, root)
             prove_forced_windows_browser_termination_is_not_controlled(
+                python, camouhost, env, runtime, root
+            )
+            prove_forced_windows_camouhost_termination_recovers_same_workspace(
                 python, camouhost, env, runtime, root
             )
 
