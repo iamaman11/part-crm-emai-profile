@@ -269,6 +269,9 @@ def run() -> int:
         if log.is_file():
             target.write(log.read_text(encoding="utf-8"))
     print(json.dumps(details, ensure_ascii=False, default=str), flush=True)
+    if details.get("status") == "unconfirmed":
+        # Claim errors never prove whether the script executed. No automatic retry.
+        return 125
     return 0 if details.get("status") == "ok" else 1
 
 
