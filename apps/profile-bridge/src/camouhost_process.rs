@@ -526,10 +526,8 @@ impl ProcessControlPort for ManagedCamouhostProcess {
         let stamp = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .map_or(0, |elapsed| elapsed.as_nanos());
-        let raw_diagnostics = Some(agent_directory.join(format!(
-            "camouhost-{}-{stamp}.stderr.log",
-            child.id()
-        )));
+        let raw_diagnostics =
+            Some(agent_directory.join(format!("camouhost-{}-{stamp}.stderr.log", child.id())));
         spawn_camouhost_diagnostic_reader(stderr, raw_diagnostics);
         state.stdin = Some(stdin);
         state.responses = Some(spawn_response_reader(stdout));
@@ -1293,11 +1291,13 @@ mod tests {
     }
 
     #[test]
-    fn agent_inbox_rejects_a_file_instead_of_directory()
-    -> Result<(), Box<dyn std::error::Error>> {
+    fn agent_inbox_rejects_a_file_instead_of_directory() -> Result<(), Box<dyn std::error::Error>> {
         let root = root_path()?;
         fs::create_dir_all(&root)?;
-        fs::write(root.join(super::LOCAL_AGENT_DIRECTORY_NAME), b"not a directory")?;
+        fs::write(
+            root.join(super::LOCAL_AGENT_DIRECTORY_NAME),
+            b"not a directory",
+        )?;
         assert!(matches!(
             super::prepare_local_agent_directory(&root),
             Err(BridgePortError::Unavailable | BridgePortError::InvalidResponse)
@@ -1308,8 +1308,7 @@ mod tests {
 
     #[cfg(windows)]
     #[test]
-    fn agent_inbox_rejects_windows_directory_symlink()
-    -> Result<(), Box<dyn std::error::Error>> {
+    fn agent_inbox_rejects_windows_directory_symlink() -> Result<(), Box<dyn std::error::Error>> {
         let root = root_path()?;
         let target = root.join("target");
         fs::create_dir_all(&target)?;
