@@ -7,20 +7,45 @@ are unchanged unless the operator explicitly opts in to the local agent.
 
 ## One-time local setup on the interactive Windows test host
 
-Create an empty directory belonging to the current Windows user:
+**Normal Windows frontend Launch (recommended).** Opt in once, under the same
+Windows account that owns the installed Bridge:
+
+```powershell
+$agentDir = Join-Path $env:LOCALAPPDATA 'ProfileBridgeAgentTests'
+New-Item -ItemType Directory -Path $agentDir -Force | Out-Null
+New-Item -ItemType File -Path (Join-Path $agentDir 'playwright-enabled') -Force | Out-Null
+```
+
+Then open the **ordinary authorized frontend** and press **Launch** for a
+profile that is independently granted to this user. A `profilebridge://`
+Windows protocol handler is a *new process*: it does not inherit environment
+variables set in an unrelated PowerShell window. The explicit user-local marker
+lets the installed Bridge find the test inbox anyway. No test URL/claim needs to
+be copied into PowerShell, and no new server or browser writer is created.
+
+The directory alone does **not** enable scripts (old diagnostic artifacts are
+not opt-in). To turn off tests for subsequent launches without destroying
+evidence, remove **only** the `playwright-enabled` file, after the current
+test session has finished. Closing a Camoufox window does not magically disable
+the mode for future launches while this file exists.
+
+**Direct developer/CI launch (existing alternative).** An explicit per-process
+environment setting remains supported and takes precedence over the marker:
 
 ```powershell
 $agentDir = Join-Path $env:LOCALAPPDATA 'ProfileBridgeAgentTests'
 New-Item -ItemType Directory -Path $agentDir -Force | Out-Null
 $env:PROFILE_BRIDGE_AGENT_DIRECTORY = $agentDir
+# Launch the installed Bridge from this same environment with a fresh,
+# normally server-issued profilebridge:// URI when such a launch is allowed.
 ```
 
-From **that same shell/environment**, launch the existing installed Bridge
-executable with an ordinary valid `profilebridge://...` open URI. Obtain the
-URI through the normal application/client workflow. Do **not** create a second
-Camoufox instance, reuse an already-spent claim, or bypass Bridge authorization.
-The agent environment setting only enables an additional local test inbox.
-It does not authorize a profile, change Coordinator, or grant a second writer.
+Both methods change **only** local Playwright test diagnostics. Neither creates
+a server launch intent, grants profile access, bypasses Cloudflare Access or
+Coordinator, changes a browser fingerprint, or disables the normal writer lock,
+Save/Commit and recovery. If the execution environment prohibits operating a
+browser, this opt-in does not override that policy: stop and record that
+external blocker rather than creating or replaying a launch claim.
 
 When Bridge has started Camouhost, inspect the available live sessions:
 
