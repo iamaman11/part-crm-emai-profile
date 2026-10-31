@@ -595,7 +595,44 @@ try:
     assert not present[urls[1]].is_closed()
 finally:
     runtime.close_context(manager, context, root)
-print("two previous Firefox tabs restored and tracked; partial close not complete", flush=True)
+
+# INVESTIGATE-04: a tab intentionally closed before a browser-wide Quit
+# must not be conflated with lost origin storage. Observe first, with no
+# synthetic tab/navigation, then read the SAME origin from the surviving tab.
+manager, context = enter()
+try:
+    initial_third_urls = [page.url for page in context.pages]
+    deadline = time.monotonic() + 20
+    while urls[1] not in {page.url for page in context.pages}:
+        if time.monotonic() >= deadline:
+            raise AssertionError(
+                "surviving original-origin tab failed native SessionStore reopen: "
+                f"initial={initial_third_urls!r} actual={[page.url for page in context.pages]!r}"
+            )
+        try:
+            context.wait_for_event("page", timeout=500)
+        except PlaywrightTimeoutError:
+            pass
+    present_third = {page.url: page for page in context.pages}
+    assert urls[0] not in present_third, (
+        "intentionally closed tab unexpectedly reopened; classify exact native Quit semantics"
+    )
+    assert present_third[urls[1]].evaluate(
+        "localStorage.getItem('restore-proof')"
+    ) == "retained", "closing a tab did not preserve its persistent origin storage"
+    cookies_after_selective_close = {
+        item["name"]: item["value"] for item in context.cookies([origin])
+        if item["name"] in expected_cookies
+    }
+    assert cookies_after_selective_close == expected_cookies, (
+        "closing a window/tab unexpectedly removed persistent origin cookies"
+    )
+finally:
+    runtime.close_context(manager, context, root)
+print(
+    "two previous tabs restored; intentionally closed tab remains closed; "
+    "persistent same-origin storage and cookies retained", flush=True
+)
 """
     try:
         env = runtime_env(runtime_lock, headless)
@@ -622,7 +659,7 @@ print("two previous Firefox tabs restored and tracked; partial close not complet
             diagnostics.seek(0, os.SEEK_END)
             diagnostics.seek(max(0, diagnostics.tell() - 2400))
             tail = diagnostics.read()
-            if result != 0 or "two previous Firefox tabs restored and tracked" not in output.read():
+            if result != 0 or "persistent same-origin storage and cookies retained" not in output.read():
                 raise AssertionError(
                     "real native Firefox tab restoration not proven: "
                     f"rc={result} diagnostic_tail={tail!r}"
