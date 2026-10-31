@@ -122,8 +122,13 @@ mod windows {
         // availability, but it must protect the exact existing profile bytes.
         // Rescue is independent and immutable; it does not grant cloud Save,
         // generation authority or a browser-WORKING certificate.
-        super::rescue::ensure_rescue(root, &workspace)
-            .map_err(|_| NativeInstallerError::Rescue)?;
+        let rescue = super::rescue::ensure_rescue(root, &workspace).map_err(|error| {
+            // Precise owner-classified failure, with no profile bytes or secrets,
+            // retained in the local installer log; no false install success.
+            eprintln!("BRIDGE_RESCUE_FAILED: {error}");
+            NativeInstallerError::Rescue
+        })?;
+        eprintln!("BRIDGE_RESCUE_OK: {rescue}");
         // This command deliberately does not activate another process or claim runtime health.
         // The wizard next starts the exact staged executable with --delivery-install-staged.
         prepared
