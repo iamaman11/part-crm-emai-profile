@@ -923,11 +923,17 @@ def crash_storage_fixture(env: dict[str, str]):
 
 _CRASH_STORAGE_JS = """
 async ({mode}) => {
-    const value = "crash-dirty-local-v1";
-    if (mode === "write") {
-        document.cookie = "b7_crash_cookie=" + value +
+    const recent = "crash-dirty-local-v1";
+    const baseline = "confirmed-native-close-v1";
+    if (mode === "baseline") {
+        document.cookie = "b7_baseline_cookie=" + baseline +
             "; Path=/; Max-Age=3600; SameSite=Lax";
-        localStorage.setItem("b7_crash_local", value);
+        localStorage.setItem("b7_baseline_local", baseline);
+    }
+    if (mode === "write") {
+        document.cookie = "b7_crash_cookie=" + recent +
+            "; Path=/; Max-Age=3600; SameSite=Lax";
+        localStorage.setItem("b7_crash_local", recent);
     }
     const req = indexedDB.open("b7-crash-storage", 1);
     const db = await new Promise((resolve, reject) => {
@@ -941,21 +947,24 @@ async ({mode}) => {
         req.onsuccess = () => resolve(req.result);
         req.onerror = () => reject(new Error("indexeddb open failed or missing"));
     });
-    let indexed;
+    let indexed, baselineIndexed;
     try {
-        indexed = await new Promise((resolve, reject) => {
-            const txn = db.transaction("samples", mode === "write" ? "readwrite" : "readonly");
+        const state = await new Promise((resolve, reject) => {
+            const txn = db.transaction("samples", mode === "read" ? "readonly" : "readwrite");
             const store = txn.objectStore("samples");
-            if (mode === "write") {
-                store.put(value, "state");
-            }
+            if (mode === "baseline") store.put(baseline, "baseline");
+            if (mode === "write") store.put(recent, "state");
             const get = store.get("state");
-            let observed;
+            const getBaseline = store.get("baseline");
+            let observed, observedBaseline;
             get.onsuccess = () => { observed = get.result; };
-            txn.oncomplete = () => resolve(observed);
+            getBaseline.onsuccess = () => { observedBaseline = getBaseline.result; };
+            txn.oncomplete = () => resolve({recent: observed, baseline: observedBaseline});
             txn.onerror = () => reject(new Error("indexeddb transaction failed"));
             txn.onabort = () => reject(new Error("indexeddb transaction aborted"));
         });
+        indexed = state.recent;
+        baselineIndexed = state.baseline;
     } finally {
         db.close();
     }
@@ -963,6 +972,8 @@ async ({mode}) => {
         cookie: document.cookie,
         local: localStorage.getItem("b7_crash_local"),
         indexed,
+        baselineLocal: localStorage.getItem("b7_baseline_local"),
+        baselineIndexed,
     };
 }
 """
@@ -971,8 +982,8 @@ async ({mode}) => {
 def crash_storage_agent_readback(
     agent_directory: Path, camouhost_pid: int, origin: str, phase: str,
 ) -> None:
-    """No second context, native SQLite edit, shadow file or synthetic browser."""
-    assert phase in ("write", "read")
+    """Read original browser persistence; distinguish confirmed from volatile."""
+    assert phase in ("baseline", "write", "read")
     source = (
         f"origin = {origin!r}\n"
         "initial_urls = [p.url for p in context.pages]\n"
@@ -980,20 +991,27 @@ def crash_storage_agent_readback(
         "initial_cookies = {c['name']: c['value'] for c in context.cookies([origin])}\n"
         "page.goto(origin, wait_until='domcontentloaded')\n"
         f"observed = page.evaluate({_CRASH_STORAGE_JS!r}, {{'mode': {phase!r}}})\n"
-        "assert observed['local'] == 'crash-dirty-local-v1', observed\n"
-        "assert observed['indexed'] == 'crash-dirty-local-v1', observed\n"
-        "assert 'b7_crash_cookie=crash-dirty-local-v1' in observed['cookie'], observed\n"
-        "assert any(c['name'] == 'b7_crash_cookie' and "
-        "c['value'] == 'crash-dirty-local-v1' for c in context.cookies([origin]))\n"
+        "assert observed['baselineLocal'] == 'confirmed-native-close-v1', observed\n"
+        "assert observed['baselineIndexed'] == 'confirmed-native-close-v1', observed\n"
+        "assert 'b7_baseline_cookie=confirmed-native-close-v1' in observed['cookie'], observed\n"
+        "assert any(c['name'] == 'b7_baseline_cookie' and "
+        "c['value'] == 'confirmed-native-close-v1' for c in context.cookies([origin]))\n"
+        "if " + repr(phase) + " != 'baseline':\n"
+        "    assert observed['indexed'] == 'crash-dirty-local-v1', observed\n"
+        "    assert 'b7_crash_cookie=crash-dirty-local-v1' in observed['cookie'], observed\n"
+        "if " + repr(phase) + " == 'write':\n"
+        "    assert observed['local'] == 'crash-dirty-local-v1', observed\n"
         "if " + repr(phase) + " == 'read':\n"
         "    assert initial_cookies.get('b7_crash_cookie') == 'crash-dirty-local-v1'\n"
-        # A real navigation consumes the origin's pending page lifecycle before
-        # the browser-main PID is terminated; do not substitute a sleep or
-        # manually checkpoint Firefox SQLite/WAL from outside its process.
+        # This is a documented native page-unload milestone, not an artificial
+        # timer or external manipulation of SQLite or WAL.
         "if " + repr(phase) + " == 'write':\n"
         "    page.goto('about:blank', wait_until='load')\n"
         "result = {'phase': " + repr(phase) + ", 'initial_urls': initial_urls, "
-        "'cookie': True, 'local_storage': True, 'indexed_db': True}\n"
+        "'confirmed_native_close': True, "
+        "'recent_cookie_durable': observed['indexed'] == 'crash-dirty-local-v1' "
+        "and 'b7_crash_cookie=crash-dirty-local-v1' in observed['cookie'], "
+        "'recent_local_durable': observed['local'] == 'crash-dirty-local-v1'}\n"
     )
     script = agent_directory / f"crash-storage-{phase}.py"
     script.write_text(source, encoding="utf-8")
@@ -1009,8 +1027,22 @@ def crash_storage_agent_readback(
         f"same-owner real-browser storage {phase} failed: "
         f"status={command.returncode}; stderr_tail={command.stderr[-1000:]!r}"
     )
-    assert "'cookie': True" in command.stdout or '"cookie": true' in command.stdout
-    print(f"native_windows_crash_storage stage={phase} real_cookie_local_indexed PASS", flush=True)
+    assert '"confirmed_native_close": true' in command.stdout
+    if phase == "read":
+        recent = (
+            "DURABLE"
+            if '"recent_local_durable": true' in command.stdout
+            else "NOT_DURABLY_CONFIRMED"
+        )
+        print(
+            "native_windows_crash_storage stage=read "
+            "confirmed_previous_close_cookie_local_indexed=PASS "
+            "unpublished_cookie_indexed=PASS "
+            f"unpublished_localStorage={recent}; no_false_saved=1",
+            flush=True,
+        )
+    else:
+        print(f"native_windows_crash_storage stage={phase} verified PASS", flush=True)
 
 
 def prove_forced_windows_browser_termination_is_not_controlled(
@@ -1026,6 +1058,37 @@ def prove_forced_windows_browser_termination_is_not_controlled(
     from ctypes import wintypes
 
     with crash_storage_fixture(env) as (crash_env, agent_base, origin):
+        # First establish a REAL, previously confirmed Firefox working copy.
+        # Only normal native Close confirms the browser's own flush lifecycle;
+        # it is NOT a cloud Save or permission to discard unsynced evidence.
+        baseline_process = start_runtime(python, camouhost, crash_env)
+        try:
+            baseline_job = DisposableWindowsProcessJob(baseline_process.pid)
+        except BaseException:
+            stop_runtime(baseline_process)
+            raise
+        try:
+            assert exchange(baseline_process, f"hello|{IPC_VERSION}") == (
+                f"hello_ack|{IPC_VERSION}"
+            )
+            assert exchange(baseline_process, f"launch|{SESSION}") == f"ready|{SESSION}"
+            assert exchange(baseline_process, f"observe_browser_visible|{SESSION}").startswith(
+                f"browser_visible|{SESSION}|"
+            )
+            assert exchange(baseline_process, f"admit_navigation|{SESSION}|") == (
+                f"navigation_admitted|{SESSION}"
+            )
+            crash_storage_agent_readback(agent_base, baseline_process.pid, origin, "baseline")
+            assert exchange(baseline_process, f"close|{SESSION}", 45) == (
+                f"closed|{SESSION}|true"
+            )
+            assert baseline_process.wait(timeout=30) == 0
+        finally:
+            try:
+                stop_runtime(baseline_process)
+            finally:
+                baseline_job.close()
+        assert_writer_quiescent(runtime, root, "pre-crash confirmed native close")
         process = start_runtime(python, camouhost, crash_env)
         # Attach BEFORE browser launch. This OS kernel boundary, not a best-effort
         # PID scan, guarantees fixture cleanup if the browser root dies first.
