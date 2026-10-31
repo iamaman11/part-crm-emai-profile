@@ -481,20 +481,58 @@ mod tests {
     }
 
     #[test]
-    fn interrupted_reclaim_refuses_active_bridge_admission()
+    fn interrupted_reclaim_refuses_active_same_generation_writer()
     -> Result<(), Box<dyn std::error::Error>> {
-        let (_test_root, root, workspace, device) = fixture("bridge-still-live")?;
-        fs::write(
-            workspace.path().join(BRIDGE_LOCK_FILE),
-            format!("profile-platform-bridge-lock-v1\n{}\n5\n", device.as_str()),
-        )?;
-        let active = super::open_root_marker(root.path())?;
-        active.try_lock_shared()?;
+        let (_test_root, _root, workspace, device) = fixture("bridge-still-live")?;
+        let active = BridgeWorkspaceLock::acquire(&workspace, &device, 5)?;
         assert!(matches!(
             BridgeWorkspaceLock::recover_interrupted_launch(&workspace, &device, 6),
             Err(LocalProfileError::LockBusy)
         ));
         assert!(workspace.path().join(BRIDGE_LOCK_FILE).exists());
+        active.release()?;
+        Ok(())
+    }
+
+    #[test]
+    fn crashed_profile_recovery_does_not_interrupt_other_live_profile()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let (_test_root, root, crashed, device) = fixture("crashed-with-another-writer")?;
+        let other_profile = ProfileId::parse("profile_other_live")?;
+        let other_generation = GenerationId::parse("generation_other_live")?;
+        let live = root.create_generation(
+            crashed.tenant_id(),
+            &other_profile,
+            &other_generation,
+        )?;
+        let live_writer = BridgeWorkspaceLock::acquire(&live, &device, 10)?;
+
+        let user_data = crashed.path().join("user_data");
+        fs::create_dir(&user_data)?;
+        let wal = user_data.join("cookies.sqlite-wal");
+        fs::write(&wal, b"unsaved-wal-must-survive")?;
+        fs::write(
+            crashed.path().join(BRIDGE_LOCK_FILE),
+            format!("profile-platform-bridge-lock-v1\n{}\n5\n", device.as_str()),
+        )?;
+        let recovered = BridgeWorkspaceLock::recover_interrupted_launch(&crashed, &device, 6)?;
+        assert_eq!(fs::read(&wal)?, b"unsaved-wal-must-survive");
+        assert_eq!(
+            fs::read_to_string(live.path().join(BRIDGE_LOCK_FILE))?,
+            format!("profile-platform-bridge-lock-v1\n{}\n10\n", device.as_str())
+        );
+        assert!(matches!(
+            DeliveryActivationGuard::acquire(&root),
+            Err(LocalProfileError::LockBusy)
+        ));
+        recovered.release()?;
+        // Recovery must neither preempt nor release another generation's owner.
+        assert!(matches!(
+            BridgeWorkspaceLock::acquire(&live, &device, 11),
+            Err(LocalProfileError::LockBusy)
+        ));
+        live_writer.release()?;
+        assert!(DeliveryActivationGuard::acquire(&root)?.confirms_quiescence());
         Ok(())
     }
 
