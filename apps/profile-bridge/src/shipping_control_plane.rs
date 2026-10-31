@@ -1709,7 +1709,7 @@ mod tests {
                             correlation_id.as_str().into()
                         },
                     })
-                    .expect("test ProblemPayload serializes")
+                    .map_err(|_| ())?
                 };
                 Ok(MachineHttpResponse::new(status, body))
             }
