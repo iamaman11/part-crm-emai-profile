@@ -1284,7 +1284,10 @@ mod tests {
         assert_eq!(super::prepare_local_agent_directory(&root)?, directory);
         assert!(directory.is_dir());
         // A repeated normal Launch reuses the same user-local inbox.
-        fs::write(directory.join("evidence.txt"), b"keep original test evidence")?;
+        fs::write(
+            directory.join("evidence.txt"),
+            b"keep original test evidence",
+        )?;
         assert_eq!(super::prepare_local_agent_directory(&root)?, directory);
         assert_eq!(
             fs::read(directory.join("evidence.txt"))?,
