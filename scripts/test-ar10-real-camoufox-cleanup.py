@@ -1312,6 +1312,7 @@ def prove_three_independent_native_profiles_two_roundtrips(
                         "assert observed['priorLocal'] == previous, observed\n"
                         "assert observed['priorIndexed'] == previous, observed\n"
                         "assert (previous is None or 'b7_native_cycle=' + previous in observed['priorCookie']), observed\n"
+                        "assert (previous is not None or 'b7_native_cycle=' not in observed['priorCookie']), observed\n"
                         "if next_value is not None:\n"
                         "    assert observed['afterLocal'] == next_value, observed\n"
                         "    assert observed['afterIndexed'] == next_value, observed\n"
@@ -1342,6 +1343,18 @@ def prove_three_independent_native_profiles_two_roundtrips(
                             pass
                     try:
                         stop_runtime(process)
+                        if clean_close:
+                            # A normal Close must make the native Firefox
+                            # writer quiescent BEFORE the disposable Job is
+                            # closed. The test must not manufacture durability
+                            # by silently killing a lingering browser.
+                            deadline = time.monotonic() + 15
+                            while runtime.firefox_writer_active(profile_root):
+                                if time.monotonic() >= deadline:
+                                    raise AssertionError(
+                                        "controlled native Close left a live Firefox writer"
+                                    )
+                                time.sleep(0.1)
                     finally:
                         job.close()
                 if clean_close:
