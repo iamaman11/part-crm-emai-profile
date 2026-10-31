@@ -1206,6 +1206,162 @@ def prove_forced_windows_browser_termination_is_not_controlled(
         )
 
 
+
+def prove_three_independent_native_profiles_two_roundtrips(
+    python: Path,
+    camouhost: Path,
+    runtime_lock: Path,
+    headless: str,
+    runtime: ModuleType,
+    temporary: Path,
+) -> None:
+    """Hosted Windows packaged Camoufox: three isolated workspaces, two real native closes.
+
+    This proves actual Firefox cookie/localStorage/IndexedDB persistence, with
+    a first read-only observer on EACH Open. It deliberately does not fake a
+    server Coordinator, R2 PUT/GET, a frontend claim, or cloud Saved.
+    """
+    with crash_storage_fixture(runtime_env(runtime_lock, headless)) as (_, agent_base, origin):
+        observer = Path(__file__).with_name("b7-playwright-observe.py")
+        cli = Path(__file__).with_name("camouhost-agent.py")
+        assert observer.is_file() and cli.is_file()
+        for profile_index in range(3):
+            profile_root = temporary / f"native-profile-{profile_index}"
+            report = materialize(python, camouhost, runtime_lock, headless, profile_root)
+            inbox = agent_base / f"profile-{profile_index}"
+            inbox.mkdir()
+            environment = process_env(runtime_lock, headless, profile_root, report)
+            environment["CAMOUHOST_AGENT_DIRECTORY"] = str(inbox)
+            previous = None
+
+            # cycle 0 -> cycle 1 -> cycle 2: two clean native Close/Reopen
+            # roundtrips for EACH of the three independent Firefox profiles.
+            for cycle in range(3):
+                process = start_runtime(python, camouhost, environment)
+                clean_close = False
+                try:
+                    assert exchange(process, f"hello|{IPC_VERSION}") == f"hello_ack|{IPC_VERSION}"
+                    assert exchange(process, f"launch|{SESSION}") == f"ready|{SESSION}"
+                    assert exchange(process, f"observe_browser_visible|{SESSION}").startswith(
+                        f"browser_visible|{SESSION}|"
+                    )
+                    assert exchange(process, f"admit_navigation|{SESSION}|") == (
+                        f"navigation_admitted|{SESSION}"
+                    )
+
+                    def same_owner(script: Path) -> str:
+                        done = subprocess.run(
+                            [sys.executable, str(cli), "--directory", str(inbox),
+                             "--pid", str(process.pid), "--script", str(script),
+                             "--timeout", "120"],
+                            capture_output=True, text=True, timeout=135,
+                        )
+                        assert done.returncode == 0, (
+                            f"native profile={profile_index} cycle={cycle} "
+                            f"agent={script.name} exit={done.returncode} "
+                            f"stderr_tail={done.stderr[-1200:]!r}"
+                        )
+                        return done.stdout
+
+                    # The first operation in the actual context is read-only:
+                    # no goto/new_page/close/marker write is permitted here.
+                    first = same_owner(observer)
+                    assert '"status": "ok"' in first, first[-1000:]
+
+                    next_value = (
+                        f"native-profile-{profile_index}-cycle-{cycle}"
+                        if cycle < 2 else None
+                    )
+                    script = inbox / f"storage-cycle-{cycle}.py"
+                    source = (
+                        f"origin = {origin!r}\n"
+                        f"previous = {previous!r}\n"
+                        f"next_value = {next_value!r}\n"
+                        "page = context.pages[0] if context.pages else context.new_page()\n"
+                        "page.goto(origin, wait_until='domcontentloaded', timeout=30000)\n"
+                        "observed = page.evaluate(" + repr(_TWO_CYCLE_STORAGE_JS) +
+                        ", {'nextValue': next_value})\n"
+                        "assert observed['priorLocal'] == previous, observed\n"
+                        "assert observed['priorIndexed'] == previous, observed\n"
+                        "assert (previous is None or 'b7_native_cycle=' + previous in observed['priorCookie']), observed\n"
+                        "if next_value is not None:\n"
+                        "    assert observed['afterLocal'] == next_value, observed\n"
+                        "    assert observed['afterIndexed'] == next_value, observed\n"
+                        "    assert 'b7_native_cycle=' + next_value in observed['afterCookie'], observed\n"
+                        "result = {'profile': " + repr(profile_index) +
+                        ", 'cycle': " + repr(cycle) +
+                        ", 'native_storage_roundtrip': True}\n"
+                    )
+                    script.write_text(source, encoding="utf-8")
+                    actual = same_owner(script)
+                    assert '"native_storage_roundtrip": true' in actual, actual[-1200:]
+                    assert exchange(process, f"close|{SESSION}", 45) == (
+                        f"closed|{SESSION}|true"
+                    ), "native controlled Close did not confirm Firefox shutdown"
+                    assert process.wait(timeout=30) == 0
+                    clean_close = True
+                    previous = next_value if next_value is not None else previous
+                finally:
+                    stop_runtime(process)
+                if clean_close:
+                    assert_writer_quiescent(
+                        runtime, profile_root,
+                        f"profile {profile_index} native cycle {cycle}",
+                    )
+            print(
+                f"native_three_profile_two_roundtrips profile={profile_index} "
+                "close_reopen=2 cookie_localStorage_indexedDB=PASS",
+                flush=True,
+            )
+
+
+_TWO_CYCLE_STORAGE_JS = r"""
+async ({nextValue}) => {
+    const open = indexedDB.open("b7-native-two-cycle", 1);
+    open.onupgradeneeded = () => open.result.createObjectStore("samples");
+    const database = await new Promise((resolve, reject) => {
+        open.onsuccess = () => resolve(open.result);
+        open.onerror = () => reject(new Error("native IndexedDB open failed"));
+    });
+    try {
+        const transaction = database.transaction("samples", "readonly");
+        const read = transaction.objectStore("samples").get("state");
+        const priorIndexed = await new Promise((resolve, reject) => {
+            read.onsuccess = () => resolve(read.result ?? null);
+            read.onerror = () => reject(new Error("native IndexedDB read failed"));
+        });
+        const priorLocal = localStorage.getItem("b7_native_cycle");
+        const priorCookie = document.cookie;
+        if (nextValue !== null) {
+            const write = database.transaction("samples", "readwrite");
+            write.objectStore("samples").put(nextValue, "state");
+            await new Promise((resolve, reject) => {
+                write.oncomplete = resolve;
+                write.onerror = () => reject(new Error("native IndexedDB write failed"));
+                write.onabort = () => reject(new Error("native IndexedDB write aborted"));
+            });
+            localStorage.setItem("b7_native_cycle", nextValue);
+            document.cookie = "b7_native_cycle=" + nextValue +
+                "; Path=/; Max-Age=7200; SameSite=Lax";
+        }
+        const verification = database.transaction("samples", "readonly");
+        const after = verification.objectStore("samples").get("state");
+        const afterIndexed = await new Promise((resolve, reject) => {
+            after.onsuccess = () => resolve(after.result ?? null);
+            after.onerror = () => reject(new Error("native IndexedDB readback failed"));
+        });
+        return {
+            priorLocal, priorIndexed, priorCookie,
+            afterLocal: localStorage.getItem("b7_native_cycle"),
+            afterIndexed, afterCookie: document.cookie,
+        };
+    } finally {
+        database.close();
+    }
+}
+"""
+
+
 def prove_ipc_timeout_contract() -> None:
     """A silent child must fail quickly without a pipe-read deadlock."""
     with tempfile.TemporaryFile(mode="w+t", encoding="utf-8") as diagnostics:
@@ -1406,6 +1562,10 @@ def main() -> int:
             python, camouhost, runtime_lock, args.headless, Path(temporary) / "restore-tabs"
         )
         if os.name == "nt" and args.headless == "false":
+            prove_three_independent_native_profiles_two_roundtrips(
+                python, camouhost, runtime_lock, args.headless, runtime,
+                Path(temporary),
+            )
             prove_external_windows_gui_close(python, camouhost, env, runtime, root)
             prove_forced_windows_browser_termination_is_not_controlled(
                 python, camouhost, env, runtime, root
