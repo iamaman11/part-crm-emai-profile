@@ -987,6 +987,11 @@ def crash_storage_agent_readback(
         "c['value'] == 'crash-dirty-local-v1' for c in context.cookies([origin]))\n"
         "if " + repr(phase) + " == 'read':\n"
         "    assert initial_cookies.get('b7_crash_cookie') == 'crash-dirty-local-v1'\n"
+        # A real navigation consumes the origin's pending page lifecycle before
+        # the browser-main PID is terminated; do not substitute a sleep or
+        # manually checkpoint Firefox SQLite/WAL from outside its process.
+        "if " + repr(phase) + " == 'write':\n"
+        "    page.goto('about:blank', wait_until='load')\n"
         "result = {'phase': " + repr(phase) + ", 'initial_urls': initial_urls, "
         "'cookie': True, 'local_storage': True, 'indexed_db': True}\n"
     )
