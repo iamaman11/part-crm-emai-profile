@@ -8,7 +8,7 @@ import { useTenant } from '../../app/TenantContext';
 // Do not expose high-impact owner ceremonies as routine member operations.
 export function UsersPage() {
   const { tenantId, contexts } = useTenant();
-  const isOwner = contexts.some((entry) => entry.tenantId === tenantId && entry.role === 'OWNER');
+  const isOwner = contexts.some((entry) => entry.tenantId === tenantId && entry.role === 'TENANT_OWNER');
   return (
     <div className="page-stack">
       <MemberDirectory />
