@@ -1241,7 +1241,16 @@ def prove_three_independent_native_profiles_two_roundtrips(
             # roundtrips for EACH of the three independent Firefox profiles.
             for cycle in range(3):
                 process = start_runtime(python, camouhost, environment)
+                # This disposable Windows test owns all descendants through
+                # an existing kernel Job, including if a new assertion fails
+                # before the controlled native Close is reached.
+                try:
+                    job = DisposableWindowsProcessJob(process.pid)
+                except BaseException:
+                    stop_runtime(process)
+                    raise
                 clean_close = False
+                navigation_admitted = False
                 try:
                     assert exchange(process, f"hello|{IPC_VERSION}") == f"hello_ack|{IPC_VERSION}"
                     assert exchange(process, f"launch|{SESSION}") == f"ready|{SESSION}"
@@ -1251,6 +1260,7 @@ def prove_three_independent_native_profiles_two_roundtrips(
                     assert exchange(process, f"admit_navigation|{SESSION}|") == (
                         f"navigation_admitted|{SESSION}"
                     )
+                    navigation_admitted = True
 
                     # The real Camouhost must have published its own
                     # session-scoped descriptor BEFORE any test script. Never
@@ -1264,7 +1274,7 @@ def prove_three_independent_native_profiles_two_roundtrips(
                     )
                     descriptor_data = json.loads(descriptor.read_text(encoding="utf-8"))
                     assert descriptor_data["pid"] == process.pid and (
-                        Path(descriptor_data["run"]).parent == inbox
+                        Path(descriptor_data["run"]).parent.samefile(inbox)
                     ), "native Camouhost descriptor does not belong to its selected inbox"
 
                     def same_owner(script: Path) -> str:
@@ -1320,7 +1330,20 @@ def prove_three_independent_native_profiles_two_roundtrips(
                     clean_close = True
                     previous = next_value if next_value is not None else previous
                 finally:
-                    stop_runtime(process)
+                    if not clean_close and navigation_admitted and process.poll() is None:
+                        # Best-effort *native* teardown on an assertion failure;
+                        # preserve the primary failure and never claim Saved.
+                        try:
+                            if exchange(process, f"close|{SESSION}", 45) == (
+                                f"closed|{SESSION}|true"
+                            ):
+                                process.wait(timeout=30)
+                        except (AssertionError, OSError, subprocess.TimeoutExpired):
+                            pass
+                    try:
+                        stop_runtime(process)
+                    finally:
+                        job.close()
                 if clean_close:
                     assert_writer_quiescent(
                         runtime, profile_root,

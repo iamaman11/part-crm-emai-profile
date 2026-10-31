@@ -78,6 +78,38 @@ def prove_agent() -> None:
             raise AssertionError("unqualified local agent directory admitted")
         agent = runtime.LocalPlaywrightAgent(str(base), "session_test")
         assert json.loads(agent.descriptor.read_text(encoding="utf-8"))["run"] == str(agent.run)
+
+        # Owner descriptor paths may use an alternate spelling (Windows 8.3
+        # name, or a benign traversable '..' component). The CLI must
+        # identify the SAME physical parent without admitting a foreign one.
+        cli_spec = importlib.util.spec_from_file_location(
+            "owned_cli_alias", ROOT / "scripts" / "camouhost-agent.py"
+        )
+        assert cli_spec and cli_spec.loader
+        cli = importlib.util.module_from_spec(cli_spec)
+        cli_spec.loader.exec_module(cli)
+        alias_parent = base / "alias-parent"
+        alias_parent.mkdir()
+        original_descriptor = agent.descriptor.read_text(encoding="utf-8")
+        try:
+            alias_run = alias_parent / ".." / agent.run.name
+            assert alias_run.is_dir() and alias_run.parent != base
+            alternate = json.loads(original_descriptor)
+            alternate["run"] = str(alias_run)
+            agent.descriptor.write_text(json.dumps(alternate), encoding="utf-8")
+            assert [item["pid"] for item in cli.sessions(base)] == [os.getpid()], (
+                "same actual owner rejected solely for alternate Windows path spelling"
+            )
+
+            foreign_run = alias_parent / agent.run.name
+            foreign_run.mkdir()
+            (foreign_run / "requests").mkdir()
+            (foreign_run / "results").mkdir()
+            alternate["run"] = str(foreign_run)
+            agent.descriptor.write_text(json.dumps(alternate), encoding="utf-8")
+            assert not cli.sessions(base), "foreign parent was admitted by samefile path check"
+        finally:
+            agent.descriptor.write_text(original_descriptor, encoding="utf-8")
         try:
             partial = agent.requests / ".incomplete.part"
             partial.write_text("raise AssertionError('uncommitted')", encoding="utf-8")

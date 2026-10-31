@@ -164,7 +164,12 @@ def sessions(directory: Path) -> list[dict[str, object]]:
             run = Path(details["run"])
             if not safe_agent_directory(run):
                 continue
-            if run.parent != directory:
+            # Windows may name one directory by its long or 8.3 short path.
+            # Compare filesystem identity, NOT spelling: lexical comparison
+            # rejects a legitimate owner and leaves a job unclaimable.
+            # Parent must remain an actual non-reparse directory in the
+            # selected inbox; a sibling/foreign run is never admitted.
+            if not safe_agent_directory(run.parent) or not run.parent.samefile(directory):
                 continue
             if entry.name != f"active-{details.get('pid')}.json" or not process_alive(details.get("pid")):
                 continue
