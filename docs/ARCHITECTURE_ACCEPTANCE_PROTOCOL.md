@@ -39,6 +39,27 @@ The historical AR protocol appended:
 
 That suffix does not apply to CAP transaction selection or create a second source commit.
 
+## No duplicate heavyweight CI for tree-identical accepted main
+
+Run all applicable heavy checks on the exact PR candidate **before merging**.
+After a guarded single-parent squash merge, the Camoufox, Quality and Local Profile
+workflows may reuse those checks only if `scripts/accepted-main-pr-reuse.py`
+independently verifies all of the following from the GitHub API:
+
+- the merged PR targets the repository's `main`, its base matches the accepted
+  commit's sole parent, and its merge SHA is that accepted commit;
+- the accepted commit and tested PR HEAD have the exact same Git tree SHA;
+- all 18 permanent required PR workflows completed successfully on that
+  candidate, and the named expensive tests actually ran and succeeded.
+
+If any proof is missing, stale, skipped, ambiguous or unavailable, the
+**normal full main tests run**, including direct pushes and non-squash merges.
+The lightweight admission job itself must succeed; a skipped heavyweight job
+is not independent test evidence. Release Set builds and signs from the
+**accepted main source** regardless of reusable CI proofs, and any staging or
+Production authorization remains separate. This is a CI execution optimization,
+not a new capability, state machine or relaxation of profile safeguards.
+
 ## Transactions whose DoD requires post-merge proof
 
 A transaction whose owning Issue requires evidence that can exist only after merge is not complete at
