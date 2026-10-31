@@ -9,6 +9,7 @@ on:
 permissions:
   actions: read
   contents: read
+  pull-requests: read
 
 concurrency:
   group: camoufox-runtime-gate-${{ github.workflow }}-${{ github.ref }}
@@ -43,8 +44,19 @@ jobs:
           test "$(git rev-parse HEAD)" = "$HEAD_SHA"
           if [ "$GITHUB_EVENT_NAME" = push ]; then
             test "$GITHUB_REF" = refs/heads/main
-            echo 'heavy=true' >> "$GITHUB_OUTPUT"
-            echo 'Accepted main always receives full real Camoufox/Windows proof.'
+            # The full real Windows/Camoufox proof was already run on the PR
+            # only when GitHub independently proves an exact-tree squash merge,
+            # 18 successful PR workflows and completed real browser test steps.
+            # Missing evidence always falls back to the complete main replay.
+            python3.12 scripts/accepted-main-pr-reuse.py --self-test
+            python3.12 scripts/accepted-main-pr-reuse.py --gate camoufox --github-output "$RUNNER_TEMP/accepted-pr-reuse.txt"
+            if grep -qx 'reuse=true' "$RUNNER_TEMP/accepted-pr-reuse.txt"; then
+              echo 'heavy=false' >> "$GITHUB_OUTPUT"
+              echo 'Exact main tree and PR browser proofs match: reuse certified.'
+            else
+              echo 'heavy=true' >> "$GITHUB_OUTPUT"
+              echo 'No exact verified PR proof: full main Camoufox replay required.'
+            fi
             exit 0
           fi
           test "$GITHUB_EVENT_NAME" = pull_request
@@ -184,7 +196,7 @@ jobs:
 
       - name: Accept mechanically proven runtime-unrelated PR without browser replay
         if: needs.scope.outputs.heavy == 'false'
-        run: echo 'Camoufox runtime inputs are mechanically proven untouched; full physical/runtime proof will run again on accepted main.'
+        run: echo 'Either exact PR browser evidence was confirmed for accepted main or PR scope was proved runtime-unrelated.'
 
       - name: Require Python 3.12 and virtual display support
         if: needs.scope.outputs.heavy == 'true'
@@ -347,7 +359,7 @@ jobs:
       - name: Accept mechanically proven runtime-unrelated PR without Windows browser replay
         if: needs.scope.outputs.heavy == 'false'
         shell: pwsh
-        run: Write-Host 'Camoufox/Bridge runtime inputs are mechanically proven untouched; full clean-host Windows proof will run on accepted main.'
+        run: Write-Host 'Either exact PR browser evidence was confirmed for accepted main or PR scope was proved runtime-unrelated.'
 
       - name: Set up exact Windows dependency-lock Python
         if: needs.scope.outputs.heavy == 'true'
