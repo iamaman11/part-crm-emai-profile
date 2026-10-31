@@ -177,8 +177,8 @@ where
             // The neutral 404 may mean consumed/expired claim OR denied access.
             // Preserve only server-validated problem, HTTP status and our safe
             // correlation in local diagnostics, never raw response or claim.
-            let problem = safe_machine_problem_code(&response, &correlation_id)
-                .unwrap_or("unrecognized");
+            let problem =
+                safe_machine_problem_code(&response, &correlation_id).unwrap_or("unrecognized");
             eprintln!(
                 "bridge_control_failure stage=launch_redemption http_status={} problem={} correlation_id={}",
                 response.status(),
