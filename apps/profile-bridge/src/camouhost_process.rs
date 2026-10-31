@@ -973,7 +973,7 @@ fn local_agent_directory() -> Result<PathBuf, BridgePortError> {
 
 fn spawn_camouhost_diagnostic_reader(stderr: ChildStderr, raw_path: Option<PathBuf>) {
     // Drain stderr continuously to avoid blocking the browser. Full raw bytes
-    // are retained for explicitly opted-in local tests. The ordinary UI summary
+    // are retained for all local profiles. The ordinary UI summary
     // still applies its independent bounded safe vocabulary.
     thread::spawn(move || {
         let mut reader = BufReader::new(stderr);
@@ -1284,8 +1284,12 @@ mod tests {
         assert_eq!(super::prepare_local_agent_directory(&root)?, directory);
         assert!(directory.is_dir());
         // A repeated normal Launch reuses the same user-local inbox.
+        fs::write(directory.join("evidence.txt"), b"keep original test evidence")?;
         assert_eq!(super::prepare_local_agent_directory(&root)?, directory);
-        assert!(!directory.join("playwright-enabled").exists());
+        assert_eq!(
+            fs::read(directory.join("evidence.txt"))?,
+            b"keep original test evidence"
+        );
         fs::remove_dir_all(root)?;
         Ok(())
     }
