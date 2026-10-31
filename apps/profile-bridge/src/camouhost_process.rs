@@ -48,7 +48,7 @@ const HELLO_RESPONSE_TIMEOUT: Duration = Duration::from_secs(10);
 const LAUNCH_RESPONSE_TIMEOUT: Duration = Duration::from_secs(120);
 // Child stderr is untrusted. Only small, fixed-vocabulary diagnostics may reach Bridge logs.
 const MAX_CAMOUHOST_DIAGNOSTIC_BYTES: usize = 128;
-const LOCAL_AGENT_DIRECTORY_ENV: &str = "PROFILE_BRIDGE_AGENT_DIRECTORY";
+const LOCAL_AGENT_DIRECTORY_NAME: &str = "ProfileBridgeAgentTests";
 const BROWSER_VISIBLE_RESPONSE_TIMEOUT: Duration = Duration::from_secs(30);
 const NAVIGATION_RESPONSE_TIMEOUT: Duration = Duration::from_secs(120);
 const OBSERVE_CLOSE_RESPONSE_TIMEOUT: Duration = Duration::from_secs(5);
@@ -442,6 +442,7 @@ impl ManagedCamouhostProcess {
         &self,
         session_id: &SessionId,
         binding: &RuntimeLaunchBinding,
+        agent_directory: &Path,
     ) -> Result<Child, BridgePortError> {
         let entrypoint = self.config.runtime_root.join(REAL_ENTRYPOINT);
         let runtime_lock = self.config.runtime_root.join(RUNTIME_LOCK_PATH);
@@ -494,11 +495,9 @@ impl ManagedCamouhostProcess {
             command.env("CAMOUHOST_PROXY_CONFIG_PATH", path);
         }
         inherit_runtime_environment(&mut command);
-        if let Some(directory) = local_agent_directory()? {
-            // Explicitly opted-in TEST sessions only. No arbitrary browser endpoint
-            // is exposed on a network interface or in ordinary GUI launches.
-            command.env("CAMOUHOST_AGENT_DIRECTORY", directory);
-        }
+        // Every installed browser profile is testable through its existing
+        // Camouhost owner. No toggle, extra writer, or extra browser process.
+        command.env("CAMOUHOST_AGENT_DIRECTORY", agent_directory);
         let child = command.spawn().map_err(|_| BridgePortError::Unavailable)?;
         if child.id() == 0 || session_id.as_str().is_empty() {
             return Err(BridgePortError::InvalidResponse);
@@ -517,19 +516,18 @@ impl ProcessControlPort for ManagedCamouhostProcess {
         if state.child.is_some() || state.active_session.is_some() {
             return Err(BridgePortError::Unavailable);
         }
-        // Validate test diagnostics BEFORE spawning: a path error must never
-        // strand an orphan browser child or its profile writer lock.
+        // Create and validate the stable user-local agent inbox before spawning.
+        // A broken path fails closed without stranding a browser writer.
         let agent_directory = local_agent_directory()?;
-        let mut child = self.launch_child(session_id, &binding)?;
+        let mut child = self.launch_child(session_id, &binding, &agent_directory)?;
         let stdin = child.stdin.take().ok_or(BridgePortError::Unavailable)?;
         let stdout = child.stdout.take().ok_or(BridgePortError::Unavailable)?;
         let stderr = child.stderr.take().ok_or(BridgePortError::Unavailable)?;
         let stamp = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .map_or(0, |elapsed| elapsed.as_nanos());
-        let raw_diagnostics = agent_directory.map(|directory| {
-            directory.join(format!("camouhost-{}-{stamp}.stderr.log", child.id()))
-        });
+        let raw_diagnostics =
+            Some(agent_directory.join(format!("camouhost-{}-{stamp}.stderr.log", child.id())));
         spawn_camouhost_diagnostic_reader(stderr, raw_diagnostics);
         state.stdin = Some(stdin);
         state.responses = Some(spawn_response_reader(stdout));
@@ -941,20 +939,41 @@ fn record_allowlisted_runtime_stage(message: &str) {
     report::record_current(stage, outcome, Cloud::Unknown, cause, 0);
 }
 
-fn local_agent_directory() -> Result<Option<PathBuf>, BridgePortError> {
-    let Some(value) = env::var_os(LOCAL_AGENT_DIRECTORY_ENV) else {
-        return Ok(None);
-    };
-    let path = PathBuf::from(value);
-    if !path.is_absolute() || path.is_symlink() || !path.is_dir() {
+fn prepare_local_agent_directory(base: &Path) -> Result<PathBuf, BridgePortError> {
+    // A deterministic user-owned inbox for every profile, not a new runtime mode.
+    // The browser/lease/claim authority remains in the existing Bridge path.
+    if !base.is_absolute() || base.is_symlink() || !base.is_dir() {
         return Err(BridgePortError::InvalidResponse);
     }
-    Ok(Some(path))
+    let directory = base.join(LOCAL_AGENT_DIRECTORY_NAME);
+    if directory.is_symlink() {
+        return Err(BridgePortError::InvalidResponse);
+    }
+    fs::create_dir_all(&directory).map_err(|_| BridgePortError::Unavailable)?;
+    if !directory.is_dir() || directory.is_symlink() {
+        return Err(BridgePortError::InvalidResponse);
+    }
+    Ok(directory)
+}
+
+fn local_agent_directory() -> Result<PathBuf, BridgePortError> {
+    #[cfg(windows)]
+    let base = env::var_os("LOCALAPPDATA")
+        .map(PathBuf::from)
+        .ok_or(BridgePortError::InvalidResponse)?;
+
+    #[cfg(not(windows))]
+    let base = env::var_os("XDG_STATE_HOME")
+        .map(PathBuf::from)
+        .or_else(|| env::var_os("HOME").map(PathBuf::from))
+        .ok_or(BridgePortError::InvalidResponse)?;
+
+    prepare_local_agent_directory(&base)
 }
 
 fn spawn_camouhost_diagnostic_reader(stderr: ChildStderr, raw_path: Option<PathBuf>) {
     // Drain stderr continuously to avoid blocking the browser. Full raw bytes
-    // are retained for explicitly opted-in local tests. The ordinary UI summary
+    // are retained for all local profiles. The ordinary UI summary
     // still applies its independent bounded safe vocabulary.
     thread::spawn(move || {
         let mut reader = BufReader::new(stderr);
@@ -1244,6 +1263,76 @@ mod tests {
             key.to_str(),
             Some("CLOUDFLARE_API_TOKEN" | "HTTP_PROXY" | "CAMOU_CONFIG_1")
         )));
+        Ok(())
+    }
+
+    #[test]
+    fn agent_inbox_is_automatic_stable_and_never_uses_a_marker()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let root = root_path()?;
+        assert!(matches!(
+            super::prepare_local_agent_directory(&PathBuf::from("relative")),
+            Err(BridgePortError::InvalidResponse)
+        ));
+        assert!(matches!(
+            super::prepare_local_agent_directory(&root),
+            Err(BridgePortError::InvalidResponse)
+        ));
+        fs::create_dir_all(&root)?;
+        let directory = root.join(super::LOCAL_AGENT_DIRECTORY_NAME);
+        assert!(!directory.exists());
+        assert_eq!(super::prepare_local_agent_directory(&root)?, directory);
+        assert!(directory.is_dir());
+        // A repeated normal Launch reuses the same user-local inbox.
+        fs::write(
+            directory.join("evidence.txt"),
+            b"keep original test evidence",
+        )?;
+        assert_eq!(super::prepare_local_agent_directory(&root)?, directory);
+        assert_eq!(
+            fs::read(directory.join("evidence.txt"))?,
+            b"keep original test evidence"
+        );
+        fs::remove_dir_all(root)?;
+        Ok(())
+    }
+
+    #[test]
+    fn agent_inbox_rejects_a_file_instead_of_directory() -> Result<(), Box<dyn std::error::Error>> {
+        let root = root_path()?;
+        fs::create_dir_all(&root)?;
+        fs::write(
+            root.join(super::LOCAL_AGENT_DIRECTORY_NAME),
+            b"not a directory",
+        )?;
+        assert!(matches!(
+            super::prepare_local_agent_directory(&root),
+            Err(BridgePortError::Unavailable | BridgePortError::InvalidResponse)
+        ));
+        fs::remove_dir_all(root)?;
+        Ok(())
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn agent_inbox_rejects_windows_directory_symlink() -> Result<(), Box<dyn std::error::Error>> {
+        let root = root_path()?;
+        let target = root.join("target");
+        fs::create_dir_all(&target)?;
+        let link = root.join(super::LOCAL_AGENT_DIRECTORY_NAME);
+        match std::os::windows::fs::symlink_dir(&target, &link) {
+            Ok(()) => {
+                assert!(matches!(
+                    super::prepare_local_agent_directory(&root),
+                    Err(BridgePortError::InvalidResponse)
+                ));
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::PermissionDenied => {
+                // Non-elevated Windows CI may disallow developer symlinks.
+            }
+            Err(error) => return Err(error.into()),
+        }
+        fs::remove_dir_all(root)?;
         Ok(())
     }
 
