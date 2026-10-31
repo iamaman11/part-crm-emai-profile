@@ -42,7 +42,9 @@ fn regular_dir(path: &Path) -> Result<(), RescueError> {
     // Children are checked before copying and cannot be reparse points.
     let metadata = io(fs::symlink_metadata(path), "rescue directory unreadable")?;
     if !regular_directory(&metadata) {
-        return Err(RescueError::new("rescue directory is a reparse or special entry"));
+        return Err(RescueError::new(
+            "rescue directory is a reparse or special entry",
+        ));
     }
     Ok(())
 }
