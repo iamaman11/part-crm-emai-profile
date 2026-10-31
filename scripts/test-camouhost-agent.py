@@ -346,8 +346,74 @@ def prove_owner_thread_polling() -> None:
     assert "['hello|a\\n', 'close|b\\n', '']" in completed.stdout.decode("utf-8"), completed.stdout
 
 
+def prove_claim_denial_and_windows_owner_preflight() -> None:
+    """Negative transport tests: no replay and no elevated ownership workaround."""
+    import contextlib
+    import io
+
+    runtime = runtime_module()
+    cli_spec = importlib.util.spec_from_file_location(
+        "owned_cli", ROOT / "scripts" / "camouhost-agent.py"
+    )
+    assert cli_spec and cli_spec.loader
+    cli = importlib.util.module_from_spec(cli_spec)
+    cli_spec.loader.exec_module(cli)
+
+    with tempfile.TemporaryDirectory(prefix="owned-agent-claim-denial-") as temp:
+        base = Path(temp).resolve()
+        agent = runtime.LocalPlaywrightAgent(str(base), "session_claim_denial")
+        fake = Context()
+        try:
+            # Native same-token owner can accept its own inbox, including on
+            # hosted Windows. No Set-Acl or ownership mutation by this test.
+            assert cli.inbox_owner_matches_process(agent.requests)
+            source = base / "preflight-script.py"
+            source.write_text("result = 123\n", encoding="utf-8")
+            args = [
+                "camouhost-agent", "--directory", str(base),
+                "--pid", str(os.getpid()),
+                "--script", str(source), "--timeout", "1",
+            ]
+            before = set(agent.requests.iterdir())
+            with patch.object(cli, "inbox_owner_matches_process", return_value=False), \\
+                    patch.object(sys, "argv", args), \\
+                    contextlib.redirect_stderr(io.StringIO()) as error_out:
+                assert cli.run() == 126
+                assert "SECURITY_CONTEXT_MISMATCH" in error_out.getvalue()
+            assert set(agent.requests.iterdir()) == before, "unsafe CLI published a request"
+
+            source_script = "context.pages[0].goto('about:must-not-execute')\n"
+            job_id = committed_request(agent.requests, source_script)
+            actual_replace = runtime.os.replace
+
+            def fail_claim_only(src: object, dst: object) -> None:
+                if str(dst).endswith(".running"):
+                    raise PermissionError(13, "unusable Windows ACL")
+                actual_replace(src, dst)
+
+            with patch.object(runtime.os, "replace", side_effect=fail_claim_only), \\
+                    contextlib.redirect_stderr(io.StringIO()) as error_out:
+                assert agent.run_one(fake) is False
+                assert "phase=claim_rename" in error_out.getvalue()
+                assert f"job={job_id}" in error_out.getvalue()
+                assert "errno=13" in error_out.getvalue()
+            receipt = json.loads(
+                (agent.results / f"{job_id}.json").read_text(encoding="utf-8")
+            )
+            assert receipt["status"] == "unconfirmed"
+            assert receipt["phase"] == "claim_rename"
+            assert receipt["errno"] == 13
+            assert (agent.requests / f"{job_id}.py").exists()
+            assert not agent.run_one(fake), "uncertain claim was replayed"
+            assert fake.pages[0].url == "about:blank", "denied job ran without claim"
+
+        finally:
+            agent.close()
+
+
 def main() -> int:
     prove_agent()
+    prove_claim_denial_and_windows_owner_preflight()
     prove_owner_thread_polling()
     print("Owned Playwright agent: owner-thread pipe, atomic jobs, full data, single context and replay guard PASS.")
     return 0
