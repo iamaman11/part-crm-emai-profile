@@ -972,10 +972,7 @@ mod tests {
         let workspace = root.create_generation(&tenant, &profile, &generation)?;
         let device = DeviceId::parse("device_recovery_atomic_marker_01")?;
         let marker = workspace.path().join(super::BRIDGE_LOCK_FILE);
-        let original = format!(
-            "profile-platform-bridge-lock-v1\n{}\n5\n",
-            device.as_str()
-        );
+        let original = format!("profile-platform-bridge-lock-v1\n{}\n5\n", device.as_str());
         std::fs::write(&marker, &original)?;
         let browser_data = workspace.path().join("user_data");
         std::fs::create_dir_all(&browser_data)?;
@@ -1000,9 +997,7 @@ mod tests {
 
         // The staged, uncommitted control bytes cannot pollute a subsequent
         // sealed generation, and a fresh authorized recovery still succeeds.
-        let recovered = BridgeWorkspaceLock::replace_interrupted(
-            &workspace, &device, 6,
-        )?;
+        let recovered = BridgeWorkspaceLock::replace_interrupted(&workspace, &device, 6)?;
         assert_eq!(
             std::fs::read_to_string(&marker)?,
             format!("profile-platform-bridge-lock-v2\n{}\n6\n", device.as_str())
