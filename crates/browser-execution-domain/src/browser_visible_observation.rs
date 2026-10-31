@@ -1217,8 +1217,8 @@ mod tests {
         let stable = ProfileStableIdentity::new(
             enabled.schema_version(),
             enabled.browser_os().clone(),
-            enabled.hardware().clone(),
-            enabled.display().clone(),
+            *enabled.hardware(),
+            *enabled.display(),
             GraphicsIdentity::new(
                 enabled.graphics().webgl_vendor(),
                 enabled.graphics().webgl_renderer(),
