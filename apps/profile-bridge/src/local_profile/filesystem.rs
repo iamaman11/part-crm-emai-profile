@@ -462,7 +462,7 @@ impl BridgeWorkspaceLock {
         F: FnOnce() -> Result<(), LocalProfileError>,
     {
         let ownership = format!(
-            "profile-platform-bridge-lock-v1\n{}\n{fresh_epoch}\n",
+            "profile-platform-bridge-lock-v2\n{}\n{fresh_epoch}\n",
             device_id.as_str()
         );
         let sequence = RECOVERY_MARKER_SEQUENCE.fetch_add(1, Ordering::Relaxed);
@@ -1005,7 +1005,7 @@ mod tests {
         )?;
         assert_eq!(
             std::fs::read_to_string(&marker)?,
-            format!("profile-platform-bridge-lock-v1\n{}\n6\n", device.as_str())
+            format!("profile-platform-bridge-lock-v2\n{}\n6\n", device.as_str())
         );
         assert_eq!(std::fs::read(&wal)?, b"unpublished-wal-before-crash");
         assert_eq!(workspace.inventory()?, inventory_before);
