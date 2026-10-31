@@ -132,7 +132,12 @@ fn open_generation_admission(workspace: &GenerationWorkspace) -> Result<File, Lo
     let marker = workspace.path().join(".profile-platform.writer-admission");
     match fs::symlink_metadata(&marker) {
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-            match OpenOptions::new().read(true).write(true).create_new(true).open(&marker) {
+            match OpenOptions::new()
+                .read(true)
+                .write(true)
+                .create_new(true)
+                .open(&marker)
+            {
                 Ok(file) => {
                     file.sync_all()?;
                     return Ok(file);
@@ -515,11 +520,8 @@ mod tests {
         let (_test_root, root, crashed, device) = fixture("crashed-with-another-writer")?;
         let other_profile = ProfileId::parse("profile_other_live")?;
         let other_generation = GenerationId::parse("generation_other_live")?;
-        let live = root.create_generation(
-            crashed.tenant_id(),
-            &other_profile,
-            &other_generation,
-        )?;
+        let live =
+            root.create_generation(crashed.tenant_id(), &other_profile, &other_generation)?;
         let live_digest_before = live.materialization_inventory_digest()?;
         let live_writer = BridgeWorkspaceLock::acquire(&live, &device, 10)?;
         assert_eq!(
