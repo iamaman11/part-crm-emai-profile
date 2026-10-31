@@ -35,18 +35,10 @@ fn io<T>(x: std::io::Result<T>, reason: &'static str) -> Result<T, RescueError> 
 }
 
 fn regular_dir(path: &Path) -> Result<(), RescueError> {
-    // The installer already validates every installation-root ancestor before
-    // acquiring its OS lock. Rescue checks EACH owned directory, not all of
-    // its ancestors again: Windows runner / per-user parents can be legitimate
-    // junctions, and their ambient layout is not part of rescue ownership.
-    // Children are checked before copying and cannot be reparse points.
-    let metadata = io(fs::symlink_metadata(path), "rescue directory unreadable")?;
-    if !regular_directory(&metadata) {
-        return Err(RescueError::new(
-            "rescue directory is a reparse or special entry",
-        ));
-    }
-    Ok(())
+    // Check the exact path AND ancestors; never accept a reparse alias
+    // outside the installed per-user root or isolated recovery directory.
+    super::bundle::validate_directory_tree(path, false)
+        .map_err(|_| RescueError::new("unsafe destination or reparse path"))
 }
 fn regular_file(meta: &fs::Metadata) -> bool {
     #[cfg(windows)]
@@ -163,11 +155,19 @@ pub(super) fn ensure_rescue(
     )?;
     io(output.write_all(b"\n"), "rescue receipt terminator failed")?;
     io(output.sync_all(), "rescue receipt sync failed")?;
+    // Windows denies directory rename while this descendant's receipt file
+    // handle is still open without delete sharing. Release it explicitly
+    // before verification and publication, never after the rename attempt.
+    drop(output);
     verify_snapshot(&stage)?;
-    // Rename never overwrites a published directory on Windows. An updater
-    // winning this race means the other published copy must be verified.
+    // Windows rename does not replace an existing directory. Only a genuinely
+    // existing verified target is an idempotent success; a share/permission/
+    // disk error is NOT another publisher and must leave the stage intact.
     if fs::rename(&stage, &published).is_err() {
-        verify_snapshot(&published)?;
+        match fs::symlink_metadata(&published) {
+            Ok(meta) if regular_directory(&meta) => verify_snapshot(&published)?,
+            _ => return Err(RescueError::new("atomic rescue publication failed")),
+        }
         return Ok("EXISTING_RESCUE_BYTES_VERIFIED");
     }
     verify_snapshot(&published)?;
