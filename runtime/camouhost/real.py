@@ -1504,10 +1504,16 @@ class LocalPlaywrightAgent:
                     os.fsync(output.fileno())
                 os.replace(staging, status_path)
                 durable_agent_directory(self.results)
-            except OSError:
-                # An unavailable diagnostic store cannot become an invented success
-                # or a second owner of browser lifecycle.
-                print("camouhost_agent_result_write_failed", file=sys.stderr, flush=True)
+            except OSError as error:
+                # The job is already consumed; a failed result publication is
+                # UNKNOWN, not permission to execute it again. Original source,
+                # stdout and stderr remain local for forensic readback.
+                print(
+                    f"camouhost_agent_result_write_failed phase=receipt_publication "
+                    f"job={job_id} errno={error.errno} "
+                    f"winerror={getattr(error, 'winerror', None)}",
+                    file=sys.stderr, flush=True,
+                )
             return True
         return False
 
