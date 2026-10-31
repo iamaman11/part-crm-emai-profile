@@ -1147,36 +1147,34 @@ where
         // as a live writer, but do not unlink it blindly: the recovery owner proves
         // an exclusive OS root admission, same device/older epoch and no active
         // native Firefox writer before it replaces *only* that marker.
-        let workspace_lock =
-            match BridgeWorkspaceLock::acquire(&workspace, &device_id, lease.epoch()) {
-                Ok(value) => value,
-                Err(LocalProfileError::LockBusy) => {
-                    match BridgeWorkspaceLock::recover_interrupted_launch(
-                        &workspace,
-                        &device_id,
-                        lease.epoch(),
-                    ) {
-                        Ok(value) => value,
-                        Err(error) => {
-                            eprintln!(
-                                "bridge_local_workspace_failure operation=recover_interrupted_launch reason={error:?}"
-                            );
-                            return Err(self.fail_before_local_use(
-                                OperatorFailureStage::LocalWorkspace,
-                                lease,
-                            ));
-                        }
+        let workspace_lock = match BridgeWorkspaceLock::acquire(
+            &workspace,
+            &device_id,
+            lease.epoch(),
+        ) {
+            Ok(value) => value,
+            Err(LocalProfileError::LockBusy) => {
+                match BridgeWorkspaceLock::recover_interrupted_launch(
+                    &workspace,
+                    &device_id,
+                    lease.epoch(),
+                ) {
+                    Ok(value) => value,
+                    Err(error) => {
+                        eprintln!(
+                            "bridge_local_workspace_failure operation=recover_interrupted_launch reason={error:?}"
+                        );
+                        return Err(
+                            self.fail_before_local_use(OperatorFailureStage::LocalWorkspace, lease)
+                        );
                     }
                 }
-                Err(error) => {
-                    eprintln!(
-                        "bridge_local_workspace_failure operation=acquire reason={error:?}"
-                    );
-                    return Err(
-                        self.fail_before_local_use(OperatorFailureStage::LocalWorkspace, lease)
-                    );
-                }
-            };
+            }
+            Err(error) => {
+                eprintln!("bridge_local_workspace_failure operation=acquire reason={error:?}");
+                return Err(self.fail_before_local_use(OperatorFailureStage::LocalWorkspace, lease));
+            }
+        };
         if let Err(error) = self.browser_preflight.evaluate_before_launch(
             &workspace,
             &device_id,
