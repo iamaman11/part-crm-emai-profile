@@ -513,11 +513,57 @@ try:
     second = context.new_page()
     second.goto(urls[1], wait_until="domcontentloaded", timeout=15000)
     assert first.url == urls[0] and second.url == urls[1]
+
+    # INVESTIGATE-05: same actual packaged context and origin, no fake
+    # browser/cookie backend. Distinct names avoid masking one mechanism by
+    # another. Expiry is generated relative to the browser host clock.
+    expires = int(time.time()) + 3600
+    context.add_cookies([{
+        "name": "b7_playwright_url", "value": "url_v1",
+        "url": urls[0], "expires": expires, "sameSite": "Lax",
+    }])
+    context.add_cookies([{
+        "name": "b7_playwright_domain", "value": "domain_v1",
+        "domain": "127.0.0.1", "path": "/",
+        "expires": expires, "sameSite": "Lax",
+    }])
+    first.evaluate(
+        "() => { document.cookie = 'b7_native_cookie=native_v1; Path=/; Max-Age=3600; SameSite=Lax'; }"
+    )
+    expected_cookies = {
+        "b7_playwright_url": "url_v1",
+        "b7_playwright_domain": "domain_v1",
+        "b7_native_cookie": "native_v1",
+    }
+    actual_before = {
+        item["name"]: item["value"] for item in context.cookies([origin])
+        if item["name"] in expected_cookies
+    }
+    visible_before = first.evaluate("document.cookie")
+    assert actual_before == expected_cookies, (
+        "same-context context.add_cookies failed immediate cookie readback: "
+        f"expected_names={sorted(expected_cookies)} "
+        f"actual_names={sorted(actual_before)}"
+    )
+    assert all(
+        f"{key}={value}" in visible_before
+        for key, value in expected_cookies.items()
+    ), "valid non-HttpOnly cookies were not visible at their original origin"
 finally:
     runtime.close_context(manager, context, root)
 
 manager, context = enter()
 try:
+    # First observation BEFORE any new page, navigation or mutation.
+    initial_urls = [page.url for page in context.pages]
+    reopened_cookies = {
+        item["name"]: item["value"] for item in context.cookies([origin])
+        if item["name"] in expected_cookies
+    }
+    assert reopened_cookies == expected_cookies, (
+        "packaged native full-process reopen did not retain valid cookies: "
+        f"initial_urls={initial_urls!r}, retained_names={sorted(reopened_cookies)}"
+    )
     # Firefox SessionStore restores windows asynchronously on Windows. Wait
     # for the existing native pages; never synthesize pages on the second launch.
     deadline = time.monotonic() + 20
