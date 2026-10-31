@@ -1317,6 +1317,31 @@ def prove_three_independent_native_profiles_two_roundtrips(
                         "    assert observed['afterLocal'] == next_value, observed\n"
                         "    assert observed['afterIndexed'] == next_value, observed\n"
                         "    assert 'b7_native_cycle=' + next_value in observed['afterCookie'], observed\n"
+                        # INVESTIGATE-05: prove BOTH supported Playwright cookie
+                        # injection forms, not only document.cookie. The
+                        # resulting cookies must survive a clean native Close
+                        # and a new managed browser process without re-injection.
+                        "import time\n"
+                        "expected_playwright_cookies = {\n"
+                        "    'b7_playwright_url': 'url-injected-native',\n"
+                        "    'b7_playwright_domain': 'domain-injected-native',\n"
+                        "}\n"
+                        "if " + repr(cycle) + " == 0:\n"
+                        "    context.add_cookies([\n"
+                        "        {'name': 'b7_playwright_url', 'value': 'url-injected-native',\n"
+                        "         'url': origin, 'sameSite': 'Lax', 'expires': time.time() + 7200},\n"
+                        "        {'name': 'b7_playwright_domain', 'value': 'domain-injected-native',\n"
+                        "         'domain': '127.0.0.1', 'path': '/', 'sameSite': 'Lax',\n"
+                        "         'expires': time.time() + 7200},\n"
+                        "    ])\n"
+                        "native_cookies = {c['name']: c for c in context.cookies([origin])}\n"
+                        "for name, value in expected_playwright_cookies.items():\n"
+                        "    assert name in native_cookies, {'missing': name, 'cookies': list(native_cookies)}\n"
+                        "    assert native_cookies[name]['value'] == value, native_cookies[name]\n"
+                        "    assert native_cookies[name]['sameSite'] == 'Lax', native_cookies[name]\n"
+                        "    assert native_cookies[name]['expires'] > time.time(), native_cookies[name]\n"
+                        "    assert not native_cookies[name]['secure'], native_cookies[name]\n"
+                        "    assert name + '=' + value in page.evaluate('document.cookie'), name\n"
                         "result = {'profile': " + repr(profile_index) +
                         ", 'cycle': " + repr(cycle) +
                         ", 'native_storage_roundtrip': True}\n"
@@ -1324,6 +1349,7 @@ def prove_three_independent_native_profiles_two_roundtrips(
                     script.write_text(source, encoding="utf-8")
                     actual = same_owner(script)
                     assert '"native_storage_roundtrip": true' in actual, actual[-1200:]
+                    assert '"playwright_cookie_reopen": true' in actual, actual[-1200:]
                     assert exchange(process, f"close|{SESSION}", 45) == (
                         f"closed|{SESSION}|true"
                     ), "native controlled Close did not confirm Firefox shutdown"
