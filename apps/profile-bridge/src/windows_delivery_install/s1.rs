@@ -420,7 +420,9 @@ fn sha256_lower_hex(bytes: &[u8]) -> String {
         .collect()
 }
 
-pub(super) fn inventory(root: &MaterializationRoot) -> Result<ProfileObservation, InventoryFailure> {
+pub(super) fn inventory(
+    root: &MaterializationRoot,
+) -> Result<ProfileObservation, InventoryFailure> {
     let mut answer = ProfileObservation::default();
     let mut sidecars = Vec::new();
     let mut files: Vec<PathBuf> = Vec::new();
