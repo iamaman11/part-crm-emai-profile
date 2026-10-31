@@ -64,8 +64,10 @@ writer or Save/Commit is authorized. D1 `READY` alone is not proof.
    root lock, immutable rescue, staging, exact installation and activation.
    On failure preserve installer stdout/stderr, existing state and backup
    paths; never do a blind reinstall/delete-to-retry.
-3. Inspect `BRIDGE_RESCUE_OK: NEW_RESCUE_BYTES_VERIFIED` or
-   `EXISTING_RESCUE_BYTES_VERIFIED` in the local installer log; verify
+3. Inspect the installer's allowlisted
+   `PROFILE_BRIDGE_RESCUE_STATUS_V1=NEW_RESCUE_BYTES_VERIFIED`,
+   `EXISTING_RESCUE_BYTES_VERIFIED` or `EMPTY_NEW_PROFILE_ROOT` event
+   in the ordinary setup log; verify
    the receipt, original+rescue inventories, persistent CNG public identity
    and exact installed Bridge/runtime/delivery components. Do not confuse
    old Bridge release LKG with a browser WORKING snapshot. If installer
