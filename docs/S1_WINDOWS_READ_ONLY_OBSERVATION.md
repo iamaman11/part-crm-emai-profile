@@ -2,6 +2,33 @@
 
 This is an **observation interface, not an installer, rollback operation or B7 acceptance**.
 
+**Important accepted update policy:** An S1 `UNKNOWN` result is NOT a mandatory
+`NO_GO` for a *binary-only* Bridge delivery update. This observer deliberately
+never certifies cloud generation CURRENT/WORKING/LKG authority and therefore
+cannot emit a browser/Coordinator `READY` verdict. Do not keep rerunning it to
+obtain an impossible status. The **canonical installer** independently verifies
+the signed release and its rollback/compatibility floor, takes the native
+exclusive writer guard, and under that guard creates or verifies a durable
+immutable, exact-byte local rescue of all existing profile bytes **before
+mutating delivery state**. The installer then reacquires the native guard at
+activation. The rescue is under the installation directory's sibling
+`ProfileBridge-recovery/snapshot-v1/profiles`, and never overwrites
+an existing published rescue or deletes an incomplete attempt.
+
+This protects local bytes across binary updates; it does **not** certify that a
+particular cloud generation has been committed or can be opened by Firefox.
+A fresh machine-CNG-authorized Coordinator snapshot is a **Launch/Save**
+obligation, not a permission to update inert binaries. An unavailable
+Coordinator blocks unauthorized browser ownership/remote mutation, NOT a
+safely quiescent signed delivery update. Missing rescue space, corrupt existing
+rescue, unreadable original WAL, unsigned/downgrade delivery, or live native
+writer still causes the **installer** to fail closed with old release/data
+unchanged. Never delete original or recovery data to force the update.
+
+The normal end-to-end evidence remains first authorized frontend Launch,
+same-owner Playwright read-only restoration, actual browser state read/write,
+controlled Close, exact Coordinator-confirmed commit and next fresh Open.
+
 ## Command (Windows, new candidate Bridge executable, outside the installed app)
 
 ```powershell
