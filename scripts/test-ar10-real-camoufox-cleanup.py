@@ -1344,7 +1344,7 @@ def prove_three_independent_native_profiles_two_roundtrips(
                         "    assert name + '=' + value in page.evaluate('document.cookie'), name\n"
                         "result = {'profile': " + repr(profile_index) +
                         ", 'cycle': " + repr(cycle) +
-                        ", 'native_storage_roundtrip': True}\n"
+                        ", 'native_storage_roundtrip': True, 'playwright_cookie_reopen': True}\n"
                     )
                     script.write_text(source, encoding="utf-8")
                     actual = same_owner(script)
