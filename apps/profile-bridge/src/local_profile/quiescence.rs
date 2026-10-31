@@ -505,10 +505,13 @@ mod tests {
         // shared root lock is held. Firefox has not yet acquired parent.lock.
         let generation = super::open_generation_admission(&workspace)?;
         generation.try_lock()?;
-        assert!(matches!(
-            DeliveryActivationGuard::acquire(&root),
-            Err(LocalProfileError::LockBusy)
-        ), "installation cannot pass when the active generation OS lock is held");
+        assert!(
+            matches!(
+                DeliveryActivationGuard::acquire(&root),
+                Err(LocalProfileError::LockBusy)
+            ),
+            "installation cannot pass when the active generation OS lock is held"
+        );
         assert_eq!(fs::read(&wal)?, b"unpublished-generation-dirty-wal");
 
         generation.unlock()?;
