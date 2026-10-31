@@ -640,18 +640,18 @@ mod tests {
 
         // Models a still-live pre-upgrade Bridge543 process, which owns only
         // a shared ROOT OS lock. No Firefox writer need be running yet.
-        let older_bridge = open_root_marker(root.path())?;
+        let older_bridge = super::open_root_marker(root.path())?;
         older_bridge.try_lock_shared()?;
         assert!(matches!(
             BridgeWorkspaceLock::acquire(&workspace, &device, 6),
             Err(LocalProfileError::LockBusy)
         ));
-        assert!(!generation_admission_exists(&workspace)?);
+        assert!(!super::generation_admission_exists(&workspace)?);
         assert!(matches!(
             BridgeWorkspaceLock::recover_interrupted_launch(&workspace, &device, 6),
             Err(LocalProfileError::LockBusy)
         ));
-        assert!(!generation_admission_exists(&workspace)?);
+        assert!(!super::generation_admission_exists(&workspace)?);
         assert_eq!(fs::read_to_string(&legacy_marker)?, legacy_bytes);
         assert_eq!(fs::read(&wal_path)?, b"durable-unpublished-wal-from-543");
         drop(older_bridge);
@@ -659,7 +659,7 @@ mod tests {
         // The old OS handle has actually died. Only a fresh new lease may
         // atomically adopt the old marker under exclusive root admission.
         let new_writer = BridgeWorkspaceLock::recover_interrupted_launch(&workspace, &device, 6)?;
-        assert!(generation_admission_exists(&workspace)?);
+        assert!(super::generation_admission_exists(&workspace)?);
         assert_eq!(fs::read(&wal_path)?, b"durable-unpublished-wal-from-543");
         assert!(matches!(
             BridgeWorkspaceLock::acquire(&workspace, &device, 7),
