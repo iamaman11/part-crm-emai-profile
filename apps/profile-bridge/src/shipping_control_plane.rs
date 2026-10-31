@@ -172,7 +172,21 @@ where
             )
             .map_err(|_| Self::Error::Transport);
         body.fill(0);
-        let response = accepted_response(response?)?;
+        let response = response?;
+        if !(200..=299).contains(&response.status()) {
+            // The neutral 404 may mean consumed/expired claim OR denied access.
+            // Preserve only server-validated problem, HTTP status and our safe
+            // correlation in local diagnostics, never raw response or claim.
+            let problem = safe_machine_problem_code(&response, &correlation_id)
+                .unwrap_or("unrecognized");
+            eprintln!(
+                "bridge_control_failure stage=launch_redemption http_status={} problem={} correlation_id={}",
+                response.status(),
+                problem,
+                correlation_id.as_str(),
+            );
+        }
+        let response = accepted_response(response)?;
         let projection =
             serde_json::from_slice::<BridgeProfileLaunchRedemptionProjection>(response.body())
                 .map_err(|_| Self::Error::InvalidResponse)?;
