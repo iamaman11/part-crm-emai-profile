@@ -1226,8 +1226,7 @@ mod tests {
                     .ok_or("disabled extensions")?,
                 canonical_webgl_parameters_sha256(&key_values("webgl"), &mut digester)
                     .ok_or("webgl params")?,
-                canonical_webgl2_disabled_sha256(&mut digester)
-                    .ok_or("disabled WebGL2 marker")?,
+                canonical_webgl2_disabled_sha256(&mut digester).ok_or("disabled WebGL2 marker")?,
                 canonical_shader_precision_sha256(&key_values("shader"), &[], &mut digester)
                     .ok_or("shader")?,
                 canonical_context_attributes_sha256(&key_values("context"), &[], &mut digester)
@@ -1251,8 +1250,7 @@ mod tests {
         );
 
         let mut fake_webgl2 = observation.clone();
-        fake_webgl2.graphics.webgl2_parameters =
-            Observed::Available(key_values("webgl2"));
+        fake_webgl2.graphics.webgl2_parameters = Observed::Available(key_values("webgl2"));
         assert_eq!(
             stable.compare_browser_visible(&fake_webgl2, &mut TestSha256),
             Err(BrowserVisibleMismatch::WebGl2Parameters)
@@ -1266,5 +1264,4 @@ mod tests {
         );
         Ok(())
     }
-
 }
