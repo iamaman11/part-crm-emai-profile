@@ -1411,6 +1411,9 @@ class LocalPlaywrightAgent:
         self.results = self.run / "results"
         self.requests.mkdir(mode=0o700)
         self.results.mkdir(mode=0o700)
+        # In-process, session-scoped negative evidence. Never redispatch a job
+        # after an uncertain rename or directory durability failure.
+        self.unconfirmed_claims: set[str] = set()
         self.descriptor = base / f"active-{os.getpid()}.json"
         descriptor_temp = base / f".active-{os.getpid()}-{secrets.token_hex(8)}.tmp"
         with descriptor_temp.open("x", encoding="utf-8") as output:
@@ -1426,13 +1429,43 @@ class LocalPlaywrightAgent:
             if not AGENT_REQUEST_PATTERN.fullmatch(request.name) or request.is_symlink():
                 continue
             job_id = request.stem
+            if job_id in self.unconfirmed_claims:
+                continue
             claimed = self.requests / f"{job_id}.running"
+            phase = "claim_rename"
             try:
                 os.replace(request, claimed)
+                phase = "claim_directory_sync"
                 durable_agent_directory(self.requests)
-            except OSError:
-                # A failed/doubtful claim must never execute Python or be replayed.
-                print("camouhost_agent_claim_unconfirmed", file=sys.stderr, flush=True)
+            except OSError as error:
+                # Rename may already have happened. Never automatically replay this
+                # request, even when the failed claim still has its .py name.
+                self.unconfirmed_claims.add(job_id)
+                print(
+                    f"camouhost_agent_claim_unconfirmed phase={phase} "
+                    f"job={job_id} errno={error.errno} "
+                    f"winerror={getattr(error, 'winerror', None)}",
+                    file=sys.stderr, flush=True,
+                )
+                # Best effort typed receipt for the original CLI, not an
+                # acknowledgement that the script ran or may be retried.
+                try:
+                    outcome = {
+                        "status": "unconfirmed", "phase": phase, "job_id": job_id,
+                        "errno": error.errno,
+                        "winerror": getattr(error, "winerror", None),
+                    }
+                    staged = self.results / f"{job_id}.part"
+                    with staged.open("x", encoding="utf-8") as output:
+                        output.write(json.dumps(outcome))
+                        output.flush()
+                        os.fsync(output.fileno())
+                    os.replace(staged, self.results / f"{job_id}.json")
+                    durable_agent_directory(self.results)
+                except OSError:
+                    # The original request, claimed file, and stderr diagnosis
+                    # remain intact even if the diagnostic volume is unavailable.
+                    pass
                 continue
             stdout_path = self.results / f"{job_id}.stdout.txt"
             stderr_path = self.results / f"{job_id}.stderr.txt"
