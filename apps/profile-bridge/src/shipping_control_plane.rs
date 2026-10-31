@@ -1,6 +1,6 @@
 use crate::dirty_generation::{GenerationSealingMaterial, GenerationSealingMaterialPort};
 use crate::generation_reopen::{GenerationDownloadCapability, GenerationReopenControlPort};
-use crate::operator_flow::{EnrollmentPort, OperatorEnrollment};
+use crate::operator_flow::{EnrollmentFailureKind, EnrollmentPort, OperatorEnrollment};
 use application_ports::{ProfileCoordinatorPort, ProfileCoordinatorRuntimePort};
 use bridge_domain::ClaimUri;
 use control_plane_contract::coordinator_api::{
@@ -96,6 +96,7 @@ pub enum ShippingControlPlaneError {
     // The server returned 408/429/5xx after a state-changing coordinator request.
     // Its effect may have applied; this is NOT a renewed lease or an ACL refusal.
     HttpServerUncertain,
+    LaunchLeaseConflict,
     HttpStatus,
     InvalidResponse,
     Clock,
@@ -108,6 +109,7 @@ impl core::fmt::Display for ShippingControlPlaneError {
             Self::HttpServerUncertain => {
                 "coordinator timeout, throttle or server response is uncertain; previous authority was not extended"
             }
+            Self::LaunchLeaseConflict => "launch refused: verified coordinator lease conflict",
             Self::HttpStatus => "machine-authenticated control-plane request was rejected",
             Self::InvalidResponse => "machine-authenticated control-plane response was invalid",
             Self::Clock => "machine control-plane request identity could not be created",
@@ -123,7 +125,8 @@ impl From<ShippingControlPlaneError> for crate::generation_reopen::GenerationReo
         match reason {
             ShippingControlPlaneError::Transport => Reopen::Transport,
             ShippingControlPlaneError::HttpServerUncertain => Reopen::ServiceTemporarilyUnavailable,
-            ShippingControlPlaneError::HttpStatus => Reopen::HttpStatus,
+            ShippingControlPlaneError::HttpStatus
+            | ShippingControlPlaneError::LaunchLeaseConflict => Reopen::HttpStatus,
             ShippingControlPlaneError::InvalidResponse => Reopen::InvalidResponse,
             ShippingControlPlaneError::Clock => Reopen::Clock,
         }
@@ -146,6 +149,17 @@ where
     T: MachineHttpPort,
 {
     type Error = ShippingControlPlaneError;
+
+    fn classify_error(error: &Self::Error) -> EnrollmentFailureKind {
+        match error {
+            ShippingControlPlaneError::LaunchLeaseConflict => EnrollmentFailureKind::LeaseConflict,
+            ShippingControlPlaneError::Transport
+            | ShippingControlPlaneError::HttpServerUncertain => {
+                EnrollmentFailureKind::ServiceUncertain
+            }
+            _ => EnrollmentFailureKind::Other,
+        }
+    }
 
     fn redeem_claim(
         &mut self,
@@ -172,7 +186,28 @@ where
             )
             .map_err(|_| Self::Error::Transport);
         body.fill(0);
-        let response = accepted_response(response?)?;
+        let response = response?;
+        let known_conflict = is_verified_launch_lease_conflict(&response, &correlation_id);
+        if !(200..=299).contains(&response.status()) {
+            // The neutral 404 may mean consumed/expired claim OR denied access.
+            // Preserve only server-validated problem, HTTP status and our safe
+            // correlation in local diagnostics, never raw response or claim.
+            let problem =
+                safe_machine_problem_code(&response, &correlation_id).unwrap_or("unrecognized");
+            eprintln!(
+                "bridge_control_failure stage=launch_redemption http_status={} problem={} correlation_id={}",
+                response.status(),
+                problem,
+                correlation_id.as_str(),
+            );
+        }
+        let response = accepted_response(response).map_err(|error| {
+            if known_conflict {
+                Self::Error::LaunchLeaseConflict
+            } else {
+                error
+            }
+        })?;
         let projection =
             serde_json::from_slice::<BridgeProfileLaunchRedemptionProjection>(response.body())
                 .map_err(|_| Self::Error::InvalidResponse)?;
@@ -1125,6 +1160,14 @@ pub(crate) fn safe_machine_problem_code(
 
 // Reading a generation never grants a new lease, claim or retry permission.
 // Temporary HTTP failures must not be reported as an ACL refusal.
+fn is_verified_launch_lease_conflict(
+    response: &MachineHttpResponse,
+    correlation_id: &CorrelationId,
+) -> bool {
+    response.status() == 409
+        && safe_machine_problem_code(response, correlation_id) == Some("lease_conflict")
+}
+
 fn classify_read_only_reopen_http_status(status: u16) -> ShippingControlPlaneError {
     if matches!(status, 408 | 429 | 500..=599) {
         ShippingControlPlaneError::HttpServerUncertain
@@ -1557,6 +1600,173 @@ mod tests {
             safe_machine_problem_code(&oversized_body, &request_id),
             None
         );
+        Ok(())
+    }
+
+    #[test]
+    fn only_correlated_409_lease_conflict_is_launch_busy() -> Result<(), Box<dyn std::error::Error>>
+    {
+        use crate::operator_flow::EnrollmentFailureKind;
+        let corr = CorrelationId::parse("corr_enroll_lease_01")?;
+        let other = CorrelationId::parse("corr_enroll_other_01")?;
+        let valid = MachineHttpResponse::new(
+            409,
+            serde_json::to_vec(&control_plane_contract::public_api::ProblemPayload {
+                problem_type: "urn:part-crm:problem:lease-conflict".into(),
+                title: "Lease Conflict".into(),
+                status: 409,
+                code: "lease_conflict".into(),
+                correlation_id: corr.as_str().into(),
+            })?,
+        );
+        assert!(super::is_verified_launch_lease_conflict(&valid, &corr));
+        assert!(!super::is_verified_launch_lease_conflict(&valid, &other));
+        assert!(!super::is_verified_launch_lease_conflict(
+            &MachineHttpResponse::new(403, valid.body().to_vec()),
+            &corr
+        ));
+        assert!(!super::is_verified_launch_lease_conflict(
+            &MachineHttpResponse::new(409, b"lease_conflict".to_vec()),
+            &corr
+        ));
+        type Enrollment = ControlPlaneEnrollment<FakeMachineHttp>;
+        assert_eq!(
+            <Enrollment as EnrollmentPort>::classify_error(
+                &ShippingControlPlaneError::LaunchLeaseConflict
+            ),
+            EnrollmentFailureKind::LeaseConflict
+        );
+        assert_eq!(
+            <Enrollment as EnrollmentPort>::classify_error(
+                &ShippingControlPlaneError::HttpServerUncertain
+            ),
+            EnrollmentFailureKind::ServiceUncertain
+        );
+        assert_eq!(
+            <Enrollment as EnrollmentPort>::classify_error(&ShippingControlPlaneError::HttpStatus),
+            EnrollmentFailureKind::Other
+        );
+        Ok(())
+    }
+
+    /// FIX-06: exercise the shipping HTTP adapter, not just its helper.
+    /// The request correlation is generated by the real redemption owner.
+    /// Only the matching trusted lease-conflict answer may become Busy.
+    #[test]
+    fn real_redemption_adapter_preserves_only_verified_lease_conflict()
+    -> Result<(), Box<dyn std::error::Error>> {
+        use crate::operator_flow::EnrollmentFailureKind;
+
+        #[derive(Clone, Copy)]
+        enum Refusal {
+            VerifiedConflict,
+            ForeignCorrelation,
+            Forbidden,
+            StaleClaim,
+            TemporaryServer,
+            MalformedConflict,
+            Transport,
+        }
+
+        struct RefusingMachineHttp(Refusal);
+
+        impl MachineHttpPort for RefusingMachineHttp {
+            type Error = ();
+
+            fn request(
+                &mut self,
+                method: MachineHttpMethod,
+                path: &str,
+                correlation_id: &CorrelationId,
+                body: Option<&[u8]>,
+            ) -> Result<MachineHttpResponse, Self::Error> {
+                assert_eq!(method, MachineHttpMethod::PostJson);
+                assert_eq!(
+                    path,
+                    control_plane_contract::profile_launch_api::BRIDGE_PROFILE_LAUNCH_REDEMPTION_PATH
+                );
+                assert!(body.is_some_and(|bytes| bytes.windows(5).any(|slice| slice == b"claim")));
+                if matches!(self.0, Refusal::Transport) {
+                    return Err(());
+                }
+                let status = match self.0 {
+                    Refusal::Forbidden => 403,
+                    Refusal::StaleClaim => 404,
+                    Refusal::TemporaryServer => 503,
+                    _ => 409,
+                };
+                let body = if matches!(self.0, Refusal::MalformedConflict) {
+                    b"lease_conflict".to_vec()
+                } else {
+                    serde_json::to_vec(&control_plane_contract::public_api::ProblemPayload {
+                        problem_type: "urn:part-crm:problem:lease-conflict".into(),
+                        title: "Lease Conflict".into(),
+                        status,
+                        code: "lease_conflict".into(),
+                        correlation_id: if matches!(self.0, Refusal::ForeignCorrelation) {
+                            "corr_foreign_request_01".into()
+                        } else {
+                            correlation_id.as_str().into()
+                        },
+                    })
+                    .map_err(|_| ())?
+                };
+                Ok(MachineHttpResponse::new(status, body))
+            }
+        }
+
+        let cases = [
+            (
+                Refusal::VerifiedConflict,
+                ShippingControlPlaneError::LaunchLeaseConflict,
+                EnrollmentFailureKind::LeaseConflict,
+            ),
+            (
+                Refusal::ForeignCorrelation,
+                ShippingControlPlaneError::HttpStatus,
+                EnrollmentFailureKind::Other,
+            ),
+            (
+                Refusal::Forbidden,
+                ShippingControlPlaneError::HttpStatus,
+                EnrollmentFailureKind::Other,
+            ),
+            (
+                Refusal::StaleClaim,
+                ShippingControlPlaneError::HttpStatus,
+                EnrollmentFailureKind::Other,
+            ),
+            (
+                Refusal::TemporaryServer,
+                ShippingControlPlaneError::HttpServerUncertain,
+                EnrollmentFailureKind::ServiceUncertain,
+            ),
+            (
+                Refusal::MalformedConflict,
+                ShippingControlPlaneError::HttpStatus,
+                EnrollmentFailureKind::Other,
+            ),
+            (
+                Refusal::Transport,
+                ShippingControlPlaneError::Transport,
+                EnrollmentFailureKind::ServiceUncertain,
+            ),
+        ];
+        for (reply, expected, classification) in cases {
+            let mut enrollment = ControlPlaneEnrollment::new(RefusingMachineHttp(reply));
+            let observed = enrollment.redeem_claim(
+                &ClaimUri::parse("profilebridge://claim/claim_01JBRIDGE_FEASIBILITY")?,
+                &DeviceId::parse("device_01JBRIDGE")?,
+                UnixMillis::new(1),
+            );
+            assert_eq!(observed, Err(expected));
+            assert_eq!(
+                <ControlPlaneEnrollment<RefusingMachineHttp> as EnrollmentPort>::classify_error(
+                    &expected,
+                ),
+                classification,
+            );
+        }
         Ok(())
     }
 

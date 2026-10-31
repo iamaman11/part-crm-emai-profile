@@ -8,14 +8,14 @@ const ROOT_MARKER: &str = ".profile-platform-root";
 const BRIDGE_LOCK_FILE: &str = ".profile-platform.lock";
 const GENERATION_DEPTH_FROM_ROOT: usize = 3;
 
-/// Existing per-generation Bridge writer ownership plus one root-scoped shared OS admission lock.
-///
-/// The shared lock does not replace the canonical per-generation control file. It only makes writer
-/// admission mutually exclusive with Windows delivery activation without introducing durable state.
+/// Writer admission has two OS locks: shared root admission excludes native installer
+/// activation; exclusive generation admission excludes another writer/recovery for THIS
+/// generation. Neither lock creates a second authority or a durable state machine.
 #[derive(Debug)]
 pub struct BridgeWorkspaceLock {
     inner: filesystem::BridgeWorkspaceLock,
     _admission: File,
+    _generation: File,
 }
 
 impl BridgeWorkspaceLock {
@@ -27,29 +27,60 @@ impl BridgeWorkspaceLock {
         let root = workspace_root(workspace)?;
         let admission = open_root_marker(root)?;
         admission.try_lock_shared().map_err(map_try_lock_error)?;
+
+        // Shipping Bridge543 has only the root shared lock and the persistent
+        // .profile-platform.lock. Do not install the NEW generation admission
+        // while that legacy writer marker exists: its still-live owner does
+        // not participate in the new per-generation OS lock.
+        if !generation_admission_exists(workspace)?
+            && fs::symlink_metadata(workspace.path().join(BRIDGE_LOCK_FILE)).is_ok()
+        {
+            return Err(LocalProfileError::LockBusy);
+        }
+
+        let generation = open_generation_admission(workspace)?;
+        generation.try_lock().map_err(map_try_lock_error)?;
         let inner = filesystem::BridgeWorkspaceLock::acquire(workspace, device_id, epoch)?;
         Ok(Self {
             inner,
             _admission: admission,
+            _generation: generation,
         })
     }
 
-    /// Same-device recovery after an interrupted Bridge. The caller must have already
-    /// redeemed fresh device/ACL and exact coordinator generation/lease authority.
-    /// Root-wide exclusive OS admission excludes *all* live cooperative Bridge writers
-    /// and Windows delivery activation until the new per-generation marker is created.
+    /// Same-device recovery under a NEW authenticated Coordinator claim/fence.
+    /// Only this generation requires OS exclusivity. A live OTHER profile must
+    /// not block recovery of dirty bytes after browser/Bridge process death.
+    /// The root shared lock still excludes installer activation across the whole root.
     pub(crate) fn recover_interrupted_launch(
         workspace: &GenerationWorkspace,
         device_id: &DeviceId,
         fresh_epoch: u64,
     ) -> Result<Self, LocalProfileError> {
         let root = workspace_root(workspace)?;
-        let exclusive = open_root_marker(root)?;
-        exclusive.try_lock().map_err(map_try_lock_error)?;
+        // The admission file can be left behind by a failed new-version
+        // acquire while an old Bridge543 ROOT-only writer still owns v1.
+        // Only the current v2 marker proves generation-scoped ownership.
+        // V1 always requires exclusive root admission before adoption.
+        let legacy_generation = !generation_admission_exists(workspace)?
+            || !generation_scoped_marker_present(workspace)?;
+        let root_lock = open_root_marker(root)?;
+        if legacy_generation {
+            // Bridge543 and all prior root-only writers hold this lock SHARED.
+            // Their marker alone is not proof of death; require EXCLUSIVE root
+            // admission before converting it to generation-scoped ownership.
+            // This one-time adoption may wait for another legacy live profile.
+            root_lock.try_lock().map_err(map_try_lock_error)?;
+        } else {
+            // Once adopted, unrelated new-version profiles stay independently
+            // usable while this specific generation is recovered.
+            root_lock.try_lock_shared().map_err(map_try_lock_error)?;
+        }
+        let generation = open_generation_admission(workspace)?;
+        generation.try_lock().map_err(map_try_lock_error)?;
 
-        // A stale Windows parent.lock file is permitted only when its actual OS handle
-        // is free. On other platforms, uncertain Firefox markers remain fail-closed.
-        // This checks the original working directory, never a replacement clone.
+        // A stale Windows parent.lock file is permitted only when the actual
+        // native handle has exited. A live or ambiguous Firefox writer blocks.
         if !matches!(
             crate::browser_execution::browser_writer_locks_absent(workspace),
             Ok(true)
@@ -57,25 +88,33 @@ impl BridgeWorkspaceLock {
             return Err(LocalProfileError::LockBusy);
         }
 
+        // Caller already proved fresh same-device lease; this only replaces the
+        // exact older marker. Never removes profile files, WAL or pending evidence.
         let inner = filesystem::BridgeWorkspaceLock::replace_interrupted(
             workspace,
             device_id,
             fresh_epoch,
         )?;
-        drop(exclusive);
 
-        // The newly established marker blocks delivery activation while we switch
-        // from exclusive crash reconciliation to ordinary shared writer admission.
-        let admission = open_root_marker(root)?;
-        if let Err(error) = admission.try_lock_shared() {
-            // A concurrent updater won admission first. Release our new marker;
-            // never start the browser while that updater owns the root.
-            inner.release()?;
-            return Err(map_try_lock_error(error));
-        }
+        let admission = if legacy_generation {
+            // Never assume an exclusive root handle can stand in for shared
+            // admission once normal browser execution begins. Installer cannot
+            // pass while the durable writer marker exists, and the new generation
+            // lock stays held throughout this transition.
+            drop(root_lock);
+            let shared = open_root_marker(root)?;
+            if let Err(error) = shared.try_lock_shared() {
+                inner.release()?;
+                return Err(map_try_lock_error(error));
+            }
+            shared
+        } else {
+            root_lock
+        };
         Ok(Self {
             inner,
             _admission: admission,
+            _generation: generation,
         })
     }
 
@@ -83,8 +122,10 @@ impl BridgeWorkspaceLock {
         let Self {
             inner,
             _admission: admission,
+            _generation: generation,
         } = self;
         let result = inner.release();
+        drop(generation);
         drop(admission);
         result
     }
@@ -126,6 +167,84 @@ fn workspace_root(workspace: &GenerationWorkspace) -> Result<&Path, LocalProfile
         .ancestors()
         .nth(GENERATION_DEPTH_FROM_ROOT)
         .ok_or(LocalProfileError::UnsafeRelativePath)
+}
+
+/// Persistent marker version, not mere lock-file existence, distinguishes
+/// root-only Bridge543 from a generation-scoped writer. Corruption or an
+/// unreadable/symlinked marker may never authorize a weaker admission check.
+fn generation_scoped_marker_present(
+    workspace: &GenerationWorkspace,
+) -> Result<bool, LocalProfileError> {
+    let marker = workspace.path().join(BRIDGE_LOCK_FILE);
+    let metadata = fs::symlink_metadata(&marker)?;
+    if metadata.file_type().is_symlink() {
+        return Err(LocalProfileError::SymbolicLinkRejected);
+    }
+    if !metadata.is_file() {
+        return Err(LocalProfileError::SpecialFileRejected);
+    }
+    if metadata.len() > 512 {
+        return Err(LocalProfileError::LockBusy);
+    }
+    Ok(fs::read_to_string(marker)?.starts_with("profile-platform-bridge-lock-v2\n"))
+}
+
+fn generation_admission_exists(workspace: &GenerationWorkspace) -> Result<bool, LocalProfileError> {
+    let path = workspace.path().join(".profile-platform.writer-admission");
+    match fs::symlink_metadata(path) {
+        Ok(metadata) if metadata.file_type().is_symlink() => {
+            Err(LocalProfileError::SymbolicLinkRejected)
+        }
+        Ok(metadata) if metadata.is_file() => Ok(true),
+        Ok(_) => Err(LocalProfileError::SpecialFileRejected),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(false),
+        Err(error) => Err(error.into()),
+    }
+}
+
+fn open_generation_admission(workspace: &GenerationWorkspace) -> Result<File, LocalProfileError> {
+    // A stable, empty OS-only lock file. Never lock .profile-generation itself:
+    // Windows byte-range locks would block its ordinary identity reads during
+    // Save/Close. This file is not a generation snapshot, state or authorization.
+    let marker = workspace.path().join(".profile-platform.writer-admission");
+    match fs::symlink_metadata(&marker) {
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            match OpenOptions::new()
+                .read(true)
+                .write(true)
+                .create_new(true)
+                .open(&marker)
+            {
+                Ok(file) => {
+                    file.sync_all()?;
+                    return Ok(file);
+                }
+                Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {}
+                Err(error) => return Err(error.into()),
+            }
+        }
+        Err(error) => return Err(error.into()),
+        Ok(_) => {}
+    }
+    let metadata = fs::symlink_metadata(&marker)?;
+    if metadata.file_type().is_symlink() {
+        return Err(LocalProfileError::SymbolicLinkRejected);
+    }
+    if !metadata.is_file() {
+        return Err(LocalProfileError::SpecialFileRejected);
+    }
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::MetadataExt;
+        if metadata.file_attributes() & 0x0400 != 0 {
+            return Err(LocalProfileError::SymbolicLinkRejected);
+        }
+    }
+    OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open(marker)
+        .map_err(LocalProfileError::from)
 }
 
 fn open_root_marker(root: &Path) -> Result<File, LocalProfileError> {
@@ -177,6 +296,18 @@ fn bridge_writer_lock_present(root: &Path, depth: usize) -> Result<bool, LocalPr
                 Err(error) => return Err(error.into()),
             }
 
+            // During one-time Bridge543 adoption, a fresh generation
+            // admission lock is obtained under the old exclusive root lock.
+            // The legacy root handle is subsequently converted to shared
+            // admission; unlike Bridge543, the new writer already holds its
+            // per-generation OS lock. Check that lock as well: otherwise an
+            // installer could enter the root-lock handoff gap before Camoufox
+            // acquires parent.lock and falsely certify a quiescent workspace.
+            // A stale marker with no OS owner remains valid recovery evidence.
+            if generation_admission_held_at(root)? {
+                return Ok(true);
+            }
+
             // An orphaned live Firefox can outlast Bridge. Reuse the native
             // handle-based probe; unknown/unreadable locks block activation.
             return Ok(!matches!(
@@ -211,6 +342,37 @@ fn bridge_writer_lock_present(root: &Path, depth: usize) -> Result<bool, LocalPr
         }
     }
     Ok(false)
+}
+
+/// The installer holds the exclusive root lock before calling this. On
+/// Windows the legacy Bridge543 writer can briefly hand off that root lock
+/// while retaining this generation-scoped admission. Probe via a separate
+/// OS handle: a held lock rejects activation even before Firefox starts.
+#[cfg(windows)]
+fn generation_admission_held_at(workspace_path: &Path) -> Result<bool, LocalProfileError> {
+    use std::os::windows::fs::MetadataExt;
+
+    let path = workspace_path.join(".profile-platform.writer-admission");
+    let metadata = match fs::symlink_metadata(&path) {
+        Ok(value) => value,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(false),
+        Err(error) => return Err(error.into()),
+    };
+    if metadata.file_type().is_symlink() || metadata.file_attributes() & 0x0400 != 0 {
+        return Err(LocalProfileError::SymbolicLinkRejected);
+    }
+    if !metadata.is_file() {
+        return Err(LocalProfileError::SpecialFileRejected);
+    }
+    let handle = OpenOptions::new().read(true).write(true).open(path)?;
+    match handle.try_lock() {
+        Ok(()) => {
+            handle.unlock()?;
+            Ok(false)
+        }
+        Err(TryLockError::WouldBlock) => Ok(true),
+        Err(TryLockError::Error(error)) => Err(error.into()),
+    }
 }
 
 fn map_try_lock_error(error: TryLockError) -> LocalProfileError {
@@ -356,6 +518,39 @@ mod tests {
 
     #[cfg(windows)]
     #[test]
+    fn installer_rejects_live_generation_admission_during_legacy_root_handoff()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let (_test_root, root, workspace, _device) = fixture("legacy-root-handoff")?;
+        fs::create_dir(workspace.path().join("user_data"))?;
+        let wal = workspace.path().join("user_data/cookies.sqlite-wal");
+        fs::write(&wal, b"unpublished-generation-dirty-wal")?;
+
+        // Model the precise Bridge543 -> generation admission handoff:
+        // the writer has taken its generation OS lock, but momentarily no
+        // shared root lock is held. Firefox has not yet acquired parent.lock.
+        let generation = super::open_generation_admission(&workspace)?;
+        generation.try_lock()?;
+        assert!(
+            matches!(
+                DeliveryActivationGuard::acquire(&root),
+                Err(LocalProfileError::LockBusy)
+            ),
+            "installation cannot pass when the active generation OS lock is held"
+        );
+        assert_eq!(fs::read(&wal)?, b"unpublished-generation-dirty-wal");
+
+        generation.unlock()?;
+        drop(generation);
+        assert!(
+            DeliveryActivationGuard::acquire(&root)?.confirms_quiescence(),
+            "stale admission file without a live OS lock is not a writer"
+        );
+        assert_eq!(fs::read(&wal)?, b"unpublished-generation-dirty-wal");
+        Ok(())
+    }
+
+    #[cfg(windows)]
+    #[test]
     fn live_native_firefox_handle_blocks_upgrade_even_without_a_bridge_writer()
     -> Result<(), Box<dyn std::error::Error>> {
         use std::os::windows::fs::OpenOptionsExt;
@@ -459,20 +654,158 @@ mod tests {
     }
 
     #[test]
-    fn interrupted_reclaim_refuses_active_bridge_admission()
+    fn interrupted_reclaim_refuses_active_same_generation_writer()
     -> Result<(), Box<dyn std::error::Error>> {
-        let (_test_root, root, workspace, device) = fixture("bridge-still-live")?;
-        fs::write(
-            workspace.path().join(BRIDGE_LOCK_FILE),
-            format!("profile-platform-bridge-lock-v1\n{}\n5\n", device.as_str()),
-        )?;
-        let active = super::open_root_marker(root.path())?;
-        active.try_lock_shared()?;
+        let (_test_root, _root, workspace, device) = fixture("bridge-still-live")?;
+        let active = BridgeWorkspaceLock::acquire(&workspace, &device, 5)?;
         assert!(matches!(
             BridgeWorkspaceLock::recover_interrupted_launch(&workspace, &device, 6),
             Err(LocalProfileError::LockBusy)
         ));
         assert!(workspace.path().join(BRIDGE_LOCK_FILE).exists());
+        active.release()?;
+        Ok(())
+    }
+
+    #[test]
+    fn crashed_profile_recovery_does_not_interrupt_other_live_profile()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let (_test_root, root, crashed, device) = fixture("crashed-with-another-writer")?;
+        let other_profile = ProfileId::parse("profile_other_live")?;
+        let other_generation = GenerationId::parse("generation_other_live")?;
+        let live =
+            root.create_generation(crashed.tenant_id(), &other_profile, &other_generation)?;
+        let live_digest_before = live.materialization_inventory_digest()?;
+        let live_writer = BridgeWorkspaceLock::acquire(&live, &device, 10)?;
+        assert_eq!(
+            live.materialization_inventory_digest()?,
+            live_digest_before,
+            "OS admission must not affect materialization identity"
+        );
+        // Windows exclusive byte locks on this immutable identity would stop
+        // normal read/write code even inside our own Bridge process.
+        assert_eq!(
+            fs::read(live.path().join(".profile-generation"))?,
+            b"profile-platform-generation-v1\n"
+        );
+        assert!(
+            live.inventory()?
+                .entries()
+                .iter()
+                .all(|entry| entry.relative_path() != ".profile-platform.writer-admission"),
+            "OS-only admission marker must not leak into encrypted snapshot"
+        );
+
+        let user_data = crashed.path().join("user_data");
+        fs::create_dir(&user_data)?;
+        let wal = user_data.join("cookies.sqlite-wal");
+        fs::write(&wal, b"unsaved-wal-must-survive")?;
+        // Simulate a crashed post-upgrade Bridge. The OS handles drop on
+        // process death, while the durable marker and new admission file stay.
+        let crashed_writer = BridgeWorkspaceLock::acquire(&crashed, &device, 5)?;
+        drop(crashed_writer);
+        let recovered = BridgeWorkspaceLock::recover_interrupted_launch(&crashed, &device, 6)?;
+        assert_eq!(fs::read(&wal)?, b"unsaved-wal-must-survive");
+        assert_eq!(
+            fs::read_to_string(live.path().join(BRIDGE_LOCK_FILE))?,
+            format!("profile-platform-bridge-lock-v2\n{}\n10\n", device.as_str())
+        );
+        assert!(matches!(
+            DeliveryActivationGuard::acquire(&root),
+            Err(LocalProfileError::LockBusy)
+        ));
+        recovered.release()?;
+        // Recovery must neither preempt nor release another generation's owner.
+        assert!(matches!(
+            BridgeWorkspaceLock::acquire(&live, &device, 11),
+            Err(LocalProfileError::LockBusy)
+        ));
+        live_writer.release()?;
+        assert!(DeliveryActivationGuard::acquire(&root)?.confirms_quiescence());
+        Ok(())
+    }
+
+    #[test]
+    fn legacy_bridge543_marker_requires_root_exclusivity_before_lock_upgrade()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let (_test_root, root, workspace, device) = fixture("legacy-bridge543-migration")?;
+        let wal_path = workspace
+            .path()
+            .join("user_data")
+            .join("cookies.sqlite-wal");
+        fs::create_dir(workspace.path().join("user_data"))?;
+        fs::write(&wal_path, b"durable-unpublished-wal-from-543")?;
+        let legacy_marker = workspace.path().join(BRIDGE_LOCK_FILE);
+        let legacy_bytes = format!("profile-platform-bridge-lock-v1\n{}\n5\n", device.as_str());
+        fs::write(&legacy_marker, &legacy_bytes)?;
+
+        // Models a still-live pre-upgrade Bridge543 process, which owns only
+        // a shared ROOT OS lock. No Firefox writer need be running yet.
+        let older_bridge = super::open_root_marker(root.path())?;
+        older_bridge.try_lock_shared()?;
+        assert!(matches!(
+            BridgeWorkspaceLock::acquire(&workspace, &device, 6),
+            Err(LocalProfileError::LockBusy)
+        ));
+        assert!(!super::generation_admission_exists(&workspace)?);
+        assert!(matches!(
+            BridgeWorkspaceLock::recover_interrupted_launch(&workspace, &device, 6),
+            Err(LocalProfileError::LockBusy)
+        ));
+        assert!(!super::generation_admission_exists(&workspace)?);
+        assert_eq!(fs::read_to_string(&legacy_marker)?, legacy_bytes);
+        assert_eq!(fs::read(&wal_path)?, b"durable-unpublished-wal-from-543");
+        drop(older_bridge);
+
+        // The old OS handle has actually died. Only a fresh new lease may
+        // atomically adopt the old marker under exclusive root admission.
+        let new_writer = BridgeWorkspaceLock::recover_interrupted_launch(&workspace, &device, 6)?;
+        assert!(super::generation_admission_exists(&workspace)?);
+        assert_eq!(fs::read(&wal_path)?, b"durable-unpublished-wal-from-543");
+        assert!(matches!(
+            BridgeWorkspaceLock::acquire(&workspace, &device, 7),
+            Err(LocalProfileError::LockBusy)
+        ));
+        new_writer.release()?;
+        Ok(())
+    }
+
+    #[test]
+    fn abandoned_generation_admission_never_upgrades_a_live_bridge543_writer()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let (_test_root, root, workspace, device) = fixture("orphaned-admission-v1")?;
+        let user_data = workspace.path().join("user_data");
+        fs::create_dir(&user_data)?;
+        let wal = user_data.join("cookies.sqlite-wal");
+        fs::write(&wal, b"unpublished-legacy-firefox-wal")?;
+        let marker = workspace.path().join(BRIDGE_LOCK_FILE);
+        let legacy = format!("profile-platform-bridge-lock-v1\n{}\n5\n", device.as_str());
+        fs::write(&marker, &legacy)?;
+
+        // A failed new-version acquire may have created this empty file
+        // while the old Bridge543 continued holding the shared root lock.
+        // File existence alone does NOT turn the old marker into a v2 owner.
+        let abandoned = super::open_generation_admission(&workspace)?;
+        drop(abandoned);
+        let old_writer = super::open_root_marker(root.path())?;
+        old_writer.try_lock_shared()?;
+        assert!(matches!(
+            BridgeWorkspaceLock::recover_interrupted_launch(&workspace, &device, 6),
+            Err(LocalProfileError::LockBusy)
+        ));
+        assert_eq!(fs::read_to_string(&marker)?, legacy);
+        assert_eq!(fs::read(&wal)?, b"unpublished-legacy-firefox-wal");
+        drop(old_writer);
+
+        // Once the old root-only writer really exits, the same fresh fence
+        // may adopt it. The replacement is v2 and the dirty WAL is untouched.
+        let recovered = BridgeWorkspaceLock::recover_interrupted_launch(&workspace, &device, 6)?;
+        assert_eq!(
+            fs::read_to_string(&marker)?,
+            format!("profile-platform-bridge-lock-v2\n{}\n6\n", device.as_str())
+        );
+        assert_eq!(fs::read(&wal)?, b"unpublished-legacy-firefox-wal");
+        recovered.release()?;
         Ok(())
     }
 

@@ -513,11 +513,57 @@ try:
     second = context.new_page()
     second.goto(urls[1], wait_until="domcontentloaded", timeout=15000)
     assert first.url == urls[0] and second.url == urls[1]
+
+    # INVESTIGATE-05: same actual packaged context and origin, no fake
+    # browser/cookie backend. Distinct names avoid masking one mechanism by
+    # another. Expiry is generated relative to the browser host clock.
+    expires = int(time.time()) + 3600
+    context.add_cookies([{
+        "name": "b7_playwright_url", "value": "url_v1",
+        "url": urls[0], "expires": expires, "sameSite": "Lax",
+    }])
+    context.add_cookies([{
+        "name": "b7_playwright_domain", "value": "domain_v1",
+        "domain": "127.0.0.1", "path": "/",
+        "expires": expires, "sameSite": "Lax",
+    }])
+    first.evaluate(
+        "() => { document.cookie = 'b7_native_cookie=native_v1; Path=/; Max-Age=3600; SameSite=Lax'; }"
+    )
+    expected_cookies = {
+        "b7_playwright_url": "url_v1",
+        "b7_playwright_domain": "domain_v1",
+        "b7_native_cookie": "native_v1",
+    }
+    actual_before = {
+        item["name"]: item["value"] for item in context.cookies([origin])
+        if item["name"] in expected_cookies
+    }
+    visible_before = first.evaluate("document.cookie")
+    assert actual_before == expected_cookies, (
+        "same-context context.add_cookies failed immediate cookie readback: "
+        f"expected_names={sorted(expected_cookies)} "
+        f"actual_names={sorted(actual_before)}"
+    )
+    assert all(
+        f"{key}={value}" in visible_before
+        for key, value in expected_cookies.items()
+    ), "valid non-HttpOnly cookies were not visible at their original origin"
 finally:
     runtime.close_context(manager, context, root)
 
 manager, context = enter()
 try:
+    # First observation BEFORE any new page, navigation or mutation.
+    initial_urls = [page.url for page in context.pages]
+    reopened_cookies = {
+        item["name"]: item["value"] for item in context.cookies([origin])
+        if item["name"] in expected_cookies
+    }
+    assert reopened_cookies == expected_cookies, (
+        "packaged native full-process reopen did not retain valid cookies: "
+        f"initial_urls={initial_urls!r}, retained_names={sorted(reopened_cookies)}"
+    )
     # Firefox SessionStore restores windows asynchronously on Windows. Wait
     # for the existing native pages; never synthesize pages on the second launch.
     deadline = time.monotonic() + 20
@@ -549,7 +595,44 @@ try:
     assert not present[urls[1]].is_closed()
 finally:
     runtime.close_context(manager, context, root)
-print("two previous Firefox tabs restored and tracked; partial close not complete", flush=True)
+
+# INVESTIGATE-04: a tab intentionally closed before a browser-wide Quit
+# must not be conflated with lost origin storage. Observe first, with no
+# synthetic tab/navigation, then read the SAME origin from the surviving tab.
+manager, context = enter()
+try:
+    initial_third_urls = [page.url for page in context.pages]
+    deadline = time.monotonic() + 20
+    while urls[1] not in {page.url for page in context.pages}:
+        if time.monotonic() >= deadline:
+            raise AssertionError(
+                "surviving original-origin tab failed native SessionStore reopen: "
+                f"initial={initial_third_urls!r} actual={[page.url for page in context.pages]!r}"
+            )
+        try:
+            context.wait_for_event("page", timeout=500)
+        except PlaywrightTimeoutError:
+            pass
+    present_third = {page.url: page for page in context.pages}
+    assert urls[0] not in present_third, (
+        "intentionally closed tab unexpectedly reopened; classify exact native Quit semantics"
+    )
+    assert present_third[urls[1]].evaluate(
+        "localStorage.getItem('restore-proof')"
+    ) == "retained", "closing a tab did not preserve its persistent origin storage"
+    cookies_after_selective_close = {
+        item["name"]: item["value"] for item in context.cookies([origin])
+        if item["name"] in expected_cookies
+    }
+    assert cookies_after_selective_close == expected_cookies, (
+        "closing a window/tab unexpectedly removed persistent origin cookies"
+    )
+finally:
+    runtime.close_context(manager, context, root)
+print(
+    "two previous tabs restored; intentionally closed tab remains closed; "
+    "persistent same-origin storage and cookies retained", flush=True
+)
 """
     try:
         env = runtime_env(runtime_lock, headless)
@@ -576,7 +659,7 @@ print("two previous Firefox tabs restored and tracked; partial close not complet
             diagnostics.seek(0, os.SEEK_END)
             diagnostics.seek(max(0, diagnostics.tell() - 2400))
             tail = diagnostics.read()
-            if result != 0 or "two previous Firefox tabs restored and tracked" not in output.read():
+            if result != 0 or "persistent same-origin storage and cookies retained" not in output.read():
                 raise AssertionError(
                     "real native Firefox tab restoration not proven: "
                     f"rc={result} diagnostic_tail={tail!r}"
@@ -807,6 +890,161 @@ class DisposableWindowsProcessJob:
                 raise AssertionError(f"Windows disposable Job close failed: {ctypes.get_last_error()}")
 
 
+@contextlib.contextmanager
+def crash_storage_fixture(env: dict[str, str]):
+    """Disposably serve one real origin; use only the owning Camouhost agent."""
+    class PageHandler(BaseHTTPRequestHandler):
+        def do_GET(self) -> None:  # noqa: N802
+            body = b"<!doctype html><title>same generation crash storage proof</title>"
+            self.send_response(200)
+            self.send_header("Content-Type", "text/html; charset=utf-8")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+        def log_message(self, _format: str, *_args: object) -> None:
+            pass
+
+    with tempfile.TemporaryDirectory(prefix="ar10-crash-storage-") as directory:
+        with ThreadingHTTPServer(("127.0.0.1", 0), PageHandler) as server:
+            thread = threading.Thread(target=server.serve_forever, daemon=True)
+            thread.start()
+            origin = f"http://127.0.0.1:{server.server_address[1]}"
+            try:
+                yield (
+                    dict(env, CAMOUHOST_AGENT_DIRECTORY=str(Path(directory).resolve())),
+                    Path(directory),
+                    origin,
+                )
+            finally:
+                server.shutdown()
+                thread.join(timeout=10)
+
+
+_CRASH_STORAGE_JS = """
+async ({mode}) => {
+    const recent = "crash-dirty-local-v1";
+    const baseline = "confirmed-native-close-v1";
+    if (mode === "baseline") {
+        document.cookie = "b7_baseline_cookie=" + baseline +
+            "; Path=/; Max-Age=3600; SameSite=Lax";
+        localStorage.setItem("b7_baseline_local", baseline);
+    }
+    if (mode === "write") {
+        document.cookie = "b7_crash_cookie=" + recent +
+            "; Path=/; Max-Age=3600; SameSite=Lax";
+        localStorage.setItem("b7_crash_local", recent);
+    }
+    const req = indexedDB.open("b7-crash-storage", 1);
+    const db = await new Promise((resolve, reject) => {
+        req.onupgradeneeded = () => {
+            if (mode === "read") {
+                req.transaction.abort();
+                return;
+            }
+            req.result.createObjectStore("samples");
+        };
+        req.onsuccess = () => resolve(req.result);
+        req.onerror = () => reject(new Error("indexeddb open failed or missing"));
+    });
+    let indexed, baselineIndexed;
+    try {
+        const state = await new Promise((resolve, reject) => {
+            const txn = db.transaction("samples", mode === "read" ? "readonly" : "readwrite");
+            const store = txn.objectStore("samples");
+            if (mode === "baseline") store.put(baseline, "baseline");
+            if (mode === "write") store.put(recent, "state");
+            const get = store.get("state");
+            const getBaseline = store.get("baseline");
+            let observed, observedBaseline;
+            get.onsuccess = () => { observed = get.result; };
+            getBaseline.onsuccess = () => { observedBaseline = getBaseline.result; };
+            txn.oncomplete = () => resolve({recent: observed, baseline: observedBaseline});
+            txn.onerror = () => reject(new Error("indexeddb transaction failed"));
+            txn.onabort = () => reject(new Error("indexeddb transaction aborted"));
+        });
+        indexed = state.recent;
+        baselineIndexed = state.baseline;
+    } finally {
+        db.close();
+    }
+    return {
+        cookie: document.cookie,
+        local: localStorage.getItem("b7_crash_local"),
+        indexed,
+        baselineLocal: localStorage.getItem("b7_baseline_local"),
+        baselineIndexed,
+    };
+}
+"""
+
+
+def crash_storage_agent_readback(
+    agent_directory: Path, camouhost_pid: int, origin: str, phase: str,
+) -> None:
+    """Read original browser persistence; distinguish confirmed from volatile."""
+    assert phase in ("baseline", "write", "read")
+    source = (
+        f"origin = {origin!r}\n"
+        "initial_urls = [p.url for p in context.pages]\n"
+        "page = context.pages[0] if context.pages else context.new_page()\n"
+        "initial_cookies = {c['name']: c['value'] for c in context.cookies([origin])}\n"
+        "page.goto(origin, wait_until='domcontentloaded')\n"
+        f"observed = page.evaluate({_CRASH_STORAGE_JS!r}, {{'mode': {phase!r}}})\n"
+        "assert observed['baselineLocal'] == 'confirmed-native-close-v1', observed\n"
+        "assert observed['baselineIndexed'] == 'confirmed-native-close-v1', observed\n"
+        "assert 'b7_baseline_cookie=confirmed-native-close-v1' in observed['cookie'], observed\n"
+        "assert any(c['name'] == 'b7_baseline_cookie' and "
+        "c['value'] == 'confirmed-native-close-v1' for c in context.cookies([origin]))\n"
+        "if " + repr(phase) + " != 'baseline':\n"
+        "    assert observed['indexed'] == 'crash-dirty-local-v1', observed\n"
+        "    assert 'b7_crash_cookie=crash-dirty-local-v1' in observed['cookie'], observed\n"
+        "if " + repr(phase) + " == 'write':\n"
+        "    assert observed['local'] == 'crash-dirty-local-v1', observed\n"
+        "if " + repr(phase) + " == 'read':\n"
+        "    assert initial_cookies.get('b7_crash_cookie') == 'crash-dirty-local-v1'\n"
+        # This is a documented native page-unload milestone, not an artificial
+        # timer or external manipulation of SQLite or WAL.
+        "if " + repr(phase) + " == 'write':\n"
+        "    page.goto('about:blank', wait_until='load')\n"
+        "result = {'phase': " + repr(phase) + ", 'initial_urls': initial_urls, "
+        "'confirmed_native_close': True, "
+        "'recent_cookie_durable': observed['indexed'] == 'crash-dirty-local-v1' "
+        "and 'b7_crash_cookie=crash-dirty-local-v1' in observed['cookie'], "
+        "'recent_local_durable': observed['local'] == 'crash-dirty-local-v1'}\n"
+    )
+    script = agent_directory / f"crash-storage-{phase}.py"
+    script.write_text(source, encoding="utf-8")
+    command = subprocess.run(
+        [
+            sys.executable, str(Path(__file__).with_name("camouhost-agent.py")),
+            "--directory", str(agent_directory), "--pid", str(camouhost_pid),
+            "--script", str(script), "--timeout", "90",
+        ],
+        capture_output=True, text=True, timeout=110,
+    )
+    assert command.returncode == 0, (
+        f"same-owner real-browser storage {phase} failed: "
+        f"status={command.returncode}; stderr_tail={command.stderr[-1000:]!r}"
+    )
+    assert '"confirmed_native_close": true' in command.stdout
+    if phase == "read":
+        recent = (
+            "DURABLE"
+            if '"recent_local_durable": true' in command.stdout
+            else "NOT_DURABLY_CONFIRMED"
+        )
+        print(
+            "native_windows_crash_storage stage=read "
+            "confirmed_previous_close_cookie_local_indexed=PASS "
+            "unpublished_cookie_indexed=PASS "
+            f"unpublished_localStorage={recent}; no_false_saved=1",
+            flush=True,
+        )
+    else:
+        print(f"native_windows_crash_storage stage={phase} verified PASS", flush=True)
+
+
 def prove_forced_windows_browser_termination_is_not_controlled(
     python: Path,
     camouhost: Path,
@@ -819,77 +1057,389 @@ def prove_forced_windows_browser_termination_is_not_controlled(
         return
     from ctypes import wintypes
 
-    process = start_runtime(python, camouhost, env)
-    # Attach BEFORE browser launch. This OS kernel boundary, not a best-effort
-    # PID scan, guarantees fixture cleanup if the browser root dies first.
-    try:
-        job = DisposableWindowsProcessJob(process.pid)
-    except BaseException:
-        stop_runtime(process)
-        raise
-    witness = None
-    kernel = ctypes.WinDLL("kernel32", use_last_error=True)
-    open_process = kernel.OpenProcess
-    open_process.argtypes = [wintypes.DWORD, wintypes.BOOL, wintypes.DWORD]
-    open_process.restype = wintypes.HANDLE
-    terminate = kernel.TerminateProcess
-    terminate.argtypes = [wintypes.HANDLE, wintypes.UINT]
-    terminate.restype = wintypes.BOOL
-    wait = kernel.WaitForSingleObject
-    wait.argtypes = [wintypes.HANDLE, wintypes.DWORD]
-    wait.restype = wintypes.DWORD
-    close = kernel.CloseHandle
-    close.argtypes = [wintypes.HANDLE]
-    close.restype = wintypes.BOOL
-    try:
-        assert exchange(process, f"hello|{IPC_VERSION}") == f"hello_ack|{IPC_VERSION}"
-        assert exchange(process, f"launch|{SESSION}") == f"ready|{SESSION}"
-        assert exchange(process, f"observe_browser_visible|{SESSION}").startswith(
-            f"browser_visible|{SESSION}|"
-        )
-        assert exchange(process, f"admit_navigation|{SESSION}|") == (
-            f"navigation_admitted|{SESSION}"
-        )
-        witness = runtime.WindowsBrowserExitWitness(process.pid)
-        assert len(witness.pids) == 1, "browser main process identity is ambiguous"
-        pid = witness.pids[0]
-        handle = open_process(0x00100001, False, pid)  # SYNCHRONIZE | TERMINATE
-        assert handle, "cannot open exact browser-main handle for negative proof"
+    with crash_storage_fixture(env) as (crash_env, agent_base, origin):
+        # First establish a REAL, previously confirmed Firefox working copy.
+        # Only normal native Close confirms the browser's own flush lifecycle;
+        # it is NOT a cloud Save or permission to discard unsynced evidence.
+        baseline_process = start_runtime(python, camouhost, crash_env)
         try:
-            assert terminate(handle, 19), "Windows refused main-PID fault injection"
-            assert wait(handle, 12000) == 0, "browser-main death not observed"
-        finally:
-            close(handle)
-        assert not witness.safely_exited(), "forced browser death looked like normal exit zero"
-        observed = None
-        for _ in range(4):
-            try:
-                observed = exchange(process, f"observe_close|{SESSION}", 10)
-            except AssertionError:
-                assert process.poll() is not None, "Camouhost stalled after browser main kill"
-                break
-            assert observed != f"close_observed|{SESSION}|true", (
-                "forced browser-main termination was mistaken for controlled Close"
+            baseline_job = DisposableWindowsProcessJob(baseline_process.pid)
+        except BaseException:
+            stop_runtime(baseline_process)
+            raise
+        try:
+            assert exchange(baseline_process, f"hello|{IPC_VERSION}") == (
+                f"hello_ack|{IPC_VERSION}"
             )
-            if observed == "error|runtime":
-                break
-            time.sleep(0.2)
-        assert observed != f"close_observed|{SESSION}|true"
-    finally:
-        try:
-            stop_runtime(process)
+            assert exchange(baseline_process, f"launch|{SESSION}") == f"ready|{SESSION}"
+            assert exchange(baseline_process, f"observe_browser_visible|{SESSION}").startswith(
+                f"browser_visible|{SESSION}|"
+            )
+            assert exchange(baseline_process, f"admit_navigation|{SESSION}|") == (
+                f"navigation_admitted|{SESSION}"
+            )
+            crash_storage_agent_readback(agent_base, baseline_process.pid, origin, "baseline")
+            assert exchange(baseline_process, f"close|{SESSION}", 45) == (
+                f"closed|{SESSION}|true"
+            )
+            assert baseline_process.wait(timeout=30) == 0
         finally:
-            # The Windows kernel, not a race-prone hand-coded PID walk, closes
-            # all remaining Firefox/driver children of this disposable job.
-            job.close()
-            if witness is not None:
-                witness.close()
+            try:
+                stop_runtime(baseline_process)
+            finally:
+                baseline_job.close()
+        assert_writer_quiescent(runtime, root, "pre-crash confirmed native close")
+        process = start_runtime(python, camouhost, crash_env)
+        # Attach BEFORE browser launch. This OS kernel boundary, not a best-effort
+        # PID scan, guarantees fixture cleanup if the browser root dies first.
+        try:
+            job = DisposableWindowsProcessJob(process.pid)
+        except BaseException:
+            stop_runtime(process)
+            raise
+        witness = None
+        kernel = ctypes.WinDLL("kernel32", use_last_error=True)
+        open_process = kernel.OpenProcess
+        open_process.argtypes = [wintypes.DWORD, wintypes.BOOL, wintypes.DWORD]
+        open_process.restype = wintypes.HANDLE
+        terminate = kernel.TerminateProcess
+        terminate.argtypes = [wintypes.HANDLE, wintypes.UINT]
+        terminate.restype = wintypes.BOOL
+        wait = kernel.WaitForSingleObject
+        wait.argtypes = [wintypes.HANDLE, wintypes.DWORD]
+        wait.restype = wintypes.DWORD
+        close = kernel.CloseHandle
+        close.argtypes = [wintypes.HANDLE]
+        close.restype = wintypes.BOOL
+        try:
+            assert exchange(process, f"hello|{IPC_VERSION}") == f"hello_ack|{IPC_VERSION}"
+            assert exchange(process, f"launch|{SESSION}") == f"ready|{SESSION}"
+            assert exchange(process, f"observe_browser_visible|{SESSION}").startswith(
+                f"browser_visible|{SESSION}|"
+            )
+            assert exchange(process, f"admit_navigation|{SESSION}|") == (
+                f"navigation_admitted|{SESSION}"
+            )
+            crash_storage_agent_readback(agent_base, process.pid, origin, "write")
+            witness = runtime.WindowsBrowserExitWitness(process.pid)
+            assert len(witness.pids) == 1, "browser main process identity is ambiguous"
+            pid = witness.pids[0]
+            handle = open_process(0x00100001, False, pid)  # SYNCHRONIZE | TERMINATE
+            assert handle, "cannot open exact browser-main handle for negative proof"
+            try:
+                assert terminate(handle, 19), "Windows refused main-PID fault injection"
+                assert wait(handle, 12000) == 0, "browser-main death not observed"
+            finally:
+                close(handle)
+            assert not witness.safely_exited(), "forced browser death looked like normal exit zero"
+            observed = None
+            for _ in range(4):
+                try:
+                    observed = exchange(process, f"observe_close|{SESSION}", 10)
+                except AssertionError:
+                    assert process.poll() is not None, "Camouhost stalled after browser main kill"
+                    break
+                assert observed != f"close_observed|{SESSION}|true", (
+                    "forced browser-main termination was mistaken for controlled Close"
+                )
+                if observed == "error|runtime":
+                    break
+                time.sleep(0.2)
+            assert observed != f"close_observed|{SESSION}|true"
+        finally:
+            try:
+                stop_runtime(process)
+            finally:
+                # The Windows kernel, not a race-prone hand-coded PID walk, closes
+                # all remaining Firefox/driver children of this disposable job.
+                job.close()
+                if witness is not None:
+                    witness.close()
 
-    deadline = time.monotonic() + 15
-    while time.monotonic() < deadline and runtime.firefox_writer_active(root):
-        time.sleep(0.1)
-    assert_writer_quiescent(runtime, root, "forced Windows browser main death")
-    print("native_windows_main_kill fails_closed_and_disposable_job_released PASS", flush=True)
+        deadline = time.monotonic() + 15
+        while time.monotonic() < deadline and runtime.firefox_writer_active(root):
+            time.sleep(0.1)
+        assert_writer_quiescent(runtime, root, "forced Windows browser main death")
+
+        # FIX-01 native half of the crash recovery composition. Reuse the SAME
+        # on-disk Firefox user_data after its main PID was killed; no fresh profile,
+        # lock deletion, browser preference reset or alternate runtime permitted.
+        restarted = start_runtime(python, camouhost, crash_env)
+        try:
+            # This disposable process has the same kernel-managed child-lifetime
+            # guarantee as the fault-injection half. No PID sweeps or manual lock
+            # deletion if the second launch fails partway through.
+            restarted_job = DisposableWindowsProcessJob(restarted.pid)
+        except BaseException:
+            stop_runtime(restarted)
+            raise
+        try:
+            assert exchange(restarted, f"hello|{IPC_VERSION}") == f"hello_ack|{IPC_VERSION}"
+            assert exchange(restarted, f"launch|{SESSION}") == f"ready|{SESSION}", (
+                "same Firefox workspace could not reach native Ready after main-PID death"
+            )
+            assert exchange(restarted, f"observe_browser_visible|{SESSION}").startswith(
+                f"browser_visible|{SESSION}|"
+            ), "native same-workspace post-crash browser-visible readiness not proven"
+            assert exchange(restarted, f"admit_navigation|{SESSION}|") == (
+                f"navigation_admitted|{SESSION}"
+            )
+            crash_storage_agent_readback(agent_base, restarted.pid, origin, "read")
+            # The prior fixture erroneously called stop_runtime(), which KILLS
+            # Camouhost and may orphan its Firefox processes while SQLite is
+            # still open. This is normal controlled fixture teardown, not a
+            # second crash. Require the real IPC close and observed child exit.
+            assert exchange(restarted, f"close|{SESSION}", 45) == (
+                f"closed|{SESSION}|true"
+            ), "native post-crash reopen did not support ordinary close"
+            assert restarted.wait(timeout=30) == 0
+        finally:
+            try:
+                stop_runtime(restarted)
+            finally:
+                restarted_job.close()
+        assert_writer_quiescent(runtime, root, "post-crash same-workspace native reopen")
+        print(
+            "native_windows_main_kill fails_closed_disposable_job_released_"
+            "and_same_workspace_native_reopen_ready PASS",
+            flush=True,
+        )
+
+
+
+def prove_three_independent_native_profiles_two_roundtrips(
+    python: Path,
+    camouhost: Path,
+    runtime_lock: Path,
+    headless: str,
+    runtime: ModuleType,
+    temporary: Path,
+) -> None:
+    """Hosted Windows packaged Camoufox: three isolated workspaces, two real native closes.
+
+    This proves actual Firefox cookie/localStorage/IndexedDB persistence, with
+    a first read-only observer on EACH Open. It deliberately does not fake a
+    server Coordinator, R2 PUT/GET, a frontend claim, or cloud Saved.
+    """
+    with crash_storage_fixture(runtime_env(runtime_lock, headless)) as (agent_env, agent_base, origin):
+        observer = Path(__file__).with_name("b7-playwright-observe.py")
+        cli = Path(__file__).with_name("camouhost-agent.py")
+        assert observer.is_file() and cli.is_file()
+        for profile_index in range(3):
+            profile_root = temporary / f"native-profile-{profile_index}"
+            report = materialize(python, camouhost, runtime_lock, headless, profile_root)
+            # Reuse the proven same-owner inbox root from the real Windows
+            # browser-main crash fixture. An extra nested directory here is
+            # not a separate browser profile and only adds a different ACL/
+            # descriptor discovery path. Firefox user_data remains isolated.
+            inbox = agent_base
+            environment = process_env(runtime_lock, headless, profile_root, report)
+            environment["CAMOUHOST_AGENT_DIRECTORY"] = agent_env["CAMOUHOST_AGENT_DIRECTORY"]
+            previous = None
+
+            # cycle 0 -> cycle 1 -> cycle 2: two clean native Close/Reopen
+            # roundtrips for EACH of the three independent Firefox profiles.
+            for cycle in range(3):
+                process = start_runtime(python, camouhost, environment)
+                # This disposable Windows test owns all descendants through
+                # an existing kernel Job, including if a new assertion fails
+                # before the controlled native Close is reached.
+                try:
+                    job = DisposableWindowsProcessJob(process.pid)
+                except BaseException:
+                    stop_runtime(process)
+                    raise
+                clean_close = False
+                navigation_admitted = False
+                try:
+                    assert exchange(process, f"hello|{IPC_VERSION}") == f"hello_ack|{IPC_VERSION}"
+                    assert exchange(process, f"launch|{SESSION}") == f"ready|{SESSION}"
+                    assert exchange(process, f"observe_browser_visible|{SESSION}").startswith(
+                        f"browser_visible|{SESSION}|"
+                    )
+                    assert exchange(process, f"admit_navigation|{SESSION}|") == (
+                        f"navigation_admitted|{SESSION}"
+                    )
+                    navigation_admitted = True
+
+                    # The real Camouhost must have published its own
+                    # session-scoped descriptor BEFORE any test script. Never
+                    # synthesize or repair it in a fixture; on failure include
+                    # only safe process/inbox diagnostics.
+                    descriptor = inbox / f"active-{process.pid}.json"
+                    assert descriptor.is_file(), (
+                        f"native profile={profile_index} cycle={cycle} "
+                        f"missing owner descriptor; process_alive={process.poll() is None}; "
+                        f"stderr_tail={stderr_tail(process)!r}"
+                    )
+                    descriptor_data = json.loads(descriptor.read_text(encoding="utf-8"))
+                    assert descriptor_data["pid"] == process.pid and (
+                        Path(descriptor_data["run"]).parent.samefile(inbox)
+                    ), "native Camouhost descriptor does not belong to its selected inbox"
+
+                    def same_owner(script: Path) -> str:
+                        done = subprocess.run(
+                            [sys.executable, str(cli), "--directory", str(inbox),
+                             "--pid", str(process.pid), "--script", str(script),
+                             "--timeout", "120"],
+                            capture_output=True, text=True, timeout=135,
+                        )
+                        assert done.returncode == 0, (
+                            f"native profile={profile_index} cycle={cycle} "
+                            f"agent={script.name} exit={done.returncode} "
+                            f"stderr_tail={done.stderr[-1200:]!r}"
+                        )
+                        return done.stdout
+
+                    # The first operation in the actual context is read-only:
+                    # no goto/new_page/close/marker write is permitted here.
+                    first = same_owner(observer)
+                    assert '"status": "ok"' in first, first[-1000:]
+
+                    next_value = (
+                        f"native-profile-{profile_index}-cycle-{cycle}"
+                        if cycle < 2 else None
+                    )
+                    script = inbox / f"storage-cycle-{cycle}.py"
+                    source = (
+                        f"origin = {origin!r}\n"
+                        f"previous = {previous!r}\n"
+                        f"next_value = {next_value!r}\n"
+                        "page = context.pages[0] if context.pages else context.new_page()\n"
+                        "page.goto(origin, wait_until='domcontentloaded', timeout=30000)\n"
+                        "observed = page.evaluate(" + repr(_TWO_CYCLE_STORAGE_JS) +
+                        ", {'nextValue': next_value})\n"
+                        "assert observed['priorLocal'] == previous, observed\n"
+                        "assert observed['priorIndexed'] == previous, observed\n"
+                        "assert (previous is None or 'b7_native_cycle=' + previous in observed['priorCookie']), observed\n"
+                        "assert (previous is not None or 'b7_native_cycle=' not in observed['priorCookie']), observed\n"
+                        "if next_value is not None:\n"
+                        "    assert observed['afterLocal'] == next_value, observed\n"
+                        "    assert observed['afterIndexed'] == next_value, observed\n"
+                        "    assert 'b7_native_cycle=' + next_value in observed['afterCookie'], observed\n"
+                        # INVESTIGATE-05: prove BOTH supported Playwright cookie
+                        # injection forms, not only document.cookie. The
+                        # resulting cookies must survive a clean native Close
+                        # and a new managed browser process without re-injection.
+                        "import time\n"
+                        "expected_playwright_cookies = {\n"
+                        "    'b7_playwright_url': 'url-injected-native',\n"
+                        "    'b7_playwright_domain': 'domain-injected-native',\n"
+                        "}\n"
+                        "if " + repr(cycle) + " == 0:\n"
+                        "    context.add_cookies([\n"
+                        "        {'name': 'b7_playwright_url', 'value': 'url-injected-native',\n"
+                        "         'url': origin, 'sameSite': 'Lax', 'expires': time.time() + 7200},\n"
+                        "        {'name': 'b7_playwright_domain', 'value': 'domain-injected-native',\n"
+                        "         'domain': '127.0.0.1', 'path': '/', 'sameSite': 'Lax',\n"
+                        "         'expires': time.time() + 7200},\n"
+                        "    ])\n"
+                        "native_cookies = {c['name']: c for c in context.cookies([origin])}\n"
+                        "for name, value in expected_playwright_cookies.items():\n"
+                        "    assert name in native_cookies, {'missing': name, 'cookies': list(native_cookies)}\n"
+                        "    assert native_cookies[name]['value'] == value, native_cookies[name]\n"
+                        "    assert native_cookies[name]['sameSite'] == 'Lax', native_cookies[name]\n"
+                        "    assert native_cookies[name]['expires'] > time.time(), native_cookies[name]\n"
+                        "    assert not native_cookies[name]['secure'], native_cookies[name]\n"
+                        "    assert name + '=' + value in page.evaluate('document.cookie'), name\n"
+                        "result = {'profile': " + repr(profile_index) +
+                        ", 'cycle': " + repr(cycle) +
+                        ", 'native_storage_roundtrip': True, 'playwright_cookie_reopen': True}\n"
+                    )
+                    script.write_text(source, encoding="utf-8")
+                    actual = same_owner(script)
+                    assert '"native_storage_roundtrip": true' in actual, actual[-1200:]
+                    assert '"playwright_cookie_reopen": true' in actual, actual[-1200:]
+                    assert exchange(process, f"close|{SESSION}", 45) == (
+                        f"closed|{SESSION}|true"
+                    ), "native controlled Close did not confirm Firefox shutdown"
+                    assert process.wait(timeout=30) == 0
+                    clean_close = True
+                    previous = next_value if next_value is not None else previous
+                finally:
+                    if not clean_close and navigation_admitted and process.poll() is None:
+                        # Best-effort *native* teardown on an assertion failure;
+                        # preserve the primary failure and never claim Saved.
+                        try:
+                            if exchange(process, f"close|{SESSION}", 45) == (
+                                f"closed|{SESSION}|true"
+                            ):
+                                process.wait(timeout=30)
+                        except (AssertionError, OSError, subprocess.TimeoutExpired):
+                            pass
+                    try:
+                        stop_runtime(process)
+                        if clean_close:
+                            # A normal Close must make the native Firefox
+                            # writer quiescent BEFORE the disposable Job is
+                            # closed. The test must not manufacture durability
+                            # by silently killing a lingering browser.
+                            deadline = time.monotonic() + 15
+                            while runtime.firefox_writer_active(profile_root):
+                                if time.monotonic() >= deadline:
+                                    raise AssertionError(
+                                        "controlled native Close left a live Firefox writer"
+                                    )
+                                time.sleep(0.1)
+                    finally:
+                        job.close()
+                if clean_close:
+                    assert_writer_quiescent(
+                        runtime, profile_root,
+                        f"profile {profile_index} native cycle {cycle}",
+                    )
+            print(
+                f"native_three_profile_two_roundtrips profile={profile_index} "
+                "close_reopen=2 cookie_localStorage_indexedDB=PASS",
+                flush=True,
+            )
+
+
+_TWO_CYCLE_STORAGE_JS = r"""
+async ({nextValue}) => {
+    const open = indexedDB.open("b7-native-two-cycle", 1);
+    open.onupgradeneeded = () => open.result.createObjectStore("samples");
+    const database = await new Promise((resolve, reject) => {
+        open.onsuccess = () => resolve(open.result);
+        open.onerror = () => reject(new Error("native IndexedDB open failed"));
+    });
+    try {
+        const transaction = database.transaction("samples", "readonly");
+        const read = transaction.objectStore("samples").get("state");
+        const priorIndexed = await new Promise((resolve, reject) => {
+            read.onsuccess = () => resolve(read.result ?? null);
+            read.onerror = () => reject(new Error("native IndexedDB read failed"));
+        });
+        const priorLocal = localStorage.getItem("b7_native_cycle");
+        const priorCookie = document.cookie;
+        if (nextValue !== null) {
+            const write = database.transaction("samples", "readwrite");
+            write.objectStore("samples").put(nextValue, "state");
+            await new Promise((resolve, reject) => {
+                write.oncomplete = resolve;
+                write.onerror = () => reject(new Error("native IndexedDB write failed"));
+                write.onabort = () => reject(new Error("native IndexedDB write aborted"));
+            });
+            localStorage.setItem("b7_native_cycle", nextValue);
+            document.cookie = "b7_native_cycle=" + nextValue +
+                "; Path=/; Max-Age=7200; SameSite=Lax";
+        }
+        const verification = database.transaction("samples", "readonly");
+        const after = verification.objectStore("samples").get("state");
+        const afterIndexed = await new Promise((resolve, reject) => {
+            after.onsuccess = () => resolve(after.result ?? null);
+            after.onerror = () => reject(new Error("native IndexedDB readback failed"));
+        });
+        return {
+            priorLocal, priorIndexed, priorCookie,
+            afterLocal: localStorage.getItem("b7_native_cycle"),
+            afterIndexed, afterCookie: document.cookie,
+        };
+    } finally {
+        database.close();
+    }
+}
+"""
 
 
 def prove_ipc_timeout_contract() -> None:
@@ -1092,6 +1642,10 @@ def main() -> int:
             python, camouhost, runtime_lock, args.headless, Path(temporary) / "restore-tabs"
         )
         if os.name == "nt" and args.headless == "false":
+            prove_three_independent_native_profiles_two_roundtrips(
+                python, camouhost, runtime_lock, args.headless, runtime,
+                Path(temporary),
+            )
             prove_external_windows_gui_close(python, camouhost, env, runtime, root)
             prove_forced_windows_browser_termination_is_not_controlled(
                 python, camouhost, env, runtime, root

@@ -79,7 +79,18 @@ pub trait DeviceAuthenticationPort {
     fn authenticate(&mut self, device_id: &DeviceId, key_handle: &str) -> Result<(), Self::Error>;
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum EnrollmentFailureKind {
+    LeaseConflict,
+    ServiceUncertain,
+    Other,
+}
+
 pub trait EnrollmentPort {
+    fn classify_error(_error: &Self::Error) -> EnrollmentFailureKind {
+        EnrollmentFailureKind::Other
+    }
+
     type Error;
 
     fn redeem_claim(
@@ -400,7 +411,8 @@ fn save_control_reason<S>(
         GenerationSuccessorControlError::ControlPlane(error) => match error {
             ShippingControlPlaneError::Transport => Reason::ControlTransport,
             ShippingControlPlaneError::HttpServerUncertain => Reason::ControlEffectUncertain,
-            ShippingControlPlaneError::HttpStatus => Reason::ControlRejected,
+            ShippingControlPlaneError::HttpStatus
+            | ShippingControlPlaneError::LaunchLeaseConflict => Reason::ControlRejected,
             ShippingControlPlaneError::InvalidResponse => Reason::ControlInvalidResponse,
             ShippingControlPlaneError::Clock => Reason::ControlClock,
         },
@@ -458,6 +470,8 @@ fn save_checkpoint_read_reason(source: SaveAttemptEvidenceError) -> GenerationSa
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum OperatorFlowError {
     Busy,
+    EnrollmentConflict,
+    EnrollmentServiceUncertain,
     CleanupRequired,
     /// The HTTP effect/response is uncertain; the last confirmed coordinator
     /// deadline has not been extended. Caller must retry or quiesce before it.
@@ -500,6 +514,9 @@ impl OperatorFlowError {
     pub const fn stage(&self) -> Option<OperatorFailureStage> {
         match self {
             Self::Busy | Self::CleanupRequired => None,
+            Self::EnrollmentConflict | Self::EnrollmentServiceUncertain => {
+                Some(OperatorFailureStage::Enrollment)
+            }
             Self::GenerationSave { .. } | Self::FreshAuthorizedOpenRequired => {
                 Some(OperatorFailureStage::GenerationSave)
             }
@@ -519,6 +536,8 @@ impl fmt::Display for OperatorFlowError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::Busy => formatter.write_str("an operator session is already active"),
+            Self::EnrollmentConflict => formatter.write_str("verified launch lease conflict"),
+            Self::EnrollmentServiceUncertain => formatter.write_str("launch redemption network result uncertain"),
             Self::CleanupRequired => formatter.write_str("previous operator cleanup is unresolved"),
             Self::HeartbeatTransportUncertain => {
                 formatter.write_str("coordinator heartbeat transport result is uncertain")
@@ -822,7 +841,15 @@ where
         let enrollment = self
             .enrollment
             .redeem_claim(claim, &device_id, now)
-            .map_err(|_| OperatorFlowError::Stage(OperatorFailureStage::Enrollment))?;
+            .map_err(|error| match E::classify_error(&error) {
+                EnrollmentFailureKind::LeaseConflict => OperatorFlowError::EnrollmentConflict,
+                EnrollmentFailureKind::ServiceUncertain => {
+                    OperatorFlowError::EnrollmentServiceUncertain
+                }
+                EnrollmentFailureKind::Other => {
+                    OperatorFlowError::Stage(OperatorFailureStage::Enrollment)
+                }
+            })?;
         let lease = self
             .coordinator
             .claim_launch_intent(
@@ -970,7 +997,15 @@ where
         let enrollment = self
             .enrollment
             .redeem_claim(claim, &device_id, now)
-            .map_err(|_| OperatorFlowError::Stage(OperatorFailureStage::Enrollment))?;
+            .map_err(|error| match E::classify_error(&error) {
+                EnrollmentFailureKind::LeaseConflict => OperatorFlowError::EnrollmentConflict,
+                EnrollmentFailureKind::ServiceUncertain => {
+                    OperatorFlowError::EnrollmentServiceUncertain
+                }
+                EnrollmentFailureKind::Other => {
+                    OperatorFlowError::Stage(OperatorFailureStage::Enrollment)
+                }
+            })?;
         let lease = self
             .coordinator
             .claim_launch_intent(
@@ -1135,7 +1170,10 @@ where
             enrollment.generation_id(),
         ) {
             Ok(value) => value,
-            Err(_) => {
+            Err(error) => {
+                eprintln!(
+                    "bridge_local_workspace_failure operation=open_generation reason={error:?}"
+                );
                 return Err(self.fail_before_local_use(OperatorFailureStage::LocalWorkspace, lease));
             }
         };
@@ -1144,30 +1182,34 @@ where
         // as a live writer, but do not unlink it blindly: the recovery owner proves
         // an exclusive OS root admission, same device/older epoch and no active
         // native Firefox writer before it replaces *only* that marker.
-        let workspace_lock =
-            match BridgeWorkspaceLock::acquire(&workspace, &device_id, lease.epoch()) {
-                Ok(value) => value,
-                Err(LocalProfileError::LockBusy) => {
-                    match BridgeWorkspaceLock::recover_interrupted_launch(
-                        &workspace,
-                        &device_id,
-                        lease.epoch(),
-                    ) {
-                        Ok(value) => value,
-                        Err(_) => {
-                            return Err(self.fail_before_local_use(
-                                OperatorFailureStage::LocalWorkspace,
-                                lease,
-                            ));
-                        }
+        let workspace_lock = match BridgeWorkspaceLock::acquire(
+            &workspace,
+            &device_id,
+            lease.epoch(),
+        ) {
+            Ok(value) => value,
+            Err(LocalProfileError::LockBusy) => {
+                match BridgeWorkspaceLock::recover_interrupted_launch(
+                    &workspace,
+                    &device_id,
+                    lease.epoch(),
+                ) {
+                    Ok(value) => value,
+                    Err(error) => {
+                        eprintln!(
+                            "bridge_local_workspace_failure operation=recover_interrupted_launch reason={error:?}"
+                        );
+                        return Err(
+                            self.fail_before_local_use(OperatorFailureStage::LocalWorkspace, lease)
+                        );
                     }
                 }
-                Err(_) => {
-                    return Err(
-                        self.fail_before_local_use(OperatorFailureStage::LocalWorkspace, lease)
-                    );
-                }
-            };
+            }
+            Err(error) => {
+                eprintln!("bridge_local_workspace_failure operation=acquire reason={error:?}");
+                return Err(self.fail_before_local_use(OperatorFailureStage::LocalWorkspace, lease));
+            }
+        };
         if let Err(error) = self.browser_preflight.evaluate_before_launch(
             &workspace,
             &device_id,
@@ -1824,7 +1866,8 @@ where
                     ShippingControlPlaneError::HttpServerUncertain => {
                         GenerationSaveFailureReason::ControlEffectUncertain
                     }
-                    ShippingControlPlaneError::HttpStatus => {
+                    ShippingControlPlaneError::HttpStatus
+                    | ShippingControlPlaneError::LaunchLeaseConflict => {
                         GenerationSaveFailureReason::ControlRejected
                     }
                     ShippingControlPlaneError::InvalidResponse => {
@@ -3512,6 +3555,135 @@ mod tests {
         );
         assert_eq!(operator.coordinator().closed, 1);
         assert!(operator.process().actions().is_empty());
+        Ok(())
+    }
+
+    /// A fake, already-claimed newer Coordinator lease reaches the actual
+    /// Operator Open and legacy Bridge543 recovery path. This is a local
+    /// application composition regression, NOT a real DO/frontend/R2 receipt.
+    #[test]
+    fn operator_open_reclaims_crashed_legacy_marker_without_erasing_wal()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let mut fixture = Fixture::new()?;
+        let workspace = fixture.root.open_generation(
+            fixture.actor.tenant_scope().tenant_id(),
+            &fixture.profile_id,
+            &fixture.generation_id,
+        )?;
+        let browser_data = workspace.path().join("user_data");
+        fs::create_dir_all(&browser_data)?;
+        let cookies = browser_data.join("cookies.sqlite");
+        let wal = browser_data.join("cookies.sqlite-wal");
+        fs::write(&cookies, b"confirmed-original-cookie-database")?;
+        fs::write(&wal, b"uncommitted-firefox-wal-must-survive")?;
+
+        let old_epoch = fixture.lease.epoch();
+        let next_epoch = old_epoch.checked_add(1).ok_or("epoch overflow")?;
+        let marker = workspace.path().join(".profile-platform.lock");
+        let original_marker = format!(
+            "profile-platform-bridge-lock-v1\n{}\n{old_epoch}\n",
+            fixture.device_id.as_str()
+        );
+        fs::write(&marker, &original_marker)?;
+        // No native OS lock remains after a real Bridge process death. A
+        // previously installed Bridge543 would not have the new generation
+        // admission file; the fresh lease is the only authority to reclaim.
+        assert!(
+            !workspace
+                .path()
+                .join(".profile-platform.writer-admission")
+                .exists()
+        );
+        fixture.lease = ProfileLease::issue(
+            fixture.actor.tenant_scope().tenant_id().clone(),
+            fixture.profile_id.clone(),
+            fixture.lease.session_id().clone(),
+            fixture.device_id.clone(),
+            next_epoch,
+            FencingToken::parse(format!("fence_01JRECOVERY{next_epoch}"))?,
+        )?;
+
+        let mut reopened = operator(&fixture, FakeCamouhost::default())?;
+        reopened.open(&fixture.claim_uri, &fixture.root, UnixMillis::new(10))?;
+        assert_eq!(
+            reopened.active_local_state(),
+            Some(LocalGenerationState::InUse)
+        );
+        assert_eq!(reopened.coordinator().claimed, 1);
+        assert_eq!(
+            reopened.process().actions(),
+            [ProcessAction::Spawn(fixture.lease.session_id().clone())]
+        );
+        assert_eq!(fs::read(&cookies)?, b"confirmed-original-cookie-database");
+        assert_eq!(fs::read(&wal)?, b"uncommitted-firefox-wal-must-survive");
+        assert_eq!(
+            fs::read_to_string(&marker)?,
+            format!(
+                "profile-platform-bridge-lock-v2\n{}\n{next_epoch}\n",
+                fixture.device_id.as_str()
+            )
+        );
+        reopened.abort(UnixMillis::new(20))?;
+        assert_eq!(fs::read(&wal)?, b"uncommitted-firefox-wal-must-survive");
+        Ok(())
+    }
+
+    /// The same application Open must never turn a same-epoch or foreign
+    /// durable marker into permission to create a second Firefox writer.
+    #[test]
+    fn operator_open_refuses_unauthorized_legacy_reclaim_and_keeps_wal()
+    -> Result<(), Box<dyn std::error::Error>> {
+        for foreign_device in [false, true] {
+            let mut fixture = Fixture::new()?;
+            let workspace = fixture.root.open_generation(
+                fixture.actor.tenant_scope().tenant_id(),
+                &fixture.profile_id,
+                &fixture.generation_id,
+            )?;
+            let user_data = workspace.path().join("user_data");
+            fs::create_dir_all(&user_data)?;
+            let wal = user_data.join("cookies.sqlite-wal");
+            fs::write(&wal, b"recover-only-with-proven-owner")?;
+            let old_epoch = fixture.lease.epoch();
+            let next_epoch = old_epoch.checked_add(1).ok_or("epoch overflow")?;
+            let marker = workspace.path().join(".profile-platform.lock");
+            let marker_owner = if foreign_device {
+                DeviceId::parse("device_foreign_operator_recovery")?
+            } else {
+                fixture.device_id.clone()
+            };
+            let blocked_marker = format!(
+                "profile-platform-bridge-lock-v1\n{}\n{}\n",
+                marker_owner.as_str(),
+                if foreign_device {
+                    old_epoch
+                } else {
+                    next_epoch
+                }
+            );
+            fs::write(&marker, &blocked_marker)?;
+            fixture.lease = ProfileLease::issue(
+                fixture.actor.tenant_scope().tenant_id().clone(),
+                fixture.profile_id.clone(),
+                fixture.lease.session_id().clone(),
+                fixture.device_id.clone(),
+                next_epoch,
+                FencingToken::parse(format!("fence_01JRECOVERYNEG{next_epoch}"))?,
+            )?;
+
+            let mut denied = operator(&fixture, FakeCamouhost::default())?;
+            assert_eq!(
+                denied.open(&fixture.claim_uri, &fixture.root, UnixMillis::new(10)),
+                Err(OperatorFlowError::Stage(
+                    OperatorFailureStage::LocalWorkspace
+                ))
+            );
+            assert_eq!(denied.coordinator().claimed, 1);
+            assert_eq!(denied.coordinator().closed, 1);
+            assert!(denied.process().actions().is_empty());
+            assert_eq!(fs::read(&wal)?, b"recover-only-with-proven-owner");
+            assert_eq!(fs::read_to_string(&marker)?, blocked_marker);
+        }
         Ok(())
     }
 
