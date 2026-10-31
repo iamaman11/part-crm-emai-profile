@@ -382,6 +382,19 @@ def prove_claim_denial_and_windows_owner_preflight() -> None:
                 assert "SECURITY_CONTEXT_MISMATCH" in error_out.getvalue()
             assert set(agent.requests.iterdir()) == before, "unsafe CLI published a request"
 
+            # A failed atomic publish has an UNKNOWN effect and must leave the
+            # staged input intact, not silently produce a new claim or replay.
+            with patch.object(cli.os, "replace", side_effect=PermissionError(13, "denied")), \
+                    patch.object(sys, "argv", args), \
+                    contextlib.redirect_stderr(io.StringIO()) as error_out:
+                assert cli.run() == 125
+                assert "SUBMIT_UNCONFIRMED" in error_out.getvalue()
+                assert "phase=request_publish" in error_out.getvalue()
+                assert "errno=13" in error_out.getvalue()
+            assert not list(agent.requests.glob("*.py"))
+            assert len(list(agent.requests.glob("*.part"))) == 1
+            assert not agent.run_one(fake), "unpublished request was executed"
+
             source_script = "context.pages[0].goto('about:must-not-execute')\n"
             job_id = committed_request(agent.requests, source_script)
             actual_replace = runtime.os.replace
