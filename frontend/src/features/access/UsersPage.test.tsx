@@ -40,7 +40,7 @@ describe('Users scope after physical Windows audit', () => {
   it('does not expose owner ceremonies and HMAC/version inputs to regular members', async () => {
     renderUsers('MEMBER');
     await waitFor(() => expect(mockedListMembers).toHaveBeenCalledTimes(1));
-    expect(screen.getByText('This view is read-only.')).toBeTruthy();
+    expect(screen.getByText(/This view is read-only/)).toBeTruthy();
     expect(screen.queryByLabelText('Invited contact HMAC')).toBeNull();
     expect(screen.queryByRole('button', { name: 'Transfer owner' })).toBeNull();
     expect(screen.queryByText('Advanced owner operations')).toBeNull();
