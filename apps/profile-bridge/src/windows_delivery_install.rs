@@ -60,7 +60,9 @@ mod windows {
     use crate::local_profile::{DeliveryActivationGuard, MaterializationRoot};
     use crate::windows_delivery::verify_delivery_candidate;
     use crate::windows_delivery_archive::WindowsDeliveryArchiveReader;
-    use crate::windows_delivery_coordinator::{WindowsDeliveryCoordinator, accepted_floor};
+    use crate::windows_delivery_coordinator::{
+        WindowsDeliveryCoordinator, WindowsDeliveryCoordinatorError, accepted_floor,
+    };
     use crate::windows_delivery_download::{DeliveryDownloadRoot, WindowsReleaseAssetFetcher};
     use crate::windows_delivery_handoff::DeliveryHandoffCoordinator;
     use crate::windows_delivery_signature::WindowsCmsSignatureVerifier;
