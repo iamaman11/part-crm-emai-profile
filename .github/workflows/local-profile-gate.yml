@@ -8,13 +8,38 @@ on:
 
 permissions:
   contents: read
+  actions: read
+  pull-requests: read
 
 concurrency:
   group: local-profile-gate-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
+  accepted-pr-proof:
+    name: Prove exact PR tree before reusing expensive checks
+    runs-on: ubuntu-latest
+    outputs:
+      reuse: ${{ steps.proof.outputs.reuse }}
+    steps:
+      - name: Checkout exact source
+        uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+      - name: Test fail-closed replay admission
+        run: |
+          python -m py_compile scripts/accepted-main-pr-reuse.py
+          python scripts/accepted-main-pr-reuse.py --self-test
+      - name: Bind accepted-main tree to completed PR checks or demand full proof
+        id: proof
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: python scripts/accepted-main-pr-reuse.py --gate local-profile --github-output "$GITHUB_OUTPUT"
+
   local-profile-linux:
+    needs: accepted-pr-proof
+    if: needs.accepted-pr-proof.outputs.reuse != 'true'
     name: Local Profile Linux
     runs-on: ubuntu-latest
     steps:
@@ -61,6 +86,8 @@ jobs:
         run: cargo test --locked -p profile-bridge --features synthetic-test-bin local_profile
 
   local-profile-windows:
+    needs: accepted-pr-proof
+    if: needs.accepted-pr-proof.outputs.reuse != 'true'
     name: Local Profile Windows
     runs-on: windows-latest
     steps:
