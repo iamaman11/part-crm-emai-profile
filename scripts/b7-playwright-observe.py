@@ -11,15 +11,22 @@ from pathlib import Path
 # Snapshot handles and URLs before touching Playwright. Blank or still-loading
 # tabs cannot be silently promoted to proof that Firefox restored a session.
 observed = tuple(context.pages)
-urls_before = [page.url for page in observed]
 capture_id = secrets.token_hex(8)
 report = {
     "session": session_id, "count_before": len(observed),
-    "urls_before": urls_before, "pages": [], "cookies": None,
+    "urls_before": [], "pages": [], "cookies": None,
     "not_applicable": [], "errors": [],
 }
 for index, page in enumerate(observed):
-    entry = {"index": index, "url": urls_before[index]}
+    try:
+        before_url = page.url
+    except Exception as error:
+        before_url = None
+        report["errors"].append({
+            "page": index, "operation": "url_before", "error": repr(error),
+        })
+    report["urls_before"].append(before_url)
+    entry = {"index": index, "url": before_url}
     report["pages"].append(entry)
     for field, read in (
         ("title", page.title),
@@ -64,7 +71,16 @@ except Exception as error:
 
 pages_after = tuple(context.pages)
 report["count_after"] = len(pages_after)
-report["urls_after"] = [page.url for page in pages_after]
+report["urls_after"] = []
+for index, page in enumerate(pages_after):
+    try:
+        after_url = page.url
+    except Exception as error:
+        after_url = None
+        report["errors"].append({
+            "page": index, "operation": "url_after", "error": repr(error),
+        })
+    report["urls_after"].append(after_url)
 if report["count_after"] != report["count_before"]:
     report["errors"].append({
         "operation": "page_count_changed",
@@ -72,7 +88,7 @@ if report["count_after"] != report["count_before"]:
     })
 if report["urls_before"] != report["urls_after"]:
     report["restore_stage"] = "URLS_CHANGED_DURING_OBSERVATION"
-elif not any(url != "about:blank" for url in urls_before):
+elif all(url in ("about:blank", None) for url in report["urls_before"]):
     report["restore_stage"] = "BLANK_ONLY_RESTORE_NOT_PROVEN"
 else:
     report["restore_stage"] = "URLS_OBSERVED_COMPLETENESS_NOT_PROVEN"
