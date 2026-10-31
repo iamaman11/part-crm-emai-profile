@@ -352,7 +352,7 @@ def prove_agent() -> None:
                 assert "snapshot disk full" in (
                     agent.results / f"{broken}.stderr.txt"
                 ).read_text(encoding="utf-8")
-                assert len(list(agent.results.glob("b7-first-restore-*.json"))) == 5
+                assert len(list(agent.results.glob("b7-first-restore-*.json"))) == 7
             finally:
                 fake.pages[0].screenshot = original
 
