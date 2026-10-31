@@ -657,6 +657,44 @@ impl UserDiagnostic {
             )) => {
                 "The previous local changes were committed, but this one-time launch selected the older browser generation and cannot open the newer one. Return to Profile Operations and choose Open again to request a fresh authorization. Do not reuse the old link or delete local profile files."
             }
+            Self::Launch(Launch::Operator(
+                crate::operator_flow::OperatorFlowError::Busy
+                | crate::operator_flow::OperatorFlowError::Preflight {
+                    reason: crate::operator_flow::OperationalRejectionReason::ProfileBusy,
+                    ..
+                },
+            )) => {
+                "This browser profile is already open or its writer is still active. Switch to the existing browser window or wait until that session closes, then request a new Open from Profile Operations. The current writer and unsaved files were not replaced."
+            }
+            Self::Launch(Launch::Operator(
+                crate::operator_flow::OperatorFlowError::Stage(
+                    crate::operator_flow::OperatorFailureStage::Enrollment,
+                ),
+            )) => {
+                "The one-time Open link is unavailable. It may have expired, been used already, or been refused for access reasons; the server intentionally does not reveal which. Return to Profile Operations and request a new Open. If a browser window is already running, use that window. Do not reconnect or reset this computer."
+            }
+            Self::Launch(Launch::Operator(
+                crate::operator_flow::OperatorFlowError::Stage(
+                    crate::operator_flow::OperatorFailureStage::CoordinatorClaim,
+                ),
+            )) => {
+                "The session coordinator did not grant a new browser writer. Check the profile's current session and your access in Profile Operations before requesting another Open; this is not proof of a network outage or a corrupt local profile."
+            }
+            Self::Launch(Launch::Operator(
+                crate::operator_flow::OperatorFlowError::Stage(
+                    crate::operator_flow::OperatorFailureStage::LocalWorkspace,
+                ),
+            )) => {
+                "Windows could not safely admit the existing local profile workspace. A live native writer, protected recovery marker, or filesystem denial may be involved. Keep its WAL, keys and recovery evidence intact; check the local diagnostic report and request supported recovery. Do not delete lock files."
+            }
+            Self::Launch(Launch::Operator(
+                crate::operator_flow::OperatorFlowError::Preflight {
+                    reason: crate::operator_flow::OperationalRejectionReason::RecoveryRequired,
+                    ..
+                },
+            )) => {
+                "The original browser profile needs supported recovery before another writer can open it. Keep the local unsaved data and recovery markers; do not reset the profile or start a second browser."
+            }
             Self::Launch(
                 Launch::Operator(_) | Launch::ActiveSessionMissing | Launch::CloseObservation(_),
             ) => {
@@ -820,6 +858,14 @@ const fn operator_code(error: crate::operator_flow::OperatorFlowError) -> &'stat
                 ),
             ..
         } => "BRIDGE_GENERATION_INTEGRITY_FAILED",
+        Error::Preflight {
+            reason: crate::operator_flow::OperationalRejectionReason::ProfileBusy,
+            ..
+        } => "BRIDGE_PROFILE_BUSY",
+        Error::Preflight {
+            reason: crate::operator_flow::OperationalRejectionReason::RecoveryRequired,
+            ..
+        } => "BRIDGE_RECOVERY_REQUIRED",
         Error::Preflight {
             reason: crate::operator_flow::OperationalRejectionReason::LocalCacheIncomplete,
             ..
@@ -1251,6 +1297,49 @@ mod tests {
         assert!(diagnostic.message().contains("fresh authorization"));
         assert!(diagnostic.message().contains("Do not reuse"));
         assert!(!diagnostic.message().contains("saved failed"));
+    }
+
+    #[test]
+    fn busy_diagnostics_are_typed_and_cannot_mislabel_redemption_or_access_denials() {
+        use crate::local_profile::LocalGenerationState;
+        use crate::operator_flow::{
+            CleanupFailures, OperationalRejectionReason, OperatorFailureStage, OperatorFlowError,
+        };
+        let busy = UserDiagnostic::Launch(ShippingCompositionError::Operator(
+            OperatorFlowError::Preflight {
+                reason: OperationalRejectionReason::ProfileBusy,
+                local_state: LocalGenerationState::InUse,
+                cleanup: CleanupFailures::none(),
+            },
+        ));
+        assert_eq!(busy.code(), "BRIDGE_PROFILE_BUSY");
+        assert!(busy.message().contains("already open"));
+        assert!(!busy.message().contains("reconnect this computer"));
+        let unrelated = UserDiagnostic::Launch(ShippingCompositionError::Operator(
+            OperatorFlowError::Preflight {
+                reason: OperationalRejectionReason::RecoveryRequired,
+                local_state: LocalGenerationState::RecoveryRequired,
+                cleanup: CleanupFailures::none(),
+            },
+        ));
+        assert_eq!(unrelated.code(), "BRIDGE_RECOVERY_REQUIRED");
+        assert!(!unrelated.message().contains("already open"));
+        let replay = UserDiagnostic::Launch(ShippingCompositionError::Operator(
+            OperatorFlowError::Stage(OperatorFailureStage::Enrollment),
+        ));
+        assert_eq!(replay.code(), "BRIDGE_LAUNCH_REDEMPTION_FAILED");
+        assert!(replay.message().contains("one-time Open link"));
+        assert!(!replay.message().contains("already open or its writer"));
+        let coordinator = UserDiagnostic::Launch(ShippingCompositionError::Operator(
+            OperatorFlowError::Stage(OperatorFailureStage::CoordinatorClaim),
+        ));
+        assert_eq!(coordinator.code(), "BRIDGE_COORDINATOR_CLAIM_FAILED");
+        assert!(!coordinator.message().contains("already open or its writer"));
+        let workspace = UserDiagnostic::Launch(ShippingCompositionError::Operator(
+            OperatorFlowError::Stage(OperatorFailureStage::LocalWorkspace),
+        ));
+        assert_eq!(workspace.code(), "BRIDGE_LOCAL_WORKSPACE_FAILED");
+        assert!(workspace.message().contains("Do not delete lock files"));
     }
 
     #[test]
