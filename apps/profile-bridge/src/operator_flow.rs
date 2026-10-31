@@ -3552,7 +3552,12 @@ mod tests {
         // No native OS lock remains after a real Bridge process death. A
         // previously installed Bridge543 would not have the new generation
         // admission file; the fresh lease is the only authority to reclaim.
-        assert!(!workspace.path().join(".profile-platform.writer-admission").exists());
+        assert!(
+            !workspace
+                .path()
+                .join(".profile-platform.writer-admission")
+                .exists()
+        );
         fixture.lease = ProfileLease::issue(
             fixture.actor.tenant_scope().tenant_id().clone(),
             fixture.profile_id.clone(),
@@ -3564,7 +3569,10 @@ mod tests {
 
         let mut reopened = operator(&fixture, FakeCamouhost::default())?;
         reopened.open(&fixture.claim_uri, &fixture.root, UnixMillis::new(10))?;
-        assert_eq!(reopened.active_local_state(), Some(LocalGenerationState::InUse));
+        assert_eq!(
+            reopened.active_local_state(),
+            Some(LocalGenerationState::InUse)
+        );
         assert_eq!(reopened.coordinator().claimed, 1);
         assert_eq!(
             reopened.process().actions(),
@@ -3611,7 +3619,11 @@ mod tests {
             let blocked_marker = format!(
                 "profile-platform-bridge-lock-v1\n{}\n{}\n",
                 marker_owner.as_str(),
-                if foreign_device { old_epoch } else { next_epoch }
+                if foreign_device {
+                    old_epoch
+                } else {
+                    next_epoch
+                }
             );
             fs::write(&marker, &blocked_marker)?;
             fixture.lease = ProfileLease::issue(
@@ -3626,7 +3638,9 @@ mod tests {
             let mut denied = operator(&fixture, FakeCamouhost::default())?;
             assert_eq!(
                 denied.open(&fixture.claim_uri, &fixture.root, UnixMillis::new(10)),
-                Err(OperatorFlowError::Stage(OperatorFailureStage::LocalWorkspace))
+                Err(OperatorFlowError::Stage(
+                    OperatorFailureStage::LocalWorkspace
+                ))
             );
             assert_eq!(denied.coordinator().claimed, 1);
             assert_eq!(denied.coordinator().closed, 1);
