@@ -809,6 +809,126 @@ mod tests {
         Ok(())
     }
 
+    // This helper is executed in a separate native Windows test process. Its
+    // OS lock is released by the kernel on process death, not by Rust Drop.
+    // Never enable the owner loop without an exact parent-set test marker.
+    #[cfg(windows)]
+    #[test]
+    fn native_bridge_crash_owner_child() -> Result<(), Box<dyn std::error::Error>> {
+        if std::env::var_os("PROFILE_BRIDGE_NATIVE_CRASH_CHILD").is_none() {
+            return Ok(());
+        }
+        let root = MaterializationRoot::open_or_create(std::env::var_os(
+            "PROFILE_BRIDGE_NATIVE_CRASH_ROOT",
+        ).ok_or("missing child root")?)?;
+        let tenant = TenantId::parse(std::env::var("PROFILE_BRIDGE_NATIVE_CRASH_TENANT")?)?;
+        let profile = ProfileId::parse(std::env::var("PROFILE_BRIDGE_NATIVE_CRASH_PROFILE")?)?;
+        let generation = GenerationId::parse(std::env::var(
+            "PROFILE_BRIDGE_NATIVE_CRASH_GENERATION",
+        )?)?;
+        let device = DeviceId::parse(std::env::var("PROFILE_BRIDGE_NATIVE_CRASH_DEVICE")?)?;
+        let workspace = root.open_generation(&tenant, &profile, &generation)?;
+        let _live_owner = BridgeWorkspaceLock::acquire(&workspace, &device, 5)?;
+        let ready = PathBuf::from(std::env::var_os(
+            "PROFILE_BRIDGE_NATIVE_CRASH_READY",
+        ).ok_or("missing child readiness path")?);
+        fs::write(ready, b"native-bridge-os-lock-held")?;
+        // The parent deliberately terminates this process. A finite backup
+        // bound ensures a failed parent cannot retain a writer indefinitely.
+        std::thread::sleep(std::time::Duration::from_secs(30));
+        Ok(())
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn killed_native_bridge_owner_reclaims_only_under_fresh_fence_and_keeps_wal()
+    -> Result<(), Box<dyn std::error::Error>> {
+        use std::process::{Command, Stdio};
+        use std::time::{Duration, Instant};
+
+        let (_test_root, root, workspace, device) = fixture("native-bridge-process-death")?;
+        let browser_data = workspace.path().join("user_data");
+        fs::create_dir(&browser_data)?;
+        let wal = browser_data.join("cookies.sqlite-wal");
+        let pending = workspace.path().join("pending-exact-successor.bin");
+        fs::write(&wal, b"native-bridge-kill-unsynced-wal")?;
+        fs::write(&pending, b"pending-encrypted-n-plus-one")?;
+        let ready = root.path().join("native-bridge-child-ready");
+        let mut child = Command::new(std::env::current_exe()?)
+            .args([
+                "--exact",
+                "local_profile::quiescence::tests::native_bridge_crash_owner_child",
+                "--nocapture",
+            ])
+            .env("PROFILE_BRIDGE_NATIVE_CRASH_CHILD", "1")
+            .env("PROFILE_BRIDGE_NATIVE_CRASH_ROOT", root.path())
+            .env("PROFILE_BRIDGE_NATIVE_CRASH_TENANT", workspace.tenant_id().as_str())
+            .env("PROFILE_BRIDGE_NATIVE_CRASH_PROFILE", workspace.profile_id().as_str())
+            .env(
+                "PROFILE_BRIDGE_NATIVE_CRASH_GENERATION",
+                workspace.generation_id().as_str(),
+            )
+            .env("PROFILE_BRIDGE_NATIVE_CRASH_DEVICE", device.as_str())
+            .env("PROFILE_BRIDGE_NATIVE_CRASH_READY", &ready)
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()?;
+
+        let checked = (|| -> Result<(), Box<dyn std::error::Error>> {
+            let deadline = Instant::now() + Duration::from_secs(15);
+            while !ready.exists() {
+                if let Some(status) = child.try_wait()? {
+                    return Err(format!(
+                        "native Bridge lock owner terminated before admission: {status}"
+                    ).into());
+                }
+                if Instant::now() >= deadline {
+                    return Err("native Bridge lock owner never confirmed admission".into());
+                }
+                std::thread::sleep(Duration::from_millis(50));
+            }
+            assert_eq!(fs::read(&ready)?, b"native-bridge-os-lock-held");
+            assert!(child.try_wait()?.is_none(), "child exited before writer proof");
+            assert!(matches!(
+                BridgeWorkspaceLock::recover_interrupted_launch(&workspace, &device, 6),
+                Err(LocalProfileError::LockBusy)
+            ), "second writer unexpectedly recovered a still-live Bridge");
+            assert!(matches!(
+                DeliveryActivationGuard::acquire(&root),
+                Err(LocalProfileError::LockBusy)
+            ), "installer bypassed a live Bridge process");
+            assert_eq!(fs::read(&wal)?, b"native-bridge-kill-unsynced-wal");
+            assert_eq!(fs::read(&pending)?, b"pending-encrypted-n-plus-one");
+
+            child.kill()?; // Exact disposable test-owned child, not Firefox.
+            assert!(!child.wait()?.success(), "killed child claimed a clean exit");
+            let recovered =
+                BridgeWorkspaceLock::recover_interrupted_launch(&workspace, &device, 6)?;
+            assert_eq!(
+                fs::read_to_string(workspace.path().join(BRIDGE_LOCK_FILE))?,
+                format!("profile-platform-bridge-lock-v2\n{}\n6\n", device.as_str())
+            );
+            assert_eq!(fs::read(&wal)?, b"native-bridge-kill-unsynced-wal");
+            assert_eq!(fs::read(&pending)?, b"pending-encrypted-n-plus-one");
+            assert!(matches!(
+                BridgeWorkspaceLock::acquire(&workspace, &device, 7),
+                Err(LocalProfileError::LockBusy)
+            ));
+            recovered.release()?;
+            assert!(DeliveryActivationGuard::acquire(&root)?.confirms_quiescence());
+            Ok(())
+        })();
+
+        // A failed assertion must never leave the disposable child holding
+        // a background native writer. Do not modify the profile or locks.
+        if child.try_wait()?.is_none() {
+            let _ = child.kill();
+            let _ = child.wait();
+        }
+        checked
+    }
+
     #[test]
     fn interrupted_reclaim_refuses_native_firefox_writer() -> Result<(), Box<dyn std::error::Error>>
     {
