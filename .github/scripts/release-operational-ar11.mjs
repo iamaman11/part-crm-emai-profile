@@ -203,6 +203,7 @@ function authorityErrors(authority) {
     'expected_current_refence_immediately_before_mutation',
     'd1_refence_immediately_before_mutation',
     'accepted_main_heavy_runtime_replay',
+    'accepted_main_exact_tree_pr_evidence',
   ];
   for (const key of requiredTrue) {
     if (policy[key] !== true) errors.push(`AR-11 promotion policy requires ${key}=true`);
@@ -219,8 +220,8 @@ function authorityErrors(authority) {
   if (policy.pr_runtime_unknown_path_policy !== 'HEAVY') {
     errors.push('AR-11 PR runtime gate must classify unknown paths as HEAVY');
   }
-  if (policy.pr_runtime_accepted_main_policy !== 'ALWAYS_HEAVY') {
-    errors.push('AR-11 accepted-main runtime policy must remain ALWAYS_HEAVY');
+  if (policy.pr_runtime_accepted_main_policy !== 'EXACT_TREE_PR_PROOF_OR_HEAVY') {
+    errors.push('AR-11 accepted-main runtime policy requires proven PR tree or full main replay');
   }
   return errors;
 }
@@ -555,7 +556,11 @@ function camoufoxErrors(workflow, classifier) {
     'Classify accepted-main or mechanically proven runtime-unrelated PR',
     'if [ "$GITHUB_EVENT_NAME" = push ]; then',
     "echo 'heavy=true'",
-    'Accepted main always receives full real Camoufox/Windows proof.',
+    'python3.12 scripts/accepted-main-pr-reuse.py --self-test',
+    'python3.12 scripts/accepted-main-pr-reuse.py --gate camoufox',
+    "grep -qx 'reuse=true'",
+    "echo 'heavy=false'",
+    "echo 'heavy=true'",
     'python3.12 -m py_compile scripts/classify-camoufox-runtime-scope.py',
     'python3.12 scripts/classify-camoufox-runtime-scope.py --self-test',
     '--paths-file "$RUNNER_TEMP/changed-paths.txt"',
@@ -710,6 +715,30 @@ function selfTest(files) {
   );
   if (camoufoxErrors(missingClassifierCall, files.camoufoxClassifier).length === 0) {
     throw new Error('Camoufox classifier self-test bypass fixture passed');
+  }
+  const missingAcceptedProof = files.camoufox.replace(
+    'python3.12 scripts/accepted-main-pr-reuse.py --gate camoufox',
+    'echo bypassed-main-proof',
+  );
+  if (!camoufoxErrors(missingAcceptedProof, files.camoufoxClassifier).some(error => error.includes('Camoufox scope routing'))) {
+    throw new Error('accepted-main PR proof bypass fixture passed');
+  }
+  const missingHeavyFallback = files.camoufox.replace(
+    "echo 'heavy=true' >> \"$GITHUB_OUTPUT\"",
+    'echo "skipped fallback"',
+  );
+  if (!camoufoxErrors(missingHeavyFallback, files.camoufoxClassifier).some(error => error.includes('Camoufox scope routing'))) {
+    throw new Error('accepted-main full replay fallback bypass fixture passed');
+  }
+  const wrongAcceptedMainPolicy = structuredClone(files.authority);
+  wrongAcceptedMainPolicy.promotion_policy.pr_runtime_accepted_main_policy = 'ALWAYS_HEAVY';
+  if (!authorityErrors(wrongAcceptedMainPolicy).some(error => error.includes('proven PR tree or full main replay'))) {
+    throw new Error('incorrect accepted-main runtime policy fixture passed');
+  }
+  const missingExactPrEvidence = structuredClone(files.authority);
+  missingExactPrEvidence.promotion_policy.accepted_main_exact_tree_pr_evidence = false;
+  if (!authorityErrors(missingExactPrEvidence).some(error => error.includes('accepted_main_exact_tree_pr_evidence'))) {
+    throw new Error('missing exact-tree PR authority fixture passed');
   }
   const unsafePrefixClassifier = files.camoufoxClassifier.replace('    "docs/",', '    "docs/",\n    "runtime/",');
   if (unsafePrefixClassifier === files.camoufoxClassifier) throw new Error('unsafe Camoufox prefix fixture setup failed');
