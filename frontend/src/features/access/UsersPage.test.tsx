@@ -12,7 +12,7 @@ vi.mock('./api', async (loadOriginal) => ({
 
 const mockedListMembers = vi.mocked(listMembers);
 
-function renderUsers(role: 'OWNER' | 'MEMBER') {
+function renderUsers(role: 'TENANT_OWNER' | 'MEMBER') {
   const query = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   return render(
     <QueryClientProvider client={query}>
@@ -47,7 +47,7 @@ describe('Users scope after physical Windows audit', () => {
   });
 
   it('labels raw owner-only commands as advanced, never ordinary invitation self-service', async () => {
-    renderUsers('OWNER');
+    renderUsers('TENANT_OWNER');
     await waitFor(() => expect(mockedListMembers).toHaveBeenCalledTimes(1));
     expect(screen.getByRole('heading', { name: 'Advanced owner operations' })).toBeTruthy();
     expect(screen.getByLabelText('Invited contact HMAC')).toBeTruthy();
