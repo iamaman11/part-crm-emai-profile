@@ -1135,7 +1135,10 @@ where
             enrollment.generation_id(),
         ) {
             Ok(value) => value,
-            Err(_) => {
+            Err(error) => {
+                eprintln!(
+                    "bridge_local_workspace_failure operation=open_generation reason={error:?}"
+                );
                 return Err(self.fail_before_local_use(OperatorFailureStage::LocalWorkspace, lease));
             }
         };
@@ -1154,7 +1157,10 @@ where
                         lease.epoch(),
                     ) {
                         Ok(value) => value,
-                        Err(_) => {
+                        Err(error) => {
+                            eprintln!(
+                                "bridge_local_workspace_failure operation=recover_interrupted_launch reason={error:?}"
+                            );
                             return Err(self.fail_before_local_use(
                                 OperatorFailureStage::LocalWorkspace,
                                 lease,
@@ -1162,7 +1168,10 @@ where
                         }
                     }
                 }
-                Err(_) => {
+                Err(error) => {
+                    eprintln!(
+                        "bridge_local_workspace_failure operation=acquire reason={error:?}"
+                    );
                     return Err(
                         self.fail_before_local_use(OperatorFailureStage::LocalWorkspace, lease)
                     );
