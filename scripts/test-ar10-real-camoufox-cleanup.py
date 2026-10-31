@@ -978,6 +978,14 @@ def prove_forced_windows_browser_termination_is_not_controlled(
     # lock deletion, browser preference reset or alternate runtime permitted.
     restarted = start_runtime(python, camouhost, env)
     try:
+        # This disposable process has the same kernel-managed child-lifetime
+        # guarantee as the fault-injection half. No PID sweeps or manual lock
+        # deletion if the second launch fails partway through.
+        restarted_job = DisposableWindowsProcessJob(restarted.pid)
+    except BaseException:
+        stop_runtime(restarted)
+        raise
+    try:
         assert exchange(restarted, f"hello|{IPC_VERSION}") == f"hello_ack|{IPC_VERSION}"
         assert exchange(restarted, f"launch|{SESSION}") == f"ready|{SESSION}", (
             "same Firefox workspace could not reach native Ready after main-PID death"
@@ -988,8 +996,19 @@ def prove_forced_windows_browser_termination_is_not_controlled(
         assert exchange(restarted, f"admit_navigation|{SESSION}|") == (
             f"navigation_admitted|{SESSION}"
         )
+        # The prior fixture erroneously called stop_runtime(), which KILLS
+        # Camouhost and may orphan its Firefox processes while SQLite is
+        # still open. This is normal controlled fixture teardown, not a
+        # second crash. Require the real IPC close and observed child exit.
+        assert exchange(restarted, f"close|{SESSION}", 45) == (
+            f"closed|{SESSION}|true"
+        ), "native post-crash reopen did not support ordinary close"
+        assert restarted.wait(timeout=30) == 0
     finally:
-        stop_runtime(restarted)
+        try:
+            stop_runtime(restarted)
+        finally:
+            restarted_job.close()
     assert_writer_quiescent(runtime, root, "post-crash same-workspace native reopen")
     print(
         "native_windows_main_kill fails_closed_disposable_job_released_"
