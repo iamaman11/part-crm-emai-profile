@@ -667,6 +667,16 @@ impl UserDiagnostic {
                 "This browser profile is already open or its writer is still active. Switch to the existing browser window or wait until that session closes, then request a new Open from Profile Operations. The current writer and unsaved files were not replaced."
             }
             Self::Launch(Launch::Operator(
+                crate::operator_flow::OperatorFlowError::EnrollmentConflict,
+            )) => {
+                "The server confirmed a launch lease conflict. Another writer or pending Open already holds this profile. Check Profile Operations or use the active window; request a new Open only when available. Do not reuse the link or delete local data."
+            }
+            Self::Launch(Launch::Operator(
+                crate::operator_flow::OperatorFlowError::EnrollmentServiceUncertain,
+            )) => {
+                "The network/server did not confirm whether the one-time Open was redeemed. Check the current session in Profile Operations first. Do not automatically replay the old link, reset this device or delete local files."
+            }
+            Self::Launch(Launch::Operator(
                 crate::operator_flow::OperatorFlowError::Stage(
                     crate::operator_flow::OperatorFailureStage::Enrollment,
                 ),
@@ -723,6 +733,8 @@ const fn operator_code(error: crate::operator_flow::OperatorFlowError) -> &'stat
     use crate::operator_flow::{OperatorFailureStage as Stage, OperatorFlowError as Error};
     match error {
         Error::Busy => "BRIDGE_PROFILE_BUSY",
+        Error::EnrollmentConflict => "BRIDGE_LAUNCH_LEASE_CONFLICT",
+        Error::EnrollmentServiceUncertain => "BRIDGE_LAUNCH_REDEMPTION_UNCONFIRMED",
         Error::CleanupRequired => "BRIDGE_CLEANUP_REQUIRED",
         Error::GenerationSave { reason } => reason.code(),
         Error::FreshAuthorizedOpenRequired => "BRIDGE_FRESH_AUTHORIZED_OPEN_REQUIRED",
@@ -1324,6 +1336,16 @@ mod tests {
         ));
         assert_eq!(unrelated.code(), "BRIDGE_RECOVERY_REQUIRED");
         assert!(!unrelated.message().contains("already open"));
+        let conflict = UserDiagnostic::Launch(ShippingCompositionError::Operator(
+            OperatorFlowError::EnrollmentConflict,
+        ));
+        assert_eq!(conflict.code(), "BRIDGE_LAUNCH_LEASE_CONFLICT");
+        assert!(conflict.message().contains("lease conflict"));
+        let uncertain = UserDiagnostic::Launch(ShippingCompositionError::Operator(
+            OperatorFlowError::EnrollmentServiceUncertain,
+        ));
+        assert_eq!(uncertain.code(), "BRIDGE_LAUNCH_REDEMPTION_UNCONFIRMED");
+        assert!(uncertain.message().contains("did not confirm"));
         let replay = UserDiagnostic::Launch(ShippingCompositionError::Operator(
             OperatorFlowError::Stage(OperatorFailureStage::Enrollment),
         ));

@@ -79,7 +79,18 @@ pub trait DeviceAuthenticationPort {
     fn authenticate(&mut self, device_id: &DeviceId, key_handle: &str) -> Result<(), Self::Error>;
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum EnrollmentFailureKind {
+    LeaseConflict,
+    ServiceUncertain,
+    Other,
+}
+
 pub trait EnrollmentPort {
+    fn classify_error(_error: &Self::Error) -> EnrollmentFailureKind {
+        EnrollmentFailureKind::Other
+    }
+
     type Error;
 
     fn redeem_claim(
@@ -400,7 +411,7 @@ fn save_control_reason<S>(
         GenerationSuccessorControlError::ControlPlane(error) => match error {
             ShippingControlPlaneError::Transport => Reason::ControlTransport,
             ShippingControlPlaneError::HttpServerUncertain => Reason::ControlEffectUncertain,
-            ShippingControlPlaneError::HttpStatus => Reason::ControlRejected,
+            ShippingControlPlaneError::HttpStatus | ShippingControlPlaneError::LaunchLeaseConflict => Reason::ControlRejected,
             ShippingControlPlaneError::InvalidResponse => Reason::ControlInvalidResponse,
             ShippingControlPlaneError::Clock => Reason::ControlClock,
         },
@@ -458,6 +469,8 @@ fn save_checkpoint_read_reason(source: SaveAttemptEvidenceError) -> GenerationSa
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum OperatorFlowError {
     Busy,
+    EnrollmentConflict,
+    EnrollmentServiceUncertain,
     CleanupRequired,
     /// The HTTP effect/response is uncertain; the last confirmed coordinator
     /// deadline has not been extended. Caller must retry or quiesce before it.
@@ -500,6 +513,7 @@ impl OperatorFlowError {
     pub const fn stage(&self) -> Option<OperatorFailureStage> {
         match self {
             Self::Busy | Self::CleanupRequired => None,
+            Self::EnrollmentConflict | Self::EnrollmentServiceUncertain => Some(OperatorFailureStage::Enrollment),
             Self::GenerationSave { .. } | Self::FreshAuthorizedOpenRequired => {
                 Some(OperatorFailureStage::GenerationSave)
             }
@@ -519,6 +533,8 @@ impl fmt::Display for OperatorFlowError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::Busy => formatter.write_str("an operator session is already active"),
+            Self::EnrollmentConflict => formatter.write_str("verified launch lease conflict"),
+            Self::EnrollmentServiceUncertain => formatter.write_str("launch redemption network result uncertain"),
             Self::CleanupRequired => formatter.write_str("previous operator cleanup is unresolved"),
             Self::HeartbeatTransportUncertain => {
                 formatter.write_str("coordinator heartbeat transport result is uncertain")
@@ -822,7 +838,11 @@ where
         let enrollment = self
             .enrollment
             .redeem_claim(claim, &device_id, now)
-            .map_err(|_| OperatorFlowError::Stage(OperatorFailureStage::Enrollment))?;
+            .map_err(|error| match E::classify_error(&error) {
+                EnrollmentFailureKind::LeaseConflict => OperatorFlowError::EnrollmentConflict,
+                EnrollmentFailureKind::ServiceUncertain => OperatorFlowError::EnrollmentServiceUncertain,
+                EnrollmentFailureKind::Other => OperatorFlowError::Stage(OperatorFailureStage::Enrollment),
+            })?;
         let lease = self
             .coordinator
             .claim_launch_intent(
@@ -970,7 +990,11 @@ where
         let enrollment = self
             .enrollment
             .redeem_claim(claim, &device_id, now)
-            .map_err(|_| OperatorFlowError::Stage(OperatorFailureStage::Enrollment))?;
+            .map_err(|error| match E::classify_error(&error) {
+                EnrollmentFailureKind::LeaseConflict => OperatorFlowError::EnrollmentConflict,
+                EnrollmentFailureKind::ServiceUncertain => OperatorFlowError::EnrollmentServiceUncertain,
+                EnrollmentFailureKind::Other => OperatorFlowError::Stage(OperatorFailureStage::Enrollment),
+            })?;
         let lease = self
             .coordinator
             .claim_launch_intent(
@@ -1831,7 +1855,7 @@ where
                     ShippingControlPlaneError::HttpServerUncertain => {
                         GenerationSaveFailureReason::ControlEffectUncertain
                     }
-                    ShippingControlPlaneError::HttpStatus => {
+                    ShippingControlPlaneError::HttpStatus | ShippingControlPlaneError::LaunchLeaseConflict => {
                         GenerationSaveFailureReason::ControlRejected
                     }
                     ShippingControlPlaneError::InvalidResponse => {
