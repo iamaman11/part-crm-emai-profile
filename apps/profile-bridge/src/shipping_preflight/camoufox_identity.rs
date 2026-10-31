@@ -543,7 +543,10 @@ mod tests {
             "webGl2:shaderPrecisionFormats",
             "webGl2:contextAttributes",
         ] {
-            assert!(object.remove(name).is_some(), "missing test fixture field {name}");
+            assert!(
+                object.remove(name).is_some(),
+                "missing test fixture field {name}"
+            );
         }
         let valid_disabled = serde_json::to_vec(&disabled)?;
         let stable = profile_stable_identity_from_config_bytes(&valid_disabled)?;
@@ -562,5 +565,4 @@ mod tests {
         );
         Ok(())
     }
-
 }
