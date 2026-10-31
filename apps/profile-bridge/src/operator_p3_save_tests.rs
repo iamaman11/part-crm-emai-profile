@@ -1330,7 +1330,10 @@ fn fresh_authorized_operator_open_reclaims_crashed_owner_without_losing_dirty_wa
     fs::create_dir_all(&user_data)?;
     let wal = user_data.join("cookies.sqlite-wal");
     fs::write(&wal, b"unpublished-authenticated-session-wal")?;
-    fs::write(workspace.path().join("prefs.js"), b"unpublished-change-before-crash")?;
+    fs::write(
+        workspace.path().join("prefs.js"),
+        b"unpublished-change-before-crash",
+    )?;
     fixture.assert_base_lock_held()?;
 
     // A second independent profile keeps its own session open. Reclaiming
@@ -1364,7 +1367,10 @@ fn fresh_authorized_operator_open_reclaims_crashed_owner_without_losing_dirty_wa
     coordinator.lease = fresh_lease.clone();
     let mut recovered = fixture.operator_with_coordinator(coordinator)?;
     recovered.open(&fixture.claim_uri, &fixture.root, UnixMillis::new(20))?;
-    assert_eq!(recovered.active_local_state(), Some(LocalGenerationState::InUse));
+    assert_eq!(
+        recovered.active_local_state(),
+        Some(LocalGenerationState::InUse)
+    );
     assert_eq!(fs::read(&wal)?, b"unpublished-authenticated-session-wal");
     assert_eq!(
         fs::read(workspace.path().join("prefs.js"))?,
@@ -1386,9 +1392,14 @@ fn fresh_authorized_operator_open_reclaims_crashed_owner_without_losing_dirty_wa
     let mut conflicting = fixture.operator_with_coordinator(conflicting_coordinator)?;
     assert!(matches!(
         conflicting.open(&fixture.claim_uri, &fixture.root, UnixMillis::new(25)),
-        Err(OperatorFlowError::Stage(OperatorFailureStage::LocalWorkspace))
+        Err(OperatorFlowError::Stage(
+            OperatorFailureStage::LocalWorkspace
+        ))
     ));
-    assert_eq!(recovered.active_local_state(), Some(LocalGenerationState::InUse));
+    assert_eq!(
+        recovered.active_local_state(),
+        Some(LocalGenerationState::InUse)
+    );
     assert_eq!(fs::read(&wal)?, b"unpublished-authenticated-session-wal");
     assert!(matches!(
         BridgeWorkspaceLock::acquire(&other_workspace, &fixture.device_id, 6),
