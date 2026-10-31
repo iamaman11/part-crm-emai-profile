@@ -8,13 +8,38 @@ on:
 
 permissions:
   contents: read
+  actions: read
+  pull-requests: read
 
 concurrency:
   group: quality-gate-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
+  accepted-pr-proof:
+    name: Prove exact PR tree before reusing expensive checks
+    runs-on: ubuntu-latest
+    outputs:
+      reuse: ${{ steps.proof.outputs.reuse }}
+    steps:
+      - name: Checkout exact source
+        uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+      - name: Test fail-closed replay admission
+        run: |
+          python -m py_compile scripts/accepted-main-pr-reuse.py
+          python scripts/accepted-main-pr-reuse.py --self-test
+      - name: Bind accepted-main tree to completed PR checks or demand full proof
+        id: proof
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: python scripts/accepted-main-pr-reuse.py --gate quality --github-output "$GITHUB_OUTPUT"
+
   rust-linux:
+    needs: accepted-pr-proof
+    if: needs.accepted-pr-proof.outputs.reuse != 'true'
     name: Rust Linux and WASM
     runs-on: ubuntu-latest
     steps:
@@ -350,6 +375,8 @@ jobs:
         run: bash scripts/check-tracked-secrets.sh
 
   d1-catalog:
+    needs: accepted-pr-proof
+    if: needs.accepted-pr-proof.outputs.reuse != 'true'
     name: D1 Catalog Migrations
     runs-on: ubuntu-latest
     steps:
@@ -399,6 +426,8 @@ jobs:
           --command "SELECT COUNT(*) AS tenants FROM tenants; SELECT COUNT(*) AS clients FROM clients; SELECT COUNT(*) AS profiles FROM browser_profiles; SELECT COUNT(*) AS invitation_acceptances FROM invitation_acceptances; SELECT COUNT(*) AS governed_owner_transfers FROM owner_transfer_commands; SELECT COUNT(*) AS governed_profile_grants FROM profile_grant_commands; SELECT COUNT(*) AS coordinator_projection_commands FROM profile_coordinator_projection_commands; SELECT COUNT(*) AS coordinator_projections FROM profile_coordinator_projections; SELECT COUNT(*) AS mailbox_bindings FROM mailbox_bindings; SELECT COUNT(*) AS mailbox_jobs FROM mailbox_jobs; SELECT COUNT(*) AS browser_mailbox_execution_bindings FROM browser_mailbox_execution_bindings; SELECT name FROM d1_migrations ORDER BY id;"
 
   cloudflare-worker:
+    needs: accepted-pr-proof
+    if: needs.accepted-pr-proof.outputs.reuse != 'true'
     name: Cloudflare Worker Release Build
     runs-on: ubuntu-latest
     env:
@@ -531,6 +560,8 @@ jobs:
           echo "Verified immutable release artifact ${UPLOADED_DIGEST} for ${SOURCE_SHA}."
 
   rust-windows:
+    needs: accepted-pr-proof
+    if: needs.accepted-pr-proof.outputs.reuse != 'true'
     name: Rust Windows And Profile Bridge Artifact
     runs-on: windows-latest
     steps:
