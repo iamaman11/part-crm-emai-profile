@@ -678,7 +678,7 @@ impl UserDiagnostic {
                     crate::operator_flow::OperatorFailureStage::CoordinatorClaim,
                 ),
             )) => {
-                "The session coordinator did not grant a new browser writer. Check the profile's current session and your access in Profile Operations before requesting another Open; this is not proof of a network outage or a corrupt local profile."
+                "The session coordinator did not grant a new browser writer. Check the profile's current session and your access in Profile Operations before requesting another Open; this is not proof of a network outage or a corrupt local profile. Keep local profile files and pending save evidence intact."
             }
             Self::Launch(Launch::Operator(
                 crate::operator_flow::OperatorFlowError::Stage(
