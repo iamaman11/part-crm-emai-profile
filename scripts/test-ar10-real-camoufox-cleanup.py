@@ -889,7 +889,30 @@ def prove_forced_windows_browser_termination_is_not_controlled(
     while time.monotonic() < deadline and runtime.firefox_writer_active(root):
         time.sleep(0.1)
     assert_writer_quiescent(runtime, root, "forced Windows browser main death")
-    print("native_windows_main_kill fails_closed_and_disposable_job_released PASS", flush=True)
+
+    # FIX-01 native half of the crash recovery composition. Reuse the SAME
+    # on-disk Firefox user_data after its main PID was killed; no fresh profile,
+    # lock deletion, browser preference reset or alternate runtime permitted.
+    restarted = start_runtime(python, camouhost, env)
+    try:
+        assert exchange(restarted, f"hello|{IPC_VERSION}") == f"hello_ack|{IPC_VERSION}"
+        assert exchange(restarted, f"launch|{SESSION}") == f"ready|{SESSION}", (
+            "same Firefox workspace could not reach native Ready after main-PID death"
+        )
+        assert exchange(restarted, f"observe_browser_visible|{SESSION}").startswith(
+            f"browser_visible|{SESSION}|"
+        ), "native same-workspace post-crash browser-visible readiness not proven"
+        assert exchange(restarted, f"admit_navigation|{SESSION}|") == (
+            f"navigation_admitted|{SESSION}"
+        )
+    finally:
+        stop_runtime(restarted)
+    assert_writer_quiescent(runtime, root, "post-crash same-workspace native reopen")
+    print(
+        "native_windows_main_kill fails_closed_disposable_job_released_"
+        "and_same_workspace_native_reopen_ready PASS",
+        flush=True,
+    )
 
 
 def prove_ipc_timeout_contract() -> None:
