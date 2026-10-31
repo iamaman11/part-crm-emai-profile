@@ -255,7 +255,50 @@ def prove_agent() -> None:
                 assert blank_report["urls_before"] == blank_report["urls_after"] == ["about:blank"]
                 assert len(blank_report["not_applicable"]) == 1
 
+                # Real packaged Firefox Playwright error from Windows CI
+                # omits the DOM name. It is still the exact same opaque
+                # about:blank storage refusal and not a browser failure.
+                fake.pages[0].evaluate = lambda _script: (
+                    _ for _ in ()
+                ).throw(RuntimeError(
+                    "Page.evaluate: The operation is insecure.\\n"
+                    "@debugger eval code line 302 > eval:1:17"
+                ))
+                blank_firefox = committed_request(
+                    agent.requests,
+                    (ROOT / "scripts" / "b7-playwright-observe.py").read_text(encoding="utf-8"),
+                )
+                assert agent.run_one(fake)
+                firefox_status = json.loads(
+                    (agent.results / f"{blank_firefox}.json").read_text(encoding="utf-8")
+                )
+                assert firefox_status["status"] == "ok", firefox_status
+                firefox_report = json.loads(
+                    Path(firefox_status["result"]["artifact"]).read_text(encoding="utf-8")
+                )
+                assert firefox_report["pages"][0]["origin_storage"]["status"] == "NOT_APPLICABLE"
+                assert firefox_report["restore_stage"] == "BLANK_ONLY_RESTORE_NOT_PROVEN"
+                assert not firefox_report["errors"]
+
+                # Identical actual-Firefox wording MUST fail on an HTTPS page.
+                fake.pages[0].url = private_content
+                https_firefox = committed_request(
+                    agent.requests,
+                    (ROOT / "scripts" / "b7-playwright-observe.py").read_text(encoding="utf-8"),
+                )
+                assert agent.run_one(fake)
+                https_firefox_status = json.loads(
+                    (agent.results / f"{https_firefox}.json").read_text(encoding="utf-8")
+                )
+                assert https_firefox_status["status"] == "error"
+                assert "The operation is insecure." in (
+                    agent.results / f"{https_firefox}.stderr.txt"
+                ).read_text(encoding="utf-8")
+
                 # The same storage error at a real HTTPS origin MUST fail.
+                fake.pages[0].evaluate = lambda _script: (
+                    _ for _ in ()
+                ).throw(RuntimeError("SecurityError: The operation is insecure"))
                 fake.pages[0].url = private_content
                 https_error = committed_request(
                     agent.requests,

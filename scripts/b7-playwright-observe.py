@@ -41,8 +41,16 @@ for index, page in enumerate(observed):
             # Firefox's isolated about:blank has no origin storage. Only that
             # precise storage/security combination is inapplicable. A real
             # HTTPS storage error or a closed page remains an actual failure.
+            # Packaged Firefox/Playwright often renders the same DOM
+            # SecurityError as "Page.evaluate: The operation is insecure."
+            # without including the exception's DOM name in Python's repr.
+            # Admit only the exact page + operation + known security wording.
+            # HTTPS errors, closed pages and unrelated about:blank failures
+            # must still make the observation fail.
+            security_error = repr(error)
             if (field == "origin_storage" and entry["url"] == "about:blank"
-                    and "SecurityError" in repr(error)):
+                    and ("SecurityError" in security_error
+                         or "Page.evaluate: The operation is insecure." in security_error)):
                 entry[field] = {
                     "status": "NOT_APPLICABLE",
                     "reason": "about_blank_opaque_origin_security_error",
