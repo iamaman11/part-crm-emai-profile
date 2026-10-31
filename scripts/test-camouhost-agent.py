@@ -197,6 +197,69 @@ def prove_agent() -> None:
             assert not capture["errors"]
             assert fake.pages[0].url == private_content, "read-only B7 script navigated"
 
+            # An opaque-origin about:blank can reject storage with SecurityError.
+            # This is NOT_APPLICABLE, not a restored-tab PASS or global failure.
+            previous_evaluate, previous_url = fake.pages[0].evaluate, fake.pages[0].url
+            try:
+                fake.pages[0].evaluate = lambda _script: (
+                    _ for _ in ()
+                ).throw(RuntimeError("SecurityError: The operation is insecure"))
+                fake.pages[0].url = "about:blank"
+                blank = committed_request(
+                    agent.requests,
+                    (ROOT / "scripts" / "b7-playwright-observe.py").read_text(encoding="utf-8"),
+                )
+                assert agent.run_one(fake)
+                blank_status = json.loads(
+                    (agent.results / f"{blank}.json").read_text(encoding="utf-8")
+                )
+                assert blank_status["status"] == "ok", blank_status
+                blank_report = json.loads(
+                    Path(blank_status["result"]["artifact"]).read_text(encoding="utf-8")
+                )
+                assert not blank_report["errors"]
+                assert blank_report["pages"][0]["origin_storage"]["status"] == "NOT_APPLICABLE"
+                assert blank_report["restore_stage"] == "BLANK_ONLY_RESTORE_NOT_PROVEN"
+                assert blank_report["urls_before"] == blank_report["urls_after"] == ["about:blank"]
+                assert len(blank_report["not_applicable"]) == 1
+
+                # The same storage error at a real HTTPS origin MUST fail.
+                fake.pages[0].url = private_content
+                https_error = committed_request(
+                    agent.requests,
+                    (ROOT / "scripts" / "b7-playwright-observe.py").read_text(encoding="utf-8"),
+                )
+                assert agent.run_one(fake)
+                https_status = json.loads(
+                    (agent.results / f"{https_error}.json").read_text(encoding="utf-8")
+                )
+                assert https_status["status"] == "error"
+                assert "SecurityError" in (
+                    agent.results / f"{https_error}.stderr.txt"
+                ).read_text(encoding="utf-8")
+
+                # A non-security about:blank error is also a real failure.
+                fake.pages[0].url = "about:blank"
+                fake.pages[0].evaluate = lambda _script: (
+                    _ for _ in ()
+                ).throw(RuntimeError("TargetClosedError: page closed"))
+                closed = committed_request(
+                    agent.requests,
+                    (ROOT / "scripts" / "b7-playwright-observe.py").read_text(encoding="utf-8"),
+                )
+                assert agent.run_one(fake)
+                closed_status = json.loads(
+                    (agent.results / f"{closed}.json").read_text(encoding="utf-8")
+                )
+                assert closed_status["status"] == "error"
+                assert "TargetClosedError" in (
+                    agent.results / f"{closed}.stderr.txt"
+                ).read_text(encoding="utf-8")
+            finally:
+                fake.pages[0].evaluate = previous_evaluate
+                fake.pages[0].url = previous_url
+            assert fake.pages[0].url == private_content
+
             # A broken observation must preserve raw errors and must NOT
             # become a positive restored-content claim or delete its artifact.
             original = fake.pages[0].screenshot
@@ -214,7 +277,7 @@ def prove_agent() -> None:
                 assert "snapshot disk full" in (
                     agent.results / f"{broken}.stderr.txt"
                 ).read_text(encoding="utf-8")
-                assert len(list(agent.results.glob("b7-first-restore-*.json"))) == 2
+                assert len(list(agent.results.glob("b7-first-restore-*.json"))) == 5
             finally:
                 fake.pages[0].screenshot = original
 
