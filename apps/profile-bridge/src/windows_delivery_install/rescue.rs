@@ -282,6 +282,90 @@ mod tests {
         Ok(())
     }
 
+
+    #[test]
+    fn interrupted_unpublished_stage_is_never_adopted_and_retry_is_independent()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let parent = temp("retry");
+        fs::create_dir_all(&parent)?;
+        let installed = parent.join("ProfileBridge");
+        let root = MaterializationRoot::open_or_create(installed.join("profiles"))?;
+        fs::write(root.path().join("dirty"), b"single original")?;
+        let rescue = parent.join("ProfileBridge-recovery");
+        fs::create_dir(&rescue)?;
+        let abandoned = rescue.join("stage-crashed-previous-process");
+        fs::create_dir(&abandoned)?;
+        fs::write(abandoned.join("partial"), b"do not silently delete this evidence")?;
+        let guard = DeliveryActivationGuard::acquire(&root)?;
+        assert_eq!(ensure_rescue(&installed, &root)?, "NEW_RESCUE_BYTES_VERIFIED");
+        assert_eq!(fs::read(abandoned.join("partial"))?, b"do not silently delete this evidence");
+        assert_eq!(fs::read(rescue.join(SNAPSHOT).join("profiles/dirty"))?, b"single original");
+        drop(guard);
+        fs::remove_dir_all(parent)?;
+        Ok(())
+    }
+
+    #[test]
+    fn bad_existing_rescue_receipt_blocks_without_changing_original()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let parent = temp("receipt");
+        fs::create_dir_all(&parent)?;
+        let installed = parent.join("ProfileBridge");
+        let root = MaterializationRoot::open_or_create(installed.join("profiles"))?;
+        let file = root.path().join("dirty");
+        fs::write(&file, b"important original")?;
+        let guard = DeliveryActivationGuard::acquire(&root)?;
+        ensure_rescue(&installed, &root)?;
+        let receipt = parent.join("ProfileBridge-recovery").join(SNAPSHOT).join(RECEIPT);
+        fs::write(&receipt, b"wrong receipt")?;
+        assert!(ensure_rescue(&installed, &root).is_err());
+        assert_eq!(fs::read(&receipt)?, b"wrong receipt");
+        assert_eq!(fs::read(&file)?, b"important original");
+        drop(guard);
+        fs::remove_dir_all(parent)?;
+        Ok(())
+    }
+
+    #[test]
+    fn unreadable_live_wal_blocks_copy_without_deleting_data()
+    -> Result<(), Box<dyn std::error::Error>> {
+        use std::os::windows::fs::OpenOptionsExt;
+        let parent = temp("wal-lock");
+        fs::create_dir_all(&parent)?;
+        let installed = parent.join("ProfileBridge");
+        let root = MaterializationRoot::open_or_create(installed.join("profiles"))?;
+        let wal = root.path().join("cookies.sqlite-wal");
+        fs::write(&wal, b"uncommitted sqlite data")?;
+        let lock = fs::OpenOptions::new().read(true).share_mode(0).open(&wal)?;
+        let guard = DeliveryActivationGuard::acquire(&root)?;
+        assert!(ensure_rescue(&installed, &root).is_err());
+        assert!(!parent.join("ProfileBridge-recovery").join(SNAPSHOT).exists());
+        drop(guard);
+        drop(lock);
+        assert_eq!(fs::read(&wal)?, b"uncommitted sqlite data");
+        fs::remove_dir_all(parent)?;
+        Ok(())
+    }
+
+    #[test]
+    fn simultaneous_delivery_guard_is_rejected_before_any_backup()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let parent = temp("writer");
+        fs::create_dir_all(&parent)?;
+        let installed = parent.join("ProfileBridge");
+        let root = MaterializationRoot::open_or_create(installed.join("profiles"))?;
+        fs::write(root.path().join("dirty"), b"writer-owned data")?;
+        let first = DeliveryActivationGuard::acquire(&root)?;
+        assert!(DeliveryActivationGuard::acquire(&root).is_err());
+        assert!(!parent.join("ProfileBridge-recovery").exists());
+        drop(first);
+        let second = DeliveryActivationGuard::acquire(&root)?;
+        assert_eq!(ensure_rescue(&installed, &root)?, "NEW_RESCUE_BYTES_VERIFIED");
+        drop(second);
+        fs::remove_dir_all(parent)?;
+        Ok(())
+    }
+
     #[test]
     fn empty_new_install_has_no_external_copy()
     -> Result<(), Box<dyn std::error::Error>> {
