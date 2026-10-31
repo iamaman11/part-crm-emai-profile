@@ -87,6 +87,14 @@ writer or Save/Commit is authorized. D1 `READY` alone is not proof.
    Then short same-owner scripts may set/read isolated test markers in
    DOM, cookies, localStorage and IndexedDB. No second browser/Playwright
    writer, CDP port, enable flag or test profile allowlist.
+   The agent CLI must run with the SAME Windows security token/owner as
+   Camouhost, normally an unelevated terminal started by that user.
+   Same account name with elevated Administrator token is not equivalent:
+   the CLI rejects incompatible inbox ownership BEFORE publishing a job
+   (exit 126, `PLAYWRIGHT_AGENT_SECURITY_CONTEXT_MISMATCH`).
+   Do not run Set-Acl/takeown or modify Firefox profile permissions;
+   use the supported same-token terminal. A failed/uncertain claim is
+   preserved with typed evidence and must not be replayed automatically.
 6. Normal GUI Close → ensure durable local Save → remote exact verify and
    *authoritative Coordinator* commit → release writer and lease → fresh
    frontend-issued Open → first read-only Playwright observer. Compare
