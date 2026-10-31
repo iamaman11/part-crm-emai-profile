@@ -1135,12 +1135,20 @@ fn committed_then_crashed_writer_recovers_wal_and_cold_reopens_sole_successor()
     let restored = root.open_generation(&tenant, &profile, &next_id)?;
     assert_eq!(fs::read(restored.path().join("user_data/cookies.sqlite-wal"))?, wal_bytes);
     assert_eq!(fs::read(restored.path().join("user_data/cookies.sqlite"))?, cookie_bytes);
-    let events = &state.borrow().events;
-    assert_eq!(events.iter().filter(|e| e.starts_with("commit:")).count(), 2);
-    assert_eq!(events.iter().filter(|e| e.starts_with("put:")).count(), 2);
-    assert_eq!(events.iter().filter(|e| e.starts_with("get:")).count(), 1);
-    assert_eq!(events.iter().filter(|e| e.as_str() == "fixture:authorized-uncertain-recovery").count(), 1);
-    drop(events);
+    {
+        let backend = state.borrow();
+        let events = &backend.events;
+        assert_eq!(events.iter().filter(|e| e.starts_with("commit:")).count(), 2);
+        assert_eq!(events.iter().filter(|e| e.starts_with("put:")).count(), 2);
+        assert_eq!(events.iter().filter(|e| e.starts_with("get:")).count(), 1);
+        assert_eq!(
+            events
+                .iter()
+                .filter(|e| e.as_str() == "fixture:authorized-uncertain-recovery")
+                .count(),
+            1,
+        );
+    }
     cold.abort(UnixMillis::new(90))?;
     Ok(())
 }
