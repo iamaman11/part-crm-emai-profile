@@ -628,7 +628,10 @@ mod tests {
     fn legacy_bridge543_marker_requires_root_exclusivity_before_lock_upgrade()
     -> Result<(), Box<dyn std::error::Error>> {
         let (_test_root, root, workspace, device) = fixture("legacy-bridge543-migration")?;
-        let wal_path = workspace.path().join("user_data").join("cookies.sqlite-wal");
+        let wal_path = workspace
+            .path()
+            .join("user_data")
+            .join("cookies.sqlite-wal");
         fs::create_dir(workspace.path().join("user_data"))?;
         fs::write(&wal_path, b"durable-unpublished-wal-from-543")?;
         let legacy_marker = workspace.path().join(BRIDGE_LOCK_FILE);
