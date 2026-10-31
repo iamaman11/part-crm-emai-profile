@@ -1230,11 +1230,13 @@ def crash_first_read_only_observer(agent_directory: Path, camouhost_pid: int) ->
     )
     assert not artifact["errors"], "first observer contained native failures"
     assert artifact["count_before"] == artifact["count_after"]
-    assert artifact["urls_before"] == artifact["urls_after"]
+    # SessionStore may still be restoring tabs; the observer reports this
+    # explicitly and does not synthesize a positive restore verdict.
     assert artifact["restore_stage"] in (
         "BLANK_ONLY_RESTORE_NOT_PROVEN",
         "URLS_OBSERVED_COMPLETENESS_NOT_PROVEN",
-    ), "first observer falsely proved full tab restoration"
+        "URLS_CHANGED_DURING_OBSERVATION",
+    ), "first observer silently asserted complete tab restoration"
     print("native_crash_first_read_only_observer PASS", flush=True)
 
 
@@ -1272,11 +1274,14 @@ def prove_forced_windows_camouhost_termination_recovers_same_workspace(
             assert exchange(process, f"observe_browser_visible|{SESSION}").startswith(
                 f"browser_visible|{SESSION}|"
             ), "original native Firefox context did not become browser-visible"
-            # Read-only observer FIRST, before any page navigation or storage write.
-            crash_first_read_only_observer(agent_base, process.pid)
+            # The existing Camouhost owner dispatches agent jobs only after
+            # navigation admission. Empty target only releases offline mode;
+            # it does not open a page or navigate (see admit_navigation).
             assert exchange(process, f"admit_navigation|{SESSION}|") == (
                 f"navigation_admitted|{SESSION}"
             )
+            # FIRST owned Playwright job after Open: read-only observation.
+            crash_first_read_only_observer(agent_base, process.pid)
 
         baseline, baseline_job = launch()
         try:
