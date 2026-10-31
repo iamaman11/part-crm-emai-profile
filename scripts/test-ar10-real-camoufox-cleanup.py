@@ -1221,17 +1221,20 @@ def prove_three_independent_native_profiles_two_roundtrips(
     a first read-only observer on EACH Open. It deliberately does not fake a
     server Coordinator, R2 PUT/GET, a frontend claim, or cloud Saved.
     """
-    with crash_storage_fixture(runtime_env(runtime_lock, headless)) as (_, agent_base, origin):
+    with crash_storage_fixture(runtime_env(runtime_lock, headless)) as (agent_env, agent_base, origin):
         observer = Path(__file__).with_name("b7-playwright-observe.py")
         cli = Path(__file__).with_name("camouhost-agent.py")
         assert observer.is_file() and cli.is_file()
         for profile_index in range(3):
             profile_root = temporary / f"native-profile-{profile_index}"
             report = materialize(python, camouhost, runtime_lock, headless, profile_root)
-            inbox = agent_base / f"profile-{profile_index}"
-            inbox.mkdir()
+            # Reuse the proven same-owner inbox root from the real Windows
+            # browser-main crash fixture. An extra nested directory here is
+            # not a separate browser profile and only adds a different ACL/
+            # descriptor discovery path. Firefox user_data remains isolated.
+            inbox = agent_base
             environment = process_env(runtime_lock, headless, profile_root, report)
-            environment["CAMOUHOST_AGENT_DIRECTORY"] = str(inbox)
+            environment["CAMOUHOST_AGENT_DIRECTORY"] = agent_env["CAMOUHOST_AGENT_DIRECTORY"]
             previous = None
 
             # cycle 0 -> cycle 1 -> cycle 2: two clean native Close/Reopen
@@ -1248,6 +1251,21 @@ def prove_three_independent_native_profiles_two_roundtrips(
                     assert exchange(process, f"admit_navigation|{SESSION}|") == (
                         f"navigation_admitted|{SESSION}"
                     )
+
+                    # The real Camouhost must have published its own
+                    # session-scoped descriptor BEFORE any test script. Never
+                    # synthesize or repair it in a fixture; on failure include
+                    # only safe process/inbox diagnostics.
+                    descriptor = inbox / f"active-{process.pid}.json"
+                    assert descriptor.is_file(), (
+                        f"native profile={profile_index} cycle={cycle} "
+                        f"missing owner descriptor; process_alive={process.poll() is None}; "
+                        f"stderr_tail={stderr_tail(process)!r}"
+                    )
+                    descriptor_data = json.loads(descriptor.read_text(encoding="utf-8"))
+                    assert descriptor_data["pid"] == process.pid and (
+                        Path(descriptor_data["run"]).parent == inbox
+                    ), "native Camouhost descriptor does not belong to its selected inbox"
 
                     def same_owner(script: Path) -> str:
                         done = subprocess.run(
