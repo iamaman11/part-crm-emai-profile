@@ -74,6 +74,28 @@ export function ProfilesWorkspace({
   });
   const generationRegister = useLogicalCommandMutation((input: { generationId: string; objectKey: string; metadataDigest: string; containerDigest: string }, idempotencyKey) =>
     registerGeneration(tenantId, profileId, input, idempotencyKey));
+  async function refreshGenerationProjection(): Promise<void> {
+    // Refresh is read-only and does not repeat the successful generation action.
+    const requested = { tenantId, profileId, generationId };
+    const [profileResult, generationResult, directoryResult] = await Promise.allSettled([
+      getProfile(requested.tenantId, requested.profileId),
+      getGeneration(requested.tenantId, requested.profileId, requested.generationId),
+      cache.invalidateQueries({ queryKey: ['operator-query', requested.tenantId, 'profiles'] }),
+    ]);
+    if (selected.current.tenantId !== requested.tenantId
+      || selected.current.profileId !== requested.profileId
+      || selected.current.generationId !== requested.generationId) return;
+    if (profileResult.status === 'fulfilled' && generationResult.status === 'fulfilled'
+      && directoryResult.status === 'fulfilled') {
+      setProfile(profileResult.value ?? null);
+      setGeneration(generationResult.value ?? null);
+      setGenerationRefreshUnconfirmed(false);
+    } else {
+      // Fail closed: a stale READY snapshot cannot authorize another Open.
+      setGenerationRefreshUnconfirmed(true);
+    }
+  }
+
   const generationAction = useLogicalCommandMutation((input:
       | { kind: 'verify'; expectedVersion: number; reference: string }
       | { kind: 'activate' | 'deactivate'; expectedVersion: number }
@@ -89,28 +111,7 @@ export function ProfilesWorkspace({
       }
       return changeGenerationActivation(tenantId, profileId, generationId, input.expectedVersion, input.kind === 'activate', idempotencyKey);
     }, {
-      onSuccess: async () => {
-        // The mutation receipt proves only the action, not its current projection.
-        // A failed readback must NOT make the completed command look retryable.
-        const requested = { tenantId, profileId, generationId };
-        const [profileResult, generationResult, directoryResult] = await Promise.allSettled([
-          getProfile(requested.tenantId, requested.profileId),
-          getGeneration(requested.tenantId, requested.profileId, requested.generationId),
-          cache.invalidateQueries({ queryKey: ['operator-query', requested.tenantId, 'profiles'] }),
-        ]);
-        if (selected.current.tenantId !== requested.tenantId
-          || selected.current.profileId !== requested.profileId
-          || selected.current.generationId !== requested.generationId) return;
-        if (profileResult.status === 'fulfilled' && generationResult.status === 'fulfilled'
-          && directoryResult.status === 'fulfilled') {
-          setProfile(profileResult.value ?? null);
-          setGeneration(generationResult.value ?? null);
-          setGenerationRefreshUnconfirmed(false);
-        } else {
-          // Fail closed: a stale READY snapshot cannot authorize another Open.
-          setGenerationRefreshUnconfirmed(true);
-        }
-      },
+      onSuccess: refreshGenerationProjection,
     },
   );
   const coordinatorLookup = useMutation({
@@ -264,7 +265,10 @@ export function ProfilesWorkspace({
         <StatusMessage state={generationLookup.error ?? generationRegister.error ?? (generationRegister.data ? `${generationRegister.data.resultCode}: ${generationRegister.data.resourceId}` : null)} />
         {generation && <GenerationActions generation={generation} profileVersion={profile?.version ?? 1} busy={generationAction.isPending} onAction={(input) => generationAction.mutate(input)} onHighImpact={(input) => generationAction.mutateAsync(input).then(() => undefined)} />}
         <StatusMessage state={generationAction.error ?? (generationAction.data ? `${generationAction.data.resultCode}: ${generationAction.data.resourceId}` : null)} />
-        {generationRefreshUnconfirmed && <p role="alert">The generation action completed, but its current status could not be confirmed. Reload the profile before opening it again; do not repeat the action.</p>}
+        {generationRefreshUnconfirmed && <div role="alert">
+          The action completed, but the latest profile status could not be confirmed. Do not repeat the action.
+          <button type="button" onClick={() => { void refreshGenerationProjection(); }}>Refresh current status</button>
+        </div>}
       </section>
 
       <section className="panel full-span">
