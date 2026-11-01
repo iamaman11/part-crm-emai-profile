@@ -1401,7 +1401,6 @@ def current_process_instance() -> dict[str, str]:
             _fields_ = [("low", wintypes.DWORD), ("high", wintypes.DWORD)]
 
         kernel = ctypes.WinDLL("kernel32", use_last_error=True)
-        handle = kernel.GetCurrentProcess()
         kernel.GetCurrentProcess.restype = wintypes.HANDLE
         handle = kernel.GetCurrentProcess()
         get_times = kernel.GetProcessTimes
