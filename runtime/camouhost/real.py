@@ -1282,8 +1282,29 @@ def report_close_observation_detail(state: dict[str, Any] | None, error: BaseExc
         "callback_events": state["callback_events"] if state is not None else [],
         "callback_event_count": state["callback_event_count"] if state is not None else 0,
     }
+    # Retain full on-machine details in the raw diagnostic artifact. Emit one
+    # independently bounded, fixed-shape witness that Bridge's closed stderr
+    # filter can verify. No exception text, URL, path, cookie or raw profile data.
     print("camouhost_close_observation_detail " + json.dumps(data, ensure_ascii=True),
           file=sys.stderr, flush=True)
+    name = type(error).__name__
+    if len(name) > 40 or not name or not name[0].isalpha() or not all(
+        char.isascii() and (char.isalnum() or char == "_") for char in name
+    ):
+        name = "OtherError"
+    def number(value: Any) -> str:
+        return str(value) if type(value) is int and 0 <= value <= 1_000_000 else "none"
+    recent = data["callback_events"][-8:]
+    events = ",".join(recent) if recent else "none"
+    print(
+        "camouhost_close_witness "
+        f"exception={name} line={number(location)} "
+        f"errno={number(data['errno'])} winerror={number(data['winerror'])} "
+        f"tracked={number(data['tracked'])} closed={number(data['closed'])} "
+        f"crashed={int(bool(data['crashed']))} "
+        f"count={number(data['callback_event_count'])} events={events}",
+        file=sys.stderr, flush=True,
+    )
 
 
 def observe_controlled_close(context: Any, state: dict[str, Any] | None) -> bool:
