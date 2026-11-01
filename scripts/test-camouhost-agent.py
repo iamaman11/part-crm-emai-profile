@@ -671,10 +671,17 @@ def prove_close_failure_witness_preserves_order() -> None:
     assert report["errno"] == 13 and report["winerror"] == 32
     assert report["tracked"] == 1 and report["closed"] == 1
     assert report["callback_events"] == ["page", "close"]
+    assert report["callback_event_count"] == 2
     assert "private profile path" not in raw
+    for _ in range(100):
+        runtime.record_close_callback(state, "page")
+    assert len(state["callback_events"]) == 64, "unbounded callback diagnostic"
+    assert state["callback_event_count"] == 102
+    assert state["callback_events"] == ["page"] * 64
 
     page.handlers["crash"](None)
-    assert state["callback_events"] == ["page", "close", "crash"]
+    assert state["callback_events"][-1] == "crash"
+    assert state["callback_event_count"] == 103
     assert not runtime.controlled_close_candidate(state), "crash became successful closure"
 
 
