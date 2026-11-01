@@ -1493,6 +1493,20 @@ class LocalPlaywrightAgent:
         os.replace(descriptor_temp, self.descriptor)
         durable_agent_directory(base)
 
+    @contextlib.contextmanager
+    def executing_witness(self) -> Any:
+        """Transient busy witness for Bridge close observation, not a Save receipt."""
+        marker = self.run / "agent-executing"
+        with marker.open("x", encoding="utf-8") as output:
+            output.write(self.session_id)
+            output.flush()
+            os.fsync(output.fileno())
+        try:
+            yield
+        finally:
+            # The .running request and result receipt survive independently.
+            marker.unlink(missing_ok=True)
+
     def run_one(self, context: Any) -> bool:
         # Never accept half-written jobs. The agent commits a request by atomic rename.
         for request in sorted(self.requests.glob("*.py")):
@@ -1712,9 +1726,18 @@ def run_ipc() -> int:
                 if raw is None:
                     if agent is not None and context is not None and navigation_admitted:
                         try:
-                            agent.run_one(context)
-                        except OSError:
-                            print("camouhost_agent_io_failure", file=sys.stderr, flush=True)
+                            # Lifecycle IPC wins whenever a frame is ready. Mark execution
+                            # before claiming any pending test job; a concurrent Bridge
+                            # ObserveClose must see BUSY rather than a false IPC death.
+                            if any(agent.requests.glob("*.py")):
+                                with agent.executing_witness():
+                                    agent.run_one(context)
+                        except OSError as error:
+                            print(
+                                f"camouhost_agent_io_failure phase=execution "
+                                f"errno={error.errno} winerror={getattr(error, 'winerror', None)}",
+                                file=sys.stderr, flush=True,
+                            )
                     continue
             if not raw:
                 break
