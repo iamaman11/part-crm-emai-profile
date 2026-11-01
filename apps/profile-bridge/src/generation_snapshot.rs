@@ -148,13 +148,19 @@ pub(crate) fn encode_workspace_snapshot_streaming(
 /// stream. This avoids writing any staging bytes for oversized input while
 /// retaining 64 KiB bounded file reads for accepted profiles.
 #[allow(dead_code)] // K2 production streaming adapter is still gated.
+/// Native Firefox total, including IndexedDB, WAL, preferences and other files.
+/// No browser payload subquota is implied by this inclusive boundary.
+const fn native_size_within_limit(native_bytes: u64) -> bool {
+    native_bytes <= MAX_STREAM_NATIVE_PROFILE_BYTES
+}
+
 fn encoded_stream_snapshot_size(
     inventory: &GenerationInventory,
 ) -> Result<u64, GenerationSnapshotError> {
     if inventory.entries().len() > MAX_SNAPSHOT_FILES {
         return Err(GenerationSnapshotError::SnapshotTooLarge);
     }
-    if inventory.total_bytes() > MAX_STREAM_NATIVE_PROFILE_BYTES {
+    if !native_size_within_limit(inventory.total_bytes()) {
         // Bounded, non-sensitive size evidence. A 512 MiB IndexedDB payload
         // can exceed the policy once real Firefox WAL and preferences count.
         // No browser/profile files are changed by this refusal.
@@ -1056,6 +1062,15 @@ mod tests {
             output.extend_from_slice(content);
         }
         output
+    }
+
+    #[test]
+    fn native_size_policy_is_inclusive_and_never_uses_browser_payload_size() {
+        let maximum = super::MAX_STREAM_NATIVE_PROFILE_BYTES;
+        assert!(super::native_size_within_limit(maximum - 1));
+        assert!(super::native_size_within_limit(maximum));
+        assert!(!super::native_size_within_limit(maximum + 1));
+        assert!(!super::native_size_within_limit(568_329_621));
     }
 
     #[test]
