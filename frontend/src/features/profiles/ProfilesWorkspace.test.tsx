@@ -70,5 +70,14 @@ describe('ProfilesWorkspace generation refresh (#802 F06)', () => {
     expect(profileLookup).toHaveBeenCalledTimes(3);
     expect(generationLookup).toHaveBeenCalledTimes(3);
     expect(activation).toHaveBeenCalledTimes(2);
+
+    // Mutation succeeds, but the immediately following projection read fails.
+    // The server command must not be replayed and stale READY must not permit Open.
+    generationLookup.mockRejectedValueOnce(new Error('readback temporarily unavailable'));
+    fireEvent.click(screen.getByRole('button', { name: 'deactivate generation' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Confirm deactivate generation' }));
+    expect(await screen.findByText(/generation action completed, but its current status could not be confirmed/i)).toBeTruthy();
+    expect(open.disabled).toBe(true);
+    expect(activation).toHaveBeenCalledTimes(3);
   });
 });
