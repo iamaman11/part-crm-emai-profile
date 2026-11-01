@@ -678,9 +678,44 @@ def prove_close_failure_witness_preserves_order() -> None:
     assert not runtime.controlled_close_candidate(state), "crash became successful closure"
 
 
+def prove_owned_job_execution_witness() -> None:
+    """D02: mark only a live owner-thread job, never a saved browser or stale job."""
+    runtime = runtime_module()
+    with tempfile.TemporaryDirectory(prefix="owned-agent-busy-witness-") as temp:
+        agent = runtime.LocalPlaywrightAgent(str(Path(temp).resolve()), "session_job_witness")
+        fake = Context()
+        marker = agent.run / "agent-executing"
+        try:
+            assert not marker.exists()
+            request = committed_request(
+                agent.requests, "result = {'pages': len(context.pages)}\n"
+            )
+            with agent.executing_witness():
+                assert marker.is_file()
+                assert agent.run_one(fake)
+                assert marker.is_file()
+            assert not marker.exists(), "finished job remains falsely busy"
+            assert json.loads((agent.results / f"{request}.json").read_text(encoding="utf-8")) == {
+                "status": "ok", "result": {"pages": 1},
+            }
+            assert not agent.run_one(fake), "completed job executed again"
+            try:
+                with agent.executing_witness():
+                    assert marker.is_file()
+                    raise OSError(13, "simulated owner-thread I/O failure")
+            except OSError:
+                pass
+            else:
+                raise AssertionError("failure silently accepted")
+            assert not marker.exists(), "failed job left a permanently busy marker"
+        finally:
+            agent.close()
+
+
 def main() -> int:
     prove_receipt_failure_diagnostics()
     prove_close_failure_witness_preserves_order()
+    prove_owned_job_execution_witness()
     prove_pid_reuse_fails_closed()
     prove_agent()
     prove_claim_denial_and_windows_owner_preflight()
