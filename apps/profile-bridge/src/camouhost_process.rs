@@ -879,6 +879,14 @@ fn owned_agent_execution_marker(directory: &Path, pid: u32, session: &SessionId)
     marker.is_file() && !marker.is_symlink()
 }
 
+fn close_observation_expired(
+    started: Instant,
+    last_busy: Option<Instant>,
+    timeout: Duration,
+) -> bool {
+    last_busy.map_or_else(|| started.elapsed(), |moment| moment.elapsed()) >= timeout
+}
+
 fn receive_close_observation_with_agent(
     state: &mut ProcessState,
     timeout: Duration,
@@ -914,8 +922,7 @@ fn receive_close_observation_with_agent(
         if agent_execution_active(state) {
             last_busy = Some(Instant::now());
         }
-        let elapsed = last_busy.map_or_else(|| started.elapsed(), |moment| moment.elapsed());
-        if elapsed >= timeout {
+        if close_observation_expired(started, last_busy, timeout) {
             return Err(BridgePortError::Unavailable);
         }
     }
@@ -1368,6 +1375,25 @@ mod tests {
             Some("CLOUDFLARE_API_TOKEN" | "HTTP_PROXY" | "CAMOU_CONFIG_1")
         )));
         Ok(())
+    }
+
+    #[test]
+    fn close_ipc_deadline_tracks_job_activity_without_masking_real_timeout() {
+        let now = std::time::Instant::now();
+        let standard = Duration::from_secs(5);
+        assert!(super::close_observation_expired(
+            now - Duration::from_secs(6), None, standard,
+        ));
+        assert!(!super::close_observation_expired(
+            now - Duration::from_secs(12),
+            Some(now - Duration::from_secs(1)),
+            standard,
+        ));
+        assert!(super::close_observation_expired(
+            now - Duration::from_secs(12),
+            Some(now - Duration::from_secs(6)),
+            standard,
+        ));
     }
 
     #[test]
