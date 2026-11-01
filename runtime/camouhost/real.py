@@ -1201,6 +1201,15 @@ class WindowsBrowserExitWitness:
         self.handles = []
 
 
+def record_close_callback(state: dict[str, Any], event: str) -> None:
+    """Keep the latest bounded close witness sequence with an exact event count."""
+    state["callback_event_count"] += 1
+    events = state["callback_events"]
+    events.append(event)
+    if len(events) > 64:
+        del events[:-64]
+
+
 def install_controlled_close_observation(context: Any, owner_pid: int | None = None) -> dict[str, Any]:
     """Observe user page/window closure without mutating browser lifecycle.
 
@@ -1214,6 +1223,7 @@ def install_controlled_close_observation(context: Any, owner_pid: int | None = N
         "crashed": False,
         # Ordered callback names only: no URL, cookie, profile data or process secrets.
         "callback_events": [],
+        "callback_event_count": 0,
         "browser_exit": (
             WindowsBrowserExitWitness(owner_pid)
             if os.name == "nt" and owner_pid is not None
@@ -1224,13 +1234,13 @@ def install_controlled_close_observation(context: Any, owner_pid: int | None = N
     def track_page(page: Any) -> None:
         token = id(page)
         state["tracked_pages"].add(token)
-        state["callback_events"].append("page")
+        record_close_callback(state, "page")
         def on_close(_page: Any, page_token: int = token) -> None:
             state["closed_pages"].add(page_token)
-            state["callback_events"].append("close")
+            record_close_callback(state, "close")
         def on_crash(_page: Any) -> None:
             state["crashed"] = True
-            state["callback_events"].append("crash")
+            record_close_callback(state, "crash")
         page.on("close", on_close)
         page.on("crash", on_crash)
 
@@ -1270,6 +1280,7 @@ def report_close_observation_detail(state: dict[str, Any] | None, error: BaseExc
         "closed": len(state["closed_pages"]) if state is not None else 0,
         "crashed": state["crashed"] if state is not None else False,
         "callback_events": state["callback_events"] if state is not None else [],
+        "callback_event_count": state["callback_event_count"] if state is not None else 0,
     }
     print("camouhost_close_observation_detail " + json.dumps(data, ensure_ascii=True),
           file=sys.stderr, flush=True)
