@@ -342,6 +342,9 @@ pub enum GenerationSaveFailureReason {
     NativeSourceChanged,
     SnapshotTooLarge,
     SealingMaterial,
+    SealingTransport,
+    SealingResponseUncertain,
+    SealingRejected,
     Encryption,
     LocalPreparation,
     CheckpointWrite,
@@ -384,6 +387,9 @@ impl GenerationSaveFailureReason {
             Self::NativeSourceChanged => "BRIDGE_SAVE_NATIVE_SOURCE_CHANGED",
             Self::SnapshotTooLarge => "BRIDGE_SAVE_SNAPSHOT_TOO_LARGE",
             Self::SealingMaterial => "BRIDGE_SAVE_SEALING_MATERIAL_UNAVAILABLE",
+            Self::SealingTransport => "BRIDGE_SAVE_SEALING_TRANSPORT_UNKNOWN",
+            Self::SealingResponseUncertain => "BRIDGE_SAVE_SEALING_RESPONSE_UNCERTAIN",
+            Self::SealingRejected => "BRIDGE_SAVE_SEALING_REJECTED",
             Self::Encryption => "BRIDGE_SAVE_ENCRYPTION_FAILED",
             Self::LocalPreparation => "BRIDGE_SAVE_LOCAL_PREPARATION_FAILED",
             Self::CheckpointWrite => "BRIDGE_SAVE_CHECKPOINT_WRITE_FAILED",
@@ -456,6 +462,17 @@ fn save_checkpoint_reason(source: SaveAttemptEvidenceError) -> GenerationSaveFai
         SaveAttemptEvidenceError::SealingMaterialUnavailable => {
             GenerationSaveFailureReason::SealingMaterial
         }
+        // No sealed BPAT exists yet: DO NOT enter the exact-checkpoint live
+        // reconnect loop, even for a transport/unknown HTTP result.
+        SaveAttemptEvidenceError::SealingTransport => {
+            GenerationSaveFailureReason::SealingTransport
+        }
+        SaveAttemptEvidenceError::SealingResponseUncertain => {
+            GenerationSaveFailureReason::SealingResponseUncertain
+        }
+        SaveAttemptEvidenceError::SealingRejected => {
+            GenerationSaveFailureReason::SealingRejected
+        }
         SaveAttemptEvidenceError::Invalid | SaveAttemptEvidenceError::Changed => {
             GenerationSaveFailureReason::CheckpointIntegrity
         }
@@ -472,6 +489,17 @@ fn save_checkpoint_read_reason(source: SaveAttemptEvidenceError) -> GenerationSa
         }
         SaveAttemptEvidenceError::SealingMaterialUnavailable => {
             GenerationSaveFailureReason::SealingMaterial
+        }
+        // No sealed BPAT exists yet: DO NOT enter the exact-checkpoint live
+        // reconnect loop, even for a transport/unknown HTTP result.
+        SaveAttemptEvidenceError::SealingTransport => {
+            GenerationSaveFailureReason::SealingTransport
+        }
+        SaveAttemptEvidenceError::SealingResponseUncertain => {
+            GenerationSaveFailureReason::SealingResponseUncertain
+        }
+        SaveAttemptEvidenceError::SealingRejected => {
+            GenerationSaveFailureReason::SealingRejected
         }
         SaveAttemptEvidenceError::Invalid | SaveAttemptEvidenceError::Changed => {
             GenerationSaveFailureReason::CheckpointIntegrity
@@ -2379,6 +2407,15 @@ mod tests {
             save_checkpoint_reason(Evidence::SealingMaterialUnavailable),
             Reason::SealingMaterial
         );
+        for (error, expected) in [
+            (Evidence::SealingTransport, Reason::SealingTransport),
+            (Evidence::SealingResponseUncertain, Reason::SealingResponseUncertain),
+            (Evidence::SealingRejected, Reason::SealingRejected),
+        ] {
+            assert_eq!(save_checkpoint_reason(error), expected);
+            assert!(!expected.allows_bounded_cloud_reconcile(),
+                "unsealed N+1 must not enter already-sealed BPAT retry path");
+        }
         assert_eq!(
             save_checkpoint_read_reason(Evidence::SealingMaterialUnavailable),
             Reason::SealingMaterial
