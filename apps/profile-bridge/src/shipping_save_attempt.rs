@@ -37,6 +37,7 @@ pub(crate) enum SaveAttemptEvidenceError {
     Invalid,
     Changed,
     SnapshotTooLarge,
+    SealingMaterialUnavailable,
     Unavailable,
 }
 
@@ -53,6 +54,7 @@ impl std::fmt::Display for SaveAttemptEvidenceError {
             Self::Invalid => formatter.write_str("save-attempt evidence is invalid"),
             Self::Changed => formatter.write_str("save-attempt workspace or bytes changed"),
             Self::SnapshotTooLarge => formatter.write_str("native Firefox snapshot exceeds 512 MiB limit"),
+            Self::SealingMaterialUnavailable => formatter.write_str("generation sealing material unavailable"),
             Self::Unavailable => formatter.write_str("save-attempt atomic staging unavailable"),
         }
     }
@@ -1707,7 +1709,7 @@ fn persist_streaming_exact_save_attempt_from_native_with_origin<
             candidate.generation_id(),
             measured_digest,
         )
-        .map_err(|_| SaveAttemptEvidenceError::Unavailable)?;
+        .map_err(|_| SaveAttemptEvidenceError::SealingMaterialUnavailable)?;
     let (key, nonce, chunk_size) = material.into_parts();
     // The first pass is bound to the original DEK request. Neither a
     // changed key-owner source nor a subsequent same-size edit can change
