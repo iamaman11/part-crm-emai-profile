@@ -52,6 +52,8 @@ const LOCAL_AGENT_DIRECTORY_NAME: &str = "ProfileBridgeAgentTests";
 const BROWSER_VISIBLE_RESPONSE_TIMEOUT: Duration = Duration::from_secs(30);
 const NAVIGATION_RESPONSE_TIMEOUT: Duration = Duration::from_secs(120);
 const OBSERVE_CLOSE_RESPONSE_TIMEOUT: Duration = Duration::from_secs(5);
+// Fail closed if a diagnostic job hangs indefinitely. This is not a Save deadline.
+const MAX_AGENT_CLOSE_OBSERVATION_WAIT: Duration = Duration::from_secs(300);
 const CLOSE_RESPONSE_TIMEOUT: Duration = Duration::from_secs(30);
 const PROCESS_EXIT_TIMEOUT: Duration = Duration::from_secs(15);
 const FORCE_EXIT_TIMEOUT: Duration = Duration::from_secs(10);
@@ -884,7 +886,10 @@ fn close_observation_expired(
     last_busy: Option<Instant>,
     timeout: Duration,
 ) -> bool {
-    last_busy.map_or_else(|| started.elapsed(), |moment| moment.elapsed()) >= timeout
+    // A continually refreshed BUSY witness must never suppress discovery of
+    // a genuinely wedged IPC owner indefinitely. No positive close is inferred.
+    started.elapsed() >= MAX_AGENT_CLOSE_OBSERVATION_WAIT
+        || last_busy.map_or_else(|| started.elapsed(), |moment| moment.elapsed()) >= timeout
 }
 
 fn receive_close_observation_with_agent(
@@ -1394,6 +1399,11 @@ mod tests {
             Some(now - Duration::from_secs(6)),
             standard,
         ));
+        assert!(super::close_observation_expired(
+            now - super::MAX_AGENT_CLOSE_OBSERVATION_WAIT - Duration::from_secs(1),
+            Some(now),
+            standard,
+        ), "a hung diagnostic job cannot hide an IPC failure indefinitely");
     }
 
     #[test]
