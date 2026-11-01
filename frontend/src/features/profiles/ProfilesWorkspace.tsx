@@ -1,7 +1,7 @@
 import { openBrowserProfile } from './api';
 import { newIdempotencyKey } from '../../shared/api/idempotency';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
-import { useEffect, useState, type FormEvent } from 'react';
+import { useEffect, useRef, useState, type FormEvent } from 'react';
 import { useTenant } from '../../app/TenantContext';
 import {
   changeGenerationActivation,
@@ -45,6 +45,9 @@ export function ProfilesWorkspace({
   const [generationId, setGenerationId] = useState('');
   const [generation, setGeneration] = useState<GenerationProjection | null>(null);
   const [coordinator, setCoordinator] = useState<CoordinatorResponse | null>(null);
+  const [generationRefreshUnconfirmed, setGenerationRefreshUnconfirmed] = useState(false);
+  const selected = useRef({ tenantId, profileId, generationId });
+  selected.current = { tenantId, profileId, generationId };
 
   const launch = useMutation({ mutationFn: () => openBrowserProfile(tenantId, profileId, newIdempotencyKey()) });
   const lookup = useMutation({
@@ -87,18 +90,25 @@ export function ProfilesWorkspace({
       return changeGenerationActivation(tenantId, profileId, generationId, input.expectedVersion, input.kind === 'activate', idempotencyKey);
     }, {
       onSuccess: async () => {
-        // Receipts are not projections: refresh from the authoritative API after success.
-        // Never synthesize a READY/VERIFIED version from the requested action.
-        const selectedProfile = profileId;
-        const selectedGeneration = generationId;
-        await cache.invalidateQueries({ queryKey: ['operator-query', tenantId, 'profiles'] });
-        const [freshProfile, freshGeneration] = await Promise.all([
-          getProfile(tenantId, selectedProfile),
-          getGeneration(tenantId, selectedProfile, selectedGeneration),
+        // The mutation receipt proves only the action, not its current projection.
+        // A failed readback must NOT make the completed command look retryable.
+        const requested = { tenantId, profileId, generationId };
+        const [profileResult, generationResult, directoryResult] = await Promise.allSettled([
+          getProfile(requested.tenantId, requested.profileId),
+          getGeneration(requested.tenantId, requested.profileId, requested.generationId),
+          cache.invalidateQueries({ queryKey: ['operator-query', requested.tenantId, 'profiles'] }),
         ]);
-        if (profileId === selectedProfile && generationId === selectedGeneration) {
-          setProfile(freshProfile ?? null);
-          setGeneration(freshGeneration ?? null);
+        if (selected.current.tenantId !== requested.tenantId
+          || selected.current.profileId !== requested.profileId
+          || selected.current.generationId !== requested.generationId) return;
+        if (profileResult.status === 'fulfilled' && generationResult.status === 'fulfilled'
+          && directoryResult.status === 'fulfilled') {
+          setProfile(profileResult.value ?? null);
+          setGeneration(generationResult.value ?? null);
+          setGenerationRefreshUnconfirmed(false);
+        } else {
+          // Fail closed: a stale READY snapshot cannot authorize another Open.
+          setGenerationRefreshUnconfirmed(true);
         }
       },
     },
@@ -126,6 +136,7 @@ export function ProfilesWorkspace({
     setGenerationId('');
     setGeneration(null);
     setCoordinator(null);
+    setGenerationRefreshUnconfirmed(false);
     if (tenantId && nextProfileId) lookup.mutate(nextProfileId);
   }, [tenantId, selectedProfileId]);
 
@@ -161,7 +172,7 @@ export function ProfilesWorkspace({
           <p>The selected profile is not visible to the active actor.</p>
         )}
         {profile && <>
-          <button type="button" disabled={launch.isPending || !['DRAFT', 'READY'].includes(profile.status)} onClick={() => launch.mutate()}>{launch.isPending ? 'Opening…' : 'Open browser'}</button>
+          <button type="button" disabled={launch.isPending || generationAction.isPending || generationRefreshUnconfirmed || !['DRAFT', 'READY'].includes(profile.status)} onClick={() => launch.mutate()}>{launch.isPending ? 'Opening…' : 'Open browser'}</button>
           <StatusMessage state={launch.error ?? (launch.isPending ? 'Preparing and opening your profile…' : null)} />
         </>}
         {profile && (
@@ -253,6 +264,7 @@ export function ProfilesWorkspace({
         <StatusMessage state={generationLookup.error ?? generationRegister.error ?? (generationRegister.data ? `${generationRegister.data.resultCode}: ${generationRegister.data.resourceId}` : null)} />
         {generation && <GenerationActions generation={generation} profileVersion={profile?.version ?? 1} busy={generationAction.isPending} onAction={(input) => generationAction.mutate(input)} onHighImpact={(input) => generationAction.mutateAsync(input).then(() => undefined)} />}
         <StatusMessage state={generationAction.error ?? (generationAction.data ? `${generationAction.data.resultCode}: ${generationAction.data.resourceId}` : null)} />
+        {generationRefreshUnconfirmed && <p role="alert">The generation action completed, but its current status could not be confirmed. Reload the profile before opening it again; do not repeat the action.</p>}
       </section>
 
       <section className="panel full-span">
