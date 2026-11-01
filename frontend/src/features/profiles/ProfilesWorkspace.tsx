@@ -85,6 +85,22 @@ export function ProfilesWorkspace({
         return quarantineGeneration(tenantId, profileId, generationId, input.expectedVersion, idempotencyKey);
       }
       return changeGenerationActivation(tenantId, profileId, generationId, input.expectedVersion, input.kind === 'activate', idempotencyKey);
+    }, {
+      onSuccess: async () => {
+        // Receipts are not projections: refresh from the authoritative API after success.
+        // Never synthesize a READY/VERIFIED version from the requested action.
+        const selectedProfile = profileId;
+        const selectedGeneration = generationId;
+        await cache.invalidateQueries({ queryKey: ['operator-query', tenantId, 'profiles'] });
+        const [freshProfile, freshGeneration] = await Promise.all([
+          getProfile(tenantId, selectedProfile),
+          getGeneration(tenantId, selectedProfile, selectedGeneration),
+        ]);
+        if (profileId === selectedProfile && generationId === selectedGeneration) {
+          setProfile(freshProfile ?? null);
+          setGeneration(freshGeneration ?? null);
+        }
+      },
     },
   );
   const coordinatorLookup = useMutation({
