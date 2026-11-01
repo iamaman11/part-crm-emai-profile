@@ -2225,7 +2225,7 @@ mod direct_native_checkpoint_tests {
         inspect_all_pending_for_s1, inspect_streaming_exact_save_attempt,
         persist_local_unsynced_intent, persist_streaming_exact_save_attempt_from_native,
     };
-    use crate::dirty_generation::{GenerationSealingMaterial, GenerationSealingMaterialPort};
+    use crate::dirty_generation::{GenerationSealingMaterial, GenerationSealingMaterialPort, SealingMaterialFailure};
     use crate::local_profile::{GenerationWorkspace, MaterializationRoot};
     use encrypted_generation_domain::{
         GenerationDek, KeyId, NoncePrefix, open_generation_streaming,
@@ -2271,9 +2271,12 @@ mod direct_native_checkpoint_tests {
         }
     }
 
-    struct OfflineKeys;
+    struct OfflineKeys(SealingMaterialFailure);
     impl GenerationSealingMaterialPort for OfflineKeys {
-        type Error = ();
+        type Error = SealingMaterialFailure;
+        fn classify_error(error: &Self::Error) -> SealingMaterialFailure {
+            *error
+        }
         fn material_for(
             &mut self,
             _tenant: &TenantId,
@@ -2282,7 +2285,7 @@ mod direct_native_checkpoint_tests {
             _successor: &GenerationId,
             _digest: [u8; 32],
         ) -> Result<GenerationSealingMaterial, Self::Error> {
-            Err(())
+            Err(self.0)
         }
     }
 
@@ -2293,10 +2296,23 @@ mod direct_native_checkpoint_tests {
         let (source, candidate) = fixture.native()?;
         persist_local_unsynced_intent(&fixture.root, &source, &fixture.lease)?;
         let before = source.inventory()?;
-        let result = persist_streaming_exact_save_attempt_from_native(
-            &fixture.root, &source, &candidate, &fixture.lease, &mut OfflineKeys,
-        );
-        assert_eq!(result, Err(SaveAttemptEvidenceError::SealingMaterialUnavailable));
+        for (cause, expected) in [
+            (SealingMaterialFailure::Transport, SaveAttemptEvidenceError::SealingTransport),
+            (
+                SealingMaterialFailure::ServerUncertain,
+                SaveAttemptEvidenceError::SealingResponseUncertain,
+            ),
+            (SealingMaterialFailure::Rejected, SaveAttemptEvidenceError::SealingRejected),
+            (
+                SealingMaterialFailure::Unavailable,
+                SaveAttemptEvidenceError::SealingMaterialUnavailable,
+            ),
+        ] {
+            let result = persist_streaming_exact_save_attempt_from_native(
+                &fixture.root, &source, &candidate, &fixture.lease, &mut OfflineKeys(cause),
+            );
+            assert_eq!(result, Err(expected));
+        }
         assert_eq!(source.inventory()?, before);
         assert_eq!(candidate.inventory()?, before);
         let pending = inspect_all_pending_for_s1(&fixture.root)?;
