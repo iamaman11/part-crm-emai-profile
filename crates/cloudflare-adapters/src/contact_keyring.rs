@@ -13,7 +13,29 @@ use worker::d1::D1Database;
 use zeroize::{Zeroize, Zeroizing};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct ContactKeyringConfigError;
+pub enum ContactKeyringConfigError {
+    InvalidShape,
+    InvalidVersion,
+    InvalidKeyHex,
+    MissingActiveKey,
+    InvalidLifecycle,
+    InvalidKeySet,
+}
+
+impl ContactKeyringConfigError {
+    /// Fixed diagnostic vocabulary. Never serialize keyring or secret-derived bytes.
+    #[must_use]
+    pub const fn code(self) -> &'static str {
+        match self {
+            Self::InvalidShape => "shape",
+            Self::InvalidVersion => "version",
+            Self::InvalidKeyHex => "key_hex",
+            Self::MissingActiveKey => "active_key",
+            Self::InvalidLifecycle => "lifecycle",
+            Self::InvalidKeySet => "keyset",
+        }
+    }
+}
 
 #[cfg(target_arch = "wasm32")]
 pub fn contact_protection_from_serialized_keyring(
@@ -51,17 +73,17 @@ fn parse_contact_protection_keyring_with_metadata(
 ) -> Result<(ContactProtectionKeyring, ContactKeyLifecycleMetadata), ContactKeyringConfigError> {
     let serialized = Zeroizing::new(serialized);
     let keyring: ContactProtectionKeyringSecret =
-        serde_json::from_str(serialized.as_str()).map_err(|_| ContactKeyringConfigError)?;
+        serde_json::from_str(serialized.as_str()).map_err(|_| ContactKeyringConfigError::InvalidShape)?;
     let active_encryption_version = EncryptionKeyVersion::new(keyring.active_encryption_version)
-        .map_err(|_| ContactKeyringConfigError)?;
+        .map_err(|_| ContactKeyringConfigError::InvalidVersion)?;
     let active_lookup_version = LookupKeyVersion::new(keyring.active_lookup_version)
-        .map_err(|_| ContactKeyringConfigError)?;
+        .map_err(|_| ContactKeyringConfigError::InvalidVersion)?;
     let mut encryption_keys = keyring
         .encryption
         .iter()
         .map(|entry| {
             Ok(ContactEncryptionRootKey::new(
-                EncryptionKeyVersion::new(entry.version).map_err(|_| ContactKeyringConfigError)?,
+                EncryptionKeyVersion::new(entry.version).map_err(|_| ContactKeyringConfigError::InvalidVersion)?,
                 decode_key_hex(&entry.key_hex)?,
             ))
         })
@@ -71,7 +93,7 @@ fn parse_contact_protection_keyring_with_metadata(
         .iter()
         .map(|entry| {
             Ok(ContactLookupRootKey::new(
-                LookupKeyVersion::new(entry.version).map_err(|_| ContactKeyringConfigError)?,
+                LookupKeyVersion::new(entry.version).map_err(|_| ContactKeyringConfigError::InvalidVersion)?,
                 decode_key_hex(&entry.key_hex)?,
             ))
         })
@@ -90,13 +112,13 @@ fn parse_contact_protection_keyring_with_metadata(
         retained_encryption_versions,
         retained_lookup_versions,
     )
-    .map_err(|_| ContactKeyringConfigError)?;
+    .map_err(|_| ContactKeyringConfigError::InvalidLifecycle)?;
 
     move_active_encryption_first(&mut encryption_keys, active_encryption_version)?;
     move_active_lookup_first(&mut lookup_keys, active_lookup_version)?;
 
     let protection_keyring = ContactProtectionKeyring::new(encryption_keys, lookup_keys)
-        .map_err(|_| ContactKeyringConfigError)?;
+        .map_err(|_| ContactKeyringConfigError::InvalidKeySet)?;
     Ok((protection_keyring, metadata))
 }
 
@@ -107,7 +129,7 @@ fn move_active_encryption_first(
     let index = keys
         .iter()
         .position(|key| key.version() == active_version)
-        .ok_or(ContactKeyringConfigError)?;
+        .ok_or(ContactKeyringConfigError::MissingActiveKey)?;
     keys.swap(0, index);
     Ok(())
 }
@@ -119,7 +141,7 @@ fn move_active_lookup_first(
     let index = keys
         .iter()
         .position(|key| key.version() == active_version)
-        .ok_or(ContactKeyringConfigError)?;
+        .ok_or(ContactKeyringConfigError::MissingActiveKey)?;
     keys.swap(0, index);
     Ok(())
 }
@@ -148,13 +170,13 @@ impl Drop for ContactProtectionKeyEntry {
 
 fn decode_key_hex(value: &str) -> Result<[u8; 32], ContactKeyringConfigError> {
     if value.len() != 64 {
-        return Err(ContactKeyringConfigError);
+        return Err(ContactKeyringConfigError::InvalidKeyHex);
     }
     let bytes = value.as_bytes();
     let mut decoded = Zeroizing::new([0_u8; 32]);
     for (index, byte) in decoded.iter_mut().enumerate() {
-        let high = hex_nibble(bytes[index * 2]).ok_or(ContactKeyringConfigError)?;
-        let low = hex_nibble(bytes[index * 2 + 1]).ok_or(ContactKeyringConfigError)?;
+        let high = hex_nibble(bytes[index * 2]).ok_or(ContactKeyringConfigError::InvalidKeyHex)?;
+        let low = hex_nibble(bytes[index * 2 + 1]).ok_or(ContactKeyringConfigError::InvalidKeyHex)?;
         *byte = (high << 4) | low;
     }
     Ok(*decoded)
