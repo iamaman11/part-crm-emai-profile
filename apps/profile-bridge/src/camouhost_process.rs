@@ -310,6 +310,7 @@ struct ProcessState {
     active_session: Option<SessionId>,
     profile_stable_identity: Option<ProfileStableIdentity>,
     navigation_target: Option<String>,
+    agent_directory: Option<PathBuf>,
 }
 
 impl ProcessState {
@@ -321,6 +322,7 @@ impl ProcessState {
             active_session: None,
             profile_stable_identity: None,
             navigation_target: None,
+            agent_directory: None,
         }
     }
 
@@ -331,6 +333,7 @@ impl ProcessState {
         self.active_session = None;
         self.profile_stable_identity = None;
         self.navigation_target = None;
+        self.agent_directory = None;
     }
 }
 
@@ -401,6 +404,18 @@ impl ManagedCamouhostCloseObserver {
         &mut self,
         session_id: &SessionId,
     ) -> Result<bool, BridgePortError> {
+        {
+            let state = self.shared.lock().map_err(|_| BridgePortError::Unavailable)?;
+            if state.active_session.as_ref() != Some(session_id) {
+                return Err(BridgePortError::InvalidResponse);
+            }
+            // Playwright's synchronous owner thread cannot service IPC while
+            // an explicit test job is executing. BUSY means no positive close
+            // witness; never turn it into a false Saved or runtime death.
+            if agent_execution_active(&state) {
+                return Ok(false);
+            }
+        }
         let response = exchange_shared(
             &self.shared,
             &CamouhostMessage::ObserveClose {
@@ -534,6 +549,7 @@ impl ProcessControlPort for ManagedCamouhostProcess {
         state.active_session = Some(session_id.clone());
         state.profile_stable_identity = Some(binding.profile_stable_identity);
         state.navigation_target = self.config.initial_url.clone();
+        state.agent_directory = Some(agent_directory);
         state.child = Some(child);
         Ok(())
     }
@@ -820,6 +836,88 @@ fn exchange_shared(
     Ok(parsed)
 }
 
+/// A strictly local, transient observation of the current Camouhost-owned
+/// Playwright job. Neither directory contents nor a stale PID grant Save authority.
+fn agent_execution_active(state: &ProcessState) -> bool {
+    let (Some(directory), Some(child), Some(session)) = (
+        state.agent_directory.as_ref(),
+        state.child.as_ref(),
+        state.active_session.as_ref(),
+    ) else {
+        return false;
+    };
+    let pid = child.id();
+    let descriptor = directory.join(format!("active-{pid}.json"));
+    if descriptor.is_symlink() {
+        return false;
+    }
+    let Ok(bytes) = fs::read(&descriptor) else {
+        return false;
+    };
+    if bytes.len() > 4096 {
+        return false;
+    }
+    let Ok(value) = serde_json::from_slice::<serde_json::Value>(&bytes) else {
+        return false;
+    };
+    if value.get("pid").and_then(serde_json::Value::as_u64) != Some(u64::from(pid))
+        || value.get("session").and_then(serde_json::Value::as_str) != Some(session.as_str())
+    {
+        return false;
+    }
+    let Some(run) = value.get("run").and_then(serde_json::Value::as_str) else {
+        return false;
+    };
+    let run = Path::new(run);
+    if run.parent() != Some(directory.as_path()) || run.is_symlink() || !run.is_dir() {
+        return false;
+    }
+    let marker = run.join("agent-executing");
+    marker.is_file() && !marker.is_symlink()
+}
+
+fn receive_close_observation_with_agent(
+    state: &mut ProcessState,
+    timeout: Duration,
+) -> Result<String, BridgePortError> {
+    // The ordinary five-second IPC contract remains unchanged when no job is
+    // active. During an explicitly admitted Playwright job, only postpone the
+    // close observation; the positive browser close witness is still required.
+    let started = Instant::now();
+    let mut last_busy = None;
+    loop {
+        let response = state
+            .responses
+            .as_ref()
+            .ok_or(BridgePortError::Unavailable)?
+            .recv_timeout(Duration::from_millis(100));
+        match response {
+            Ok(result) => return result,
+            Err(RecvTimeoutError::Disconnected) => {
+                return Err(BridgePortError::InvalidResponse);
+            }
+            Err(RecvTimeoutError::Timeout) => {}
+        }
+        if state
+            .child
+            .as_mut()
+            .ok_or(BridgePortError::Unavailable)?
+            .try_wait()
+            .map_err(|_| BridgePortError::Unavailable)?
+            .is_some()
+        {
+            return Err(BridgePortError::Unavailable);
+        }
+        if agent_execution_active(state) {
+            last_busy = Some(Instant::now());
+        }
+        let elapsed = last_busy.map_or_else(|| started.elapsed(), |moment| moment.elapsed());
+        if elapsed >= timeout {
+            return Err(BridgePortError::Unavailable);
+        }
+    }
+}
+
 fn exchange_frame_shared(
     shared: &Arc<Mutex<ProcessState>>,
     frame: &str,
@@ -836,6 +934,9 @@ fn exchange_frame_shared(
         .and_then(|()| stdin.write_all(b"\n"))
         .and_then(|()| stdin.flush())
         .map_err(|_| BridgePortError::Unavailable)?;
+    if frame.starts_with("observe_close|") {
+        return receive_close_observation_with_agent(&mut state, timeout);
+    }
     let responses = state
         .responses
         .as_ref()
