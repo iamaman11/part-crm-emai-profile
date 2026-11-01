@@ -665,8 +665,14 @@ def prove_close_failure_witness_preserves_order() -> None:
     with contextlib.redirect_stderr(captured):
         runtime.report_close_observation_detail(state, problem)
     raw = captured.getvalue()
-    assert raw.startswith("camouhost_close_observation_detail ")
-    report = json.loads(raw.split(" ", 1)[1])
+    lines = raw.splitlines()
+    assert len(lines) == 2, lines
+    assert lines[0].startswith("camouhost_close_observation_detail ")
+    assert lines[1].startswith("camouhost_close_witness ")
+    report = json.loads(lines[0].split(" ", 1)[1])
+    assert "exception=SyntheticWindowsFailure" in lines[1]
+    assert "errno=13 winerror=32" in lines[1]
+    assert "events=page,close" in lines[1]
     assert report["exception_type"] == "SyntheticWindowsFailure"
     assert report["errno"] == 13 and report["winerror"] == 32
     assert report["tracked"] == 1 and report["closed"] == 1
