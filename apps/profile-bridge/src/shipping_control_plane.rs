@@ -1,4 +1,4 @@
-use crate::dirty_generation::{GenerationSealingMaterial, GenerationSealingMaterialPort};
+use crate::dirty_generation::{GenerationSealingMaterial, GenerationSealingMaterialPort, SealingMaterialFailure};
 use crate::generation_reopen::{GenerationDownloadCapability, GenerationReopenControlPort};
 use crate::operator_flow::{EnrollmentFailureKind, EnrollmentPort, OperatorEnrollment};
 use application_ports::{ProfileCoordinatorPort, ProfileCoordinatorRuntimePort};
@@ -614,6 +614,17 @@ where
     T: MachineHttpPort,
 {
     type Error = ShippingControlPlaneError;
+
+    fn classify_error(error: &Self::Error) -> SealingMaterialFailure {
+        match error {
+            ShippingControlPlaneError::Transport => SealingMaterialFailure::Transport,
+            ShippingControlPlaneError::HttpServerUncertain => SealingMaterialFailure::ServerUncertain,
+            ShippingControlPlaneError::HttpStatus
+            | ShippingControlPlaneError::LaunchLeaseConflict => SealingMaterialFailure::Rejected,
+            ShippingControlPlaneError::InvalidResponse
+            | ShippingControlPlaneError::Clock => SealingMaterialFailure::Unavailable,
+        }
+    }
 
     fn material_for(
         &mut self,
