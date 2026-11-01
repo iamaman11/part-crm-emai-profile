@@ -325,8 +325,11 @@ def run() -> int:
         time.sleep(0.1)
     try:
         details = json.loads(status.read_text(encoding="utf-8"))
-    except (OSError, ValueError):
-        print("PLAYWRIGHT_AGENT_UNCONFIRMED: unreadable result; do not retry automatically", file=sys.stderr)
+    except OSError as error:
+        print(f"PLAYWRIGHT_AGENT_UNCONFIRMED phase=receipt_read errno={error.errno} winerror={getattr(error, 'winerror', None)}; do not replay automatically", file=sys.stderr)
+        return 125
+    except ValueError as error:
+        print(f"PLAYWRIGHT_AGENT_UNCONFIRMED phase=receipt_parse error={type(error).__name__}; do not replay automatically", file=sys.stderr)
         return 125
     for extension, target in (("stdout.txt", sys.stdout), ("stderr.txt", sys.stderr)):
         log = results / f"{job_id}.{extension}"
