@@ -1391,6 +1391,46 @@ def durable_agent_directory(path: Path) -> None:
             os.close(descriptor)
 
 
+def current_process_instance() -> dict[str, str]:
+    """OS process creation identity; a PID alone can later belong to another process."""
+    if os.name == "nt":
+        import ctypes
+        from ctypes import wintypes
+
+        class FILETIME(ctypes.Structure):
+            _fields_ = [("low", wintypes.DWORD), ("high", wintypes.DWORD)]
+
+        kernel = ctypes.WinDLL("kernel32", use_last_error=True)
+        handle = kernel.GetCurrentProcess()
+        kernel.GetCurrentProcess.restype = wintypes.HANDLE
+        handle = kernel.GetCurrentProcess()
+        get_times = kernel.GetProcessTimes
+        get_times.argtypes = [wintypes.HANDLE] + [ctypes.POINTER(FILETIME)] * 4
+        get_times.restype = wintypes.BOOL
+        created, exited, kernel_time, user_time = (FILETIME() for _ in range(4))
+        if not get_times(handle, ctypes.byref(created), ctypes.byref(exited),
+                         ctypes.byref(kernel_time), ctypes.byref(user_time)):
+            raise OSError(ctypes.get_last_error(), "Camouhost process creation time unavailable")
+        image = ctypes.create_unicode_buffer(32768)
+        length = wintypes.DWORD(len(image))
+        query = kernel.QueryFullProcessImageNameW
+        query.argtypes = [wintypes.HANDLE, wintypes.DWORD, wintypes.LPWSTR,
+                          ctypes.POINTER(wintypes.DWORD)]
+        query.restype = wintypes.BOOL
+        if not query(handle, 0, image, ctypes.byref(length)):
+            raise OSError(ctypes.get_last_error(), "Camouhost process image unavailable")
+        return {
+            "created": str((created.high << 32) | created.low),
+            "image": os.path.normcase(image.value),
+        }
+    pid = os.getpid()
+    stat = Path(f"/proc/{pid}/stat").read_text(encoding="utf-8")
+    return {
+        "created": stat[stat.rfind(")") + 2:].split()[19],
+        "image": os.readlink(f"/proc/{pid}/exe"),
+    }
+
+
 class LocalPlaywrightAgent:
     """Explicitly opted-in local test runner; the live Camouhost thread owns Playwright.
 
@@ -1417,7 +1457,7 @@ class LocalPlaywrightAgent:
         self.descriptor = base / f"active-{os.getpid()}.json"
         descriptor_temp = base / f".active-{os.getpid()}-{secrets.token_hex(8)}.tmp"
         with descriptor_temp.open("x", encoding="utf-8") as output:
-            output.write(json.dumps({"pid": os.getpid(), "session": session_id, "run": str(self.run)}))
+            output.write(json.dumps({"pid": os.getpid(), "session": session_id, "run": str(self.run), "process": current_process_instance()}))
             output.flush()
             os.fsync(output.fileno())
         os.replace(descriptor_temp, self.descriptor)
