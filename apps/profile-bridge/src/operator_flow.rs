@@ -450,6 +450,9 @@ fn save_checkpoint_reason(source: SaveAttemptEvidenceError) -> GenerationSaveFai
         SaveAttemptEvidenceError::Io(_) | SaveAttemptEvidenceError::Unavailable => {
             GenerationSaveFailureReason::CheckpointWrite
         }
+        SaveAttemptEvidenceError::SnapshotTooLarge => {
+            GenerationSaveFailureReason::SnapshotTooLarge
+        }
         SaveAttemptEvidenceError::Invalid | SaveAttemptEvidenceError::Changed => {
             GenerationSaveFailureReason::CheckpointIntegrity
         }
@@ -460,6 +463,9 @@ fn save_checkpoint_read_reason(source: SaveAttemptEvidenceError) -> GenerationSa
     match source {
         SaveAttemptEvidenceError::Io(_) | SaveAttemptEvidenceError::Unavailable => {
             GenerationSaveFailureReason::CheckpointRead
+        }
+        SaveAttemptEvidenceError::SnapshotTooLarge => {
+            GenerationSaveFailureReason::SnapshotTooLarge
         }
         SaveAttemptEvidenceError::Invalid | SaveAttemptEvidenceError::Changed => {
             GenerationSaveFailureReason::CheckpointIntegrity
@@ -2358,6 +2364,14 @@ mod tests {
         assert_eq!(
             save_checkpoint_reason(Evidence::Invalid),
             Reason::CheckpointIntegrity
+        );
+        assert_eq!(
+            save_checkpoint_reason(Evidence::SnapshotTooLarge),
+            Reason::SnapshotTooLarge
+        );
+        assert_eq!(
+            save_checkpoint_read_reason(Evidence::SnapshotTooLarge),
+            Reason::SnapshotTooLarge
         );
         assert_eq!(
             save_checkpoint_reason(Evidence::Io(std::io::ErrorKind::PermissionDenied)),
