@@ -78,6 +78,38 @@ def prove_agent() -> None:
             raise AssertionError("unqualified local agent directory admitted")
         agent = runtime.LocalPlaywrightAgent(str(base), "session_test")
         assert json.loads(agent.descriptor.read_text(encoding="utf-8"))["run"] == str(agent.run)
+
+        # Owner descriptor paths may use an alternate spelling (Windows 8.3
+        # name, or a benign traversable '..' component). The CLI must
+        # identify the SAME physical parent without admitting a foreign one.
+        cli_spec = importlib.util.spec_from_file_location(
+            "owned_cli_alias", ROOT / "scripts" / "camouhost-agent.py"
+        )
+        assert cli_spec and cli_spec.loader
+        cli = importlib.util.module_from_spec(cli_spec)
+        cli_spec.loader.exec_module(cli)
+        alias_parent = base / "alias-parent"
+        alias_parent.mkdir()
+        original_descriptor = agent.descriptor.read_text(encoding="utf-8")
+        try:
+            alias_run = alias_parent / ".." / agent.run.name
+            assert alias_run.is_dir() and alias_run.parent != base
+            alternate = json.loads(original_descriptor)
+            alternate["run"] = str(alias_run)
+            agent.descriptor.write_text(json.dumps(alternate), encoding="utf-8")
+            assert [item["pid"] for item in cli.sessions(base)] == [os.getpid()], (
+                "same actual owner rejected solely for alternate Windows path spelling"
+            )
+
+            foreign_run = alias_parent / agent.run.name
+            foreign_run.mkdir()
+            (foreign_run / "requests").mkdir()
+            (foreign_run / "results").mkdir()
+            alternate["run"] = str(foreign_run)
+            agent.descriptor.write_text(json.dumps(alternate), encoding="utf-8")
+            assert not cli.sessions(base), "foreign parent was admitted by samefile path check"
+        finally:
+            agent.descriptor.write_text(original_descriptor, encoding="utf-8")
         try:
             partial = agent.requests / ".incomplete.part"
             partial.write_text("raise AssertionError('uncommitted')", encoding="utf-8")
@@ -197,6 +229,112 @@ def prove_agent() -> None:
             assert not capture["errors"]
             assert fake.pages[0].url == private_content, "read-only B7 script navigated"
 
+            # An opaque-origin about:blank can reject storage with SecurityError.
+            # This is NOT_APPLICABLE, not a restored-tab PASS or global failure.
+            previous_evaluate, previous_url = fake.pages[0].evaluate, fake.pages[0].url
+            try:
+                fake.pages[0].evaluate = lambda _script: (
+                    _ for _ in ()
+                ).throw(RuntimeError("SecurityError: The operation is insecure"))
+                fake.pages[0].url = "about:blank"
+                blank = committed_request(
+                    agent.requests,
+                    (ROOT / "scripts" / "b7-playwright-observe.py").read_text(encoding="utf-8"),
+                )
+                assert agent.run_one(fake)
+                blank_status = json.loads(
+                    (agent.results / f"{blank}.json").read_text(encoding="utf-8")
+                )
+                assert blank_status["status"] == "ok", blank_status
+                blank_report = json.loads(
+                    Path(blank_status["result"]["artifact"]).read_text(encoding="utf-8")
+                )
+                assert not blank_report["errors"]
+                assert blank_report["pages"][0]["origin_storage"]["status"] == "NOT_APPLICABLE"
+                assert blank_report["restore_stage"] == "BLANK_ONLY_RESTORE_NOT_PROVEN"
+                assert blank_report["urls_before"] == blank_report["urls_after"] == ["about:blank"]
+                assert len(blank_report["not_applicable"]) == 1
+
+                # Real packaged Firefox Playwright error from Windows CI
+                # omits the DOM name. It is still the exact same opaque
+                # about:blank storage refusal and not a browser failure.
+                fake.pages[0].evaluate = lambda _script: (
+                    _ for _ in ()
+                ).throw(RuntimeError(
+                    "Page.evaluate: The operation is insecure.\\n"
+                    "@debugger eval code line 302 > eval:1:17"
+                ))
+                blank_firefox = committed_request(
+                    agent.requests,
+                    (ROOT / "scripts" / "b7-playwright-observe.py").read_text(encoding="utf-8"),
+                )
+                assert agent.run_one(fake)
+                firefox_status = json.loads(
+                    (agent.results / f"{blank_firefox}.json").read_text(encoding="utf-8")
+                )
+                assert firefox_status["status"] == "ok", firefox_status
+                firefox_report = json.loads(
+                    Path(firefox_status["result"]["artifact"]).read_text(encoding="utf-8")
+                )
+                assert firefox_report["pages"][0]["origin_storage"]["status"] == "NOT_APPLICABLE"
+                assert firefox_report["restore_stage"] == "BLANK_ONLY_RESTORE_NOT_PROVEN"
+                assert not firefox_report["errors"]
+
+                # Identical actual-Firefox wording MUST fail on an HTTPS page.
+                fake.pages[0].url = private_content
+                https_firefox = committed_request(
+                    agent.requests,
+                    (ROOT / "scripts" / "b7-playwright-observe.py").read_text(encoding="utf-8"),
+                )
+                assert agent.run_one(fake)
+                https_firefox_status = json.loads(
+                    (agent.results / f"{https_firefox}.json").read_text(encoding="utf-8")
+                )
+                assert https_firefox_status["status"] == "error"
+                assert "The operation is insecure." in (
+                    agent.results / f"{https_firefox}.stderr.txt"
+                ).read_text(encoding="utf-8")
+
+                # The same storage error at a real HTTPS origin MUST fail.
+                fake.pages[0].evaluate = lambda _script: (
+                    _ for _ in ()
+                ).throw(RuntimeError("SecurityError: The operation is insecure"))
+                fake.pages[0].url = private_content
+                https_error = committed_request(
+                    agent.requests,
+                    (ROOT / "scripts" / "b7-playwright-observe.py").read_text(encoding="utf-8"),
+                )
+                assert agent.run_one(fake)
+                https_status = json.loads(
+                    (agent.results / f"{https_error}.json").read_text(encoding="utf-8")
+                )
+                assert https_status["status"] == "error"
+                assert "SecurityError" in (
+                    agent.results / f"{https_error}.stderr.txt"
+                ).read_text(encoding="utf-8")
+
+                # A non-security about:blank error is also a real failure.
+                fake.pages[0].url = "about:blank"
+                fake.pages[0].evaluate = lambda _script: (
+                    _ for _ in ()
+                ).throw(RuntimeError("TargetClosedError: page closed"))
+                closed = committed_request(
+                    agent.requests,
+                    (ROOT / "scripts" / "b7-playwright-observe.py").read_text(encoding="utf-8"),
+                )
+                assert agent.run_one(fake)
+                closed_status = json.loads(
+                    (agent.results / f"{closed}.json").read_text(encoding="utf-8")
+                )
+                assert closed_status["status"] == "error"
+                assert "TargetClosedError" in (
+                    agent.results / f"{closed}.stderr.txt"
+                ).read_text(encoding="utf-8")
+            finally:
+                fake.pages[0].evaluate = previous_evaluate
+                fake.pages[0].url = previous_url
+            assert fake.pages[0].url == private_content
+
             # A broken observation must preserve raw errors and must NOT
             # become a positive restored-content claim or delete its artifact.
             original = fake.pages[0].screenshot
@@ -214,7 +352,7 @@ def prove_agent() -> None:
                 assert "snapshot disk full" in (
                     agent.results / f"{broken}.stderr.txt"
                 ).read_text(encoding="utf-8")
-                assert len(list(agent.results.glob("b7-first-restore-*.json"))) == 2
+                assert len(list(agent.results.glob("b7-first-restore-*.json"))) == 7
             finally:
                 fake.pages[0].screenshot = original
 
@@ -283,8 +421,106 @@ def prove_owner_thread_polling() -> None:
     assert "['hello|a\\n', 'close|b\\n', '']" in completed.stdout.decode("utf-8"), completed.stdout
 
 
+def prove_claim_denial_and_windows_owner_preflight() -> None:
+    """Negative transport tests: no replay and no elevated ownership workaround."""
+    import contextlib
+    import io
+
+    runtime = runtime_module()
+    cli_spec = importlib.util.spec_from_file_location(
+        "owned_cli", ROOT / "scripts" / "camouhost-agent.py"
+    )
+    assert cli_spec and cli_spec.loader
+    cli = importlib.util.module_from_spec(cli_spec)
+    cli_spec.loader.exec_module(cli)
+
+    with tempfile.TemporaryDirectory(prefix="owned-agent-claim-denial-") as temp:
+        base = Path(temp).resolve()
+        agent = runtime.LocalPlaywrightAgent(str(base), "session_claim_denial")
+        fake = Context()
+        try:
+            # Native same-token owner can accept its own inbox, including on
+            # hosted Windows. No Set-Acl or ownership mutation by this test.
+            assert cli.inbox_owner_matches_process(agent.requests)
+            assert cli.owner_in_current_windows_session(os.getpid())
+            source = base / "preflight-script.py"
+            source.write_text("result = 123\n", encoding="utf-8")
+            args = [
+                "camouhost-agent", "--directory", str(base),
+                "--pid", str(os.getpid()),
+                "--script", str(source), "--timeout", "1",
+            ]
+            before = set(agent.requests.iterdir())
+            # Matching file ownership alone cannot authorize a different
+            # interactive logon session. Reject before publishing any request.
+            with patch.object(cli, "owner_in_current_windows_session", return_value=False), \
+                    patch.object(sys, "argv", args), \
+                    contextlib.redirect_stderr(io.StringIO()) as error_out:
+                assert cli.run() == 126
+                assert "SESSION_CONTEXT_MISMATCH" in error_out.getvalue()
+            assert set(agent.requests.iterdir()) == before
+
+            with patch.object(
+                cli, "owner_in_current_windows_session",
+                side_effect=OSError(5, "Windows session query denied"),
+            ), patch.object(sys, "argv", args), \
+                    contextlib.redirect_stderr(io.StringIO()) as error_out:
+                assert cli.run() == 126
+                assert "SESSION_CONTEXT_UNKNOWN" in error_out.getvalue()
+                assert "errno=5" in error_out.getvalue()
+            assert set(agent.requests.iterdir()) == before
+            with patch.object(cli, "inbox_owner_matches_process", return_value=False), \
+                    patch.object(sys, "argv", args), \
+                    contextlib.redirect_stderr(io.StringIO()) as error_out:
+                assert cli.run() == 126
+                assert "SECURITY_CONTEXT_MISMATCH" in error_out.getvalue()
+            assert set(agent.requests.iterdir()) == before, "unsafe CLI published a request"
+
+            # A failed atomic publish has an UNKNOWN effect and must leave the
+            # staged input intact, not silently produce a new claim or replay.
+            with patch.object(cli.os, "replace", side_effect=PermissionError(13, "denied")), \
+                    patch.object(sys, "argv", args), \
+                    contextlib.redirect_stderr(io.StringIO()) as error_out:
+                assert cli.run() == 125
+                assert "SUBMIT_UNCONFIRMED" in error_out.getvalue()
+                assert "phase=request_publish" in error_out.getvalue()
+                assert "errno=13" in error_out.getvalue()
+            assert not list(agent.requests.glob("*.py"))
+            assert len(list(agent.requests.glob("*.part"))) == 1
+            assert not agent.run_one(fake), "unpublished request was executed"
+
+            source_script = "context.pages[0].goto('about:must-not-execute')\n"
+            job_id = committed_request(agent.requests, source_script)
+            actual_replace = runtime.os.replace
+
+            def fail_claim_only(src: object, dst: object) -> None:
+                if str(dst).endswith(".running"):
+                    raise PermissionError(13, "unusable Windows ACL")
+                actual_replace(src, dst)
+
+            with patch.object(runtime.os, "replace", side_effect=fail_claim_only), \
+                    contextlib.redirect_stderr(io.StringIO()) as error_out:
+                assert agent.run_one(fake) is False
+                assert "phase=claim_rename" in error_out.getvalue()
+                assert f"job={job_id}" in error_out.getvalue()
+                assert "errno=13" in error_out.getvalue()
+            receipt = json.loads(
+                (agent.results / f"{job_id}.json").read_text(encoding="utf-8")
+            )
+            assert receipt["status"] == "unconfirmed"
+            assert receipt["phase"] == "claim_rename"
+            assert receipt["errno"] == 13
+            assert (agent.requests / f"{job_id}.py").exists()
+            assert not agent.run_one(fake), "uncertain claim was replayed"
+            assert fake.pages[0].url == "about:blank", "denied job ran without claim"
+
+        finally:
+            agent.close()
+
+
 def main() -> int:
     prove_agent()
+    prove_claim_denial_and_windows_owner_preflight()
     prove_owner_thread_polling()
     print("Owned Playwright agent: owner-thread pipe, atomic jobs, full data, single context and replay guard PASS.")
     return 0

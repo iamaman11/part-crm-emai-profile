@@ -1320,6 +1320,98 @@ fn canonical_save_checkpoint_survives_owner_process_loss_without_authorizing_pub
 }
 
 #[test]
+fn fresh_authorized_operator_open_reclaims_crashed_owner_without_losing_dirty_wal()
+-> Result<(), Box<dyn std::error::Error>> {
+    let fixture = Fixture::new("crash-local-reopen-with-wal")?;
+    let mut first_owner = fixture.operator()?;
+    first_owner.open(&fixture.claim_uri, &fixture.root, UnixMillis::new(10))?;
+    let workspace = fixture.base_workspace()?;
+    let user_data = workspace.path().join("user_data");
+    fs::create_dir_all(&user_data)?;
+    let wal = user_data.join("cookies.sqlite-wal");
+    fs::write(&wal, b"unpublished-authenticated-session-wal")?;
+    fs::write(
+        workspace.path().join("prefs.js"),
+        b"unpublished-change-before-crash",
+    )?;
+    fixture.assert_base_lock_held()?;
+
+    // A second independent profile keeps its own session open. Reclaiming
+    // the crashed generation must not force the unrelated writer to close.
+    let unrelated_profile = ProfileId::parse("profile_unrelated_recovery_live")?;
+    let unrelated_generation = GenerationId::parse("generation_unrelated_recovery_live")?;
+    let other_workspace = fixture.root.create_generation(
+        fixture.actor.tenant_scope().tenant_id(),
+        &unrelated_profile,
+        &unrelated_generation,
+    )?;
+    let other_writer = BridgeWorkspaceLock::acquire(&other_workspace, &fixture.device_id, 5)?;
+
+    // Simulate loss of the whole Bridge owner process: Drop closes kernel
+    // locks, but cannot make an explicit close/commit, so no Saved is inferred.
+    drop(first_owner);
+    assert!(workspace.path().join(".profile-platform.lock").is_file());
+    assert_eq!(fs::read(&wal)?, b"unpublished-authenticated-session-wal");
+
+    // The existing Coordinator is the ONLY issuer of a new owner epoch/fence.
+    // A new claim is mandatory; a stale old-process lease is never reused.
+    let fresh_lease = ProfileLease::issue(
+        fixture.actor.tenant_scope().tenant_id().clone(),
+        fixture.profile_id.clone(),
+        SessionId::parse(format!("session_recovered_{}", fixture.lease.epoch()))?,
+        fixture.device_id.clone(),
+        fixture.lease.epoch() + 1,
+        FencingToken::parse(format!("fence_recovered_{}", fixture.lease.epoch()))?,
+    )?;
+    let mut coordinator = fixture.coordinator();
+    coordinator.lease = fresh_lease.clone();
+    let mut recovered = fixture.operator_with_coordinator(coordinator)?;
+    recovered.open(&fixture.claim_uri, &fixture.root, UnixMillis::new(20))?;
+    assert_eq!(
+        recovered.active_local_state(),
+        Some(LocalGenerationState::InUse)
+    );
+    assert_eq!(fs::read(&wal)?, b"unpublished-authenticated-session-wal");
+    assert_eq!(
+        fs::read(workspace.path().join("prefs.js"))?,
+        b"unpublished-change-before-crash"
+    );
+
+    // Even a mistaken second "fresh" server claim must not create a local
+    // second writer. It may only reject and leave all evidence untouched.
+    let later_lease = ProfileLease::issue(
+        fixture.actor.tenant_scope().tenant_id().clone(),
+        fixture.profile_id.clone(),
+        SessionId::parse(format!("session_contested_{}", fixture.lease.epoch()))?,
+        fixture.device_id.clone(),
+        fixture.lease.epoch() + 2,
+        FencingToken::parse(format!("fence_contested_{}", fixture.lease.epoch()))?,
+    )?;
+    let mut conflicting_coordinator = fixture.coordinator();
+    conflicting_coordinator.lease = later_lease;
+    let mut conflicting = fixture.operator_with_coordinator(conflicting_coordinator)?;
+    assert!(matches!(
+        conflicting.open(&fixture.claim_uri, &fixture.root, UnixMillis::new(25)),
+        Err(OperatorFlowError::Stage(
+            OperatorFailureStage::LocalWorkspace
+        ))
+    ));
+    assert_eq!(
+        recovered.active_local_state(),
+        Some(LocalGenerationState::InUse)
+    );
+    assert_eq!(fs::read(&wal)?, b"unpublished-authenticated-session-wal");
+    assert!(matches!(
+        BridgeWorkspaceLock::acquire(&other_workspace, &fixture.device_id, 6),
+        Err(LocalProfileError::LockBusy)
+    ));
+
+    recovered.close(UnixMillis::new(30))?;
+    other_writer.release()?;
+    Ok(())
+}
+
+#[test]
 fn crashed_save_checkpoint_blocks_fresh_launch_only_for_affected_profile()
 -> Result<(), Box<dyn std::error::Error>> {
     let fixture = Fixture::new("crashed-save-fresh-open")?;

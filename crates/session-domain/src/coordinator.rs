@@ -1326,6 +1326,126 @@ mod tests {
         Ok(())
     }
 
+    /// The existing DO ingress must first prove the historical actor/device.
+    /// Once authorized, recovery and a new intent are ONE durable transition;
+    /// neither a stale claim nor a second writer may consume that new fence.
+    #[test]
+    fn atomic_uncertain_recovery_requires_new_intent_and_fresh_writer_epoch()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let mut state = coordinator()?;
+        issue(&mut state, 1, 1, 10)?;
+        claim(&mut state, 2, 2, 11, "fence_01JCOORDINATOR")?;
+        let old_epoch = state.next_epoch();
+        state.apply(envelope(
+            "idem_tick_recovery_01JCOORDINATOR",
+            3,
+            3,
+            CoordinatorCommand::Tick {
+                now: UnixMillis::new(21),
+            },
+        )?)?;
+        assert_eq!(state.status(), CoordinatorStatus::Uncertain);
+        assert!(state.active_lease().is_none());
+
+        let new_intent = LaunchIntentId::parse("intent_04JCOORDINATOR")?;
+        let actor = ActorId::parse("actor_01JCOORDINATOR")?;
+        let device = DeviceId::parse("device_01JCOORDINATOR")?;
+        let recovered = state.apply(envelope(
+            "idem_recover_issue_04JCOORDINATOR",
+            4,
+            4,
+            CoordinatorCommand::RecoverAndIssueLaunchIntent {
+                launch_intent_id: new_intent.clone(),
+                actor_id: actor.clone(),
+                device_id: device.clone(),
+                now: UnixMillis::new(22),
+                expires_at: UnixMillis::new(50),
+            },
+        )?)?;
+        assert_eq!(
+            recovered.outcome(),
+            &CoordinatorOutcome::LaunchIntentIssued {
+                launch_intent_id: new_intent.clone()
+            }
+        );
+        assert_eq!(state.status(), CoordinatorStatus::Idle);
+        assert!(state.recovery_claim_pending());
+        assert!(state.active_lease().is_none());
+        assert_eq!(state.next_epoch(), old_epoch);
+
+        let foreign_device = state.apply(envelope(
+            "idem_foreign_claim_04JCOORDINATOR",
+            5,
+            5,
+            CoordinatorCommand::Claim {
+                launch_intent_id: new_intent.clone(),
+                actor_id: actor.clone(),
+                device_id: DeviceId::parse("device_02JCOORDINATOR")?,
+                session_id: SessionId::parse("session_04JCOORDINATOR")?,
+                fencing_token: FencingToken::parse("fence_04JCOORDINATOR")?,
+                now: UnixMillis::new(23),
+            },
+        )?);
+        assert_eq!(foreign_device, Err(CoordinatorError::DeviceMismatch));
+        assert_eq!(state.status(), CoordinatorStatus::Idle);
+        assert!(state.recovery_claim_pending());
+
+        let stale_intent = state.apply(envelope(
+            "idem_stale_claim_04JCOORDINATOR",
+            5,
+            5,
+            CoordinatorCommand::Claim {
+                launch_intent_id: LaunchIntentId::parse("intent_01JCOORDINATOR")?,
+                actor_id: actor.clone(),
+                device_id: device.clone(),
+                session_id: SessionId::parse("session_04JCOORDINATOR")?,
+                fencing_token: FencingToken::parse("fence_04JCOORDINATOR")?,
+                now: UnixMillis::new(23),
+            },
+        )?);
+        assert_eq!(stale_intent, Err(CoordinatorError::LaunchIntentMismatch));
+
+        let claimed = state.apply(envelope(
+            "idem_fresh_claim_04JCOORDINATOR",
+            5,
+            5,
+            CoordinatorCommand::Claim {
+                launch_intent_id: new_intent.clone(),
+                actor_id: actor.clone(),
+                device_id: device.clone(),
+                session_id: SessionId::parse("session_04JCOORDINATOR")?,
+                fencing_token: FencingToken::parse("fence_04JCOORDINATOR")?,
+                now: UnixMillis::new(23),
+            },
+        )?)?;
+        assert!(matches!(
+            claimed.outcome(),
+            CoordinatorOutcome::LeaseClaimed { lease } if lease.epoch() == old_epoch + 1
+        ));
+        assert_eq!(state.status(), CoordinatorStatus::Active);
+        assert!(!state.recovery_claim_pending());
+        assert!(state.pending_intent().is_none());
+
+        let duplicate_recovery = state.apply(envelope(
+            "idem_duplicate_recovery_04JCOORDINATOR",
+            6,
+            6,
+            CoordinatorCommand::RecoverAndIssueLaunchIntent {
+                launch_intent_id: LaunchIntentId::parse("intent_05JCOORDINATOR")?,
+                actor_id: actor,
+                device_id: device,
+                now: UnixMillis::new(24),
+                expires_at: UnixMillis::new(60),
+            },
+        )?);
+        assert_eq!(
+            duplicate_recovery,
+            Err(CoordinatorError::CoordinatorUnavailable)
+        );
+        assert_eq!(state.next_epoch(), old_epoch + 1);
+        Ok(())
+    }
+
     #[test]
     fn late_clean_release_becomes_uncertain() -> Result<(), Box<dyn std::error::Error>> {
         let mut state = coordinator()?;

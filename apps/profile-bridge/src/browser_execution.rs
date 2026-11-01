@@ -16,7 +16,10 @@ const MATERIALIZATION_SCHEMA: &str = "profile-platform-materialization-v2";
 const EXACT_TEXT_STAGE_ATTEMPTS: usize = 16;
 static EXACT_TEXT_STAGE_SEQUENCE: AtomicU64 = AtomicU64::new(1);
 const BRIDGE_LOCK_FILE: &str = ".profile-platform.lock";
-const BRIDGE_LOCK_SCHEMA: &str = "profile-platform-bridge-lock-v1";
+// A legacy v1 marker proves only Bridge543 root-scoped admission. Normal
+// managed browser launch requires v2 generation-scoped admission; recovery
+// of a v1 marker first converts it under a fresh fenced lease and OS locks.
+const BRIDGE_LOCK_SCHEMA: &str = "profile-platform-bridge-lock-v2";
 const FIREFOX_PARENT_LOCK_FILE: &str = ".parentlock";
 const FIREFOX_WINDOWS_PARENT_LOCK_FILE: &str = "parent.lock";
 const FIREFOX_LOCK_FILE: &str = "lock";
@@ -1115,7 +1118,30 @@ mod tests {
             ),
             Err(BrowserLaunchBlocker::RecoveryRequired)
         );
-        assert!(workspace.path().join(super::BRIDGE_LOCK_FILE).exists());
+        // The legacy Bridge543 marker must NOT be mistaken for the v2
+        // generation-scoped live OS ownership acquired above. Reclaiming it
+        // requires the existing fresh-epoch recovery owner, not a direct Open.
+        let marker = workspace.path().join(super::BRIDGE_LOCK_FILE);
+        let current = std::fs::read_to_string(&marker)?;
+        let legacy = current.replace(
+            "profile-platform-bridge-lock-v2",
+            "profile-platform-bridge-lock-v1",
+        );
+        assert_ne!(legacy, current);
+        std::fs::write(&marker, legacy)?;
+        assert_eq!(
+            evaluate_browser_launch(
+                &workspace,
+                &device,
+                7,
+                &binding,
+                &policy("route-a")?,
+                Some(&observation("route-a")?),
+                false,
+            ),
+            Err(BrowserLaunchBlocker::RecoveryRequired)
+        );
+        std::fs::write(&marker, current)?;
         bridge_lock.release()?;
         remove_test_root(&root_path)?;
         Ok(())

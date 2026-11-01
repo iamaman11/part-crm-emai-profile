@@ -4,7 +4,6 @@ use sha2::{Digest, Sha256};
 use std::fs::{self, File, OpenOptions};
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
-#[cfg(test)]
 use std::sync::atomic::{AtomicU64, Ordering};
 
 const ROOT_MARKER: &str = ".profile-platform-root";
@@ -12,6 +11,8 @@ const ROOT_MARKER_CONTENT: &str = "profile-platform-local-root-v1\n";
 const GENERATION_MARKER: &str = ".profile-generation";
 const GENERATION_MARKER_CONTENT: &str = "profile-platform-generation-v1\n";
 const BRIDGE_LOCK_FILE: &str = ".profile-platform.lock";
+const RECOVERY_MARKER_STAGE_PREFIX: &str = ".profile-platform.lock.recovery-";
+const GENERATION_ADMISSION_FILE: &str = ".profile-platform.writer-admission";
 pub(crate) const BROWSER_IDENTITY_RECORD_FILE: &str = ".profile-browser-identity-v1";
 const BROWSER_STATE_DIRECTORY: &str = "user_data";
 const FIREFOX_PARENT_LOCK_PATH: &str = "user_data/.parentlock";
@@ -23,6 +24,7 @@ const FNV_OFFSET_BASIS: u64 = 0xcbf2_9ce4_8422_2325;
 const FNV_PRIME: u64 = 0x0000_0100_0000_01b3;
 #[cfg(test)]
 static REJECTED_GENERATION_SEQUENCE: AtomicU64 = AtomicU64::new(1);
+static RECOVERY_MARKER_SEQUENCE: AtomicU64 = AtomicU64::new(1);
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct MaterializationRoot {
@@ -374,7 +376,7 @@ impl BridgeWorkspaceLock {
         }
         let lock_path = workspace.path().join(BRIDGE_LOCK_FILE);
         let ownership = format!(
-            "profile-platform-bridge-lock-v1\n{}\n{epoch}\n",
+            "profile-platform-bridge-lock-v2\n{}\n{epoch}\n",
             device_id.as_str()
         );
         let mut file = OpenOptions::new()
@@ -396,9 +398,9 @@ impl BridgeWorkspaceLock {
         })
     }
 
-    /// May be called only while the root's OS admission lock is held *exclusively*,
-    /// after the operator obtained a fresh coordinator claim for this exact device
-    /// and generation, and proved that no native Firefox writer still owns user_data.
+    /// Caller holds exclusive ROOT admission for legacy v1 markers, or exclusive
+    /// GENERATION admission plus shared root admission for new v2 markers.
+    /// It also proved a fresh same-device fence and no live native Firefox writer.
     /// The persistent marker is crash evidence, not proof of a surviving OS writer.
     pub(super) fn replace_interrupted(
         workspace: &GenerationWorkspace,
@@ -414,23 +416,80 @@ impl BridgeWorkspaceLock {
             return Err(LocalProfileError::LockBusy);
         }
         let previous = read_control_text(&lock_path)?;
-        let owner_prefix = format!("profile-platform-bridge-lock-v1\n{}\n", device_id.as_str());
-        let previous_epoch = previous
-            .strip_prefix(&owner_prefix)
-            .and_then(|suffix| suffix.strip_suffix('\n'))
-            .and_then(|value| value.parse::<u64>().ok())
+        // V1 is the root-only Bridge543 marker. V2 certifies that THIS
+        // marker was created while generation OS admission was held. Never
+        // infer that fact merely from an abandoned admission file.
+        let owner_prefixes = [
+            format!("profile-platform-bridge-lock-v2\n{}\n", device_id.as_str()),
+            format!("profile-platform-bridge-lock-v1\n{}\n", device_id.as_str()),
+        ];
+        let previous_epoch = owner_prefixes
+            .iter()
+            .find_map(|prefix| {
+                previous
+                    .strip_prefix(prefix)
+                    .and_then(|suffix| suffix.strip_suffix('\n'))
+                    .and_then(|value| value.parse::<u64>().ok())
+            })
             .ok_or(LocalProfileError::LockBusy)?;
         if previous_epoch == 0 || previous_epoch >= fresh_epoch {
             return Err(LocalProfileError::LockBusy);
         }
-        // There is no live Bridge admission handle (the caller has the exclusive OS root
-        // lock) or live Firefox writer (caller preflight). Recheck immediately before
-        // unlink; never remove the directory, cookies, WAL, or identity sidecars.
-        if read_control_text(&lock_path)? != previous {
+        Self::replace_interrupted_with_pre_publish(
+            workspace,
+            device_id,
+            fresh_epoch,
+            &lock_path,
+            &previous,
+            || Ok(()),
+        )
+    }
+
+    // The old durable marker must remain present until the new one is fully
+    // synced and atomically published. Removing it first creates a power-loss
+    // interval with no recovery evidence, even though the OS locks are safe.
+    // The small callback is a local fault boundary for the crash-before-rename
+    // regression; shipping always supplies the no-op and never bypasses checks.
+    fn replace_interrupted_with_pre_publish<F>(
+        workspace: &GenerationWorkspace,
+        device_id: &DeviceId,
+        fresh_epoch: u64,
+        lock_path: &Path,
+        previous: &str,
+        before_publish: F,
+    ) -> Result<Self, LocalProfileError>
+    where
+        F: FnOnce() -> Result<(), LocalProfileError>,
+    {
+        let ownership = format!(
+            "profile-platform-bridge-lock-v2\n{}\n{fresh_epoch}\n",
+            device_id.as_str()
+        );
+        let sequence = RECOVERY_MARKER_SEQUENCE.fetch_add(1, Ordering::Relaxed);
+        let staged = workspace.path().join(format!(
+            "{RECOVERY_MARKER_STAGE_PREFIX}{}-{fresh_epoch}-{sequence}",
+            std::process::id()
+        ));
+        // Same directory/volume as the marker. An interrupted or rejected
+        // stage is never an authority to erase the old marker, WAL or LKG.
+        let mut file = OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&staged)?;
+        file.write_all(ownership.as_bytes())?;
+        file.sync_all()?;
+        drop(file);
+        if read_control_text(lock_path)? != previous {
             return Err(LocalProfileError::LockBusy);
         }
-        fs::remove_file(&lock_path)?;
-        Self::acquire(workspace, device_id, fresh_epoch)
+        before_publish()?;
+        // Windows MoveFileEx/Unix rename replaces the exact destination
+        // atomically. On error the original marker remains intact.
+        fs::rename(&staged, lock_path)?;
+        Ok(Self {
+            lock_path: lock_path.to_path_buf(),
+            ownership,
+        })
     }
 
     pub fn release(self) -> Result<(), LocalProfileError> {
@@ -770,7 +829,10 @@ fn normalized_relative_path(relative: &Path) -> Result<String, LocalProfileError
 }
 
 fn is_bridge_control_file(relative_path: &str) -> bool {
-    matches!(relative_path, GENERATION_MARKER | BRIDGE_LOCK_FILE)
+    matches!(
+        relative_path,
+        GENERATION_MARKER | BRIDGE_LOCK_FILE | GENERATION_ADMISSION_FILE
+    ) || relative_path.starts_with(RECOVERY_MARKER_STAGE_PREFIX)
 }
 
 fn is_ephemeral_browser_lock(relative_path: &str) -> bool {
@@ -899,6 +961,50 @@ mod tests {
                 .is_err()
         );
         assert!(!workspace.path().exists());
+        let _ = crate::test_support::remove_test_root(&path);
+        Ok(())
+    }
+
+    #[test]
+    fn interrupted_recovery_publication_keeps_prior_marker_wal_and_inventory()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let (path, root, tenant, profile, generation) = fixture()?;
+        let workspace = root.create_generation(&tenant, &profile, &generation)?;
+        let device = DeviceId::parse("device_recovery_atomic_marker_01")?;
+        let marker = workspace.path().join(super::BRIDGE_LOCK_FILE);
+        let original = format!("profile-platform-bridge-lock-v1\n{}\n5\n", device.as_str());
+        std::fs::write(&marker, &original)?;
+        let browser_data = workspace.path().join("user_data");
+        std::fs::create_dir_all(&browser_data)?;
+        let wal = browser_data.join("cookies.sqlite-wal");
+        std::fs::write(&wal, b"unpublished-wal-before-crash")?;
+        let inventory_before = workspace.inventory()?;
+
+        // Simulate the process dying after the new marker has been fully
+        // fsynced, but before the atomic rename. No old-marker unlink occurs.
+        let error = BridgeWorkspaceLock::replace_interrupted_with_pre_publish(
+            &workspace,
+            &device,
+            6,
+            &marker,
+            &original,
+            || Err(super::LocalProfileError::LockBusy),
+        );
+        assert!(matches!(error, Err(super::LocalProfileError::LockBusy)));
+        assert_eq!(std::fs::read_to_string(&marker)?, original);
+        assert_eq!(std::fs::read(&wal)?, b"unpublished-wal-before-crash");
+        assert_eq!(workspace.inventory()?, inventory_before);
+
+        // The staged, uncommitted control bytes cannot pollute a subsequent
+        // sealed generation, and a fresh authorized recovery still succeeds.
+        let recovered = BridgeWorkspaceLock::replace_interrupted(&workspace, &device, 6)?;
+        assert_eq!(
+            std::fs::read_to_string(&marker)?,
+            format!("profile-platform-bridge-lock-v2\n{}\n6\n", device.as_str())
+        );
+        assert_eq!(std::fs::read(&wal)?, b"unpublished-wal-before-crash");
+        assert_eq!(workspace.inventory()?, inventory_before);
+        recovered.release()?;
         let _ = crate::test_support::remove_test_root(&path);
         Ok(())
     }

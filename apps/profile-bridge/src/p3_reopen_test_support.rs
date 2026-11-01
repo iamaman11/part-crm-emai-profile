@@ -958,6 +958,201 @@ fn canonical_save_then_local_reuse_skips_cloud_download()
     run_canonical_saved_successor_reopen(false)
 }
 
+/// Hosted Windows operator-composition regression, NOT a live Cloudflare DO/R2
+/// or a pinned Camoufox Playwright result. Its backend is an in-memory provider
+/// fixture; the filesystem/lock, streamed encrypted Save, signed GET and actual
+/// shipping Operator ownership/materialization are the production owners.
+///
+/// Models the exact order missing from the original physical B7 fixture:
+/// confirmed N+1, a fresh writer, a crash with new browser WAL bytes, a
+/// separately-authorized recovery claim, Save N+2, and cold download N+2.
+/// The preceding coordinator-domain test proves the atomic same-device
+/// Uncertain recovery; this fixture does NOT grant authority itself.
+#[cfg(windows)]
+#[test]
+fn committed_then_crashed_writer_recovers_wal_and_cold_reopens_sole_successor()
+-> Result<(), Box<dyn std::error::Error>> {
+    let counter = TEMP_COUNTER.fetch_add(1, Ordering::Relaxed);
+    let root_path = std::env::temp_dir().join(format!(
+        "profile-bridge-p3-crash-streamed-{}-{counter}",
+        std::process::id()
+    ));
+    let _cleanup = CleanupRoot(root_path.clone());
+    let root = MaterializationRoot::open_or_create(root_path)?;
+    let tenant = TenantId::parse(TENANT)?;
+    let profile = ProfileId::parse(PROFILE)?;
+    let device = DeviceId::parse(DEVICE)?;
+    let base_id = GenerationId::parse(BASE_GENERATION)?;
+    let base = root.create_generation(&tenant, &profile, &base_id)?;
+    fs::write(base.path().join("prefs.js"), b"first-committed-source")?;
+    let config = b"{}\n";
+    fs::write(base.path().join("camoufox-config.json"), config)?;
+    let bundle = approved_bundle()?;
+    let identity = browser_identity_fixture(
+        bundle.manifest().runtime_version(),
+        bundle.manifest().inventory_sha256().as_str(),
+        "profile-stability-v1-probe-p3-reopen-e2e",
+        lower_hex(&Sha256::digest(config)),
+    )?;
+    let binding = MaterializationBinding::new(
+        tenant.clone(),
+        profile.clone(),
+        base_id.clone(),
+        "c".repeat(64),
+        base.materialization_inventory_digest()?,
+        identity,
+    )?;
+    persist_materialization_binding(&base, &binding)?;
+
+    let state = Rc::new(RefCell::new(BackendState::new()?));
+    let transport = BackendMachineHttp { state: Rc::clone(&state) };
+    let preflights: PreflightObservations = Rc::new(RefCell::new(Vec::new()));
+    let make_operator = || -> Result<_, Box<dyn std::error::Error>> {
+        Ok(ProfileBridgeOperator::new(
+            FakeDeviceIdentity::new(device.clone()),
+            FakeDeviceKeyStore::default(),
+            DeviceAuthentication,
+            ControlPlaneEnrollment::new(transport.clone()),
+            ControlPlaneCoordinator::new(transport.clone()),
+            TestRuntimeBundle { bundle: approved_bundle()? },
+            RecordingPreflight { observations: Rc::clone(&preflights) },
+            FakeProcessControl::default(),
+            FakeCamouhost::default(),
+        ))
+    };
+    let mut downloader = VerifiedGenerationObjectDownloader::new(BackendGet {
+        state: Rc::clone(&state),
+    });
+    let mut uploader = BackendPut { state: Rc::clone(&state) };
+    let mut operator = make_operator()?;
+    let first_claim = ClaimUri::parse(
+        "profilebridge://claim/claim_p3_crash_first_000001_0123456789",
+    )?;
+    operator.open_authoritative(&first_claim, &root, &mut downloader, UnixMillis::new(10))?;
+    fs::write(base.path().join("prefs.js"), b"confirmed-committed-generation")?;
+    operator.close_with_durable_local_intent(&root, UnixMillis::new(20))?;
+    let first = operator.save_retained_successor_streaming(
+        &root,
+        transport.clone(),
+        &mut uploader,
+        UnixMillis::new(30),
+    )?;
+    assert!(first.is_saved());
+    let committed_id = first.committed().generation_id().clone();
+    assert_ne!(committed_id, base_id);
+    assert_eq!(state.borrow().coordinator_status, CoordinatorStatusDto::Idle);
+
+    // This fresh Open uses the exact cloud-committed CURRENT generation.
+    let second_claim = ClaimUri::parse(
+        "profilebridge://claim/claim_p3_crash_second_000002_0123456789",
+    )?;
+    operator.open_authoritative(&second_claim, &root, &mut downloader, UnixMillis::new(40))?;
+    let committed = root.open_generation(&tenant, &profile, &committed_id)?;
+    assert_eq!(fs::read(committed.path().join("prefs.js"))?, b"confirmed-committed-generation");
+    let user_data = committed.path().join("user_data");
+    fs::create_dir_all(&user_data)?;
+    let cookie_db = user_data.join("cookies.sqlite");
+    let wal = user_data.join("cookies.sqlite-wal");
+    let cookie_bytes = b"confirmed-cookie-db-before-crash";
+    let wal_bytes = b"new-unpublished-cookie-wal-after-crash";
+    fs::write(&cookie_db, cookie_bytes)?;
+    fs::write(&wal, wal_bytes)?;
+    let marker = committed.path().join(".profile-platform.lock");
+    let before_epoch = state.borrow().epoch;
+    assert_eq!(
+        fs::read_to_string(&marker)?,
+        format!("profile-platform-bridge-lock-v2\n{}\n{before_epoch}\n", device.as_str()),
+    );
+
+    // Drop without Close/Save models process death: the OS admission handle
+    // disappears but the durable Bridge lock and dirty Firefox bytes survive.
+    drop(operator);
+    assert!(marker.exists());
+    assert_eq!(fs::read(&wal)?, wal_bytes);
+    {
+        let mut server = state.borrow_mut();
+        assert_eq!(server.coordinator_status, CoordinatorStatusDto::Active);
+        server.coordinator_status = CoordinatorStatusDto::Uncertain;
+        server.coordinator_version += 1;
+        server.coordinator_sequence += 1;
+        server.live_session_id = None;
+        server.live_fencing_token = None;
+        // The real frontend/DO atomic RecoverAndIssueLaunchIntent is proven
+        // separately in coordinator.rs. Model its *positive authorized result*
+        // here: a new one-time claim can be redeemed; this fake transport is
+        // NOT a simulation of DO provenance verification.
+        server.coordinator_status = CoordinatorStatusDto::Idle;
+        server.coordinator_version += 1;
+        server.coordinator_sequence += 1;
+        server.events.push("fixture:authorized-uncertain-recovery".to_owned());
+    }
+
+    let mut recovered = make_operator()?;
+    let recovered_claim = ClaimUri::parse(
+        "profilebridge://claim/claim_p3_crash_recovered_000003_0123456789",
+    )?;
+    recovered.open_authoritative(
+        &recovered_claim, &root, &mut downloader, UnixMillis::new(50),
+    )?;
+    assert_eq!(recovered.active_local_state(), Some(LocalGenerationState::InUse));
+    let recovered_epoch = state.borrow().epoch;
+    assert_eq!(recovered_epoch, before_epoch + 1);
+    assert_eq!(
+        fs::read_to_string(&marker)?,
+        format!("profile-platform-bridge-lock-v2\n{}\n{recovered_epoch}\n", device.as_str()),
+    );
+    assert_eq!(fs::read(&cookie_db)?, cookie_bytes);
+    assert_eq!(fs::read(&wal)?, wal_bytes);
+    assert_eq!(
+        state.borrow().events.iter().filter(|e| e.starts_with("commit:")).count(),
+        1,
+        "a fresh recovered Open must not duplicate the previous commit",
+    );
+
+    // Explicit next controlled Close/Save publishes the new WAL exactly once.
+    recovered.close_with_durable_local_intent(&root, UnixMillis::new(60))?;
+    let second = recovered.save_retained_successor_streaming(
+        &root,
+        transport.clone(),
+        &mut uploader,
+        UnixMillis::new(70),
+    )?;
+    assert!(second.is_saved());
+    let next_id = second.committed().generation_id().clone();
+    assert_ne!(next_id, committed_id);
+    let next = root.open_generation(&tenant, &profile, &next_id)?;
+    assert_eq!(fs::read(next.path().join("user_data/cookies.sqlite-wal"))?, wal_bytes);
+    assert_eq!(fs::read(next.path().join("user_data/cookies.sqlite"))?, cookie_bytes);
+
+    // Only a disposable test workspace is removed. A genuinely independent
+    // signed GET + decrypted materialization must restore the NEW saved WAL.
+    fs::remove_dir_all(next.path())?;
+    let mut cold = make_operator()?;
+    let cold_claim = ClaimUri::parse(
+        "profilebridge://claim/claim_p3_crash_cold_000004_0123456789",
+    )?;
+    cold.open_authoritative(&cold_claim, &root, &mut downloader, UnixMillis::new(80))?;
+    let restored = root.open_generation(&tenant, &profile, &next_id)?;
+    assert_eq!(fs::read(restored.path().join("user_data/cookies.sqlite-wal"))?, wal_bytes);
+    assert_eq!(fs::read(restored.path().join("user_data/cookies.sqlite"))?, cookie_bytes);
+    {
+        let backend = state.borrow();
+        let events = &backend.events;
+        assert_eq!(events.iter().filter(|e| e.starts_with("commit:")).count(), 2);
+        assert_eq!(events.iter().filter(|e| e.starts_with("put:")).count(), 2);
+        assert_eq!(events.iter().filter(|e| e.starts_with("get:")).count(), 1);
+        assert_eq!(
+            events
+                .iter()
+                .filter(|e| e.as_str() == "fixture:authorized-uncertain-recovery")
+                .count(),
+            1,
+        );
+    }
+    cold.abort(UnixMillis::new(90))?;
+    Ok(())
+}
+
 #[cfg(windows)]
 /// K3 source/fixture proof, not a live-provider R2 retention or installed B7 verdict.
 /// Exercise the SAME streamed Save owner 100 times with one real filesystem root,
