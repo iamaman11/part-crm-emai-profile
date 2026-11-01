@@ -4,7 +4,7 @@
 //! call PUT/commit after restart. Only the live retained owner can publish.
 //! Recovery must obtain a fresh authoritative, ACL/fencing-safe decision before
 //! using these exact bytes. Never remove an unknown record during cleanup.
-use crate::dirty_generation::{GenerationSealingMaterialPort, PreparedDirtyGeneration};
+use crate::dirty_generation::{GenerationSealingMaterialPort, PreparedDirtyGeneration, SealingMaterialFailure};
 use crate::generation_object_spool::VerifiedGenerationObjectFile;
 use crate::generation_snapshot::{GenerationSnapshotError, WorkspaceSnapshotReader};
 use crate::local_profile::{GenerationWorkspace, MaterializationRoot};
@@ -38,6 +38,9 @@ pub(crate) enum SaveAttemptEvidenceError {
     Changed,
     SnapshotTooLarge,
     SealingMaterialUnavailable,
+    SealingTransport,
+    SealingResponseUncertain,
+    SealingRejected,
     Unavailable,
 }
 
@@ -55,6 +58,9 @@ impl std::fmt::Display for SaveAttemptEvidenceError {
             Self::Changed => formatter.write_str("save-attempt workspace or bytes changed"),
             Self::SnapshotTooLarge => formatter.write_str("native Firefox snapshot exceeds 512 MiB limit"),
             Self::SealingMaterialUnavailable => formatter.write_str("generation sealing material unavailable"),
+            Self::SealingTransport => formatter.write_str("generation sealing service transport unavailable"),
+            Self::SealingResponseUncertain => formatter.write_str("generation sealing service response uncertain"),
+            Self::SealingRejected => formatter.write_str("generation sealing request rejected"),
             Self::Unavailable => formatter.write_str("save-attempt atomic staging unavailable"),
         }
     }
@@ -1709,7 +1715,16 @@ fn persist_streaming_exact_save_attempt_from_native_with_origin<
             candidate.generation_id(),
             measured_digest,
         )
-        .map_err(|_| SaveAttemptEvidenceError::SealingMaterialUnavailable)?;
+        .map_err(|error| match K::classify_error(&error) {
+            SealingMaterialFailure::Transport => SaveAttemptEvidenceError::SealingTransport,
+            SealingMaterialFailure::ServerUncertain => {
+                SaveAttemptEvidenceError::SealingResponseUncertain
+            }
+            SealingMaterialFailure::Rejected => SaveAttemptEvidenceError::SealingRejected,
+            SealingMaterialFailure::Unavailable => {
+                SaveAttemptEvidenceError::SealingMaterialUnavailable
+            }
+        })?;
     let (key, nonce, chunk_size) = material.into_parts();
     // The first pass is bound to the original DEK request. Neither a
     // changed key-owner source nor a subsequent same-size edit can change
