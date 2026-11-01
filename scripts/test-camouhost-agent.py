@@ -578,8 +578,63 @@ def prove_receipt_failure_diagnostics() -> None:
             agent.close()
 
 
+def prove_pid_reuse_fails_closed() -> None:
+    """D03: a live foreign process with recycled PID is not the original owner."""
+    import contextlib
+    import io
+
+    runtime = runtime_module()
+    spec = importlib.util.spec_from_file_location(
+        "owned_pid_reuse_cli", ROOT / "scripts" / "camouhost-agent.py"
+    )
+    assert spec and spec.loader
+    cli = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(cli)
+    with tempfile.TemporaryDirectory(prefix="owned-agent-pid-reuse-") as temp:
+        base = Path(temp).resolve()
+        agent = runtime.LocalPlaywrightAgent(str(base), "session_pid_reuse")
+        script = base / "probe.py"
+        script.write_text("result = 'must-not-run'\n", encoding="utf-8")
+        args = [
+            "camouhost-agent", "--directory", str(base), "--pid", str(os.getpid()),
+            "--script", str(script), "--timeout", "0.1",
+        ]
+        try:
+            original = cli.process_instance(os.getpid())
+            descriptor = json.loads(agent.descriptor.read_text(encoding="utf-8"))
+            assert descriptor["process"] == original
+            assert [x["pid"] for x in cli.sessions(base)] == [os.getpid()]
+            foreign = dict(original, image="C:\\reused\\chrome.exe")
+            assert foreign != original
+            with patch.object(cli, "process_instance", return_value=foreign):
+                assert cli.sessions(base) == [], "reused PID advertised as an owner"
+            assert agent.descriptor.is_file(), "stale evidence deleted"
+
+            # OS identity changes after discovery but before the CLI creates a job.
+            with patch.object(cli, "process_instance", side_effect=[original, foreign]), \
+                    patch.object(sys, "argv", args), \
+                    contextlib.redirect_stderr(io.StringIO()) as error_out:
+                assert cli.run() == 126
+                assert "PROCESS_INSTANCE_MISMATCH" in error_out.getvalue()
+            assert not list(agent.requests.iterdir()), "stale owner received a job"
+
+            # The instance changes after durable staging, immediately before rename.
+            # Keep the staged bytes for diagnosis; never publish the submitted script.
+            with patch.object(cli, "process_instance", side_effect=[original, original, foreign]), \
+                    patch.object(sys, "argv", args), \
+                    contextlib.redirect_stderr(io.StringIO()) as error_out:
+                assert cli.run() == 126
+                assert "phase=request_publish" in error_out.getvalue()
+            assert not list(agent.requests.glob("*.py"))
+            assert list(agent.requests.glob("*.part")), "staged evidence was removed"
+            assert not agent.run_one(Context()), "stale process received Playwright work"
+        finally:
+            agent.close()
+
+
 def main() -> int:
     prove_receipt_failure_diagnostics()
+    prove_pid_reuse_fails_closed()
     prove_agent()
     prove_claim_denial_and_windows_owner_preflight()
     prove_owner_thread_polling()
