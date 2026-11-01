@@ -1212,6 +1212,8 @@ def install_controlled_close_observation(context: Any, owner_pid: int | None = N
         "tracked_pages": set(),
         "closed_pages": set(),
         "crashed": False,
+        # Ordered callback names only: no URL, cookie, profile data or process secrets.
+        "callback_events": [],
         "browser_exit": (
             WindowsBrowserExitWitness(owner_pid)
             if os.name == "nt" and owner_pid is not None
@@ -1222,11 +1224,15 @@ def install_controlled_close_observation(context: Any, owner_pid: int | None = N
     def track_page(page: Any) -> None:
         token = id(page)
         state["tracked_pages"].add(token)
-        page.on(
-            "close",
-            lambda _page, page_token=token: state["closed_pages"].add(page_token),
-        )
-        page.on("crash", lambda _page: state.__setitem__("crashed", True))
+        state["callback_events"].append("page")
+        def on_close(_page: Any, page_token: int = token) -> None:
+            state["closed_pages"].add(page_token)
+            state["callback_events"].append("close")
+        def on_crash(_page: Any) -> None:
+            state["crashed"] = True
+            state["callback_events"].append("crash")
+        page.on("close", on_close)
+        page.on("crash", on_crash)
 
     for page in context.pages:
         track_page(page)
@@ -1242,6 +1248,31 @@ def controlled_close_candidate(state: dict[str, Any] | None) -> bool:
         return False
     witness = state.get("browser_exit")
     return witness is None or witness.safely_exited()
+
+
+def report_close_observation_detail(state: dict[str, Any] | None, error: BaseException) -> None:
+    """Local failure witness; keep the original OS error code and callback sequence.
+
+    No exception message or Playwright page contents enter the Bridge protocol.
+    """
+    location = 0
+    frame = error.__traceback__
+    while frame is not None:
+        if frame.tb_frame.f_code.co_filename == __file__:
+            location = frame.tb_lineno
+        frame = frame.tb_next
+    data = {
+        "exception_type": type(error).__name__,
+        "line": location,
+        "errno": getattr(error, "errno", None),
+        "winerror": getattr(error, "winerror", None),
+        "tracked": len(state["tracked_pages"]) if state is not None else 0,
+        "closed": len(state["closed_pages"]) if state is not None else 0,
+        "crashed": state["crashed"] if state is not None else False,
+        "callback_events": state["callback_events"] if state is not None else [],
+    }
+    print("camouhost_close_observation_detail " + json.dumps(data, ensure_ascii=True),
+          file=sys.stderr, flush=True)
 
 
 def observe_controlled_close(context: Any, state: dict[str, Any] | None) -> bool:
@@ -1799,6 +1830,7 @@ def run_ipc() -> int:
                 try:
                     controlled = observe_controlled_close(context, close_observation)
                 except BaseException as error:
+                    report_close_observation_detail(close_observation, error)
                     report_runtime_failure("close", error)
                     emit("error|runtime")
                     return 5
