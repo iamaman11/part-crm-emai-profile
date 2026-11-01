@@ -76,8 +76,13 @@ describe('ProfilesWorkspace generation refresh (#802 F06)', () => {
     generationLookup.mockRejectedValueOnce(new Error('readback temporarily unavailable'));
     fireEvent.click(screen.getByRole('button', { name: 'deactivate generation' }));
     fireEvent.click(screen.getByRole('button', { name: 'Confirm deactivate generation' }));
-    expect(await screen.findByText(/generation action completed, but its current status could not be confirmed/i)).toBeTruthy();
+    expect(await screen.findByText(/action completed, but the latest profile status could not be confirmed/i)).toBeTruthy();
     expect(open.disabled).toBe(true);
     expect(activation).toHaveBeenCalledTimes(3);
+    fireEvent.click(screen.getByRole('button', { name: 'Refresh current status' }));
+    await waitFor(() => expect(screen.queryByRole('button', { name: 'Refresh current status' })).toBeNull());
+    expect(open.disabled).toBe(true); // Fresh SUSPENDED is still non-launchable.
+    expect(activation).toHaveBeenCalledTimes(3); // Read-only recovery, no duplicate command.
+    expect(generationLookup).toHaveBeenCalledTimes(5);
   });
 });
