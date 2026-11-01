@@ -71,8 +71,22 @@ impl GenerationSealingMaterial {
     }
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum SealingMaterialFailure {
+    Unavailable,
+    Transport,
+    ServerUncertain,
+    Rejected,
+}
+
 pub trait GenerationSealingMaterialPort {
     type Error;
+
+    /// Default for local/test sealers; the remote adapter refines transport
+    /// failures without ever granting permission to replay a sealing request.
+    fn classify_error(_error: &Self::Error) -> SealingMaterialFailure {
+        SealingMaterialFailure::Unavailable
+    }
 
     fn material_for(
         &mut self,
