@@ -47,7 +47,7 @@ const HELLO_RESPONSE_TIMEOUT: Duration = Duration::from_secs(30);
 const HELLO_RESPONSE_TIMEOUT: Duration = Duration::from_secs(10);
 const LAUNCH_RESPONSE_TIMEOUT: Duration = Duration::from_secs(120);
 // Child stderr is untrusted. Only small, fixed-vocabulary diagnostics may reach Bridge logs.
-const MAX_CAMOUHOST_DIAGNOSTIC_BYTES: usize = 128;
+const MAX_CAMOUHOST_DIAGNOSTIC_BYTES: usize = 256;
 const LOCAL_AGENT_DIRECTORY_NAME: &str = "ProfileBridgeAgentTests";
 const BROWSER_VISIBLE_RESPONSE_TIMEOUT: Duration = Duration::from_secs(30);
 const NAVIGATION_RESPONSE_TIMEOUT: Duration = Duration::from_secs(120);
@@ -958,6 +958,50 @@ fn exchange_frame_shared(
     receive_response(responses, timeout)
 }
 
+fn safe_close_observation_witness(message: &str) -> bool {
+    // Only typed, bounded, local failure facts are admitted from child stderr.
+    // The full original traceback remains in the local raw test artifact.
+    let Some(data) = message.strip_prefix("camouhost_close_witness ") else {
+        return false;
+    };
+    let fields: Vec<_> = data.split(' ').collect();
+    if fields.len() != 9 {
+        return false;
+    }
+    let Some(name) = fields[0].strip_prefix("exception=") else {
+        return false;
+    };
+    if name.is_empty()
+        || name.len() > 40
+        || !name.as_bytes()[0].is_ascii_alphabetic()
+        || !name.bytes().all(|c| c.is_ascii_alphanumeric() || c == b'_')
+    {
+        return false;
+    }
+    let valid_number = |field: &str, prefix: &str, allow_none: bool| {
+        field.strip_prefix(prefix).is_some_and(|value| {
+            (allow_none && value == "none")
+                || value.parse::<u32>().is_ok_and(|number| number <= 1_000_000)
+        })
+    };
+    if !valid_number(fields[1], "line=", false)
+        || !valid_number(fields[2], "errno=", true)
+        || !valid_number(fields[3], "winerror=", true)
+        || !valid_number(fields[4], "tracked=", true)
+        || !valid_number(fields[5], "closed=", true)
+        || !matches!(fields[6], "crashed=0" | "crashed=1")
+        || !valid_number(fields[7], "count=", true)
+    {
+        return false;
+    }
+    let Some(events) = fields[8].strip_prefix("events=") else {
+        return false;
+    };
+    events == "none"
+        || (events.split(',').count() <= 8
+            && events.split(',').all(|event| matches!(event, "page" | "close" | "crash")))
+}
+
 fn allowlisted_camouhost_diagnostic(line: &[u8]) -> Option<&str> {
     // Do not log raw child stderr: Python/Playwright may emit private URLs,
     // filesystem paths, environment variables or profile content in tracebacks.
@@ -1002,7 +1046,7 @@ fn allowlisted_camouhost_diagnostic(line: &[u8]) -> Option<&str> {
         .strip_prefix("camouhost_pages count=")
         .and_then(|count| count.parse::<u16>().ok())
         .is_some_and(|count| count <= 512);
-    if allowed_failure || allowed_stage || allowed_pages {
+    if allowed_failure || allowed_stage || allowed_pages || safe_close_observation_witness(message) {
         return Some(message);
     }
     None
@@ -1622,6 +1666,24 @@ mod tests {
             workspace.inventory()?.inventory_digest(),
             browser_identity,
         )?)
+    }
+
+    #[test]
+    fn safe_close_witness_reaches_bridge_but_free_text_and_unbounded_data_do_not() {
+        let accepted = b"camouhost_close_witness exception=OSError line=1247 errno=13 winerror=32 tracked=1 closed=1 crashed=0 count=3 events=page,close,close\r\n";
+        assert_eq!(
+            allowlisted_camouhost_diagnostic(accepted),
+            Some("camouhost_close_witness exception=OSError line=1247 errno=13 winerror=32 tracked=1 closed=1 crashed=0 count=3 events=page,close,close")
+        );
+        for rejected in [
+            b"camouhost_close_witness exception=OSError line=1247 errno=13 winerror=32 tracked=1 closed=1 crashed=0 count=3 events=page,private\n".as_slice(),
+            b"camouhost_close_witness exception=OSError line=1247 errno=13 winerror=32 tracked=1 closed=1 crashed=0 count=3 events=page,close,close path=C:\\private\n",
+            b"camouhost_close_witness exception=OSError line=1247 errno=13 winerror=32 tracked=1 closed=1 crashed=0 count=3 events=page,close,close,close,close,close,close,close,close\n",
+            b"camouhost_close_witness exception=Unsafe.Error line=1247 errno=13 winerror=32 tracked=1 closed=1 crashed=0 count=3 events=page\n",
+            b"camouhost_close_witness exception=OSError line=1247 errno=13 winerror=-1 tracked=1 closed=1 crashed=0 count=3 events=page\n",
+        ] {
+            assert_eq!(allowlisted_camouhost_diagnostic(rejected), None);
+        }
     }
 
     #[test]
