@@ -2256,6 +2256,41 @@ mod direct_native_checkpoint_tests {
         }
     }
 
+    struct OfflineKeys;
+    impl GenerationSealingMaterialPort for OfflineKeys {
+        type Error = ();
+        fn material_for(
+            &mut self,
+            _tenant: &TenantId,
+            _profile: &ProfileId,
+            _base: &GenerationId,
+            _successor: &GenerationId,
+            _digest: [u8; 32],
+        ) -> Result<GenerationSealingMaterial, Self::Error> {
+            Err(())
+        }
+    }
+
+    #[test]
+    fn remote_sealing_failure_preserves_local_unsynced_not_a_disk_failure()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let fixture = Fixture::new()?;
+        let (source, candidate) = fixture.native()?;
+        persist_local_unsynced_intent(&fixture.root, &source, &fixture.lease)?;
+        let before = source.inventory()?;
+        let result = persist_streaming_exact_save_attempt_from_native(
+            &fixture.root, &source, &candidate, &fixture.lease, &mut OfflineKeys,
+        );
+        assert_eq!(result, Err(SaveAttemptEvidenceError::SealingMaterialUnavailable));
+        assert_eq!(source.inventory()?, before);
+        assert_eq!(candidate.inventory()?, before);
+        let pending = inspect_all_pending_for_s1(&fixture.root)?;
+        assert_eq!(pending.lone_local_unsynced, 1);
+        assert_eq!(pending.exact_checkpoints, 0);
+        assert!(!attempt_path(&fixture.root, &fixture.tenant, &fixture.profile, &fixture.next).exists());
+        Ok(())
+    }
+
     struct Fixture {
         path: PathBuf,
         root: MaterializationRoot,
