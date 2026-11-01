@@ -106,6 +106,13 @@ fn parse_contact_protection_keyring_with_metadata(
         .iter()
         .map(|key| key.version().value())
         .collect::<Vec<_>>();
+    // Distinguish a missing active key from invalid retained-key metadata.
+    // This reveals only version membership, never any key or secret bytes.
+    if !retained_encryption_versions.contains(&active_encryption_version.value())
+        || !retained_lookup_versions.contains(&active_lookup_version.value())
+    {
+        return Err(ContactKeyringConfigError::MissingActiveKey);
+    }
     let metadata = ContactKeyLifecycleMetadata::new(
         active_encryption_version.value(),
         active_lookup_version.value(),
@@ -240,6 +247,46 @@ mod tests {
             )
             .is_err()
         );
+    }
+
+    #[test]
+    fn invalid_keyring_reports_only_a_fixed_nonsecret_failure_category() {
+        assert_eq!(
+            parse_contact_protection_keyring("not-json".to_owned()).err(),
+            Some(ContactKeyringConfigError::InvalidShape),
+        );
+        assert_eq!(
+            parse_contact_protection_keyring(
+                r#"{"activeEncryptionVersion":0,"activeLookupVersion":1,"encryption":[],"lookup":[]}"#.to_owned(),
+            ).err(),
+            Some(ContactKeyringConfigError::InvalidVersion),
+        );
+        let key = "ab".repeat(32);
+        let missing_active = format!(
+            "{{\"activeEncryptionVersion\":2,\"activeLookupVersion\":1,\"encryption\":[{{\"version\":1,\"keyHex\":\"{key}\"}}],\"lookup\":[{{\"version\":1,\"keyHex\":\"{key}\"}}]}}"
+        );
+        assert_eq!(
+            parse_contact_protection_keyring(missing_active).err(),
+            Some(ContactKeyringConfigError::MissingActiveKey),
+        );
+        let invalid_hex = format!(
+            "{{\"activeEncryptionVersion\":1,\"activeLookupVersion\":1,\"encryption\":[{{\"version\":1,\"keyHex\":\"not-hex\"}}],\"lookup\":[{{\"version\":1,\"keyHex\":\"{key}\"}}]}}"
+        );
+        assert_eq!(
+            parse_contact_protection_keyring(invalid_hex).err(),
+            Some(ContactKeyringConfigError::InvalidKeyHex),
+        );
+        for code in [
+            ContactKeyringConfigError::InvalidShape,
+            ContactKeyringConfigError::InvalidVersion,
+            ContactKeyringConfigError::InvalidKeyHex,
+            ContactKeyringConfigError::MissingActiveKey,
+            ContactKeyringConfigError::InvalidLifecycle,
+            ContactKeyringConfigError::InvalidKeySet,
+        ] {
+            assert!(code.code().bytes().all(|byte| byte.is_ascii_lowercase() || byte == b'_'));
+            assert!(!code.code().contains(&key), "key material leaked in status category");
+        }
     }
 
     #[test]
