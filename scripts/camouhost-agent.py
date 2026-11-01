@@ -324,12 +324,33 @@ def run() -> int:
             return 124
         time.sleep(0.1)
     try:
-        details = json.loads(status.read_text(encoding="utf-8"))
+        receipt_text = status.read_text(encoding="utf-8")
     except OSError as error:
-        print(f"PLAYWRIGHT_AGENT_UNCONFIRMED phase=receipt_read errno={error.errno} winerror={getattr(error, 'winerror', None)}; do not replay automatically", file=sys.stderr)
+        print(
+            f"PLAYWRIGHT_AGENT_UNCONFIRMED phase=receipt_read job={job_id} "
+            f"errno={error.errno} winerror={getattr(error, 'winerror', None)}; "
+            "do not replay automatically", file=sys.stderr,
+        )
         return 125
+    except UnicodeError as error:
+        print(
+            f"PLAYWRIGHT_AGENT_UNCONFIRMED phase=receipt_decode job={job_id} "
+            f"error={type(error).__name__}; do not replay automatically", file=sys.stderr,
+        )
+        return 125
+    try:
+        details = json.loads(receipt_text)
     except ValueError as error:
-        print(f"PLAYWRIGHT_AGENT_UNCONFIRMED phase=receipt_parse error={type(error).__name__}; do not replay automatically", file=sys.stderr)
+        print(
+            f"PLAYWRIGHT_AGENT_UNCONFIRMED phase=receipt_parse job={job_id} "
+            f"error={type(error).__name__}; do not replay automatically", file=sys.stderr,
+        )
+        return 125
+    if not isinstance(details, dict) or details.get("status") not in ("ok", "error", "unconfirmed"):
+        print(
+            f"PLAYWRIGHT_AGENT_UNCONFIRMED phase=receipt_shape job={job_id}; "
+            "do not replay automatically", file=sys.stderr,
+        )
         return 125
     for extension, target in (("stdout.txt", sys.stdout), ("stderr.txt", sys.stderr)):
         log = results / f"{job_id}.{extension}"
