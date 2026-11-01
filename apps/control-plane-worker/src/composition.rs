@@ -98,7 +98,11 @@ pub fn client_contact_protection(
         env.secret(CLIENT_CONTACT_PROTECTION_KEYRING_BINDING)?
             .to_string(),
     )
-    .map_err(|_| Error::RustError("invalid client contact protection keyring".to_owned()))
+    .map_err(|error| {
+        // Fixed-category readiness telemetry only; never log serialized keys.
+        eprintln!("CLIENT_CONTACT_KEYRING_INVALID category={}", error.code());
+        Error::RustError("invalid client contact protection keyring".to_owned())
+    })
 }
 
 #[cfg(not(target_arch = "wasm32"))]
