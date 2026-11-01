@@ -1018,6 +1018,10 @@ impl<T: MachineHttpPort> ProfileCoordinatorRuntimePort for SharedControlPlaneCoo
 impl<T: MachineHttpPort> GenerationSealingMaterialPort for SharedControlPlaneCoordinator<T> {
     type Error = ShippingControlPlaneError;
 
+    fn classify_error(error: &Self::Error) -> SealingMaterialFailure {
+        <ControlPlaneCoordinator<T> as GenerationSealingMaterialPort>::classify_error(error)
+    }
+
     fn material_for(
         &mut self,
         tenant_id: &TenantId,
