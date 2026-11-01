@@ -53,7 +53,7 @@ const BROWSER_VISIBLE_RESPONSE_TIMEOUT: Duration = Duration::from_secs(30);
 const NAVIGATION_RESPONSE_TIMEOUT: Duration = Duration::from_secs(120);
 const OBSERVE_CLOSE_RESPONSE_TIMEOUT: Duration = Duration::from_secs(5);
 // Fail closed if a diagnostic job hangs indefinitely. This is not a Save deadline.
-const MAX_AGENT_CLOSE_OBSERVATION_WAIT: Duration = Duration::from_secs(300);
+const MAX_AGENT_CLOSE_OBSERVATION_WAIT: Duration = Duration::from_secs(60);
 const CLOSE_RESPONSE_TIMEOUT: Duration = Duration::from_secs(30);
 const PROCESS_EXIT_TIMEOUT: Duration = Duration::from_secs(15);
 const FORCE_EXIT_TIMEOUT: Duration = Duration::from_secs(10);
@@ -406,18 +406,6 @@ impl ManagedCamouhostCloseObserver {
         &mut self,
         session_id: &SessionId,
     ) -> Result<bool, BridgePortError> {
-        {
-            let state = self.shared.lock().map_err(|_| BridgePortError::Unavailable)?;
-            if state.active_session.as_ref() != Some(session_id) {
-                return Err(BridgePortError::InvalidResponse);
-            }
-            // Playwright's synchronous owner thread cannot service IPC while
-            // an explicit test job is executing. BUSY means no positive close
-            // witness; never turn it into a false Saved or runtime death.
-            if agent_execution_active(&state) {
-                return Ok(false);
-            }
-        }
         let response = exchange_shared(
             &self.shared,
             &CamouhostMessage::ObserveClose {
@@ -943,6 +931,17 @@ fn exchange_frame_shared(
         return Err(BridgePortError::InvalidResponse);
     }
     let mut state = shared.lock().map_err(|_| BridgePortError::Unavailable)?;
+    // The owner-thread Playwright job cannot dispatch an IPC frame until it
+    // finishes. Under the SAME lock used to send the frame, return a negative
+    // observation immediately instead of blocking the process-control owner.
+    // This is never evidence for Save; only the real positive frame can Save.
+    if let Some(session) = frame.strip_prefix("observe_close|") {
+        if state.active_session.as_ref().map(SessionId::as_str) == Some(session)
+            && agent_execution_active(&state)
+        {
+            return Ok(format!("close_observed|{session}|false"));
+        }
+    }
     let stdin = state.stdin.as_mut().ok_or(BridgePortError::Unavailable)?;
     stdin
         .write_all(frame.as_bytes())
