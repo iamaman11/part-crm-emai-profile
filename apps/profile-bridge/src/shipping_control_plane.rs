@@ -1128,8 +1128,16 @@ fn decode_sealing_material_response(
     mut response: MachineHttpResponse,
 ) -> Result<BridgeGenerationSealingMaterialResponse, ShippingControlPlaneError> {
     if !(200..=299).contains(&response.status()) {
+        // A 408, throttle or 5xx from this state-changing sealing endpoint
+        // cannot prove the material request had no effect. Do not pretend it
+        // was an explicit ACL denial or retry on the old fencing token.
+        let cause = if matches!(response.status(), 408 | 429 | 500..=599) {
+            ShippingControlPlaneError::HttpServerUncertain
+        } else {
+            ShippingControlPlaneError::HttpStatus
+        };
         response.body.fill(0);
-        return Err(ShippingControlPlaneError::HttpStatus);
+        return Err(cause);
     }
     if response.body.len() > MAX_SEALING_MATERIAL_RESPONSE_BYTES {
         response.body.fill(0);
@@ -1574,6 +1582,25 @@ mod tests {
     };
     use session_domain::ProfileLease;
     use std::collections::VecDeque;
+
+    #[test]
+    fn sealing_http_status_distinguishes_uncertain_server_effect_from_acl_denial() {
+        use super::decode_sealing_material_response;
+        for status in [408, 429, 500, 502, 503] {
+            assert!(matches!(
+                decode_sealing_material_response(MachineHttpResponse::new(
+                    status, b"secret-payload-to-zeroize".to_vec()
+                )),
+                Err(ShippingControlPlaneError::HttpServerUncertain)
+            ));
+        }
+        for status in [400, 401, 403, 404, 409, 422] {
+            assert!(matches!(
+                decode_sealing_material_response(MachineHttpResponse::new(status, Vec::new())),
+                Err(ShippingControlPlaneError::HttpStatus)
+            ));
+        }
+    }
 
     #[test]
     fn shared_sealing_owner_preserves_transport_and_rejection_provenance() {
