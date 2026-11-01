@@ -151,9 +151,18 @@ pub(crate) fn encode_workspace_snapshot_streaming(
 fn encoded_stream_snapshot_size(
     inventory: &GenerationInventory,
 ) -> Result<u64, GenerationSnapshotError> {
-    if inventory.entries().len() > MAX_SNAPSHOT_FILES
-        || inventory.total_bytes() > MAX_STREAM_NATIVE_PROFILE_BYTES
-    {
+    if inventory.entries().len() > MAX_SNAPSHOT_FILES {
+        return Err(GenerationSnapshotError::SnapshotTooLarge);
+    }
+    if inventory.total_bytes() > MAX_STREAM_NATIVE_PROFILE_BYTES {
+        // Bounded, non-sensitive size evidence. A 512 MiB IndexedDB payload
+        // can exceed the policy once real Firefox WAL and preferences count.
+        // No browser/profile files are changed by this refusal.
+        eprintln!(
+            "BRIDGE_NATIVE_SNAPSHOT_SIZE_REFUSED native_bytes={} limit_bytes={}",
+            inventory.total_bytes(),
+            MAX_STREAM_NATIVE_PROFILE_BYTES,
+        );
         return Err(GenerationSnapshotError::SnapshotTooLarge);
     }
     let mut size = 12_u64; // BPGW0001 + u32 file count
