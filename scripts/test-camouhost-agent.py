@@ -518,7 +518,68 @@ def prove_claim_denial_and_windows_owner_preflight() -> None:
             agent.close()
 
 
+def prove_receipt_failure_diagnostics() -> None:
+    """A consumed job must remain UNKNOWN on receipt I/O, decode, parse or shape failure."""
+    import contextlib
+    import io
+
+    runtime = runtime_module()
+    cli_spec = importlib.util.spec_from_file_location(
+        "owned_receipt_cli", ROOT / "scripts" / "camouhost-agent.py"
+    )
+    assert cli_spec and cli_spec.loader
+    cli = importlib.util.module_from_spec(cli_spec)
+    cli_spec.loader.exec_module(cli)
+
+    with tempfile.TemporaryDirectory(prefix="owned-agent-receipt-") as temp:
+        base = Path(temp).resolve()
+        agent = runtime.LocalPlaywrightAgent(str(base), "session_receipt")
+        source = base / "receipt-probe.py"
+        source.write_text("result = 'execute-only-once'\n", encoding="utf-8")
+        args = [
+            "camouhost-agent", "--directory", str(base),
+            "--pid", str(os.getpid()), "--script", str(source), "--timeout", "1",
+        ]
+        read_text = Path.read_text
+        cases = [
+            ("receipt_read", b'{"status":"ok"}', True),
+            ("receipt_decode", b"\xff\xfe", False),
+            ("receipt_parse", b'{"status":', False),
+            ("receipt_shape", b'[]', False),
+        ]
+        try:
+            for phase, raw_receipt, deny_read in cases:
+                job_id = secrets.token_hex(16)
+                receipt = agent.results / f"{job_id}.json"
+                receipt.write_bytes(raw_receipt)
+
+                def read_with_optional_denial(path: Path, *a: object, **kw: object) -> str:
+                    if deny_read and path == receipt:
+                        raise PermissionError(13, "receipt temporarily unreadable")
+                    return read_text(path, *a, **kw)
+
+                errors = io.StringIO()
+                output = io.StringIO()
+                with patch.object(cli.secrets, "token_hex", return_value=job_id), \
+                        patch.object(Path, "read_text", read_with_optional_denial), \
+                        patch.object(sys, "argv", args), \
+                        contextlib.redirect_stderr(errors), \
+                        contextlib.redirect_stdout(output):
+                    exit_code = cli.run()
+                assert exit_code == 125, (phase, exit_code, errors.getvalue())
+                assert f"phase={phase}" in errors.getvalue(), errors.getvalue()
+                assert f"job={job_id}" in errors.getvalue(), errors.getvalue()
+                if deny_read:
+                    assert "errno=13" in errors.getvalue(), errors.getvalue()
+                assert receipt.read_bytes() == raw_receipt, "original receipt lost"
+                assert (agent.requests / f"{job_id}.py").exists(), "request replayed or erased"
+                assert not (agent.requests / f"{job_id}.running").exists(), "job was executed"
+        finally:
+            agent.close()
+
+
 def main() -> int:
+    prove_receipt_failure_diagnostics()
     prove_agent()
     prove_claim_denial_and_windows_owner_preflight()
     prove_owner_thread_polling()
