@@ -453,6 +453,9 @@ fn save_checkpoint_reason(source: SaveAttemptEvidenceError) -> GenerationSaveFai
         SaveAttemptEvidenceError::SnapshotTooLarge => {
             GenerationSaveFailureReason::SnapshotTooLarge
         }
+        SaveAttemptEvidenceError::SealingMaterialUnavailable => {
+            GenerationSaveFailureReason::SealingMaterial
+        }
         SaveAttemptEvidenceError::Invalid | SaveAttemptEvidenceError::Changed => {
             GenerationSaveFailureReason::CheckpointIntegrity
         }
@@ -466,6 +469,9 @@ fn save_checkpoint_read_reason(source: SaveAttemptEvidenceError) -> GenerationSa
         }
         SaveAttemptEvidenceError::SnapshotTooLarge => {
             GenerationSaveFailureReason::SnapshotTooLarge
+        }
+        SaveAttemptEvidenceError::SealingMaterialUnavailable => {
+            GenerationSaveFailureReason::SealingMaterial
         }
         SaveAttemptEvidenceError::Invalid | SaveAttemptEvidenceError::Changed => {
             GenerationSaveFailureReason::CheckpointIntegrity
@@ -2368,6 +2374,14 @@ mod tests {
         assert_eq!(
             save_checkpoint_reason(Evidence::SnapshotTooLarge),
             Reason::SnapshotTooLarge
+        );
+        assert_eq!(
+            save_checkpoint_reason(Evidence::SealingMaterialUnavailable),
+            Reason::SealingMaterial
+        );
+        assert_eq!(
+            save_checkpoint_read_reason(Evidence::SealingMaterialUnavailable),
+            Reason::SealingMaterial
         );
         assert_eq!(
             save_checkpoint_read_reason(Evidence::SnapshotTooLarge),
