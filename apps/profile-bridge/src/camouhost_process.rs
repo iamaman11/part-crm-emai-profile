@@ -846,7 +846,10 @@ fn agent_execution_active(state: &ProcessState) -> bool {
     ) else {
         return false;
     };
-    let pid = child.id();
+    owned_agent_execution_marker(directory, child.id(), session)
+}
+
+fn owned_agent_execution_marker(directory: &Path, pid: u32, session: &SessionId) -> bool {
     let descriptor = directory.join(format!("active-{pid}.json"));
     if descriptor.is_symlink() {
         return false;
@@ -869,7 +872,7 @@ fn agent_execution_active(state: &ProcessState) -> bool {
         return false;
     };
     let run = Path::new(run);
-    if run.parent() != Some(directory.as_path()) || run.is_symlink() || !run.is_dir() {
+    if run.parent() != Some(directory) || run.is_symlink() || !run.is_dir() {
         return false;
     }
     let marker = run.join("agent-executing");
