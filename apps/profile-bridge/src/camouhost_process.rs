@@ -1371,6 +1371,39 @@ mod tests {
     }
 
     #[test]
+    fn owned_playwright_job_activity_is_not_a_close_or_save_witness()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let root = root_path()?;
+        fs::create_dir_all(&root)?;
+        let directory = root.join("ProfileBridgeAgentTests");
+        let run = directory.join("camouhost-4123-test");
+        fs::create_dir_all(&run)?;
+        let session = SessionId::parse("session_01JD02OWNEDAGENT")?;
+        let descriptor = directory.join("active-4123.json");
+        fs::write(
+            &descriptor,
+            serde_json::to_vec(&serde_json::json!({
+                "pid": 4123,
+                "session": session.as_str(),
+                "run": run.to_string_lossy(),
+            }))?,
+        )?;
+        let marker = run.join("agent-executing");
+        assert!(!super::owned_agent_execution_marker(&directory, 4123, &session));
+        fs::write(&marker, b"active read-only test")?;
+        assert!(super::owned_agent_execution_marker(&directory, 4123, &session));
+        assert!(!super::owned_agent_execution_marker(&directory, 4124, &session));
+        let foreign = SessionId::parse("session_01JD02FOREIGN")?;
+        assert!(!super::owned_agent_execution_marker(&directory, 4123, &foreign));
+        // A stale descriptor for a different run cannot make our current
+        // process look busy, even if it contains a plausible PID.
+        fs::write(&descriptor, br#"{"pid":4123,"session":"session_01JD02OWNEDAGENT","run":"foreign"}"#)?;
+        assert!(!super::owned_agent_execution_marker(&directory, 4123, &session));
+        fs::remove_dir_all(root)?;
+        Ok(())
+    }
+
+    #[test]
     fn agent_inbox_is_automatic_stable_and_never_uses_a_marker()
     -> Result<(), Box<dyn std::error::Error>> {
         let root = root_path()?;
