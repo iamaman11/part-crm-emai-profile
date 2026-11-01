@@ -2189,6 +2189,19 @@ fn hex(bytes: &[u8]) -> String {
 }
 
 #[cfg(test)]
+#[test]
+fn native_snapshot_size_refusal_keeps_distinct_error_provenance() {
+    assert_eq!(
+        snapshot_preflight_reason(GenerationSnapshotError::SnapshotTooLarge),
+        SaveAttemptEvidenceError::SnapshotTooLarge
+    );
+    assert_eq!(
+        snapshot_preflight_reason(GenerationSnapshotError::SourceChanged),
+        SaveAttemptEvidenceError::Changed
+    );
+}
+
+#[cfg(test)]
 mod direct_native_checkpoint_tests {
     use super::{
         SaveAttemptEvidenceError, attempt_path, discover_unresolved_streaming_exact_save_attempt,
