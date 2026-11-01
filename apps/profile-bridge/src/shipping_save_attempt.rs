@@ -6,7 +6,7 @@
 //! using these exact bytes. Never remove an unknown record during cleanup.
 use crate::dirty_generation::{GenerationSealingMaterialPort, PreparedDirtyGeneration};
 use crate::generation_object_spool::VerifiedGenerationObjectFile;
-use crate::generation_snapshot::WorkspaceSnapshotReader;
+use crate::generation_snapshot::{GenerationSnapshotError, WorkspaceSnapshotReader};
 use crate::local_profile::{GenerationWorkspace, MaterializationRoot};
 use crate::shipping_generation_save::CommittedGenerationSuccessor;
 use encrypted_generation_domain::{
@@ -36,6 +36,7 @@ pub(crate) enum SaveAttemptEvidenceError {
     Io(std::io::ErrorKind),
     Invalid,
     Changed,
+    SnapshotTooLarge,
     Unavailable,
 }
 
@@ -51,12 +52,21 @@ impl std::fmt::Display for SaveAttemptEvidenceError {
             Self::Io(kind) => write!(formatter, "save-attempt local I/O failure: {kind:?}"),
             Self::Invalid => formatter.write_str("save-attempt evidence is invalid"),
             Self::Changed => formatter.write_str("save-attempt workspace or bytes changed"),
+            Self::SnapshotTooLarge => formatter.write_str("native Firefox snapshot exceeds 512 MiB limit"),
             Self::Unavailable => formatter.write_str("save-attempt atomic staging unavailable"),
         }
     }
 }
 
 impl std::error::Error for SaveAttemptEvidenceError {}
+
+/// Preserve a size-policy refusal instead of reporting corrupted checkpoint bytes.
+fn snapshot_preflight_reason(error: GenerationSnapshotError) -> SaveAttemptEvidenceError {
+    match error {
+        GenerationSnapshotError::SnapshotTooLarge => SaveAttemptEvidenceError::SnapshotTooLarge,
+        _ => SaveAttemptEvidenceError::Changed,
+    }
+}
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -1663,7 +1673,7 @@ fn persist_streaming_exact_save_attempt_from_native_with_origin<
         return Err(SaveAttemptEvidenceError::Changed);
     }
     let mut reader = WorkspaceSnapshotReader::new(candidate, &inventory)
-        .map_err(|_| SaveAttemptEvidenceError::Changed)?;
+        .map_err(snapshot_preflight_reason)?;
     let expected_bytes = reader.expected_bytes();
     let mut digest = Sha256::new();
     let mut buffer = [0_u8; 65_536];
@@ -1703,7 +1713,7 @@ fn persist_streaming_exact_save_attempt_from_native_with_origin<
     // changed key-owner source nor a subsequent same-size edit can change
     // the ciphertext silently: both sealing passes authenticate this digest.
     let mut comparison = WorkspaceSnapshotReader::new(candidate, &inventory)
-        .map_err(|_| SaveAttemptEvidenceError::Changed)?;
+        .map_err(snapshot_preflight_reason)?;
     let metadata = GenerationMetadata::for_prehashed_stream(
         GenerationIdentity::new(
             lease.tenant_id().clone(),
@@ -1737,7 +1747,7 @@ fn persist_streaming_exact_save_attempt_from_native_with_origin<
         recovered_lone_origin,
         |output| {
             let mut actual_reader = WorkspaceSnapshotReader::new(candidate, &inventory)
-                .map_err(|_| SaveAttemptEvidenceError::Changed)?;
+                .map_err(snapshot_preflight_reason)?;
             let actual = seal_generation_streaming(&metadata, &key, &mut actual_reader, output)
                 .map_err(|_| SaveAttemptEvidenceError::Changed)?;
             if actual != expected
