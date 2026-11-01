@@ -632,8 +632,55 @@ def prove_pid_reuse_fails_closed() -> None:
             agent.close()
 
 
+def prove_close_failure_witness_preserves_order() -> None:
+    """F02: original typed OS failure and callback chronology survive redacted reporting."""
+    import contextlib
+    import io
+
+    runtime = runtime_module()
+    class EventPage:
+        def __init__(self) -> None:
+            self.handlers: dict[str, object] = {}
+        def on(self, name: str, callback: object) -> None:
+            self.handlers[name] = callback
+
+    class EventContext:
+        def __init__(self, page: EventPage) -> None:
+            self.pages = [page]
+            self.handlers: dict[str, object] = {}
+        def on(self, name: str, callback: object) -> None:
+            self.handlers[name] = callback
+
+    class SyntheticWindowsFailure(OSError):
+        winerror = 32
+
+    page = EventPage()
+    state = runtime.install_controlled_close_observation(EventContext(page))
+    assert state["callback_events"] == ["page"]
+    page.handlers["close"](None)
+    assert state["callback_events"] == ["page", "close"]
+
+    problem = SyntheticWindowsFailure(13, "private profile path must not appear in diagnostics")
+    captured = io.StringIO()
+    with contextlib.redirect_stderr(captured):
+        runtime.report_close_observation_detail(state, problem)
+    raw = captured.getvalue()
+    assert raw.startswith("camouhost_close_observation_detail ")
+    report = json.loads(raw.split(" ", 1)[1])
+    assert report["exception_type"] == "SyntheticWindowsFailure"
+    assert report["errno"] == 13 and report["winerror"] == 32
+    assert report["tracked"] == 1 and report["closed"] == 1
+    assert report["callback_events"] == ["page", "close"]
+    assert "private profile path" not in raw
+
+    page.handlers["crash"](None)
+    assert state["callback_events"] == ["page", "close", "crash"]
+    assert not runtime.controlled_close_candidate(state), "crash became successful closure"
+
+
 def main() -> int:
     prove_receipt_failure_diagnostics()
+    prove_close_failure_witness_preserves_order()
     prove_pid_reuse_fails_closed()
     prove_agent()
     prove_claim_denial_and_windows_owner_preflight()
