@@ -1576,6 +1576,32 @@ mod tests {
     use std::collections::VecDeque;
 
     #[test]
+    fn shared_sealing_owner_preserves_transport_and_rejection_provenance() {
+        use crate::dirty_generation::SealingMaterialFailure as Cause;
+        use ShippingControlPlaneError as Error;
+        for (error, expected) in [
+            (Error::Transport, Cause::Transport),
+            (Error::HttpServerUncertain, Cause::ServerUncertain),
+            (Error::HttpStatus, Cause::Rejected),
+            (Error::LaunchLeaseConflict, Cause::Rejected),
+            (Error::InvalidResponse, Cause::Unavailable),
+            (Error::Clock, Cause::Unavailable),
+        ] {
+            assert_eq!(
+                <ControlPlaneCoordinator<SealingMachineHttp> as GenerationSealingMaterialPort>::
+                    classify_error(&error),
+                expected
+            );
+            assert_eq!(
+                <SharedControlPlaneCoordinator<SealingMachineHttp> as GenerationSealingMaterialPort>::
+                    classify_error(&error),
+                expected,
+                "the production shared Coordinator must not erase transport evidence"
+            );
+        }
+    }
+
+    #[test]
     fn download_refusal_evidence_is_bounded_and_contains_only_trusted_problem_fields()
     -> Result<(), Box<dyn std::error::Error>> {
         let request_id = CorrelationId::parse("corr_reopen_refusal_01")?;
