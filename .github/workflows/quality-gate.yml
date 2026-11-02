@@ -633,3 +633,14 @@ jobs:
             throw "profile-bridge.exe is empty"
           }
           Write-Host "Verified Profile Bridge artifact: $($artifact.FullName) ($($artifact.Length) bytes)"
+
+      # Source-only PR test transport; not a signed installer or approved Release Set.
+      # No production enrollment, trust mutation or deployment is possible here.
+      - name: Upload disposable exact-head Windows Bridge candidate
+        if: github.event_name == 'pull_request'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: p2-disposable-bridge-${{ github.event.pull_request.head.sha }}
+          path: target/release/profile-bridge.exe
+          if-no-files-found: error
+          retention-days: 7

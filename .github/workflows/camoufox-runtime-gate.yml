@@ -177,6 +177,21 @@ jobs:
           cargo test --locked -p profile-bridge --test real_camoufox_runtime bridge_preflight_launches_real_camoufox_through_managed_ipc -- --exact --nocapture
           if ($LASTEXITCODE -ne 0) { throw 'production Bridge/Playwright integration failed' }
 
+      - name: Prove native state survives encrypted Save and cold Reopen
+        if: needs.scope.outputs.heavy == 'true'
+        shell: pwsh
+        run: |
+          # Reuse the existing production Bridge + pinned official runtime from
+          # this exact job, with isolated ephemeral control-plane test ports.
+          # This is a physical browser/state proof, NOT a deployed GUI/R2 proof.
+          $root = Join-Path $env:RUNNER_TEMP 'camouhost-runtime'
+          $env:AR10_REAL_CAMOUFOX = '1'
+          $env:AR10_PYTHON = Join-Path $root 'python/python.exe'
+          $env:AR10_RUNTIME_ROOT = $root
+          $env:AR10_BROWSER_STATE_HEADLESS = 'false'
+          cargo test --locked -p profile-bridge --test portable_browser_state real_cookie_local_storage_and_indexed_db_survive_authoritative_p3_reopen -- --exact --nocapture
+          if ($LASTEXITCODE -ne 0) { throw 'real Camoufox encrypted Save/Reopen or native storage persistence failed' }
+
       - name: Upload exact PR candidate for installed Windows evaluation
         if: needs.scope.outputs.heavy == 'true'
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
