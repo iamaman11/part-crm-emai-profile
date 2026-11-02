@@ -139,10 +139,12 @@ describe('ProfilesWorkspace generation refresh (#802 F06)', () => {
     const oldRead = new Promise<Awaited<ReturnType<typeof getProfile>>>((resolve) => {
       resolveOld = resolve;
     });
-    profileLookup.mockImplementation((_tenant, id) => id === 'profile_old'
-      ? oldRead
-      : Promise.resolve({ profileId: id, status: 'READY', version: 8, linkedClientId: null }
-        as Awaited<ReturnType<typeof getProfile>>));
+    profileLookup.mockImplementation(async (_tenant, id) => {
+      if (id === 'profile_old') return oldRead;
+      return {
+        profileId: id, status: 'READY', version: 8, linkedClientId: null,
+      } as Awaited<ReturnType<typeof getProfile>>;
+    });
     const cache = new QueryClient({ defaultOptions: { queries: { retry: false } } });
     const provider = (id: string) => (
       <QueryClientProvider client={cache}>
