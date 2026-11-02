@@ -252,9 +252,8 @@ mod windows {
     };
     use crate::shipping_generation_successor_control::{
         RestartExactCommitObservation, RestartExactLocalCompletion,
-        complete_active_exact_after_restart,
-        confirm_retained_exact_retry_nonapplication, resume_exact_successor_under_fresh_lease,
-        resume_lone_local_unsynced_under_fresh_lease,
+        complete_active_exact_after_restart, confirm_retained_exact_retry_nonapplication,
+        resume_exact_successor_under_fresh_lease, resume_lone_local_unsynced_under_fresh_lease,
     };
     use crate::shipping_preflight::ShippingBrowserLaunchPreflight;
     use crate::user_diagnostics::report::{self, Cause, Cloud, Outcome, Stage};
@@ -1744,18 +1743,42 @@ mod tests {
         use crate::shipping_generation_successor_control::RestartExactLocalCompletionError as Restart;
 
         for (failure, expected) in [
-            (Restart::NativeSnapshotTooLarge, "PRESERVE_LOCAL_BYTES;NATIVE_RESCUE_REQUIRED"),
-            (Restart::PreSealTransport, "PRESERVE_LOCAL_BYTES;FRESH_AUTHORIZED_OBSERVATION"),
+            (
+                Restart::NativeSnapshotTooLarge,
+                "PRESERVE_LOCAL_BYTES;NATIVE_RESCUE_REQUIRED",
+            ),
+            (
+                Restart::PreSealTransport,
+                "PRESERVE_LOCAL_BYTES;FRESH_AUTHORIZED_OBSERVATION",
+            ),
             (
                 Restart::PreSealResponseUncertain,
                 "PRESERVE_LOCAL_BYTES;FRESH_AUTHORIZED_OBSERVATION",
             ),
-            (Restart::UploadOrCommitUncertain, "PRESERVE_LOCAL_BYTES;FRESH_AUTHORIZED_OBSERVATION"),
-            (Restart::PreSealRejected, "PRESERVE_LOCAL_BYTES;CHECK_SERVER_AUTHORITY"),
-            (Restart::PreSealUnavailable, "PRESERVE_LOCAL_BYTES;CHECK_SEALING_SERVICE"),
-            (Restart::LocalEvidenceChanged, "PRESERVE_LOCAL_BYTES;CHECK_LOCAL_EVIDENCE"),
-            (Restart::WriterOrLockUnresolved, "PRESERVE_LOCAL_BYTES;CHECK_NATIVE_WRITER"),
-            (Restart::BindingOrRetirementFailed, "PRESERVE_LOCAL_BYTES;RECONCILE_ACTIVE_EXACT"),
+            (
+                Restart::UploadOrCommitUncertain,
+                "PRESERVE_LOCAL_BYTES;FRESH_AUTHORIZED_OBSERVATION",
+            ),
+            (
+                Restart::PreSealRejected,
+                "PRESERVE_LOCAL_BYTES;CHECK_SERVER_AUTHORITY",
+            ),
+            (
+                Restart::PreSealUnavailable,
+                "PRESERVE_LOCAL_BYTES;CHECK_SEALING_SERVICE",
+            ),
+            (
+                Restart::LocalEvidenceChanged,
+                "PRESERVE_LOCAL_BYTES;CHECK_LOCAL_EVIDENCE",
+            ),
+            (
+                Restart::WriterOrLockUnresolved,
+                "PRESERVE_LOCAL_BYTES;CHECK_NATIVE_WRITER",
+            ),
+            (
+                Restart::BindingOrRetirementFailed,
+                "PRESERVE_LOCAL_BYTES;RECONCILE_ACTIVE_EXACT",
+            ),
             (
                 Restart::ControlPlane(Http::Transport),
                 "PRESERVE_LOCAL_BYTES;FRESH_AUTHORIZED_OBSERVATION",
@@ -1776,7 +1799,10 @@ mod tests {
                 Restart::ControlPlane(Http::InvalidResponse),
                 "PRESERVE_LOCAL_BYTES;INSPECT_SERVER_RESPONSE",
             ),
-            (Restart::ControlPlane(Http::Clock), "PRESERVE_LOCAL_BYTES;CHECK_CLOCK"),
+            (
+                Restart::ControlPlane(Http::Clock),
+                "PRESERVE_LOCAL_BYTES;CHECK_CLOCK",
+            ),
         ] {
             let step = recovery_next_safe_step(failure);
             assert_eq!(step, expected);
