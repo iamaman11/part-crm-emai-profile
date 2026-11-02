@@ -615,7 +615,7 @@ pub(crate) fn reserve_original_native_for_rescue(
     let reserve = match root.open_generation(tenant, profile, &generation_id) {
         Ok(existing) => {
             if existing
-                .inventory()
+                .sync_native_reserve_contents()
                 .map_err(|_| SaveAttemptEvidenceError::Changed)?
                 != inventory
             {
@@ -2857,12 +2857,12 @@ mod direct_native_checkpoint_tests {
         )?;
         let original = source.inventory()?;
         begin_native_rescue_edit(&fixture.root, &source, &first)?;
-        assert_eq!(
+        assert!(matches!(
             classify_scoped_pending_save_evidence(
                 &fixture.root, &fixture.tenant, &fixture.profile,
             ),
             Err(SaveAttemptEvidenceError::Changed),
-        );
+        ));
         // Simulate power loss after the owned Firefox session changed WAL,
         // but before a clean Close could publish the new native inventory.
         fs::write(source.path().join("user_data/cookies.sqlite-wal"), b"crash dirty WAL")?;
