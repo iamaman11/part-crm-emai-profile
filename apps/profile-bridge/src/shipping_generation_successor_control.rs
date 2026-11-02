@@ -5,6 +5,8 @@ use crate::dirty_generation::recover_local_unsynced_native_clone;
 use crate::dirty_generation::{
     GenerationSealingMaterial, GenerationSealingMaterialPort, PreparedDirtyGeneration,
 };
+#[cfg(any(windows, test))]
+use crate::generation_snapshot::{GenerationSnapshotError, WorkspaceSnapshotReader};
 use crate::local_profile::MaterializationRoot;
 #[cfg(any(windows, test))]
 use crate::local_profile::{BridgeWorkspaceLock, LocalGenerationRecord, LocalProfileError};
@@ -28,8 +30,9 @@ use crate::shipping_save_attempt::{
 };
 #[cfg(any(windows, test))]
 use crate::shipping_save_attempt::{
-    ScopedPendingSaveEvidence, classify_scoped_pending_save_evidence,
+    SaveAttemptEvidenceError, ScopedPendingSaveEvidence, classify_scoped_pending_save_evidence,
     deterministic_lone_unsynced_successor, local_unsynced_matches_fresh_lease,
+    native_rescue_interrupted_under_fresh_lease,
     persist_streaming_exact_save_attempt_from_lone_intent,
     retire_active_exact_attempt_after_restart, retire_active_streamed_attempt_after_restart,
     retire_matching_local_unsynced_after_restart,
@@ -76,6 +79,9 @@ pub enum RestartExactLocalCompletion {
     /// Verified local source exists, but no cloud effect has been proved.
     /// Requires a *new* D1 affirmative decision and fresh writer fence.
     LocalUnsyncedAuthorizedAwaitingFirstSeal,
+    /// Fresh N launch claim, independent D1 nonapplication and locally
+    /// verifiable original rescue bytes. Actual editing journal still pending.
+    NativeRescueRequired,
     NotActiveExact,
     /// D1 positively proved nonapplication; exact same-attempt resume is still pending.
     RetryDecisionConfirmedAwaitingResumption,
@@ -88,6 +94,11 @@ pub enum RestartExactLocalCompletion {
 #[cfg(any(windows, test))]
 pub enum RestartExactLocalCompletionError {
     LocalEvidenceChanged,
+    NativeSnapshotTooLarge,
+    PreSealTransport,
+    PreSealResponseUncertain,
+    PreSealRejected,
+    PreSealUnavailable,
     WriterOrLockUnresolved,
     BindingOrRetirementFailed,
     /// Signed PUT or commit outcome is uncertain; never discard original bytes.
@@ -101,11 +112,40 @@ impl RestartExactLocalCompletionError {
     pub const fn code(self) -> &'static str {
         match self {
             Self::LocalEvidenceChanged => "P3_RECOVERY_LOCAL_EVIDENCE_CHANGED",
+            Self::NativeSnapshotTooLarge => "P3_RECOVERY_NATIVE_SNAPSHOT_TOO_LARGE",
+            Self::PreSealTransport => "P3_RECOVERY_PRESEAL_TRANSPORT_UNKNOWN",
+            Self::PreSealResponseUncertain => "P3_RECOVERY_PRESEAL_RESPONSE_UNCERTAIN",
+            Self::PreSealRejected => "P3_RECOVERY_PRESEAL_REJECTED",
+            Self::PreSealUnavailable => "P3_RECOVERY_PRESEAL_UNAVAILABLE",
             Self::WriterOrLockUnresolved => "P3_RECOVERY_WRITER_UNRESOLVED",
             Self::BindingOrRetirementFailed => "P3_RECOVERY_LOCAL_COMPLETION_BLOCKED",
             Self::UploadOrCommitUncertain => "P3_RECOVERY_UPLOAD_OR_COMMIT_UNCERTAIN",
             Self::ControlPlane(_) => "P3_RECOVERY_CLOUD_OBSERVATION_FAILED",
         }
+    }
+}
+
+#[cfg(any(windows, test))]
+fn first_seal_recovery_failure(
+    error: SaveAttemptEvidenceError,
+) -> RestartExactLocalCompletionError {
+    match error {
+        SaveAttemptEvidenceError::SnapshotTooLarge => {
+            RestartExactLocalCompletionError::NativeSnapshotTooLarge
+        }
+        SaveAttemptEvidenceError::SealingTransport => {
+            RestartExactLocalCompletionError::PreSealTransport
+        }
+        SaveAttemptEvidenceError::SealingResponseUncertain => {
+            RestartExactLocalCompletionError::PreSealResponseUncertain
+        }
+        SaveAttemptEvidenceError::SealingRejected => {
+            RestartExactLocalCompletionError::PreSealRejected
+        }
+        SaveAttemptEvidenceError::SealingMaterialUnavailable => {
+            RestartExactLocalCompletionError::PreSealUnavailable
+        }
+        _ => RestartExactLocalCompletionError::LocalEvidenceChanged,
     }
 }
 
@@ -302,6 +342,35 @@ pub(crate) fn complete_active_exact_after_restart<T: MachineHttpPort>(
         || fresh_lease.epoch() == 0
     {
         return Err(RestartExactLocalCompletionError::WriterOrLockUnresolved);
+    }
+    // An interrupted managed edit intentionally has a changed native
+    // inventory. It is NOT ordinary LOCAL_UNSYNCED, and must not attempt
+    // cloud first-seal until a fresh browser rescue closes cleanly.
+    if native_rescue_interrupted_under_fresh_lease(
+        root,
+        tenant_id,
+        profile_id,
+        selected_generation,
+        fresh_lease,
+    )
+    .map_err(|_| RestartExactLocalCompletionError::LocalEvidenceChanged)?
+    {
+        let verdict = request_local_unsynced_retry_decision(
+            tenant_id,
+            profile_id,
+            selected_generation,
+            fresh_lease,
+            transport,
+        )
+        .map_err(RestartExactLocalCompletionError::ControlPlane)?;
+        return Ok(match verdict {
+            BridgeGenerationSuccessorRetryVerdict::NotAppliedRetryable => {
+                RestartExactLocalCompletion::NativeRescueRequired
+            }
+            BridgeGenerationSuccessorRetryVerdict::Blocked => {
+                RestartExactLocalCompletion::RetryDecisionBlocked
+            }
+        });
     }
     // Inspect the ONE canonical BPAT with bounded memory before the legacy
     // lone-intent classifier: a 512 MiB verified checkpoint must not hit the
@@ -687,6 +756,16 @@ where
         let inventory = source
             .inventory()
             .map_err(|_| RestartExactLocalCompletionError::LocalEvidenceChanged)?;
+        // Check the exact canonical native+framing limit under the existing
+        // writer lock BEFORE materializing any second Firefox workspace.
+        // An oversized local browser is a policy refusal, not corrupt bytes;
+        // the original LOCAL_UNSYNCED evidence remains available for rescue.
+        WorkspaceSnapshotReader::new(&source, &inventory).map_err(|error| match error {
+            GenerationSnapshotError::SnapshotTooLarge => {
+                RestartExactLocalCompletionError::NativeSnapshotTooLarge
+            }
+            _ => RestartExactLocalCompletionError::LocalEvidenceChanged,
+        })?;
         let record = LocalGenerationRecord::from_verified_unsynced_close(
             selected_generation.clone(),
             inventory.total_bytes(),
@@ -710,7 +789,7 @@ where
             fresh_lease,
             sealer,
         )
-        .map_err(|_| RestartExactLocalCompletionError::LocalEvidenceChanged)?;
+        .map_err(first_seal_recovery_failure)?;
         let mut verified =
             discover_unresolved_streaming_exact_save_attempt(root, tenant_id, profile_id)
                 .map_err(|_| RestartExactLocalCompletionError::LocalEvidenceChanged)?
@@ -1459,6 +1538,29 @@ mod tests {
     use std::sync::atomic::{AtomicU64, Ordering};
 
     static FIXTURE_SEQUENCE: AtomicU64 = AtomicU64::new(1);
+
+    #[test]
+    fn first_seal_recovery_does_not_call_oversize_corruption_or_grant_retry() {
+        use super::first_seal_recovery_failure;
+        use crate::shipping_save_attempt::SaveAttemptEvidenceError as Evidence;
+        use RestartExactLocalCompletionError as Failure;
+        for (source, expected) in [
+            (Evidence::SnapshotTooLarge, Failure::NativeSnapshotTooLarge),
+            (Evidence::SealingTransport, Failure::PreSealTransport),
+            (
+                Evidence::SealingResponseUncertain,
+                Failure::PreSealResponseUncertain,
+            ),
+            (Evidence::SealingRejected, Failure::PreSealRejected),
+            (
+                Evidence::SealingMaterialUnavailable,
+                Failure::PreSealUnavailable,
+            ),
+            (Evidence::Changed, Failure::LocalEvidenceChanged),
+        ] {
+            assert_eq!(first_seal_recovery_failure(source), expected);
+        }
+    }
 
     #[test]
     fn save_http_diagnostics_never_include_tenant_profile_or_untrusted_route() {
@@ -2559,6 +2661,335 @@ mod tests {
             &fixture.tenant,
             &fixture.profile,
         )?);
+        Ok(())
+    }
+
+    #[test]
+    fn lone_intent_refuses_foreign_stale_and_changed_claims_before_d1()
+    -> Result<(), Box<dyn std::error::Error>> {
+        // These checks reject BEFORE size preflight, so a large sparse payload
+        // would add costly inventory reads without proving more authority.
+        for case in 0..4 {
+            let fixture = Fixture::new()?;
+            let root = MaterializationRoot::open_or_create(&fixture.root_path)?;
+            let source = root.open_generation(&fixture.tenant, &fixture.profile, &fixture.base)?;
+            let native = source.path().join("user_data");
+            std::fs::create_dir_all(&native)?;
+            let wal = native.join("cookies.sqlite-wal");
+            std::fs::write(&wal, b"native-wal-original")?;
+            persist_local_unsynced_intent(&root, &source, &fixture.lease)?;
+            let prior_inventory = source.inventory()?;
+            let device = if case == 1 {
+                DeviceId::parse("device_foreign_oversize_rescue")?
+            } else {
+                fixture.lease.device_id().clone()
+            };
+            let epoch = if case == 0 {
+                fixture.lease.epoch()
+            } else {
+                fixture.lease.epoch() + 1
+            };
+            let fresh = ProfileLease::issue(
+                fixture.tenant.clone(),
+                fixture.profile.clone(),
+                SessionId::parse("session_oversize_unauthorized_claim")?,
+                device,
+                epoch,
+                FencingToken::parse("fence_oversize_unauthorized_claim")?,
+            )?;
+            let selected = if case == 2 {
+                GenerationId::parse("generation_oversize_foreign_server_selection")?
+            } else {
+                fixture.base.clone()
+            };
+            if case == 3 {
+                std::fs::write(
+                    source.path().join("prefs.js"),
+                    b"source-changed-after-close",
+                )?;
+                assert_ne!(source.inventory()?, prior_inventory);
+            }
+            let bytes_before = source.inventory()?;
+            let mut network = Transport {
+                responses: VecDeque::from([MachineHttpResponse::new(
+                    200,
+                    br#"{"verdict":"NOT_APPLIED_RETRYABLE"}"#.to_vec(),
+                )]),
+                paths: Vec::new(),
+            };
+            let mut sealer = Sealer;
+            let mut upload = RecoveryPut::default();
+            assert_eq!(
+                super::resume_lone_local_unsynced_under_fresh_lease(
+                    &root,
+                    &fixture.tenant,
+                    &fixture.profile,
+                    &selected,
+                    &fresh,
+                    &mut sealer,
+                    &mut network,
+                    &mut upload,
+                ),
+                Err(if case == 3 {
+                    RestartExactLocalCompletionError::LocalEvidenceChanged
+                } else {
+                    RestartExactLocalCompletionError::WriterOrLockUnresolved
+                }),
+                "case={case}"
+            );
+            assert!(
+                network.paths.is_empty(),
+                "case={case}: D1 must not be called"
+            );
+            assert_eq!(upload.calls, 0, "case={case}: R2 must not be called");
+            assert_eq!(source.inventory()?, bytes_before);
+            assert_eq!(std::fs::read(&wal)?, b"native-wal-original");
+            assert!(has_unresolved_save_attempt_for_profile(
+                &root,
+                &fixture.tenant,
+                &fixture.profile,
+            )?);
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn lone_intent_obeys_explicit_server_denial_without_rescue_open()
+    -> Result<(), Box<dyn std::error::Error>> {
+        // Server denial precedes native-size preflight and is deliberately
+        // tested with small real WAL bytes, not a huge sparse object.
+        let fixture = Fixture::new()?;
+        let root = MaterializationRoot::open_or_create(&fixture.root_path)?;
+        let source = root.open_generation(&fixture.tenant, &fixture.profile, &fixture.base)?;
+        let native = source.path().join("user_data");
+        std::fs::create_dir_all(&native)?;
+        let wal = native.join("cookies.sqlite-wal");
+        std::fs::write(&wal, b"native-wal-stays-local")?;
+        let original = source.inventory()?;
+        persist_local_unsynced_intent(&root, &source, &fixture.lease)?;
+        let fresh = ProfileLease::issue(
+            fixture.tenant.clone(),
+            fixture.profile.clone(),
+            SessionId::parse("session_oversize_denied")?,
+            fixture.lease.device_id().clone(),
+            fixture.lease.epoch() + 1,
+            FencingToken::parse("fence_oversize_denied")?,
+        )?;
+        let candidate = crate::shipping_save_attempt::deterministic_lone_unsynced_successor(
+            &root,
+            &fixture.tenant,
+            &fixture.profile,
+            &fixture.base,
+            &fresh,
+        )?
+        .ok_or("expected deterministic successor")?;
+        let mut network = Transport {
+            responses: VecDeque::from([MachineHttpResponse::new(
+                200,
+                br#"{"verdict":"BLOCKED"}"#.to_vec(),
+            )]),
+            paths: Vec::new(),
+        };
+        let mut sealer = Sealer;
+        let mut upload = RecoveryPut::default();
+        assert_eq!(
+            super::resume_lone_local_unsynced_under_fresh_lease(
+                &root,
+                &fixture.tenant,
+                &fixture.profile,
+                &fixture.base,
+                &fresh,
+                &mut sealer,
+                &mut network,
+                &mut upload,
+            ),
+            Ok(false)
+        );
+        assert_eq!(network.paths.len(), 1);
+        assert!(network.paths[0].ends_with("/generation-successor/local-unsynced/retry-decision"));
+        assert_eq!(upload.calls, 0);
+        assert!(
+            root.open_generation(&fixture.tenant, &fixture.profile, &candidate)
+                .is_err()
+        );
+        assert_eq!(source.inventory()?, original);
+        assert_eq!(std::fs::read(&wal)?, b"native-wal-stays-local");
+        assert!(has_unresolved_save_attempt_for_profile(
+            &root,
+            &fixture.tenant,
+            &fixture.profile,
+        )?);
+        Ok(())
+    }
+
+    #[test]
+    fn fresh_authorized_oversize_recovery_rejects_before_clone_sealing_and_put()
+    -> Result<(), Box<dyn std::error::Error>> {
+        use crate::generation_snapshot::MAX_STREAM_WORKSPACE_SNAPSHOT_BYTES;
+
+        for framing_exceeds_limit in [false, true] {
+            let fixture = Fixture::new()?;
+            let root = MaterializationRoot::open_or_create(&fixture.root_path)?;
+            let source = root.open_generation(&fixture.tenant, &fixture.profile, &fixture.base)?;
+            let native = source.path().join("user_data");
+            std::fs::create_dir_all(&native)?;
+            let wal = native.join("cookies.sqlite-wal");
+            std::fs::write(&wal, b"original-oversized-native-wal")?;
+            let filler_path = native.join("oversized-indexeddb-native.bin");
+            let filler = std::fs::File::create(&filler_path)?;
+            let original_bytes = source.inventory()?.total_bytes();
+            let limit = MAX_STREAM_WORKSPACE_SNAPSHOT_BYTES;
+            let native_target = if framing_exceeds_limit {
+                limit - 1
+            } else {
+                limit + 1
+            };
+            assert!(original_bytes < native_target);
+            filler.set_len(native_target - original_bytes)?;
+            filler.sync_all()?;
+
+            let original_inventory = source.inventory()?;
+            assert_eq!(original_inventory.total_bytes(), native_target);
+            persist_local_unsynced_intent(&root, &source, &fixture.lease)?;
+            let fresh = ProfileLease::issue(
+                fixture.tenant.clone(),
+                fixture.profile.clone(),
+                SessionId::parse("session_oversize_fresh_retry")?,
+                fixture.lease.device_id().clone(),
+                fixture.lease.epoch() + 1,
+                FencingToken::parse("fence_oversize_fresh_retry")?,
+            )?;
+            let candidate = crate::shipping_save_attempt::deterministic_lone_unsynced_successor(
+                &root,
+                &fixture.tenant,
+                &fixture.profile,
+                &fixture.base,
+                &fresh,
+            )?
+            .ok_or("deterministic successor missing")?;
+            let mut network = Transport {
+                responses: VecDeque::from([MachineHttpResponse::new(
+                    200,
+                    br#"{"verdict":"NOT_APPLIED_RETRYABLE"}"#.to_vec(),
+                )]),
+                paths: Vec::new(),
+            };
+            let mut sealer = Sealer;
+            let mut upload = RecoveryPut::default();
+            assert_eq!(
+                super::resume_lone_local_unsynced_under_fresh_lease(
+                    &root,
+                    &fixture.tenant,
+                    &fixture.profile,
+                    &fixture.base,
+                    &fresh,
+                    &mut sealer,
+                    &mut network,
+                    &mut upload,
+                ),
+                Err(RestartExactLocalCompletionError::NativeSnapshotTooLarge),
+            );
+            assert_eq!(network.paths.len(), 1);
+            assert!(
+                network.paths[0].ends_with("/generation-successor/local-unsynced/retry-decision")
+            );
+            assert_eq!(upload.calls, 0);
+            assert!(
+                root.open_generation(&fixture.tenant, &fixture.profile, &candidate)
+                    .is_err()
+            );
+            assert_eq!(source.inventory()?, original_inventory);
+            assert_eq!(std::fs::read(&wal)?, b"original-oversized-native-wal");
+            assert_eq!(std::fs::read(source.path().join("prefs.js"))?, b"save");
+            assert!(has_unresolved_save_attempt_for_profile(
+                &root,
+                &fixture.tenant,
+                &fixture.profile,
+            )?);
+            assert!(
+                discover_unresolved_streaming_exact_save_attempt(
+                    &root,
+                    &fixture.tenant,
+                    &fixture.profile,
+                )
+                .is_err(),
+                "lone LOCAL_UNSYNCED was not sealed into a BPAT"
+            );
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn offline_first_seal_transport_loss_preserves_exact_native_intent_without_put()
+    -> Result<(), Box<dyn std::error::Error>> {
+        // Two interruption points: before the first fresh D1 decision and
+        // after sealing exactly one N+1 but before the second D1 decision.
+        // Neither may turn the old fence into upload authority.
+        for first_decision_confirmed in [false, true] {
+            let fixture = Fixture::new()?;
+            let root = MaterializationRoot::open_or_create(&fixture.root_path)?;
+            let source = root.open_generation(&fixture.tenant, &fixture.profile, &fixture.base)?;
+            let original = std::fs::read(source.path().join("prefs.js"))?;
+            persist_local_unsynced_intent(&root, &source, &fixture.lease)?;
+            let fresh = ProfileLease::issue(
+                fixture.tenant.clone(),
+                fixture.profile.clone(),
+                SessionId::parse("session_offline_transport_reconnect")?,
+                fixture.lease.device_id().clone(),
+                fixture.lease.epoch() + 1,
+                FencingToken::parse("fence_offline_transport_reconnect")?,
+            )?;
+            let mut transport = Transport::default();
+            if first_decision_confirmed {
+                transport.responses.push_back(MachineHttpResponse::new(
+                    200,
+                    br#"{"verdict":"NOT_APPLIED_RETRYABLE"}"#.to_vec(),
+                ));
+            }
+            let mut sealer = Sealer;
+            let mut upload = RecoveryPut::default();
+            assert_eq!(
+                super::resume_lone_local_unsynced_under_fresh_lease(
+                    &root,
+                    &fixture.tenant,
+                    &fixture.profile,
+                    &fixture.base,
+                    &fresh,
+                    &mut sealer,
+                    &mut transport,
+                    &mut upload,
+                ),
+                Err(RestartExactLocalCompletionError::ControlPlane(
+                    ShippingControlPlaneError::Transport
+                ))
+            );
+            assert_eq!(
+                transport.paths.len(),
+                if first_decision_confirmed { 2 } else { 1 }
+            );
+            assert_eq!(upload.calls, 0, "cloud PUT without fresh D1 authority");
+            assert_eq!(std::fs::read(source.path().join("prefs.js"))?, original);
+            assert!(
+                has_unresolved_save_attempt_for_profile(&root, &fixture.tenant, &fixture.profile)?,
+                "offline LOCAL_UNSYNCED or first sealed BPAT was discarded"
+            );
+            let sealed = discover_unresolved_streaming_exact_save_attempt(
+                &root,
+                &fixture.tenant,
+                &fixture.profile,
+            );
+            if first_decision_confirmed {
+                assert!(
+                    sealed?.is_some(),
+                    "first seal must remain durable for next claim"
+                );
+            } else {
+                assert!(
+                    sealed.is_err(),
+                    "unsealed intent must not be treated as a BPAT"
+                );
+            }
+        }
         Ok(())
     }
 

@@ -1184,11 +1184,16 @@ class WindowsBrowserExitWitness:
                 raise RuntimeContractError("Cannot retain Camoufox browser process witness")
             self.handles.append(handle)
 
-    def safely_exited(self) -> bool:
+    def safely_exited(self, wait_millis: int = 0) -> bool:
         # A page-close callback is NOT proof. The exact browser root must have
         # finished with exit code zero, never STILL_ACTIVE, killed or unknown.
+        # A bounded wait is permitted only after all normal page-close callbacks;
+        # GUI WM_CLOSE may deliver Playwright TargetClosedError just before the
+        # native zero-exit witness becomes observable. No synthetic exit proof.
+        if not 0 <= wait_millis <= 250:
+            raise ValueError("browser close witness wait exceeds safe limit")
         for handle in self.handles:
-            if self.wait(handle, 0) != 0:
+            if self.wait(handle, wait_millis) != 0:
                 return False
             code = self.ctypes.wintypes.DWORD()
             if not self.get_exit(handle, self.ctypes.byref(code)) or code.value != 0:
@@ -1199,6 +1204,15 @@ class WindowsBrowserExitWitness:
         for handle in getattr(self, "handles", []):
             self.close_handle(handle)
         self.handles = []
+
+
+def record_close_callback(state: dict[str, Any], event: str) -> None:
+    """Keep the latest bounded close witness sequence with an exact event count."""
+    state["callback_event_count"] += 1
+    events = state["callback_events"]
+    events.append(event)
+    if len(events) > 64:
+        del events[:-64]
 
 
 def install_controlled_close_observation(context: Any, owner_pid: int | None = None) -> dict[str, Any]:
@@ -1212,6 +1226,9 @@ def install_controlled_close_observation(context: Any, owner_pid: int | None = N
         "tracked_pages": set(),
         "closed_pages": set(),
         "crashed": False,
+        # Ordered callback names only: no URL, cookie, profile data or process secrets.
+        "callback_events": [],
+        "callback_event_count": 0,
         "browser_exit": (
             WindowsBrowserExitWitness(owner_pid)
             if os.name == "nt" and owner_pid is not None
@@ -1222,11 +1239,15 @@ def install_controlled_close_observation(context: Any, owner_pid: int | None = N
     def track_page(page: Any) -> None:
         token = id(page)
         state["tracked_pages"].add(token)
-        page.on(
-            "close",
-            lambda _page, page_token=token: state["closed_pages"].add(page_token),
-        )
-        page.on("crash", lambda _page: state.__setitem__("crashed", True))
+        record_close_callback(state, "page")
+        def on_close(_page: Any, page_token: int = token) -> None:
+            state["closed_pages"].add(page_token)
+            record_close_callback(state, "close")
+        def on_crash(_page: Any) -> None:
+            state["crashed"] = True
+            record_close_callback(state, "crash")
+        page.on("close", on_close)
+        page.on("crash", on_crash)
 
     for page in context.pages:
         track_page(page)
@@ -1234,14 +1255,72 @@ def install_controlled_close_observation(context: Any, owner_pid: int | None = N
     return state
 
 
-def controlled_close_candidate(state: dict[str, Any] | None) -> bool:
+def controlled_close_candidate(
+    state: dict[str, Any] | None, *, exit_wait_millis: int = 0
+) -> bool:
     if state is None or state["crashed"]:
         return False
     tracked = state["tracked_pages"]
     if not tracked or tracked != state["closed_pages"]:
         return False
     witness = state.get("browser_exit")
-    return witness is None or witness.safely_exited()
+    # Only the actual retained browser-process handle may attest normal exit;
+    # callback closure and a bounded wait never authorize Save on their own.
+    if witness is None:
+        return True
+    # Keep the existing zero-wait witness API (including supported observers)
+    # unchanged. A timed wait is used only after a TargetClosedError with
+    # complete page-close callbacks and an independently retained native PID.
+    if exit_wait_millis == 0:
+        return witness.safely_exited()
+    return witness.safely_exited(exit_wait_millis)
+
+
+def report_close_observation_detail(state: dict[str, Any] | None, error: BaseException) -> None:
+    """Local failure witness; keep the original OS error code and callback sequence.
+
+    No exception message or Playwright page contents enter the Bridge protocol.
+    """
+    location = 0
+    frame = error.__traceback__
+    while frame is not None:
+        if frame.tb_frame.f_code.co_filename == __file__:
+            location = frame.tb_lineno
+        frame = frame.tb_next
+    data = {
+        "exception_type": type(error).__name__,
+        "line": location,
+        "errno": getattr(error, "errno", None),
+        "winerror": getattr(error, "winerror", None),
+        "tracked": len(state["tracked_pages"]) if state is not None else 0,
+        "closed": len(state["closed_pages"]) if state is not None else 0,
+        "crashed": state["crashed"] if state is not None else False,
+        "callback_events": state["callback_events"] if state is not None else [],
+        "callback_event_count": state["callback_event_count"] if state is not None else 0,
+    }
+    # Retain full on-machine details in the raw diagnostic artifact. Emit one
+    # independently bounded, fixed-shape witness that Bridge's closed stderr
+    # filter can verify. No exception text, URL, path, cookie or raw profile data.
+    print("camouhost_close_observation_detail " + json.dumps(data, ensure_ascii=True),
+          file=sys.stderr, flush=True)
+    name = type(error).__name__
+    if len(name) > 40 or not name or not name[0].isalpha() or not all(
+        char.isascii() and (char.isalnum() or char == "_") for char in name
+    ):
+        name = "OtherError"
+    def number(value: Any) -> str:
+        return str(value) if type(value) is int and 0 <= value <= 1_000_000 else "none"
+    recent = data["callback_events"][-8:]
+    events = ",".join(recent) if recent else "none"
+    print(
+        "camouhost_close_witness "
+        f"exception={name} line={number(location)} "
+        f"errno={number(data['errno'])} winerror={number(data['winerror'])} "
+        f"tracked={number(data['tracked'])} closed={number(data['closed'])} "
+        f"crashed={int(bool(data['crashed']))} "
+        f"count={number(data['callback_event_count'])} events={events}",
+        file=sys.stderr, flush=True,
+    )
 
 
 def observe_controlled_close(context: Any, state: dict[str, Any] | None) -> bool:
@@ -1261,7 +1340,12 @@ def observe_controlled_close(context: Any, state: dict[str, Any] | None) -> bool
         # can reject the pending wait after delivering page-close callbacks. All other
         # failures may be ignored ONLY if the positive non-crashed witness already exists;
         # a disappearing process without close callbacks is still an IPC/runtime failure.
-        if type(error).__name__ != "TimeoutError" and not controlled_close_candidate(state):
+        if type(error).__name__ != "TimeoutError" and not controlled_close_candidate(
+            state, exit_wait_millis=250
+        ):
+            # All page close callbacks plus a verified exit code zero are still
+            # required. Crashes, nonzero exit, missing callback and unknown
+            # Windows process state preserve the original exception.
             raise
     return controlled_close_candidate(state)
 
@@ -1391,6 +1475,45 @@ def durable_agent_directory(path: Path) -> None:
             os.close(descriptor)
 
 
+def current_process_instance() -> dict[str, str]:
+    """OS process creation identity; a PID alone can later belong to another process."""
+    if os.name == "nt":
+        import ctypes
+        from ctypes import wintypes
+
+        class FILETIME(ctypes.Structure):
+            _fields_ = [("low", wintypes.DWORD), ("high", wintypes.DWORD)]
+
+        kernel = ctypes.WinDLL("kernel32", use_last_error=True)
+        kernel.GetCurrentProcess.restype = wintypes.HANDLE
+        handle = kernel.GetCurrentProcess()
+        get_times = kernel.GetProcessTimes
+        get_times.argtypes = [wintypes.HANDLE] + [ctypes.POINTER(FILETIME)] * 4
+        get_times.restype = wintypes.BOOL
+        created, exited, kernel_time, user_time = (FILETIME() for _ in range(4))
+        if not get_times(handle, ctypes.byref(created), ctypes.byref(exited),
+                         ctypes.byref(kernel_time), ctypes.byref(user_time)):
+            raise OSError(ctypes.get_last_error(), "Camouhost process creation time unavailable")
+        image = ctypes.create_unicode_buffer(32768)
+        length = wintypes.DWORD(len(image))
+        query = kernel.QueryFullProcessImageNameW
+        query.argtypes = [wintypes.HANDLE, wintypes.DWORD, wintypes.LPWSTR,
+                          ctypes.POINTER(wintypes.DWORD)]
+        query.restype = wintypes.BOOL
+        if not query(handle, 0, image, ctypes.byref(length)):
+            raise OSError(ctypes.get_last_error(), "Camouhost process image unavailable")
+        return {
+            "created": str((created.high << 32) | created.low),
+            "image": os.path.normcase(image.value),
+        }
+    pid = os.getpid()
+    stat = Path(f"/proc/{pid}/stat").read_text(encoding="utf-8")
+    return {
+        "created": stat[stat.rfind(")") + 2:].split()[19],
+        "image": os.readlink(f"/proc/{pid}/exe"),
+    }
+
+
 class LocalPlaywrightAgent:
     """Explicitly opted-in local test runner; the live Camouhost thread owns Playwright.
 
@@ -1417,11 +1540,25 @@ class LocalPlaywrightAgent:
         self.descriptor = base / f"active-{os.getpid()}.json"
         descriptor_temp = base / f".active-{os.getpid()}-{secrets.token_hex(8)}.tmp"
         with descriptor_temp.open("x", encoding="utf-8") as output:
-            output.write(json.dumps({"pid": os.getpid(), "session": session_id, "run": str(self.run)}))
+            output.write(json.dumps({"pid": os.getpid(), "session": session_id, "run": str(self.run), "process": current_process_instance()}))
             output.flush()
             os.fsync(output.fileno())
         os.replace(descriptor_temp, self.descriptor)
         durable_agent_directory(base)
+
+    @contextlib.contextmanager
+    def executing_witness(self) -> Any:
+        """Transient busy witness for Bridge close observation, not a Save receipt."""
+        marker = self.run / "agent-executing"
+        with marker.open("x", encoding="utf-8") as output:
+            output.write(self.session_id)
+            output.flush()
+            os.fsync(output.fileno())
+        try:
+            yield
+        finally:
+            # The .running request and result receipt survive independently.
+            marker.unlink(missing_ok=True)
 
     def run_one(self, context: Any) -> bool:
         # Never accept half-written jobs. The agent commits a request by atomic rename.
@@ -1642,9 +1779,18 @@ def run_ipc() -> int:
                 if raw is None:
                     if agent is not None and context is not None and navigation_admitted:
                         try:
-                            agent.run_one(context)
-                        except OSError:
-                            print("camouhost_agent_io_failure", file=sys.stderr, flush=True)
+                            # Lifecycle IPC wins whenever a frame is ready. Mark execution
+                            # before claiming any pending test job; a concurrent Bridge
+                            # ObserveClose must see BUSY rather than a false IPC death.
+                            if any(agent.requests.glob("*.py")):
+                                with agent.executing_witness():
+                                    agent.run_one(context)
+                        except OSError as error:
+                            print(
+                                f"camouhost_agent_io_failure phase=execution "
+                                f"errno={error.errno} winerror={getattr(error, 'winerror', None)}",
+                                file=sys.stderr, flush=True,
+                            )
                     continue
             if not raw:
                 break
@@ -1760,6 +1906,7 @@ def run_ipc() -> int:
                 try:
                     controlled = observe_controlled_close(context, close_observation)
                 except BaseException as error:
+                    report_close_observation_detail(close_observation, error)
                     report_runtime_failure("close", error)
                     emit("error|runtime")
                     return 5

@@ -47,11 +47,13 @@ const HELLO_RESPONSE_TIMEOUT: Duration = Duration::from_secs(30);
 const HELLO_RESPONSE_TIMEOUT: Duration = Duration::from_secs(10);
 const LAUNCH_RESPONSE_TIMEOUT: Duration = Duration::from_secs(120);
 // Child stderr is untrusted. Only small, fixed-vocabulary diagnostics may reach Bridge logs.
-const MAX_CAMOUHOST_DIAGNOSTIC_BYTES: usize = 128;
+const MAX_CAMOUHOST_DIAGNOSTIC_BYTES: usize = 256;
 const LOCAL_AGENT_DIRECTORY_NAME: &str = "ProfileBridgeAgentTests";
 const BROWSER_VISIBLE_RESPONSE_TIMEOUT: Duration = Duration::from_secs(30);
 const NAVIGATION_RESPONSE_TIMEOUT: Duration = Duration::from_secs(120);
 const OBSERVE_CLOSE_RESPONSE_TIMEOUT: Duration = Duration::from_secs(5);
+// Fail closed if a diagnostic job hangs indefinitely. This is not a Save deadline.
+const MAX_AGENT_CLOSE_OBSERVATION_WAIT: Duration = Duration::from_secs(60);
 const CLOSE_RESPONSE_TIMEOUT: Duration = Duration::from_secs(30);
 const PROCESS_EXIT_TIMEOUT: Duration = Duration::from_secs(15);
 const FORCE_EXIT_TIMEOUT: Duration = Duration::from_secs(10);
@@ -310,6 +312,7 @@ struct ProcessState {
     active_session: Option<SessionId>,
     profile_stable_identity: Option<ProfileStableIdentity>,
     navigation_target: Option<String>,
+    agent_directory: Option<PathBuf>,
 }
 
 impl ProcessState {
@@ -321,6 +324,7 @@ impl ProcessState {
             active_session: None,
             profile_stable_identity: None,
             navigation_target: None,
+            agent_directory: None,
         }
     }
 
@@ -331,6 +335,7 @@ impl ProcessState {
         self.active_session = None;
         self.profile_stable_identity = None;
         self.navigation_target = None;
+        self.agent_directory = None;
     }
 }
 
@@ -534,6 +539,7 @@ impl ProcessControlPort for ManagedCamouhostProcess {
         state.active_session = Some(session_id.clone());
         state.profile_stable_identity = Some(binding.profile_stable_identity);
         state.navigation_target = self.config.initial_url.clone();
+        state.agent_directory = Some(agent_directory);
         state.child = Some(child);
         Ok(())
     }
@@ -820,6 +826,101 @@ fn exchange_shared(
     Ok(parsed)
 }
 
+/// A strictly local, transient observation of the current Camouhost-owned
+/// Playwright job. Neither directory contents nor a stale PID grant Save authority.
+fn agent_execution_active(state: &ProcessState) -> bool {
+    let (Some(directory), Some(child), Some(session)) = (
+        state.agent_directory.as_ref(),
+        state.child.as_ref(),
+        state.active_session.as_ref(),
+    ) else {
+        return false;
+    };
+    owned_agent_execution_marker(directory, child.id(), session)
+}
+
+fn owned_agent_execution_marker(directory: &Path, pid: u32, session: &SessionId) -> bool {
+    let descriptor = directory.join(format!("active-{pid}.json"));
+    if descriptor.is_symlink() {
+        return false;
+    }
+    let Ok(bytes) = fs::read(&descriptor) else {
+        return false;
+    };
+    if bytes.len() > 4096 {
+        return false;
+    }
+    let Ok(value) = serde_json::from_slice::<serde_json::Value>(&bytes) else {
+        return false;
+    };
+    if value.get("pid").and_then(serde_json::Value::as_u64) != Some(u64::from(pid))
+        || value.get("session").and_then(serde_json::Value::as_str) != Some(session.as_str())
+    {
+        return false;
+    }
+    let Some(run) = value.get("run").and_then(serde_json::Value::as_str) else {
+        return false;
+    };
+    let run = Path::new(run);
+    if run.parent() != Some(directory) || run.is_symlink() || !run.is_dir() {
+        return false;
+    }
+    let marker = run.join("agent-executing");
+    marker.is_file() && !marker.is_symlink()
+}
+
+fn close_observation_expired(
+    started: Instant,
+    last_busy: Option<Instant>,
+    timeout: Duration,
+) -> bool {
+    // A continually refreshed BUSY witness must never suppress discovery of
+    // a genuinely wedged IPC owner indefinitely. No positive close is inferred.
+    started.elapsed() >= MAX_AGENT_CLOSE_OBSERVATION_WAIT
+        || last_busy.map_or_else(|| started.elapsed(), |moment| moment.elapsed()) >= timeout
+}
+
+fn receive_close_observation_with_agent(
+    state: &mut ProcessState,
+    timeout: Duration,
+) -> Result<String, BridgePortError> {
+    // The ordinary five-second IPC contract remains unchanged when no job is
+    // active. During an explicitly admitted Playwright job, only postpone the
+    // close observation; the positive browser close witness is still required.
+    let started = Instant::now();
+    let mut last_busy = None;
+    loop {
+        let response = state
+            .responses
+            .as_ref()
+            .ok_or(BridgePortError::Unavailable)?
+            .recv_timeout(Duration::from_millis(100));
+        match response {
+            Ok(result) => return result,
+            Err(RecvTimeoutError::Disconnected) => {
+                return Err(BridgePortError::InvalidResponse);
+            }
+            Err(RecvTimeoutError::Timeout) => {}
+        }
+        if state
+            .child
+            .as_mut()
+            .ok_or(BridgePortError::Unavailable)?
+            .try_wait()
+            .map_err(|_| BridgePortError::Unavailable)?
+            .is_some()
+        {
+            return Err(BridgePortError::Unavailable);
+        }
+        if agent_execution_active(state) {
+            last_busy = Some(Instant::now());
+        }
+        if close_observation_expired(started, last_busy, timeout) {
+            return Err(BridgePortError::Unavailable);
+        }
+    }
+}
+
 fn exchange_frame_shared(
     shared: &Arc<Mutex<ProcessState>>,
     frame: &str,
@@ -830,17 +931,76 @@ fn exchange_frame_shared(
         return Err(BridgePortError::InvalidResponse);
     }
     let mut state = shared.lock().map_err(|_| BridgePortError::Unavailable)?;
+    // The owner-thread Playwright job cannot dispatch an IPC frame until it
+    // finishes. Under the SAME lock used to send the frame, return a negative
+    // observation immediately instead of blocking the process-control owner.
+    // This is never evidence for Save; only the real positive frame can Save.
+    if let Some(session) = frame.strip_prefix("observe_close|")
+        && state.active_session.as_ref().map(SessionId::as_str) == Some(session)
+        && agent_execution_active(&state)
+    {
+        return Ok(format!("close_observed|{session}|false"));
+    }
     let stdin = state.stdin.as_mut().ok_or(BridgePortError::Unavailable)?;
     stdin
         .write_all(frame.as_bytes())
         .and_then(|()| stdin.write_all(b"\n"))
         .and_then(|()| stdin.flush())
         .map_err(|_| BridgePortError::Unavailable)?;
+    if frame.starts_with("observe_close|") {
+        return receive_close_observation_with_agent(&mut state, timeout);
+    }
     let responses = state
         .responses
         .as_ref()
         .ok_or(BridgePortError::Unavailable)?;
     receive_response(responses, timeout)
+}
+
+fn safe_close_observation_witness(message: &str) -> bool {
+    // Only typed, bounded, local failure facts are admitted from child stderr.
+    // The full original traceback remains in the local raw test artifact.
+    let Some(data) = message.strip_prefix("camouhost_close_witness ") else {
+        return false;
+    };
+    let fields: Vec<_> = data.split(' ').collect();
+    if fields.len() != 9 {
+        return false;
+    }
+    let Some(name) = fields[0].strip_prefix("exception=") else {
+        return false;
+    };
+    if name.is_empty()
+        || name.len() > 40
+        || !name.as_bytes()[0].is_ascii_alphabetic()
+        || !name.bytes().all(|c| c.is_ascii_alphanumeric() || c == b'_')
+    {
+        return false;
+    }
+    let valid_number = |field: &str, prefix: &str, allow_none: bool| {
+        field.strip_prefix(prefix).is_some_and(|value| {
+            (allow_none && value == "none")
+                || value.parse::<u32>().is_ok_and(|number| number <= 1_000_000)
+        })
+    };
+    if !valid_number(fields[1], "line=", false)
+        || !valid_number(fields[2], "errno=", true)
+        || !valid_number(fields[3], "winerror=", true)
+        || !valid_number(fields[4], "tracked=", true)
+        || !valid_number(fields[5], "closed=", true)
+        || !matches!(fields[6], "crashed=0" | "crashed=1")
+        || !valid_number(fields[7], "count=", true)
+    {
+        return false;
+    }
+    let Some(events) = fields[8].strip_prefix("events=") else {
+        return false;
+    };
+    events == "none"
+        || (events.split(',').count() <= 8
+            && events
+                .split(',')
+                .all(|event| matches!(event, "page" | "close" | "crash")))
 }
 
 fn allowlisted_camouhost_diagnostic(line: &[u8]) -> Option<&str> {
@@ -887,7 +1047,8 @@ fn allowlisted_camouhost_diagnostic(line: &[u8]) -> Option<&str> {
         .strip_prefix("camouhost_pages count=")
         .and_then(|count| count.parse::<u16>().ok())
         .is_some_and(|count| count <= 512);
-    if allowed_failure || allowed_stage || allowed_pages {
+    if allowed_failure || allowed_stage || allowed_pages || safe_close_observation_witness(message)
+    {
         return Some(message);
     }
     None
@@ -1267,6 +1428,81 @@ mod tests {
     }
 
     #[test]
+    fn close_ipc_deadline_tracks_job_activity_without_masking_real_timeout() {
+        let now = std::time::Instant::now();
+        let standard = Duration::from_secs(5);
+        assert!(super::close_observation_expired(
+            now - Duration::from_secs(6),
+            None,
+            standard,
+        ));
+        assert!(!super::close_observation_expired(
+            now - Duration::from_secs(12),
+            Some(now - Duration::from_secs(1)),
+            standard,
+        ));
+        assert!(super::close_observation_expired(
+            now - Duration::from_secs(12),
+            Some(now - Duration::from_secs(6)),
+            standard,
+        ));
+        assert!(
+            super::close_observation_expired(
+                now - super::MAX_AGENT_CLOSE_OBSERVATION_WAIT - Duration::from_secs(1),
+                Some(now),
+                standard,
+            ),
+            "a hung diagnostic job cannot hide an IPC failure indefinitely"
+        );
+    }
+
+    #[test]
+    fn owned_playwright_job_activity_is_not_a_close_or_save_witness()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let root = root_path()?;
+        fs::create_dir_all(&root)?;
+        let directory = root.join("ProfileBridgeAgentTests");
+        let run = directory.join("camouhost-4123-test");
+        fs::create_dir_all(&run)?;
+        let session = SessionId::parse("session_01JD02OWNEDAGENT")?;
+        let descriptor = directory.join("active-4123.json");
+        fs::write(
+            &descriptor,
+            serde_json::to_vec(&serde_json::json!({
+                "pid": 4123,
+                "session": session.as_str(),
+                "run": run.to_string_lossy(),
+            }))?,
+        )?;
+        let marker = run.join("agent-executing");
+        assert!(!super::owned_agent_execution_marker(
+            &directory, 4123, &session
+        ));
+        fs::write(&marker, b"active read-only test")?;
+        assert!(super::owned_agent_execution_marker(
+            &directory, 4123, &session
+        ));
+        assert!(!super::owned_agent_execution_marker(
+            &directory, 4124, &session
+        ));
+        let foreign = SessionId::parse("session_01JD02FOREIGN")?;
+        assert!(!super::owned_agent_execution_marker(
+            &directory, 4123, &foreign
+        ));
+        // A stale descriptor for a different run cannot make our current
+        // process look busy, even if it contains a plausible PID.
+        fs::write(
+            &descriptor,
+            br#"{"pid":4123,"session":"session_01JD02OWNEDAGENT","run":"foreign"}"#,
+        )?;
+        assert!(!super::owned_agent_execution_marker(
+            &directory, 4123, &session
+        ));
+        fs::remove_dir_all(root)?;
+        Ok(())
+    }
+
+    #[test]
     fn agent_inbox_is_automatic_stable_and_never_uses_a_marker()
     -> Result<(), Box<dyn std::error::Error>> {
         let root = root_path()?;
@@ -1450,6 +1686,26 @@ mod tests {
             workspace.inventory()?.inventory_digest(),
             browser_identity,
         )?)
+    }
+
+    #[test]
+    fn safe_close_witness_reaches_bridge_but_free_text_and_unbounded_data_do_not() {
+        let accepted = b"camouhost_close_witness exception=OSError line=1247 errno=13 winerror=32 tracked=1 closed=1 crashed=0 count=3 events=page,close,close\r\n";
+        assert_eq!(
+            allowlisted_camouhost_diagnostic(accepted),
+            Some(
+                "camouhost_close_witness exception=OSError line=1247 errno=13 winerror=32 tracked=1 closed=1 crashed=0 count=3 events=page,close,close"
+            )
+        );
+        for rejected in [
+            b"camouhost_close_witness exception=OSError line=1247 errno=13 winerror=32 tracked=1 closed=1 crashed=0 count=3 events=page,private\n".as_slice(),
+            b"camouhost_close_witness exception=OSError line=1247 errno=13 winerror=32 tracked=1 closed=1 crashed=0 count=3 events=page,close,close path=C:\\private\n",
+            b"camouhost_close_witness exception=OSError line=1247 errno=13 winerror=32 tracked=1 closed=1 crashed=0 count=3 events=page,close,close,close,close,close,close,close,close\n",
+            b"camouhost_close_witness exception=Unsafe.Error line=1247 errno=13 winerror=32 tracked=1 closed=1 crashed=0 count=3 events=page\n",
+            b"camouhost_close_witness exception=OSError line=1247 errno=13 winerror=-1 tracked=1 closed=1 crashed=0 count=3 events=page\n",
+        ] {
+            assert_eq!(allowlisted_camouhost_diagnostic(rejected), None);
+        }
     }
 
     #[test]

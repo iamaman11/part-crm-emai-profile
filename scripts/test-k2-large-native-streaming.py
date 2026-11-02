@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Measured 256/512 MiB K2 file-stream roundtrip in the real native Rust test process.
+"""Measured 256/512/543 MiB K2 file-stream roundtrip in the real native Rust test process.
 
 This validates bounded file streaming and cold snapshot restore. It does NOT
 exercise R2/D1, installed Windows browser state, or independent WORKING/LKG.
@@ -20,7 +20,7 @@ import time
 TEST = "generation_snapshot::tests::k2_full_256_and_512_mib_file_streaming_encrypt_cold_restore"
 MIB = 1_048_576
 MAX_PROCESS_PEAK_RSS = 256 * MIB
-MAX_LOGICAL_PEAK_DISK = 2_304 * MIB  # 512 MiB native + ciphertext + BPGW + restored + margins
+MAX_LOGICAL_PEAK_DISK = 2_304 * MIB  # 543 MiB native + ciphertext + BPGW + restored + margins
 
 
 def compiled_library_test() -> Path:
@@ -141,7 +141,7 @@ def main() -> int:
         status = child.wait()
     elapsed = time.monotonic() - started
     print(
-        f"K2_MEASURED_FILE_STREAM exact_test={TEST} source=256/512MiB"
+        f"K2_MEASURED_FILE_STREAM exact_test={TEST} source=256/512/543MiB"
         f" rust_build_profile=release"
         f" peak_process_rss_bytes={peak_rss}"
         f" peak_fixture_logical_disk_bytes={peak_disk}"

@@ -152,7 +152,12 @@ impl ReadOnlyProfileDiagnosis {
                         "NOT_CONFIRMED"
                     };
                     diagnosis.state = "BLOCKED_LOCAL_BYTES_RETAINED_OR_UNKNOWN";
-                    diagnosis.next_safe_step = "PRESERVE_BYTES_CHECK_CAUSE";
+                    diagnosis.next_safe_step = match *reason {
+                        crate::operator_flow::GenerationSaveFailureReason::SnapshotTooLarge => {
+                            "PRESERVE_LOCAL_BYTES;NATIVE_RESCUE_REQUIRED"
+                        }
+                        _ => "PRESERVE_BYTES_CHECK_CAUSE",
+                    };
                 }
             }
             Err(OperatorFlowError::Stage(_)) => {
@@ -622,6 +627,13 @@ impl UserDiagnostic {
                 | crate::operator_flow::GenerationSaveFailureReason::VerificationUnproven => {
                     "The cloud save outcome is not confirmed. Original local profile bytes and the exact save attempt must be retained. Restore connectivity and use the authorized recovery path; never start a new save or delete files to resolve an uncertain reply."
                 }
+                crate::operator_flow::GenerationSaveFailureReason::SealingTransport
+                | crate::operator_flow::GenerationSaveFailureReason::SealingResponseUncertain => {
+                    "The cloud sealing result is uncertain before a checkpoint could be created. The original LOCAL_UNSYNCED Firefox data must be preserved. Obtain fresh server authority before recovery; do not automatically repeat the sealing request or claim Saved."
+                }
+                crate::operator_flow::GenerationSaveFailureReason::SealingRejected => {
+                    "The server rejected this profile sealing request. This is not a network outage or successful save. Preserve LOCAL_UNSYNCED browser bytes and check current Profile Operations authority."
+                }
                 crate::operator_flow::GenerationSaveFailureReason::ControlRejected => {
                     "The server rejected this save request. Check Profile Operations for current access and session authority. This is not evidence of a network outage or cloud success. Keep the local profile and pending save bytes."
                 }
@@ -912,6 +924,45 @@ const fn operator_code(error: crate::operator_flow::OperatorFlowError) -> &'stat
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn oversized_native_close_reports_safe_rescue_without_claiming_a_saved_profile() {
+        use crate::local_profile::LocalGenerationState;
+        use crate::operator_flow::{
+            GenerationSaveFailureReason, OperatorDiagnosticFacts, OperatorFlowError,
+            OperatorGenerationSaveCompletion,
+        };
+        let facts = OperatorDiagnosticFacts {
+            active_local: None,
+            retained_local: Some(LocalGenerationState::DirtyLocal),
+            candidate_prepared: false,
+            cleanup_blocked: false,
+        };
+        for (reason, expected_step) in [
+            (
+                GenerationSaveFailureReason::SnapshotTooLarge,
+                "PRESERVE_LOCAL_BYTES;NATIVE_RESCUE_REQUIRED",
+            ),
+            (
+                GenerationSaveFailureReason::SealingTransport,
+                "PRESERVE_BYTES_CHECK_CAUSE",
+            ),
+            (
+                GenerationSaveFailureReason::ControlRejected,
+                "PRESERVE_BYTES_CHECK_CAUSE",
+            ),
+        ] {
+            let failed: Result<OperatorGenerationSaveCompletion, OperatorFlowError> =
+                Err(OperatorFlowError::GenerationSave { reason });
+            let diagnosis = ReadOnlyProfileDiagnosis::after_save(facts, &failed);
+            let record = diagnosis.redacted_record();
+            assert!(record.contains(&format!("CAUSE={}", reason.code())));
+            assert!(record.contains(&format!("NEXT_SAFE_STEP={expected_step}")));
+            assert!(record.contains("LOCAL=DIRTY_BYTES_RETAINED"));
+            assert!(!record.contains("CLOUD=COMMITTED_EXACT"));
+            assert!(!record.contains("P3_OWNER_DIAG=CLOUD_SAVED"));
+        }
+    }
 
     #[test]
     fn verified_offline_intent_diagnosis_never_claims_cloud_saved() {

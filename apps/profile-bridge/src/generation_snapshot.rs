@@ -12,9 +12,13 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 pub(crate) const WORKSPACE_SNAPSHOT_MAGIC: &[u8; 8] = b"BPGW0001";
 pub(crate) const MAX_WORKSPACE_SNAPSHOT_BYTES: usize = 67_108_864;
-/// Maximum native Firefox bytes, separate from snapshot's framing overhead.
+/// The strict upper bound for native Firefox bytes is the already validated
+/// streaming plaintext envelope. BPGW framing consumes part of this budget:
+/// the canonical encoded size is checked separately before writing or cloning.
+/// There is no smaller, arbitrary 512 MiB native-profile limit.
 #[allow(dead_code)] // K2 shipping integration is still gated.
-pub(crate) const MAX_STREAM_NATIVE_PROFILE_BYTES: u64 = 536_870_912; // 512 MiB
+pub(crate) const MAX_STREAM_NATIVE_PROFILE_BYTES: u64 =
+    encrypted_generation_domain::MAX_STREAM_PLAINTEXT_BYTES;
 /// The same encrypted-generation-domain bound applies to BPGW0001 encoded
 /// bytes, so no successful snapshot can later fail encryption from a smaller
 /// policy limit. Legacy Vec API remains capped at 64 MiB.
@@ -77,10 +81,9 @@ pub(crate) fn encode_workspace_snapshot_streaming(
     expected_inventory: &GenerationInventory,
     output: &mut impl Write,
 ) -> Result<StreamedWorkspaceSnapshot, GenerationSnapshotError> {
-    // Check *native* size and the exact BPGW0001 wire size before writing
-    // a single byte to the unpublished spool. Metadata overhead from many
-    // tiny Firefox files must not disqualify an otherwise valid 512 MiB
-    // native profile, nor can a huge inventory fill disk before rejection.
+    // Check the native upper bound AND the exact BPGW0001 wire size before
+    // writing any bytes. Profiles larger than 512 MiB can fit if their
+    // real native content plus framing is within the existing 576 MiB envelope.
     let expected_length = encoded_stream_snapshot_size(expected_inventory)?;
     let count = u32::try_from(expected_inventory.entries().len())
         .map_err(|_| GenerationSnapshotError::SnapshotTooLarge)?;
@@ -148,12 +151,27 @@ pub(crate) fn encode_workspace_snapshot_streaming(
 /// stream. This avoids writing any staging bytes for oversized input while
 /// retaining 64 KiB bounded file reads for accepted profiles.
 #[allow(dead_code)] // K2 production streaming adapter is still gated.
+/// Native Firefox total, including IndexedDB, WAL, preferences and other files.
+/// No browser payload subquota is implied by this inclusive boundary.
+const fn native_size_within_limit(native_bytes: u64) -> bool {
+    native_bytes <= MAX_STREAM_NATIVE_PROFILE_BYTES
+}
+
 fn encoded_stream_snapshot_size(
     inventory: &GenerationInventory,
 ) -> Result<u64, GenerationSnapshotError> {
-    if inventory.entries().len() > MAX_SNAPSHOT_FILES
-        || inventory.total_bytes() > MAX_STREAM_NATIVE_PROFILE_BYTES
-    {
+    if inventory.entries().len() > MAX_SNAPSHOT_FILES {
+        return Err(GenerationSnapshotError::SnapshotTooLarge);
+    }
+    if !native_size_within_limit(inventory.total_bytes()) {
+        // Bounded, non-sensitive evidence. Native+framing must fit the
+        // streaming plaintext limit; never silently discard Firefox files.
+        // No browser/profile files are changed by this refusal.
+        eprintln!(
+            "BRIDGE_NATIVE_SNAPSHOT_SIZE_REFUSED cause=native_bytes native_bytes={} limit_bytes={}",
+            inventory.total_bytes(),
+            MAX_STREAM_NATIVE_PROFILE_BYTES,
+        );
         return Err(GenerationSnapshotError::SnapshotTooLarge);
     }
     let mut size = 12_u64; // BPGW0001 + u32 file count
@@ -168,6 +186,15 @@ fn encoded_stream_snapshot_size(
             .and_then(|value| value.checked_add(entry.bytes()))
             .ok_or(GenerationSnapshotError::SnapshotTooLarge)?;
         if size > MAX_STREAM_WORKSPACE_SNAPSHOT_BYTES {
+            // Native bytes may be below the ceiling while the exact BPGW
+            // metadata framing exceeds it. Report both bounded measurements,
+            // not a false integrity/checkpoint error or any Firefox path.
+            eprintln!(
+                "BRIDGE_NATIVE_SNAPSHOT_SIZE_REFUSED cause=encoded_plaintext native_bytes={} encoded_bytes_at_least={} limit_bytes={}",
+                inventory.total_bytes(),
+                size,
+                MAX_STREAM_WORKSPACE_SNAPSHOT_BYTES,
+            );
             return Err(GenerationSnapshotError::SnapshotTooLarge);
         }
     }
@@ -1050,12 +1077,39 @@ mod tests {
     }
 
     #[test]
+    fn native_size_policy_is_inclusive_and_never_uses_browser_payload_size() {
+        let maximum = super::MAX_STREAM_NATIVE_PROFILE_BYTES;
+        assert!(super::native_size_within_limit(maximum - 1));
+        assert!(super::native_size_within_limit(maximum));
+        assert!(!super::native_size_within_limit(maximum + 1));
+        assert!(super::native_size_within_limit(568_329_621));
+    }
+
+    #[test]
+    fn physical_oversized_native_512_mib_can_fit_existing_stream_envelope() {
+        // Measured Firefox bytes from the physical Windows failure, no
+        // 568 MiB allocation or large sparse file required for this boundary.
+        let native = 568_329_621_u64;
+        let envelope = super::MAX_STREAM_WORKSPACE_SNAPSHOT_BYTES;
+        assert_eq!(envelope, 603_979_776);
+        assert!(super::native_size_within_limit(native));
+        // Path framing is included in the real encoded_stream_snapshot_size
+        // check. These examples demonstrate why native-only 512 MiB
+        // rejection was unnecessary and cannot be used as cloud evidence.
+        let typical_framing = 12 + 10_000_u64 * (2 + 100 + 8);
+        assert!(native + typical_framing <= envelope);
+        let excessive_framing = envelope - native + 1;
+        assert!(native + excessive_framing > envelope);
+        assert!(!super::native_size_within_limit(envelope + 1));
+    }
+
+    #[test]
     fn full_512_mib_firefox_native_profile_fits_maximum_canonical_framing() {
         let raw = 536_870_912_u64;
         let max_file_count = 100_000_u64;
         let max_path_bytes = 512_u64;
         let encoded = 12 + raw + max_file_count * (2 + max_path_bytes + 8);
-        assert_eq!(super::MAX_STREAM_NATIVE_PROFILE_BYTES, raw);
+        assert!(super::native_size_within_limit(raw));
         assert_eq!(
             super::MAX_STREAM_WORKSPACE_SNAPSHOT_BYTES,
             encrypted_generation_domain::MAX_STREAM_PLAINTEXT_BYTES,
@@ -1318,8 +1372,10 @@ mod tests {
         result
     }
 
-    // Expensive cross-platform acceptance exercise. Run explicitly on CI machines
-    // with enough disk (it writes >= 1 GiB of actual encrypted and decrypted bytes).
+    // Expensive cross-platform acceptance exercise. Keep the stable test name
+    // used by scripts/test-k2-large-native-streaming.py; the cases now include 543 MiB.
+    // Run explicitly on CI machines
+    // with enough disk (each run writes > 1 GiB of encrypted and decrypted bytes).
     // This is FILE streaming proof, not a claim of signed R2/D1 or a Firefox launch.
     #[test]
     #[ignore = "K2 large file acceptance: run explicitly with --ignored"]
@@ -1332,7 +1388,9 @@ mod tests {
         use std::io::{Seek, SeekFrom, Write};
         use std::time::Instant;
 
-        for target_mib in [256_u64, 512] {
+        // 543 MiB exceeds the historical 512 MiB native-profile gate and
+        // covers the 568_329_621-byte physical Windows failure.
+        for target_mib in [256_u64, 512, 543] {
             let fixture = Fixture::new()?;
             let started = Instant::now();
             let result = (|| {
@@ -1344,7 +1402,7 @@ mod tests {
                     &base,
                 )?;
                 // Include the browser-managed native paths and a large opaque
-                // storage payload. set_len intentionally avoids a 512 MiB Vec.
+                // storage payload. set_len avoids a generation-sized Vec.
                 let user_data = source.path().join("user_data");
                 fs::create_dir_all(user_data.join("storage/default"))?;
                 fs::write(source.path().join("prefs.js"), b"user_pref('K2', true);")?;

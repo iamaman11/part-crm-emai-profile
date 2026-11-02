@@ -13,7 +13,29 @@ use worker::d1::D1Database;
 use zeroize::{Zeroize, Zeroizing};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct ContactKeyringConfigError;
+pub enum ContactKeyringConfigError {
+    InvalidShape,
+    InvalidVersion,
+    InvalidKeyHex,
+    MissingActiveKey,
+    InvalidLifecycle,
+    InvalidKeySet,
+}
+
+impl ContactKeyringConfigError {
+    /// Fixed diagnostic vocabulary. Never serialize keyring or secret-derived bytes.
+    #[must_use]
+    pub const fn code(self) -> &'static str {
+        match self {
+            Self::InvalidShape => "shape",
+            Self::InvalidVersion => "version",
+            Self::InvalidKeyHex => "key_hex",
+            Self::MissingActiveKey => "active_key",
+            Self::InvalidLifecycle => "lifecycle",
+            Self::InvalidKeySet => "keyset",
+        }
+    }
+}
 
 #[cfg(target_arch = "wasm32")]
 pub fn contact_protection_from_serialized_keyring(
@@ -50,18 +72,19 @@ fn parse_contact_protection_keyring_with_metadata(
     serialized: String,
 ) -> Result<(ContactProtectionKeyring, ContactKeyLifecycleMetadata), ContactKeyringConfigError> {
     let serialized = Zeroizing::new(serialized);
-    let keyring: ContactProtectionKeyringSecret =
-        serde_json::from_str(serialized.as_str()).map_err(|_| ContactKeyringConfigError)?;
+    let keyring: ContactProtectionKeyringSecret = serde_json::from_str(serialized.as_str())
+        .map_err(|_| ContactKeyringConfigError::InvalidShape)?;
     let active_encryption_version = EncryptionKeyVersion::new(keyring.active_encryption_version)
-        .map_err(|_| ContactKeyringConfigError)?;
+        .map_err(|_| ContactKeyringConfigError::InvalidVersion)?;
     let active_lookup_version = LookupKeyVersion::new(keyring.active_lookup_version)
-        .map_err(|_| ContactKeyringConfigError)?;
+        .map_err(|_| ContactKeyringConfigError::InvalidVersion)?;
     let mut encryption_keys = keyring
         .encryption
         .iter()
         .map(|entry| {
             Ok(ContactEncryptionRootKey::new(
-                EncryptionKeyVersion::new(entry.version).map_err(|_| ContactKeyringConfigError)?,
+                EncryptionKeyVersion::new(entry.version)
+                    .map_err(|_| ContactKeyringConfigError::InvalidVersion)?,
                 decode_key_hex(&entry.key_hex)?,
             ))
         })
@@ -71,7 +94,8 @@ fn parse_contact_protection_keyring_with_metadata(
         .iter()
         .map(|entry| {
             Ok(ContactLookupRootKey::new(
-                LookupKeyVersion::new(entry.version).map_err(|_| ContactKeyringConfigError)?,
+                LookupKeyVersion::new(entry.version)
+                    .map_err(|_| ContactKeyringConfigError::InvalidVersion)?,
                 decode_key_hex(&entry.key_hex)?,
             ))
         })
@@ -84,19 +108,26 @@ fn parse_contact_protection_keyring_with_metadata(
         .iter()
         .map(|key| key.version().value())
         .collect::<Vec<_>>();
+    // Distinguish a missing active key from invalid retained-key metadata.
+    // This reveals only version membership, never any key or secret bytes.
+    if !retained_encryption_versions.contains(&active_encryption_version.value())
+        || !retained_lookup_versions.contains(&active_lookup_version.value())
+    {
+        return Err(ContactKeyringConfigError::MissingActiveKey);
+    }
     let metadata = ContactKeyLifecycleMetadata::new(
         active_encryption_version.value(),
         active_lookup_version.value(),
         retained_encryption_versions,
         retained_lookup_versions,
     )
-    .map_err(|_| ContactKeyringConfigError)?;
+    .map_err(|_| ContactKeyringConfigError::InvalidLifecycle)?;
 
     move_active_encryption_first(&mut encryption_keys, active_encryption_version)?;
     move_active_lookup_first(&mut lookup_keys, active_lookup_version)?;
 
     let protection_keyring = ContactProtectionKeyring::new(encryption_keys, lookup_keys)
-        .map_err(|_| ContactKeyringConfigError)?;
+        .map_err(|_| ContactKeyringConfigError::InvalidKeySet)?;
     Ok((protection_keyring, metadata))
 }
 
@@ -107,7 +138,7 @@ fn move_active_encryption_first(
     let index = keys
         .iter()
         .position(|key| key.version() == active_version)
-        .ok_or(ContactKeyringConfigError)?;
+        .ok_or(ContactKeyringConfigError::MissingActiveKey)?;
     keys.swap(0, index);
     Ok(())
 }
@@ -119,7 +150,7 @@ fn move_active_lookup_first(
     let index = keys
         .iter()
         .position(|key| key.version() == active_version)
-        .ok_or(ContactKeyringConfigError)?;
+        .ok_or(ContactKeyringConfigError::MissingActiveKey)?;
     keys.swap(0, index);
     Ok(())
 }
@@ -148,13 +179,14 @@ impl Drop for ContactProtectionKeyEntry {
 
 fn decode_key_hex(value: &str) -> Result<[u8; 32], ContactKeyringConfigError> {
     if value.len() != 64 {
-        return Err(ContactKeyringConfigError);
+        return Err(ContactKeyringConfigError::InvalidKeyHex);
     }
     let bytes = value.as_bytes();
     let mut decoded = Zeroizing::new([0_u8; 32]);
     for (index, byte) in decoded.iter_mut().enumerate() {
-        let high = hex_nibble(bytes[index * 2]).ok_or(ContactKeyringConfigError)?;
-        let low = hex_nibble(bytes[index * 2 + 1]).ok_or(ContactKeyringConfigError)?;
+        let high = hex_nibble(bytes[index * 2]).ok_or(ContactKeyringConfigError::InvalidKeyHex)?;
+        let low =
+            hex_nibble(bytes[index * 2 + 1]).ok_or(ContactKeyringConfigError::InvalidKeyHex)?;
         *byte = (high << 4) | low;
     }
     Ok(*decoded)
@@ -195,6 +227,115 @@ mod tests {
     }
 
     #[test]
+    fn serialized_key_rotation_preserves_legacy_decrypt_and_lookup()
+    -> Result<(), Box<dyn std::error::Error>> {
+        use crate::contact_protection::{
+            ContactCryptoError, ContactNonceSource, RustCryptoContactProtection,
+        };
+        use application_ports::clients::{ContactEncryptionRequest, ContactProtectionPort};
+        use client_domain::{
+            ContactKind, ContactNormalizationVersion, ContactProtectionVersion,
+            exact_lookup_hmac_input, normalize_contact_value,
+        };
+        use profile_platform_primitives::{ContactPointId, TenantId};
+        use std::future::Future;
+        use std::task::{Context, Poll, Waker};
+
+        struct FixedNonce;
+        impl ContactNonceSource for FixedNonce {
+            fn fill_nonce(&self, nonce: &mut [u8; 24]) -> Result<(), ContactCryptoError> {
+                nonce.copy_from_slice(&[0x55; 24]);
+                Ok(())
+            }
+        }
+
+        fn block_on<F: Future>(future: F) -> F::Output {
+            let waker = Waker::noop();
+            let mut context = Context::from_waker(waker);
+            let mut future = Box::pin(future);
+            loop {
+                match future.as_mut().poll(&mut context) {
+                    Poll::Ready(value) => return value,
+                    Poll::Pending => std::hint::spin_loop(),
+                }
+            }
+        }
+
+        // Start with v1, then rotate to v2 while retaining both old key types.
+        // A newly active version must never re-encrypt historic stored bytes.
+        let original = format!(
+            "{{\"activeEncryptionVersion\":1,\"activeLookupVersion\":1,\"encryption\":[{{\"version\":1,\"keyHex\":\"{}\"}}],\"lookup\":[{{\"version\":1,\"keyHex\":\"{}\"}}]}}",
+            "11".repeat(32),
+            "22".repeat(32),
+        );
+        let rotated = format!(
+            "{{\"activeEncryptionVersion\":2,\"activeLookupVersion\":2,\"encryption\":[{{\"version\":2,\"keyHex\":\"{}\"}},{{\"version\":1,\"keyHex\":\"{}\"}}],\"lookup\":[{{\"version\":2,\"keyHex\":\"{}\"}},{{\"version\":1,\"keyHex\":\"{}\"}}]}}",
+            "33".repeat(32),
+            "11".repeat(32),
+            "44".repeat(32),
+            "22".repeat(32),
+        );
+        let (original_keys, _) = parse_contact_protection_keyring_with_metadata(original)
+            .expect("valid original keyring fixture");
+        let (rotated_keys, metadata) = parse_contact_protection_keyring_with_metadata(rotated)
+            .expect("valid rotated keyring fixture");
+        let original_protector = RustCryptoContactProtection::new(original_keys, FixedNonce);
+        let rotated_protector = RustCryptoContactProtection::new(rotated_keys, FixedNonce);
+        let tenant = TenantId::parse("tenant_01JKEYROTATE")?;
+        let contact = ContactPointId::parse("contact_01JKEYROTATE")?;
+        let normalized = normalize_contact_value(
+            ContactKind::Email,
+            ContactNormalizationVersion::V1,
+            "Legacy@Example.com",
+        )?;
+        let old_ciphertext = block_on(original_protector.encrypt_contact_display(
+            ContactEncryptionRequest::new(
+                &tenant,
+                &contact,
+                ContactProtectionVersion::V1,
+                &normalized,
+            ),
+        ))?;
+        assert_eq!(old_ciphertext.key_version().value(), 1);
+        assert_eq!(
+            rotated_protector
+                .decrypt_contact_display(
+                    &tenant,
+                    &contact,
+                    ContactProtectionVersion::V1,
+                    &old_ciphertext,
+                )?
+                .as_str(),
+            "legacy@example.com",
+        );
+        let new_ciphertext = block_on(rotated_protector.encrypt_contact_display(
+            ContactEncryptionRequest::new(
+                &tenant,
+                &contact,
+                ContactProtectionVersion::V1,
+                &normalized,
+            ),
+        ))?;
+        assert_eq!(new_ciphertext.key_version().value(), 2);
+
+        let lookup_input = exact_lookup_hmac_input(
+            &tenant,
+            ContactKind::Email,
+            ContactNormalizationVersion::V1,
+            &normalized,
+        );
+        let old_tokens = original_protector.derive_lookup_candidates(&tenant, &lookup_input)?;
+        let rotated_tokens = rotated_protector.derive_lookup_candidates(&tenant, &lookup_input)?;
+        assert_eq!(old_tokens.len(), 1);
+        assert_eq!(rotated_tokens.len(), 2);
+        assert_eq!(rotated_tokens[0].key_version().value(), 2);
+        assert_eq!(rotated_tokens[1].key_version().value(), 1);
+        assert_eq!(rotated_tokens[1].bytes(), old_tokens[0].bytes());
+        assert!(format!("{metadata:?}").contains("retained_encryption_versions"));
+        Ok(())
+    }
+
+    #[test]
     fn keyring_requires_explicit_present_active_versions_and_valid_entries() {
         assert!(
             parse_contact_protection_keyring(
@@ -218,6 +359,53 @@ mod tests {
             )
             .is_err()
         );
+    }
+
+    #[test]
+    fn invalid_keyring_reports_only_a_fixed_nonsecret_failure_category() {
+        assert_eq!(
+            parse_contact_protection_keyring("not-json".to_owned()).err(),
+            Some(ContactKeyringConfigError::InvalidShape),
+        );
+        assert_eq!(
+            parse_contact_protection_keyring(
+                r#"{"activeEncryptionVersion":0,"activeLookupVersion":1,"encryption":[],"lookup":[]}"#.to_owned(),
+            ).err(),
+            Some(ContactKeyringConfigError::InvalidVersion),
+        );
+        let key = "ab".repeat(32);
+        let missing_active = format!(
+            "{{\"activeEncryptionVersion\":2,\"activeLookupVersion\":1,\"encryption\":[{{\"version\":1,\"keyHex\":\"{key}\"}}],\"lookup\":[{{\"version\":1,\"keyHex\":\"{key}\"}}]}}"
+        );
+        assert_eq!(
+            parse_contact_protection_keyring(missing_active).err(),
+            Some(ContactKeyringConfigError::MissingActiveKey),
+        );
+        let invalid_hex = format!(
+            "{{\"activeEncryptionVersion\":1,\"activeLookupVersion\":1,\"encryption\":[{{\"version\":1,\"keyHex\":\"not-hex\"}}],\"lookup\":[{{\"version\":1,\"keyHex\":\"{key}\"}}]}}"
+        );
+        assert_eq!(
+            parse_contact_protection_keyring(invalid_hex).err(),
+            Some(ContactKeyringConfigError::InvalidKeyHex),
+        );
+        for code in [
+            ContactKeyringConfigError::InvalidShape,
+            ContactKeyringConfigError::InvalidVersion,
+            ContactKeyringConfigError::InvalidKeyHex,
+            ContactKeyringConfigError::MissingActiveKey,
+            ContactKeyringConfigError::InvalidLifecycle,
+            ContactKeyringConfigError::InvalidKeySet,
+        ] {
+            assert!(
+                code.code()
+                    .bytes()
+                    .all(|byte| byte.is_ascii_lowercase() || byte == b'_')
+            );
+            assert!(
+                !code.code().contains(&key),
+                "key material leaked in status category"
+            );
+        }
     }
 
     #[test]

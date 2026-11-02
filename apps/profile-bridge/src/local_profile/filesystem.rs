@@ -347,6 +347,46 @@ impl GenerationWorkspace {
         build_inventory(&self.canonical_path)
     }
 
+    /// Flush a verified independent native copy, including its directory
+    /// entries. A preexisting reserve is re-flushed on restart too, never
+    /// trusted merely because its size and inventory currently match.
+    pub fn sync_native_reserve_contents(&self) -> Result<GenerationInventory, LocalProfileError> {
+        let before = self.inventory()?;
+        for entry in before.entries() {
+            OpenOptions::new()
+                .read(true)
+                .write(true)
+                .open(self.path().join(entry.relative_path()))?
+                .sync_all()?;
+        }
+        OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open(self.path().join(GENERATION_MARKER))?
+            .sync_all()?;
+        #[cfg(unix)]
+        {
+            let mut dirs = std::collections::BTreeSet::new();
+            dirs.insert(self.path().to_path_buf());
+            for entry in before.entries() {
+                let mut path = self.path().join(entry.relative_path());
+                while path.pop() && path.starts_with(self.path()) {
+                    dirs.insert(path.clone());
+                    if path == self.path() {
+                        break;
+                    }
+                }
+            }
+            for dir in dirs.iter().rev() {
+                File::open(dir)?.sync_all()?;
+            }
+        }
+        if self.inventory()? != before {
+            return Err(LocalProfileError::CloneChanged);
+        }
+        Ok(before)
+    }
+
     /// Digest only immutable generation materialization inputs.
     ///
     /// `user_data/**` is mutable browser state (cookies, localStorage, caches and Firefox
@@ -586,6 +626,15 @@ impl RecoveryClone {
     #[must_use]
     pub const fn workspace(&self) -> &GenerationWorkspace {
         &self.clone
+    }
+
+    /// Flush an independently verified native rescue copy before allowing
+    /// any later managed browser write of the original. This never grants
+    /// browser Open or a cloud effect.
+    pub fn sync_verified_reserve(&self) -> Result<GenerationInventory, LocalProfileError> {
+        self.verify_clone_only()?;
+        self.clone.sync_native_reserve_contents()?;
+        self.verify_clone_only()
     }
 
     pub fn verify_clone_only(&self) -> Result<GenerationInventory, LocalProfileError> {

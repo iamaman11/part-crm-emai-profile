@@ -20,11 +20,13 @@ use crate::generation_reopen::{
     GenerationReopenControlPort,
 };
 #[cfg(any(windows, test))]
-use crate::local_profile::RecoveryClone;
+use crate::generation_snapshot::{GenerationSnapshotError, WorkspaceSnapshotReader};
 use crate::local_profile::{
     BridgeWorkspaceLock, GenerationWorkspace, LocalGenerationRecord, LocalGenerationState,
     LocalProfileError, MaterializationRoot,
 };
+#[cfg(any(windows, test))]
+use crate::local_profile::{GenerationInventory, RecoveryClone};
 use crate::runtime_bundle::{
     ApprovedRuntimeBundle, RuntimeLaunchError, RuntimeSessionOrchestrator,
 };
@@ -44,6 +46,8 @@ use crate::shipping_generation_successor_control::GenerationSuccessorControlErro
 use crate::shipping_generation_successor_control::{
     RestartExactLocalCompletionError, publish_streamed_exact_under_writer,
 };
+#[cfg(any(windows, test))]
+use crate::shipping_save_attempt::begin_native_rescue_edit;
 use crate::shipping_save_attempt::{
     SaveAttemptEvidenceError, discover_unresolved_streaming_exact_save_attempt,
     has_unresolved_save_attempt_for_profile, persist_local_unsynced_intent,
@@ -116,6 +120,14 @@ pub enum PendingSaveRecovery {
     /// Exact N+1 committed while this claim still selected N.
     /// Never launch N; release the unused claim only with fresh native proof.
     CommittedNewerRequiresClaim,
+    /// An authorized Save-retry observed a native snapshot beyond the
+    /// supported encrypted envelope. This is diagnostic only: it MUST NOT
+    /// allow launching the old N or bypass the pending-save guard.
+    NativeSnapshotTooLarge,
+    /// Only a fresh Coordinator Open claim selects the original N; D1 must
+    /// also positively rule out a pending N+1. The OS lock and original
+    /// rescue journal remain mandatory before any managed browser write.
+    NativeRescueRequired,
     /// Unknown, blocked, conflicting or incomplete recovery.
     Blocked,
 }
@@ -342,6 +354,9 @@ pub enum GenerationSaveFailureReason {
     NativeSourceChanged,
     SnapshotTooLarge,
     SealingMaterial,
+    SealingTransport,
+    SealingResponseUncertain,
+    SealingRejected,
     Encryption,
     LocalPreparation,
     CheckpointWrite,
@@ -373,6 +388,18 @@ impl GenerationSaveFailureReason {
         )
     }
 
+    /// The first BPAT may not exist when the sealing-material request lost
+    /// its response. This is a separate, local-only retry: the original
+    /// LOCAL_UNSYNCED inventory and the current heartbeat must be re-proved.
+    /// The actual PUT still requires the normal D1-positive exact decision.
+    #[must_use]
+    pub const fn allows_bounded_preseal_reconnect(self) -> bool {
+        matches!(
+            self,
+            Self::SealingTransport | Self::SealingResponseUncertain
+        )
+    }
+
     /// Stable, redacted user/support code, never a storage key or raw HTTP.
     #[must_use]
     pub const fn code(self) -> &'static str {
@@ -384,6 +411,9 @@ impl GenerationSaveFailureReason {
             Self::NativeSourceChanged => "BRIDGE_SAVE_NATIVE_SOURCE_CHANGED",
             Self::SnapshotTooLarge => "BRIDGE_SAVE_SNAPSHOT_TOO_LARGE",
             Self::SealingMaterial => "BRIDGE_SAVE_SEALING_MATERIAL_UNAVAILABLE",
+            Self::SealingTransport => "BRIDGE_SAVE_SEALING_TRANSPORT_UNKNOWN",
+            Self::SealingResponseUncertain => "BRIDGE_SAVE_SEALING_RESPONSE_UNCERTAIN",
+            Self::SealingRejected => "BRIDGE_SAVE_SEALING_REJECTED",
             Self::Encryption => "BRIDGE_SAVE_ENCRYPTION_FAILED",
             Self::LocalPreparation => "BRIDGE_SAVE_LOCAL_PREPARATION_FAILED",
             Self::CheckpointWrite => "BRIDGE_SAVE_CHECKPOINT_WRITE_FAILED",
@@ -450,6 +480,17 @@ fn save_checkpoint_reason(source: SaveAttemptEvidenceError) -> GenerationSaveFai
         SaveAttemptEvidenceError::Io(_) | SaveAttemptEvidenceError::Unavailable => {
             GenerationSaveFailureReason::CheckpointWrite
         }
+        SaveAttemptEvidenceError::SnapshotTooLarge => GenerationSaveFailureReason::SnapshotTooLarge,
+        SaveAttemptEvidenceError::SealingMaterialUnavailable => {
+            GenerationSaveFailureReason::SealingMaterial
+        }
+        // No sealed BPAT exists yet: DO NOT enter the exact-checkpoint live
+        // reconnect loop, even for a transport/unknown HTTP result.
+        SaveAttemptEvidenceError::SealingTransport => GenerationSaveFailureReason::SealingTransport,
+        SaveAttemptEvidenceError::SealingResponseUncertain => {
+            GenerationSaveFailureReason::SealingResponseUncertain
+        }
+        SaveAttemptEvidenceError::SealingRejected => GenerationSaveFailureReason::SealingRejected,
         SaveAttemptEvidenceError::Invalid | SaveAttemptEvidenceError::Changed => {
             GenerationSaveFailureReason::CheckpointIntegrity
         }
@@ -461,10 +502,40 @@ fn save_checkpoint_read_reason(source: SaveAttemptEvidenceError) -> GenerationSa
         SaveAttemptEvidenceError::Io(_) | SaveAttemptEvidenceError::Unavailable => {
             GenerationSaveFailureReason::CheckpointRead
         }
+        SaveAttemptEvidenceError::SnapshotTooLarge => GenerationSaveFailureReason::SnapshotTooLarge,
+        SaveAttemptEvidenceError::SealingMaterialUnavailable => {
+            GenerationSaveFailureReason::SealingMaterial
+        }
+        // No sealed BPAT exists yet: DO NOT enter the exact-checkpoint live
+        // reconnect loop, even for a transport/unknown HTTP result.
+        SaveAttemptEvidenceError::SealingTransport => GenerationSaveFailureReason::SealingTransport,
+        SaveAttemptEvidenceError::SealingResponseUncertain => {
+            GenerationSaveFailureReason::SealingResponseUncertain
+        }
+        SaveAttemptEvidenceError::SealingRejected => GenerationSaveFailureReason::SealingRejected,
         SaveAttemptEvidenceError::Invalid | SaveAttemptEvidenceError::Changed => {
             GenerationSaveFailureReason::CheckpointIntegrity
         }
     }
+}
+
+/// Check the canonical native+framing limit against the ORIGINAL closed
+/// browser under its already-retained Bridge writer lock, before constructing
+/// a second generation-sized RecoveryClone. This is a preflight only, never
+/// a Save, cloud retry, local repair or permission to open stale N.
+#[cfg(any(windows, test))]
+fn preflight_retained_native_before_clone(
+    source: &GenerationWorkspace,
+    inventory: &GenerationInventory,
+) -> Result<(), GenerationSaveFailureReason> {
+    WorkspaceSnapshotReader::new(source, inventory)
+        .map(|_| ())
+        .map_err(|error| match error {
+            GenerationSnapshotError::SnapshotTooLarge => {
+                GenerationSaveFailureReason::SnapshotTooLarge
+            }
+            _ => GenerationSaveFailureReason::NativeSourceChanged,
+        })
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -1028,6 +1099,8 @@ where
         // It shares this exact verified cursor and is owned by composition.
         on_claim(&mut self.coordinator, &lease);
 
+        let mut native_rescue_required = false;
+
         // Any surviving exact save or interrupted checkpoint stage is unresolved
         // recovery evidence. Even if the old cloud pointer is still accessible,
         // launching it as a clean browser could discard newer local SQLite/WAL.
@@ -1110,11 +1183,22 @@ where
                     });
                 }
             }
+            // This is an ordinary freshly claimed Coordinator writer, not
+            // browser authority inferred from a Save retry-decision. Recheck
+            // the native original and durably journal rescue under OS admission.
+            if recovered == PendingSaveRecovery::NativeRescueRequired {
+                native_rescue_required = true;
+            }
             // A recovery callback never overrides the conservative guard.
             // Only the specific fully completed checkpoint may disappear; a
             // torn sibling, unsafe writer or failed local binding still blocks.
-            if recovered != PendingSaveRecovery::ReadySelected
-                || !matches!(
+            let unresolved_blocker = if recovered != PendingSaveRecovery::ReadySelected {
+                // A separately admitted native rescue is the ONLY non-ACTIVE
+                // path allowed to continue; it must still prove its reserve
+                // and journal before the managed browser starts.
+                !native_rescue_required
+            } else {
+                !matches!(
                     has_unresolved_save_attempt_for_profile(
                         root,
                         enrollment.actor().tenant_scope().tenant_id(),
@@ -1122,19 +1206,37 @@ where
                     ),
                     Ok(false)
                 )
-            {
-                return Err(self.fail_before_local_use(OperatorFailureStage::GenerationSave, lease));
+            };
+            if unresolved_blocker {
+                // Always release the newly claimed coordinator lease FIRST.
+                // A failed release is a stronger terminal failure and must
+                // never be hidden by the read-only oversize diagnosis.
+                let failure =
+                    self.fail_before_local_use(OperatorFailureStage::GenerationSave, lease);
+                return Err(
+                    if recovered == PendingSaveRecovery::NativeSnapshotTooLarge
+                        && failure == OperatorFlowError::Stage(OperatorFailureStage::GenerationSave)
+                    {
+                        OperatorFlowError::GenerationSave {
+                            reason: GenerationSaveFailureReason::SnapshotTooLarge,
+                        }
+                    } else {
+                        failure
+                    },
+                );
             }
         }
 
-        if let Err(reason) = ensure_materialized(
-            &mut self.coordinator,
-            enrollment.actor().tenant_scope().tenant_id(),
-            enrollment.profile_id(),
-            enrollment.generation_id(),
-            &device_id,
-            lease.epoch(),
-        ) {
+        if !native_rescue_required
+            && let Err(reason) = ensure_materialized(
+                &mut self.coordinator,
+                enrollment.actor().tenant_scope().tenant_id(),
+                enrollment.profile_id(),
+                enrollment.generation_id(),
+                &device_id,
+                lease.epoch(),
+            )
+        {
             // The natural materialization owner certifies no writes only for a failed read
             // before workspace creation. Verify exact absence again before requesting the
             // typed no-browser-use release. Any new directory, dirty/unknown evidence,
@@ -1219,6 +1321,24 @@ where
             let reason = B::operational_rejection_reason(&error);
             return Err(self.fail_preflight_with_lock_before_use(
                 reason,
+                lease,
+                workspace_lock,
+                &workspace,
+            ));
+        }
+        if native_rescue_required {
+            #[cfg(any(windows, test))]
+            if begin_native_rescue_edit(root, &workspace, &lease).is_err() {
+                return Err(self.fail_with_lock_before_use(
+                    OperatorFailureStage::GenerationSave,
+                    lease,
+                    workspace_lock,
+                    &workspace,
+                ));
+            }
+            #[cfg(not(any(windows, test)))]
+            return Err(self.fail_with_lock_before_use(
+                OperatorFailureStage::GenerationSave,
                 lease,
                 workspace_lock,
                 &workspace,
@@ -1749,6 +1869,11 @@ where
                     .map_err(|_| OperatorFlowError::GenerationSave {
                         reason: GenerationSaveFailureReason::NativeSourceChanged,
                     })?;
+            // F05: a 576 MiB native limit or excessive BPGW framing must
+            // refuse before the expensive full Firefox N+1 clone is created.
+            // Original LOCAL_UNSYNCED and WAL remain in the source workspace.
+            preflight_retained_native_before_clone(&workspace, &source_inventory)
+                .map_err(|reason| OperatorFlowError::GenerationSave { reason })?;
             let candidate =
                 match RecoveryClone::create(&workspace, root, tenant, profile, &candidate_id) {
                     Ok(clone) => {
@@ -1851,6 +1976,21 @@ where
             let reason = match error {
                 RestartExactLocalCompletionError::LocalEvidenceChanged => {
                     GenerationSaveFailureReason::CheckpointIntegrity
+                }
+                RestartExactLocalCompletionError::NativeSnapshotTooLarge => {
+                    GenerationSaveFailureReason::SnapshotTooLarge
+                }
+                RestartExactLocalCompletionError::PreSealTransport => {
+                    GenerationSaveFailureReason::SealingTransport
+                }
+                RestartExactLocalCompletionError::PreSealResponseUncertain => {
+                    GenerationSaveFailureReason::SealingResponseUncertain
+                }
+                RestartExactLocalCompletionError::PreSealRejected => {
+                    GenerationSaveFailureReason::SealingRejected
+                }
+                RestartExactLocalCompletionError::PreSealUnavailable => {
+                    GenerationSaveFailureReason::SealingMaterial
                 }
                 RestartExactLocalCompletionError::WriterOrLockUnresolved
                 | RestartExactLocalCompletionError::BindingOrRetirementFailed => {
@@ -2317,6 +2457,112 @@ mod tests {
     }
 
     #[test]
+    fn physical_indexeddb_overhead_and_bpgw_framing_are_checked_before_clone()
+    -> Result<(), Box<dyn std::error::Error>> {
+        use super::{GenerationSaveFailureReason, preflight_retained_native_before_clone};
+        use crate::generation_snapshot::MAX_STREAM_NATIVE_PROFILE_BYTES;
+
+        let fixture = Fixture::new()?;
+        let tenant = fixture.actor.tenant_scope().tenant_id();
+        let source =
+            fixture
+                .root
+                .open_generation(tenant, &fixture.profile_id, &fixture.generation_id)?;
+        let base_bytes = source.inventory()?.total_bytes();
+        let observed_native = 568_329_621_u64; // Physical 512 MiB IndexedDB payload + Firefox overhead.
+        assert!(base_bytes < observed_native);
+        let user_data = source.path().join("user_data");
+        fs::create_dir_all(&user_data)?;
+        let original = user_data.join("indexeddb-native-overhead.bin");
+        let payload = fs::OpenOptions::new()
+            .create_new(true)
+            .write(true)
+            .open(&original)?;
+
+        // Large logical file, no 568 MiB test allocation or plaintext spool.
+        payload.set_len(observed_native - base_bytes)?;
+        let accepted = source.inventory()?;
+        assert_eq!(accepted.total_bytes(), observed_native);
+        assert_eq!(
+            preflight_retained_native_before_clone(&source, &accepted),
+            Ok(())
+        );
+
+        // Native bytes can still fit while BPGW path framing cannot.
+        let framing_only_native = MAX_STREAM_NATIVE_PROFILE_BYTES - 1;
+        payload.set_len(framing_only_native - base_bytes)?;
+        let framing_refused = source.inventory()?;
+        assert_eq!(framing_refused.total_bytes(), framing_only_native);
+        assert_eq!(
+            preflight_retained_native_before_clone(&source, &framing_refused),
+            Err(GenerationSaveFailureReason::SnapshotTooLarge)
+        );
+        assert_eq!(source.inventory()?, framing_refused);
+
+        // Beyond the native boundary is a distinct early refusal. Neither
+        // case creates N+1, touches Firefox WAL, nor grants a cloud retry.
+        payload.set_len(MAX_STREAM_NATIVE_PROFILE_BYTES + 1 - base_bytes)?;
+        let native_refused = source.inventory()?;
+        assert_eq!(
+            preflight_retained_native_before_clone(&source, &native_refused),
+            Err(GenerationSaveFailureReason::SnapshotTooLarge)
+        );
+        assert_eq!(source.inventory()?, native_refused);
+        let forbidden = GenerationId::parse("generation_f05_framing_no_successor")?;
+        assert!(matches!(
+            fixture
+                .root
+                .open_generation(tenant, &fixture.profile_id, &forbidden),
+            Err(LocalProfileError::Io(std::io::ErrorKind::NotFound))
+        ));
+        Ok(())
+    }
+
+    #[test]
+    fn native_oversize_preflight_rejects_before_any_successor_clone_or_cloud_effect()
+    -> Result<(), Box<dyn std::error::Error>> {
+        use super::{GenerationSaveFailureReason, preflight_retained_native_before_clone};
+        use crate::generation_snapshot::MAX_STREAM_NATIVE_PROFILE_BYTES;
+
+        let fixture = Fixture::new()?;
+        let tenant = fixture.actor.tenant_scope().tenant_id();
+        let source =
+            fixture
+                .root
+                .open_generation(tenant, &fixture.profile_id, &fixture.generation_id)?;
+        let user_data = source.path().join("user_data");
+        fs::create_dir_all(&user_data)?;
+        let original = user_data.join("oversized-native-profile.bin");
+        let payload = fs::OpenOptions::new()
+            .create_new(true)
+            .write(true)
+            .open(&original)?;
+        payload.set_len(MAX_STREAM_NATIVE_PROFILE_BYTES + 1)?;
+        drop(payload);
+        let original_inventory = source.inventory()?;
+        assert!(original_inventory.total_bytes() > MAX_STREAM_NATIVE_PROFILE_BYTES);
+        assert_eq!(
+            preflight_retained_native_before_clone(&source, &original_inventory),
+            Err(GenerationSaveFailureReason::SnapshotTooLarge),
+        );
+        // No RecoveryClone::create, sealer, PUT or commit is called after this
+        // preflight refusal in the normal retained Save path.
+        assert_eq!(
+            fs::metadata(&original)?.len(),
+            MAX_STREAM_NATIVE_PROFILE_BYTES + 1,
+        );
+        assert_eq!(source.inventory()?, original_inventory);
+        let never_created = GenerationId::parse("generation_native_oversize_forbidden_clone")?;
+        assert!(matches!(
+            fixture
+                .root
+                .open_generation(tenant, &fixture.profile_id, &never_created),
+            Err(LocalProfileError::Io(std::io::ErrorKind::NotFound)),
+        ));
+        Ok(())
+    }
+
+    #[test]
     fn save_owner_maps_control_and_local_causes_without_granting_retries() {
         use super::{
             GenerationSaveFailureReason as Reason, save_checkpoint_read_reason,
@@ -2360,6 +2606,36 @@ mod tests {
             Reason::CheckpointIntegrity
         );
         assert_eq!(
+            save_checkpoint_reason(Evidence::SnapshotTooLarge),
+            Reason::SnapshotTooLarge
+        );
+        assert_eq!(
+            save_checkpoint_reason(Evidence::SealingMaterialUnavailable),
+            Reason::SealingMaterial
+        );
+        for (error, expected) in [
+            (Evidence::SealingTransport, Reason::SealingTransport),
+            (
+                Evidence::SealingResponseUncertain,
+                Reason::SealingResponseUncertain,
+            ),
+            (Evidence::SealingRejected, Reason::SealingRejected),
+        ] {
+            assert_eq!(save_checkpoint_reason(error), expected);
+            assert!(
+                !expected.allows_bounded_cloud_reconcile(),
+                "unsealed N+1 must not enter already-sealed BPAT retry path"
+            );
+        }
+        assert_eq!(
+            save_checkpoint_read_reason(Evidence::SealingMaterialUnavailable),
+            Reason::SealingMaterial
+        );
+        assert_eq!(
+            save_checkpoint_read_reason(Evidence::SnapshotTooLarge),
+            Reason::SnapshotTooLarge
+        );
+        assert_eq!(
             save_checkpoint_reason(Evidence::Io(std::io::ErrorKind::PermissionDenied)),
             Reason::CheckpointWrite
         );
@@ -2376,6 +2652,26 @@ mod tests {
             Reason::ControlInvalidResponse,
         ] {
             assert!(!reason.allows_bounded_cloud_reconcile());
+        }
+        // Pre-seal recovery does NOT grant the sealed-BPAT retry path.
+        // Only transport/ambiguous material lookup may repeat locally after
+        // a successful current-session heartbeat. Explicit denial, invalid
+        // local evidence and oversize must never enter that loop.
+        for reason in [Reason::SealingTransport, Reason::SealingResponseUncertain] {
+            assert!(reason.allows_bounded_preseal_reconnect());
+            assert!(!reason.allows_bounded_cloud_reconcile());
+        }
+        for reason in [
+            Reason::SealingRejected,
+            Reason::SealingMaterial,
+            Reason::SnapshotTooLarge,
+            Reason::NativeSourceChanged,
+            Reason::CheckpointIntegrity,
+            Reason::ControlRejected,
+            Reason::ControlTransport,
+            Reason::UploadOutcomeUncertain,
+        ] {
+            assert!(!reason.allows_bounded_preseal_reconnect());
         }
         for reason in [
             Reason::ControlTransport,
@@ -3436,6 +3732,236 @@ mod tests {
         assert_eq!(unauthorized_starts.get(), 0);
         assert!(rejected.process().actions().is_empty());
         assert_eq!(fs::read(&pending)?, b"torn-attempt");
+        Ok(())
+    }
+
+    #[test]
+    fn oversize_pending_recovery_preserves_typed_cause_only_after_safe_lease_release()
+    -> Result<(), Box<dyn std::error::Error>> {
+        use super::{CleanupFailures, GenerationSaveFailureReason};
+        let fixture = Fixture::new()?;
+        let tenant = fixture.actor.tenant_scope().tenant_id();
+        let source =
+            fixture
+                .root
+                .open_generation(tenant, &fixture.profile_id, &fixture.generation_id)?;
+        let original_wal = source.path().join("user_data").join("cookies.sqlite-wal");
+        fs::create_dir_all(original_wal.parent().ok_or("missing native directory")?)?;
+        fs::write(&original_wal, b"F05-original-native-WAL")?;
+        crate::shipping_save_attempt::persist_local_unsynced_intent(
+            &fixture.root,
+            &source,
+            &fixture.lease,
+        )?;
+        let inventory = source.inventory()?;
+        for refuse_release in [false, true] {
+            let mut owner = operator(&fixture, FakeCamouhost::default())?;
+            owner.coordinator.close_fail = refuse_release;
+            let observed = Cell::new(0_u32);
+            let materializations = Cell::new(0_u32);
+            let runtime_starts = Cell::new(0_u32);
+            let result = owner.open_with_materialization(
+                &fixture.claim_uri,
+                &fixture.root,
+                UnixMillis::new(10),
+                (
+                    |_coordinator, _lease| {},
+                    |_coordinator, _tenant, _profile, _generation, _device, _epoch| {
+                        materializations.set(materializations.get() + 1);
+                        Ok(())
+                    },
+                ),
+                || {
+                    runtime_starts.set(runtime_starts.get() + 1);
+                    Ok(())
+                },
+                |_coordinator, _tenant, _profile, _selected, _lease| {
+                    observed.set(observed.get() + 1);
+                    PendingSaveRecovery::NativeSnapshotTooLarge
+                },
+            );
+            let expected = if refuse_release {
+                OperatorFlowError::Terminal {
+                    stage: OperatorFailureStage::GenerationSave,
+                    local_state: LocalGenerationState::MaterializedClean,
+                    cleanup: CleanupFailures {
+                        process: false,
+                        workspace_lock: false,
+                        coordinator_lease: true,
+                    },
+                }
+            } else {
+                OperatorFlowError::GenerationSave {
+                    reason: GenerationSaveFailureReason::SnapshotTooLarge,
+                }
+            };
+            assert_eq!(result, Err(expected));
+            assert_eq!(observed.get(), 1);
+            assert_eq!(materializations.get(), 0);
+            assert_eq!(runtime_starts.get(), 0);
+            assert_eq!(owner.coordinator().claimed, 1);
+            assert_eq!(owner.coordinator().closed, 1);
+            assert_eq!(owner.coordinator().clean_closed, 0);
+            assert_eq!(owner.cleanup_blocked(), refuse_release);
+            assert!(owner.process().actions().is_empty());
+            assert_eq!(source.inventory()?, inventory);
+            assert_eq!(fs::read(&original_wal)?, b"F05-original-native-WAL");
+            assert!(
+                crate::shipping_save_attempt::has_unresolved_save_attempt_for_profile(
+                    &fixture.root,
+                    tenant,
+                    &fixture.profile_id
+                )?
+            );
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn denied_native_rescue_preflight_keeps_original_closed_intent()
+    -> Result<(), Box<dyn std::error::Error>> {
+        use crate::shipping_save_attempt::{
+            ScopedPendingSaveEvidence, classify_scoped_pending_save_evidence,
+            native_rescue_interrupted_under_fresh_lease, persist_local_unsynced_intent,
+        };
+
+        let fixture = Fixture::new()?;
+        let tenant = fixture.actor.tenant_scope().tenant_id();
+        let source =
+            fixture
+                .root
+                .open_generation(tenant, &fixture.profile_id, &fixture.generation_id)?;
+        let wal = source.path().join("user_data").join("cookies.sqlite-wal");
+        fs::create_dir_all(wal.parent().ok_or("native WAL parent missing")?)?;
+        fs::write(&wal, b"preflight-denied-original-WAL")?;
+        persist_local_unsynced_intent(&fixture.root, &source, &fixture.lease)?;
+        let inventory = source.inventory()?;
+        let fresh = ProfileLease::issue(
+            tenant.clone(),
+            fixture.profile_id.clone(),
+            SessionId::parse("session_f05_preflight_denied_01")?,
+            fixture.device_id.clone(),
+            fixture.lease.epoch() + 1,
+            FencingToken::parse("fence_f05_preflight_denied_01")?,
+        )?;
+        let mut owner = operator(&fixture, FakeCamouhost::default())?;
+        owner.coordinator.lease = fresh.clone();
+        owner.browser_preflight.allow = false;
+        let result = owner.open_with_materialization(
+            &fixture.claim_uri,
+            &fixture.root,
+            UnixMillis::new(10),
+            (
+                |_coordinator, _lease| {},
+                |_coordinator, _tenant, _profile, _generation, _device, _epoch| Ok(()),
+            ),
+            || Ok(()),
+            |_coordinator, _tenant, _profile, _generation, _lease| {
+                PendingSaveRecovery::NativeRescueRequired
+            },
+        );
+        assert!(matches!(result, Err(OperatorFlowError::Preflight { .. })));
+        assert_eq!(owner.browser_preflight.calls, 1);
+        assert!(owner.process().actions().is_empty());
+        assert_eq!(source.inventory()?, inventory);
+        assert_eq!(fs::read(&wal)?, b"preflight-denied-original-WAL");
+        assert!(!native_rescue_interrupted_under_fresh_lease(
+            &fixture.root,
+            tenant,
+            &fixture.profile_id,
+            &fixture.generation_id,
+            &fresh,
+        )?);
+        match classify_scoped_pending_save_evidence(&fixture.root, tenant, &fixture.profile_id)? {
+            ScopedPendingSaveEvidence::LocalUnsynced {
+                base_generation,
+                prior_epoch,
+            } => {
+                assert_eq!(base_generation, fixture.generation_id);
+                assert_eq!(prior_epoch, fixture.lease.epoch());
+            }
+            _ => return Err("preflight refusal modified original local intent".into()),
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn one_managed_native_rescue_open_and_clean_close_publish_new_inventory()
+    -> Result<(), Box<dyn std::error::Error>> {
+        use crate::shipping_save_attempt::{
+            SaveAttemptEvidenceError, ScopedPendingSaveEvidence,
+            classify_scoped_pending_save_evidence, persist_local_unsynced_intent,
+        };
+
+        let fixture = Fixture::new()?;
+        let tenant = fixture.actor.tenant_scope().tenant_id();
+        let source =
+            fixture
+                .root
+                .open_generation(tenant, &fixture.profile_id, &fixture.generation_id)?;
+        let wal = source.path().join("user_data").join("cookies.sqlite-wal");
+        fs::create_dir_all(wal.parent().ok_or("native WAL parent missing")?)?;
+        fs::write(&wal, b"original native WAL; must survive rescue")?;
+        persist_local_unsynced_intent(&fixture.root, &source, &fixture.lease)?;
+        let original = source.inventory()?;
+        let fresh = ProfileLease::issue(
+            tenant.clone(),
+            fixture.profile_id.clone(),
+            SessionId::parse("session_f05_managed_rescue_01")?,
+            fixture.device_id.clone(),
+            fixture.lease.epoch() + 1,
+            FencingToken::parse("fence_f05_managed_rescue_01")?,
+        )?;
+        let mut owner = operator(&fixture, FakeCamouhost::default())?;
+        owner.coordinator.lease = fresh.clone();
+        let materializations = Cell::new(0_u32);
+        let prelaunch = Cell::new(0_u32);
+        owner.open_with_materialization(
+            &fixture.claim_uri,
+            &fixture.root,
+            UnixMillis::new(10),
+            (
+                |_coordinator, lease| assert_eq!(lease, &fresh),
+                |_coordinator, _tenant, _profile, _generation, _device, _epoch| {
+                    materializations.set(materializations.get() + 1);
+                    Ok(())
+                },
+            ),
+            || {
+                prelaunch.set(prelaunch.get() + 1);
+                Ok(())
+            },
+            |_coordinator, _tenant, _profile, _selected, _lease| {
+                // Shipping gets this result ONLY after fresh Coordinator N
+                // and separately D1-confirmed nonapplication.
+                PendingSaveRecovery::NativeRescueRequired
+            },
+        )?;
+        assert_eq!(owner.active_session_id(), Some(fresh.session_id()));
+        assert_eq!(owner.coordinator().claimed, 1);
+        assert_eq!(materializations.get(), 0);
+        assert_eq!(prelaunch.get(), 1);
+        assert_eq!(source.inventory()?, original);
+        assert!(matches!(
+            classify_scoped_pending_save_evidence(&fixture.root, tenant, &fixture.profile_id,),
+            Err(SaveAttemptEvidenceError::Changed)
+        ));
+        // One managed Camoufox owns the original source until native Close.
+        fs::write(&wal, b"edited smaller WAL")?;
+        owner.close_with_durable_local_intent(&fixture.root, UnixMillis::new(20))?;
+        assert_eq!(owner.active_session_id(), None);
+        assert_eq!(fs::read(&wal)?, b"edited smaller WAL");
+        assert_ne!(source.inventory()?, original);
+        match classify_scoped_pending_save_evidence(&fixture.root, tenant, &fixture.profile_id)? {
+            ScopedPendingSaveEvidence::LocalUnsynced {
+                base_generation,
+                prior_epoch,
+            } => {
+                assert_eq!(base_generation, fixture.generation_id);
+                assert_eq!(prior_epoch, fresh.epoch());
+            }
+            _ => return Err("clean managed rescue did not publish current intent".into()),
+        }
         Ok(())
     }
 

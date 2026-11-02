@@ -172,6 +172,74 @@ def process_alive(pid: object) -> bool:
     return True
 
 
+def process_instance(pid: int) -> dict[str, str]:
+    """Creation time and executable path; PID liveness is not owner identity."""
+    if not isinstance(pid, int) or isinstance(pid, bool) or pid <= 0:
+        raise OSError("invalid process ID")
+    if os.name == "nt":
+        import ctypes
+        from ctypes import wintypes
+
+        class FILETIME(ctypes.Structure):
+            _fields_ = [("low", wintypes.DWORD), ("high", wintypes.DWORD)]
+
+        kernel = ctypes.WinDLL("kernel32", use_last_error=True)
+        open_process = kernel.OpenProcess
+        open_process.argtypes = [wintypes.DWORD, wintypes.BOOL, wintypes.DWORD]
+        open_process.restype = wintypes.HANDLE
+        handle = open_process(0x00101000, False, pid)  # SYNCHRONIZE | QUERY_LIMITED_INFORMATION
+        if not handle:
+            raise OSError(ctypes.get_last_error(), "process identity unavailable")
+        try:
+            wait = kernel.WaitForSingleObject
+            wait.argtypes = [wintypes.HANDLE, wintypes.DWORD]
+            wait.restype = wintypes.DWORD
+            if wait(handle, 0) != 0x00000102:
+                raise OSError("process instance is not running")
+            get_times = kernel.GetProcessTimes
+            get_times.argtypes = [wintypes.HANDLE] + [ctypes.POINTER(FILETIME)] * 4
+            get_times.restype = wintypes.BOOL
+            created, exited, kernel_time, user_time = (FILETIME() for _ in range(4))
+            if not get_times(handle, ctypes.byref(created), ctypes.byref(exited),
+                             ctypes.byref(kernel_time), ctypes.byref(user_time)):
+                raise OSError(ctypes.get_last_error(), "process creation time unavailable")
+            image = ctypes.create_unicode_buffer(32768)
+            length = wintypes.DWORD(len(image))
+            query = kernel.QueryFullProcessImageNameW
+            query.argtypes = [wintypes.HANDLE, wintypes.DWORD, wintypes.LPWSTR,
+                              ctypes.POINTER(wintypes.DWORD)]
+            query.restype = wintypes.BOOL
+            if not query(handle, 0, image, ctypes.byref(length)):
+                raise OSError(ctypes.get_last_error(), "process image unavailable")
+            return {
+                "created": str((created.high << 32) | created.low),
+                "image": os.path.normcase(image.value),
+            }
+        finally:
+            kernel.CloseHandle.argtypes = [wintypes.HANDLE]
+            kernel.CloseHandle(handle)
+    stat = Path(f"/proc/{pid}/stat").read_text(encoding="utf-8")
+    return {
+        "created": stat[stat.rfind(")") + 2:].split()[19],
+        "image": os.readlink(f"/proc/{pid}/exe"),
+    }
+
+
+def owner_process_matches(directory: Path, selected: dict[str, object]) -> bool:
+    """Revalidate the descriptor and OS instance before committing a request."""
+    pid = selected.get("pid")
+    if not isinstance(pid, int) or isinstance(pid, bool):
+        return False
+    descriptor = directory / f"active-{pid}.json"
+    try:
+        if descriptor.is_symlink() or not descriptor.is_file():
+            return False
+        latest = json.loads(descriptor.read_text(encoding="utf-8"))
+        return latest == selected and selected.get("process") == process_instance(pid)
+    except (OSError, ValueError, TypeError, KeyError):
+        return False
+
+
 def durable_directory(path: Path) -> None:
     """On Unix, sync the parent entry after the atomic inbox publication."""
     if os.name == "posix":
@@ -199,7 +267,7 @@ def sessions(directory: Path) -> list[dict[str, object]]:
             # selected inbox; a sibling/foreign run is never admitted.
             if not safe_agent_directory(run.parent) or not run.parent.samefile(directory):
                 continue
-            if entry.name != f"active-{details.get('pid')}.json" or not process_alive(details.get("pid")):
+            if entry.name != f"active-{details.get('pid')}.json" or not owner_process_matches(directory, details):
                 continue
             if not safe_agent_directory(run / "requests") or not safe_agent_directory(run / "results"):
                 continue
@@ -276,6 +344,13 @@ def run() -> int:
             "logon session. No request was published.", file=sys.stderr,
         )
         return 126
+    if not owner_process_matches(directory, candidates[0]):
+        print(
+            "PLAYWRIGHT_AGENT_PROCESS_INSTANCE_MISMATCH phase=prepublish; "
+            "owner descriptor or process instance changed; no request published",
+            file=sys.stderr,
+        )
+        return 126
     script = arguments.script.read_bytes()  # No artificial source/content cap for test profiles.
     job_id = secrets.token_hex(16)
     staging = requests / f".{job_id}.part"
@@ -287,6 +362,13 @@ def run() -> int:
             output.flush()
             os.fsync(output.fileno())
         submit_phase = "request_publish"
+        if not owner_process_matches(directory, candidates[0]):
+            print(
+                "PLAYWRIGHT_AGENT_PROCESS_INSTANCE_MISMATCH phase=request_publish; "
+                "owner changed; staged evidence retained, request not published",
+                file=sys.stderr,
+            )
+            return 126
         os.replace(staging, committed)
         submit_phase = "request_directory_sync"
         durable_directory(requests)
@@ -306,7 +388,7 @@ def run() -> int:
     descriptor = directory / f"active-{candidates[0]['pid']}.json"
     deadline = None if arguments.timeout == 0 else time.monotonic() + arguments.timeout
     while not status.is_file():
-        if not descriptor.is_file() or not process_alive(candidates[0].get("pid")):
+        if not owner_process_matches(directory, candidates[0]):
             print(
                 "PLAYWRIGHT_AGENT_UNCONFIRMED: session ended without a result; "
                 "do not replay this job automatically",
@@ -324,9 +406,33 @@ def run() -> int:
             return 124
         time.sleep(0.1)
     try:
-        details = json.loads(status.read_text(encoding="utf-8"))
-    except (OSError, ValueError):
-        print("PLAYWRIGHT_AGENT_UNCONFIRMED: unreadable result; do not retry automatically", file=sys.stderr)
+        receipt_text = status.read_text(encoding="utf-8")
+    except OSError as error:
+        print(
+            f"PLAYWRIGHT_AGENT_UNCONFIRMED phase=receipt_read job={job_id} "
+            f"errno={error.errno} winerror={getattr(error, 'winerror', None)}; "
+            "do not replay automatically", file=sys.stderr,
+        )
+        return 125
+    except UnicodeError as error:
+        print(
+            f"PLAYWRIGHT_AGENT_UNCONFIRMED phase=receipt_decode job={job_id} "
+            f"error={type(error).__name__}; do not replay automatically", file=sys.stderr,
+        )
+        return 125
+    try:
+        details = json.loads(receipt_text)
+    except ValueError as error:
+        print(
+            f"PLAYWRIGHT_AGENT_UNCONFIRMED phase=receipt_parse job={job_id} "
+            f"error={type(error).__name__}; do not replay automatically", file=sys.stderr,
+        )
+        return 125
+    if not isinstance(details, dict) or details.get("status") not in ("ok", "error", "unconfirmed"):
+        print(
+            f"PLAYWRIGHT_AGENT_UNCONFIRMED phase=receipt_shape job={job_id}; "
+            "do not replay automatically", file=sys.stderr,
+        )
         return 125
     for extension, target in (("stdout.txt", sys.stdout), ("stderr.txt", sys.stderr)):
         log = results / f"{job_id}.{extension}"

@@ -84,6 +84,22 @@ fn confirmed_save_trigger<E>(observation: Result<bool, E>) -> Result<ConfirmedSa
     })
 }
 
+/// The existing pending-recovery observation is read-only. Preserve an
+/// exact native-size refusal through the Open owner's normal lease cleanup;
+/// all other errors remain blocked without synthetic browser authority.
+#[cfg(any(windows, test))]
+fn pending_recovery_failure_disposition(
+    error: crate::shipping_generation_successor_control::RestartExactLocalCompletionError,
+) -> crate::operator_flow::PendingSaveRecovery {
+    use crate::operator_flow::PendingSaveRecovery;
+    use crate::shipping_generation_successor_control::RestartExactLocalCompletionError;
+    if error == RestartExactLocalCompletionError::NativeSnapshotTooLarge {
+        PendingSaveRecovery::NativeSnapshotTooLarge
+    } else {
+        PendingSaveRecovery::Blocked
+    }
+}
+
 /// One user-triggered Open may continue once after its local N->N+1
 /// recovery was proved committed and its unused Coordinator lease was
 /// released cleanly. The existing machine authority issues a fresh claim;
@@ -101,6 +117,39 @@ fn retryable_reconnect_observation(
         error,
         Restart::ControlPlane(Http::Transport | Http::HttpServerUncertain)
     )
+}
+
+/// Diagnostic only. A failed recovery never grants permission to replay
+/// a sealing request, mutate a LOCAL_UNSYNCED profile or open stale N.
+/// Keep the next action specific so an oversized native snapshot or unknown
+/// cloud effect is not presented as an ordinary safe retry.
+#[cfg(any(windows, test))]
+fn recovery_next_safe_step(
+    error: crate::shipping_generation_successor_control::RestartExactLocalCompletionError,
+) -> &'static str {
+    use crate::shipping_control_plane::ShippingControlPlaneError as Http;
+    use crate::shipping_generation_successor_control::RestartExactLocalCompletionError as Restart;
+    match error {
+        Restart::NativeSnapshotTooLarge => "PRESERVE_LOCAL_BYTES;NATIVE_RESCUE_REQUIRED",
+        Restart::PreSealTransport
+        | Restart::PreSealResponseUncertain
+        | Restart::UploadOrCommitUncertain
+        | Restart::ControlPlane(Http::Transport | Http::HttpServerUncertain) => {
+            "PRESERVE_LOCAL_BYTES;FRESH_AUTHORIZED_OBSERVATION"
+        }
+        Restart::PreSealRejected
+        | Restart::ControlPlane(Http::HttpStatus | Http::LaunchLeaseConflict) => {
+            "PRESERVE_LOCAL_BYTES;CHECK_SERVER_AUTHORITY"
+        }
+        Restart::PreSealUnavailable => "PRESERVE_LOCAL_BYTES;CHECK_SEALING_SERVICE",
+        Restart::LocalEvidenceChanged => "PRESERVE_LOCAL_BYTES;CHECK_LOCAL_EVIDENCE",
+        Restart::WriterOrLockUnresolved => "PRESERVE_LOCAL_BYTES;CHECK_NATIVE_WRITER",
+        Restart::BindingOrRetirementFailed => "PRESERVE_LOCAL_BYTES;RECONCILE_ACTIVE_EXACT",
+        Restart::ControlPlane(Http::InvalidResponse) => {
+            "PRESERVE_LOCAL_BYTES;INSPECT_SERVER_RESPONSE"
+        }
+        Restart::ControlPlane(Http::Clock) => "PRESERVE_LOCAL_BYTES;CHECK_CLOCK",
+    }
 }
 
 #[cfg(any(windows, test))]
@@ -202,8 +251,9 @@ pub fn run_delivery_command(
 mod windows {
     use super::{
         ConfirmedSaveTrigger, ShippingCompositionError, ShippingDeliveryCommand,
-        confirmed_save_trigger, open_with_one_fresh_claim,
-        retire_historical_probe_only_after_proof, retryable_reconnect_observation,
+        confirmed_save_trigger, open_with_one_fresh_claim, pending_recovery_failure_disposition,
+        recovery_next_safe_step, retire_historical_probe_only_after_proof,
+        retryable_reconnect_observation,
     };
     use crate::camouhost_process::{
         ManagedCamouhostConfig, ManagedCamouhostProcess, RuntimeBindingSlot, RuntimeDisplayMode,
@@ -219,8 +269,9 @@ mod windows {
     };
     use crate::shipping_generation_successor_control::{
         RestartExactCommitObservation, RestartExactLocalCompletion,
-        complete_active_exact_after_restart, confirm_retained_exact_retry_nonapplication,
-        resume_exact_successor_under_fresh_lease, resume_lone_local_unsynced_under_fresh_lease,
+        RestartExactLocalCompletionError, complete_active_exact_after_restart,
+        confirm_retained_exact_retry_nonapplication, resume_exact_successor_under_fresh_lease,
+        resume_lone_local_unsynced_under_fresh_lease,
     };
     use crate::shipping_preflight::ShippingBrowserLaunchPreflight;
     use crate::user_diagnostics::report::{self, Cause, Cloud, Outcome, Stage};
@@ -768,10 +819,11 @@ mod windows {
                                 }
                                 Err(error) => {
                                     eprintln!(
-                                        "P3_RECOVERY={};NEXT_SAFE_STEP=RETRY_OWNED_RECOVERY",
-                                        error.code()
+                                        "P3_RECOVERY={};NEXT_SAFE_STEP={}",
+                                        error.code(),
+                                        recovery_next_safe_step(error)
                                     );
-                                    false
+                                    return pending_recovery_failure_disposition(error);
                                 }
                             };
                             if committed {
@@ -779,6 +831,10 @@ mod windows {
                             } else {
                                 PendingSaveRecovery::Blocked
                             }
+                        }
+                        Ok(RestartExactLocalCompletion::NativeRescueRequired) => {
+                            eprintln!("P3_RECOVERY=NATIVE_RESCUE_REQUESTED;NEXT_SAFE_STEP=FRESH_CLAIM_NATIVE_JOURNAL");
+                            PendingSaveRecovery::NativeRescueRequired
                         }
                         Ok(RestartExactLocalCompletion::RetryDecisionBlocked) => {
                             eprintln!("P3_RECOVERY=RETRY_BLOCKED;NEXT_SAFE_STEP=PRESERVE_LOCAL_BYTES");
@@ -821,12 +877,22 @@ mod windows {
                                     );
                                     false
                                 }
+                                Err(RestartExactLocalCompletionError::NativeSnapshotTooLarge) => {
+                                    // Not a PUT retry grant. This Open already owns
+                                    // a freshly redeemed/current N writer claim;
+                                    // the operator must also acquire native OS
+                                    // admission, verify the original and publish
+                                    // rescue-in-progress before Camoufox launch.
+                                    eprintln!("P3_RECOVERY=NATIVE_RESCUE_REQUIRED;NEXT_SAFE_STEP=VERIFY_ORIGINAL_AND_JOURNAL");
+                                    return PendingSaveRecovery::NativeRescueRequired;
+                                }
                                 Err(error) => {
                                     eprintln!(
-                                        "P3_RECOVERY={};NEXT_SAFE_STEP=RETRY_OWNED_RECOVERY",
-                                        error.code()
+                                        "P3_RECOVERY={};NEXT_SAFE_STEP={}",
+                                        error.code(),
+                                        recovery_next_safe_step(error)
                                     );
-                                    false
+                                    return pending_recovery_failure_disposition(error);
                                 }
                             };
                             // First-sealed LOCAL_UNSYNCED uses the same exact
@@ -858,10 +924,11 @@ mod windows {
                         }
                         Err(error) => {
                             eprintln!(
-                                "P3_RECOVERY={};NEXT_SAFE_STEP=RETRY_OWNED_RECOVERY",
-                                error.code()
+                                "P3_RECOVERY={};NEXT_SAFE_STEP={}",
+                                error.code(),
+                                recovery_next_safe_step(error)
                             );
-                            PendingSaveRecovery::Blocked
+                            pending_recovery_failure_disposition(error)
                         }
                     };
                     recovered
@@ -1021,12 +1088,28 @@ mod windows {
                 {
                     return Err(ShippingCompositionError::HeartbeatAuthorityUncertain);
                 }
+                // Pre-seal transport uncertainty precedes BPAT creation.
+                // Reattempt only the original local seal after a confirmed
+                // live heartbeat; ordinary D1 retry fencing still guards PUT.
+                let mut first_seal_pending = matches!(
+                    &initial,
+                    Err(OperatorFlowError::GenerationSave { reason })
+                        if reason.allows_bounded_preseal_reconnect()
+                );
                 match initial {
                     Ok(completion) if completion.is_saved() => return Ok(()),
                     Ok(_) => return Err(ShippingCompositionError::CommittedRecoveryRequired),
                     Err(OperatorFlowError::GenerationSave { reason })
-                        if !reason.allows_bounded_cloud_reconcile() =>
+                        if !reason.allows_bounded_cloud_reconcile()
+                            && !reason.allows_bounded_preseal_reconnect() =>
                     {
+                        if reason
+                            == crate::operator_flow::GenerationSaveFailureReason::SnapshotTooLarge
+                        {
+                            eprintln!(
+                                "P3_RECOVERY=NATIVE_SNAPSHOT_TOO_LARGE;NEXT_SAFE_STEP=PRESERVE_LOCAL_BYTES;NATIVE_RESCUE_REQUIRED"
+                            );
+                        }
                         return Err(ShippingCompositionError::Operator(
                             OperatorFlowError::GenerationSave { reason },
                         ));
@@ -1097,33 +1180,38 @@ mod windows {
                                 .retained_save_lease()
                                 .cloned()
                                 .ok_or(ShippingCompositionError::CommittedRecoveryRequired)?;
-                            match confirm_retained_exact_retry_nonapplication(
-                                &materialization_root,
-                                &original,
-                                &mut recovery_observation_transport,
-                            ) {
-                                Ok(true) => {}
-                                Ok(false) => {
-                                    return Err(
-                                        ShippingCompositionError::CommittedRecoveryRequired,
-                                    );
-                                }
-                                Err(error) if retryable_reconnect_observation(error) => {
-                                    // No D1-positive decision was observed. Wait
-                                    // only within the confirmed writer deadline.
-                                    continue;
-                                }
-                                Err(error) => {
-                                    // Definitive 401/403/404, malformed response,
-                                    // clock or changed local evidence are NOT
-                                    // transient network failures. Preserve N+1.
-                                    eprintln!(
-                                        "P3_RECOVERY={};NEXT_SAFE_STEP=PRESERVE_LOCAL_BYTES",
-                                        error.code()
-                                    );
-                                    return Err(
-                                        ShippingCompositionError::CommittedRecoveryRequired,
-                                    );
+                            // No exact BPAT exists after a transient first-seal
+                            // failure. The retained Save must still prove
+                            // the exact descriptor in D1 before any cloud PUT.
+                            if !first_seal_pending {
+                                match confirm_retained_exact_retry_nonapplication(
+                                    &materialization_root,
+                                    &original,
+                                    &mut recovery_observation_transport,
+                                ) {
+                                    Ok(true) => {}
+                                    Ok(false) => {
+                                        return Err(
+                                            ShippingCompositionError::CommittedRecoveryRequired,
+                                        );
+                                    }
+                                    Err(error) if retryable_reconnect_observation(error) => {
+                                        // No D1-positive decision was observed. Wait
+                                        // only within the confirmed writer deadline.
+                                        continue;
+                                    }
+                                    Err(error) => {
+                                        // Definitive 401/403/404, malformed response,
+                                        // clock or changed local evidence are NOT
+                                        // transient network failures. Preserve N+1.
+                                        eprintln!(
+                                            "P3_RECOVERY={};NEXT_SAFE_STEP=PRESERVE_LOCAL_BYTES",
+                                            error.code()
+                                        );
+                                        return Err(
+                                            ShippingCompositionError::CommittedRecoveryRequired,
+                                        );
+                                    }
                                 }
                             }
                             let timing = operator
@@ -1193,16 +1281,28 @@ mod windows {
                                     );
                                 }
                                 Err(OperatorFlowError::GenerationSave { reason })
-                                    if !reason.allows_bounded_cloud_reconcile() =>
+                                    if !reason.allows_bounded_cloud_reconcile()
+                                        && !reason.allows_bounded_preseal_reconnect() =>
                                 {
+                                    if reason == crate::operator_flow::GenerationSaveFailureReason::SnapshotTooLarge {
+                                        eprintln!("P3_RECOVERY=NATIVE_SNAPSHOT_TOO_LARGE;NEXT_SAFE_STEP=PRESERVE_LOCAL_BYTES;NATIVE_RESCUE_REQUIRED");
+                                    }
                                     return Err(ShippingCompositionError::Operator(
                                         OperatorFlowError::GenerationSave { reason },
                                     ));
                                 }
-                                Err(
-                                    OperatorFlowError::Stage(OperatorFailureStage::GenerationSave)
-                                    | OperatorFlowError::GenerationSave { .. },
-                                ) if operator.has_pending_dirty_close() => {
+                                Err(OperatorFlowError::GenerationSave { reason })
+                                    if operator.has_pending_dirty_close() =>
+                                {
+                                    // A retry after first seal can reach D1/R2.
+                                    // Next iteration must gate any exact BPAT.
+                                    first_seal_pending = reason.allows_bounded_preseal_reconnect();
+                                    continue;
+                                }
+                                Err(OperatorFlowError::Stage(
+                                    OperatorFailureStage::GenerationSave,
+                                )) if operator.has_pending_dirty_close() => {
+                                    first_seal_pending = false;
                                     continue;
                                 }
                                 Err(error) => {
@@ -1515,8 +1615,8 @@ mod windows {
 mod tests {
     use super::{
         ConfirmedSaveTrigger, ShippingCompositionError, confirmed_save_trigger,
-        open_with_one_fresh_claim, retire_historical_probe_only_after_proof,
-        retryable_reconnect_observation,
+        open_with_one_fresh_claim, pending_recovery_failure_disposition, recovery_next_safe_step,
+        retire_historical_probe_only_after_proof, retryable_reconnect_observation,
     };
     #[cfg(not(windows))]
     use super::{ShippingDeliveryCommand, run_claim, run_delivery_command};
@@ -1670,6 +1770,29 @@ mod tests {
     }
 
     #[test]
+    fn native_oversize_recovery_reports_exact_cause_without_open_or_retry_authority() {
+        use crate::operator_flow::PendingSaveRecovery;
+        use crate::shipping_control_plane::ShippingControlPlaneError as Http;
+        use crate::shipping_generation_successor_control::RestartExactLocalCompletionError as Restart;
+
+        assert_eq!(
+            pending_recovery_failure_disposition(Restart::NativeSnapshotTooLarge),
+            PendingSaveRecovery::NativeSnapshotTooLarge
+        );
+        for other in [
+            Restart::LocalEvidenceChanged,
+            Restart::WriterOrLockUnresolved,
+            Restart::PreSealTransport,
+            Restart::ControlPlane(Http::HttpStatus),
+        ] {
+            assert_eq!(
+                pending_recovery_failure_disposition(other),
+                PendingSaveRecovery::Blocked
+            );
+        }
+    }
+
+    #[test]
     fn reconnect_observation_never_spins_on_acl_denial_or_invalid_authority() {
         use crate::shipping_control_plane::ShippingControlPlaneError as Http;
         use crate::shipping_generation_successor_control::RestartExactLocalCompletionError as Restart;
@@ -1688,11 +1811,91 @@ mod tests {
         }
         for local in [
             Restart::LocalEvidenceChanged,
+            Restart::NativeSnapshotTooLarge,
+            Restart::PreSealTransport,
+            Restart::PreSealResponseUncertain,
+            Restart::PreSealRejected,
+            Restart::PreSealUnavailable,
             Restart::WriterOrLockUnresolved,
             Restart::BindingOrRetirementFailed,
             Restart::UploadOrCommitUncertain,
         ] {
             assert!(!retryable_reconnect_observation(local));
+        }
+    }
+
+    #[test]
+    fn failed_recovery_advises_only_safe_actions_without_replay_or_stale_open() {
+        use crate::shipping_control_plane::ShippingControlPlaneError as Http;
+        use crate::shipping_generation_successor_control::RestartExactLocalCompletionError as Restart;
+
+        for (failure, expected) in [
+            (
+                Restart::NativeSnapshotTooLarge,
+                "PRESERVE_LOCAL_BYTES;NATIVE_RESCUE_REQUIRED",
+            ),
+            (
+                Restart::PreSealTransport,
+                "PRESERVE_LOCAL_BYTES;FRESH_AUTHORIZED_OBSERVATION",
+            ),
+            (
+                Restart::PreSealResponseUncertain,
+                "PRESERVE_LOCAL_BYTES;FRESH_AUTHORIZED_OBSERVATION",
+            ),
+            (
+                Restart::UploadOrCommitUncertain,
+                "PRESERVE_LOCAL_BYTES;FRESH_AUTHORIZED_OBSERVATION",
+            ),
+            (
+                Restart::PreSealRejected,
+                "PRESERVE_LOCAL_BYTES;CHECK_SERVER_AUTHORITY",
+            ),
+            (
+                Restart::PreSealUnavailable,
+                "PRESERVE_LOCAL_BYTES;CHECK_SEALING_SERVICE",
+            ),
+            (
+                Restart::LocalEvidenceChanged,
+                "PRESERVE_LOCAL_BYTES;CHECK_LOCAL_EVIDENCE",
+            ),
+            (
+                Restart::WriterOrLockUnresolved,
+                "PRESERVE_LOCAL_BYTES;CHECK_NATIVE_WRITER",
+            ),
+            (
+                Restart::BindingOrRetirementFailed,
+                "PRESERVE_LOCAL_BYTES;RECONCILE_ACTIVE_EXACT",
+            ),
+            (
+                Restart::ControlPlane(Http::Transport),
+                "PRESERVE_LOCAL_BYTES;FRESH_AUTHORIZED_OBSERVATION",
+            ),
+            (
+                Restart::ControlPlane(Http::HttpServerUncertain),
+                "PRESERVE_LOCAL_BYTES;FRESH_AUTHORIZED_OBSERVATION",
+            ),
+            (
+                Restart::ControlPlane(Http::HttpStatus),
+                "PRESERVE_LOCAL_BYTES;CHECK_SERVER_AUTHORITY",
+            ),
+            (
+                Restart::ControlPlane(Http::LaunchLeaseConflict),
+                "PRESERVE_LOCAL_BYTES;CHECK_SERVER_AUTHORITY",
+            ),
+            (
+                Restart::ControlPlane(Http::InvalidResponse),
+                "PRESERVE_LOCAL_BYTES;INSPECT_SERVER_RESPONSE",
+            ),
+            (
+                Restart::ControlPlane(Http::Clock),
+                "PRESERVE_LOCAL_BYTES;CHECK_CLOCK",
+            ),
+        ] {
+            let step = recovery_next_safe_step(failure);
+            assert_eq!(step, expected);
+            assert!(step.starts_with("PRESERVE_LOCAL_BYTES;"));
+            assert!(!step.contains("RETRY_OWNED_RECOVERY"));
+            assert!(!step.contains("CONTINUE_OPEN"));
         }
     }
 

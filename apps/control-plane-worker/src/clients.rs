@@ -348,7 +348,16 @@ async fn update_client_contact(
         Ok(value) => value,
         Err(_) => return invalid_request(actor.actor().correlation_id().as_str()),
     };
-    let protector = client_contact_protection(env)?;
+    let protector = match client_contact_protection(env) {
+        Ok(protector) => protector,
+        Err(_) => {
+            // A missing/invalid keyring is deployment readiness, not a contact
+            // write. Return the same structured Problem+correlation contract
+            // as other unavailable dependencies without exposing key material.
+            eprintln!("CLIENT_CONTACT_PROTECTION_NOT_READY");
+            return dependency_unavailable(actor.actor().correlation_id().as_str());
+        }
+    };
     match execute_upsert_contact(
         actor.actor(),
         role,

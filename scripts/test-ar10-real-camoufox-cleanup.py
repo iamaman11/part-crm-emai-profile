@@ -688,16 +688,20 @@ def prove_external_windows_gui_close(
         return
 
     title = f"AR10 External Controlled Close {os.getpid()}"
+    second_title = f"AR10 Additional Controlled Close {os.getpid()}"
     content = (f"<html><head><title>{title}</title></head>"
                "<body>Close this disposable Camoufox test window</body></html>").encode("utf-8")
+    second_content = (f"<html><head><title>{second_title}</title></head>"
+                      "<body>Close this second disposable window first</body></html>").encode("utf-8")
 
     class Handler(BaseHTTPRequestHandler):
         def do_GET(self) -> None:  # noqa: N802
+            body = second_content if self.path == "/second" else content
             self.send_response(200)
             self.send_header("Content-Type", "text/html; charset=utf-8")
-            self.send_header("Content-Length", str(len(content)))
+            self.send_header("Content-Length", str(len(body)))
             self.end_headers()
-            self.wfile.write(content)
+            self.wfile.write(body)
 
         def log_message(self, _format: str, *_args: object) -> None:
             pass
@@ -705,7 +709,12 @@ def prove_external_windows_gui_close(
     server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
     server_thread = threading.Thread(target=server.serve_forever, daemon=True)
     server_thread.start()
-    process = start_runtime(python, camouhost, env)
+    # Native Playwright job runs inside Camouhost's existing owner/context.
+    # No second browser, GUI automation controller, or forced process exit.
+    agent_dir = root.parent / f"ar10-wm-close-agent-{os.getpid()}-{time.monotonic_ns()}"
+    agent_dir.mkdir()
+    agent_env = dict(env, CAMOUHOST_AGENT_DIRECTORY=str(agent_dir))
+    process = start_runtime(python, camouhost, agent_env)
 
     from ctypes import wintypes
 
@@ -727,7 +736,7 @@ def prove_external_windows_gui_close(
     post_message.argtypes = [wintypes.HWND, wintypes.UINT, wintypes.WPARAM, wintypes.LPARAM]
     post_message.restype = wintypes.BOOL
 
-    def matching_windows() -> list[int]:
+    def matching_windows(expected_title: str) -> list[int]:
         found: list[int] = []
 
         @ctypes.WINFUNCTYPE(wintypes.BOOL, wintypes.HWND, wintypes.LPARAM)
@@ -738,7 +747,7 @@ def prove_external_windows_gui_close(
             if count == 0:
                 return True
             buffer = ctypes.create_unicode_buffer(count + 1)
-            if get_text(handle, buffer, len(buffer)) > 0 and title in buffer.value:
+            if get_text(handle, buffer, len(buffer)) > 0 and expected_title in buffer.value:
                 found.append(handle)
             return True
 
@@ -766,15 +775,71 @@ def prove_external_windows_gui_close(
         deadline = time.monotonic() + 30
         handles: list[int] = []
         while time.monotonic() < deadline:
-            handles = matching_windows()
+            handles = matching_windows(title)
             if handles:
                 break
             time.sleep(0.2)
         if len(handles) != 1:
             raise AssertionError("no unique, real disposable browser window identified")
-        if not post_message(handles[0], 0x0010, 0, 0):
-            raise AssertionError("external WM_CLOSE dispatch failed")
 
+        # First open a SECOND native Firefox window using the SAME Playwright
+        # BrowserContext. Closing it alone must never certify a whole-browser
+        # Quit or start a generation Save while the first window is still live.
+        second_url = f"http://127.0.0.1:{server.server_port}/second"
+        script = agent_dir / "open-second-native-window.py"
+        script.write_text(
+            "page = context.new_page()\n"
+            f"page.goto({second_url!r}, wait_until='domcontentloaded', timeout=30000)\n"
+            f"assert page.title() == {second_title!r}\n"
+            "result = {'second_window_opened': True}\n",
+            encoding="utf-8",
+        )
+        agent_command = subprocess.run(
+            [
+                sys.executable, str(Path(__file__).with_name("camouhost-agent.py")),
+                "--directory", str(agent_dir), "--pid", str(process.pid),
+                "--script", str(script), "--timeout", "60",
+            ],
+            text=True, capture_output=True, timeout=75, check=False,
+        )
+        if agent_command.returncode != 0 or '"second_window_opened": true' not in agent_command.stdout:
+            raise AssertionError(
+                "second native window did not open in the owned context "
+                f"agent_rc={agent_command.returncode} "
+                f"stderr_tail={agent_command.stderr[-800:]!r}"
+            )
+        deadline = time.monotonic() + 30
+        second_handles: list[int] = []
+        while time.monotonic() < deadline:
+            second_handles = matching_windows(second_title)
+            if second_handles:
+                break
+            time.sleep(0.2)
+        if len(second_handles) != 1 or second_handles[0] == handles[0]:
+            raise AssertionError("second native Firefox window is not independently visible")
+        if not post_message(second_handles[0], 0x0010, 0, 0):
+            raise AssertionError("second native WM_CLOSE dispatch failed")
+
+        deadline = time.monotonic() + 20
+        while time.monotonic() < deadline:
+            response = exchange(process, f"observe_close|{SESSION}")
+            if response != f"close_observed|{SESSION}|false":
+                raise AssertionError(
+                    "selective window close was mistaken for browser-wide Quit: "
+                    f"{response[:120]!r}"
+                )
+            if not matching_windows(second_title):
+                break
+            time.sleep(0.2)
+        else:
+            raise AssertionError("second native window did not close normally")
+        if matching_windows(title) != handles or process.poll() is not None:
+            raise AssertionError("first native Firefox writer was lost after selective close")
+
+        # Only closing the LAST window may become a clean whole-browser
+        # witness. Forced death, early callback, or a surviving window cannot.
+        if not post_message(handles[0], 0x0010, 0, 0):
+            raise AssertionError("last native WM_CLOSE dispatch failed")
         deadline = time.monotonic() + 20
         while time.monotonic() < deadline:
             response = exchange(process, f"observe_close|{SESSION}")
@@ -785,7 +850,7 @@ def prove_external_windows_gui_close(
                 raise AssertionError(f"unexpected GUI-close IPC result: {response[:120]!r}")
             time.sleep(0.2)
         if not normal_close_proved:
-            raise AssertionError("external WM_CLOSE did not produce positive callback witness")
+            raise AssertionError("last native WM_CLOSE did not produce positive callback witness")
         if exchange(process, f"close|{SESSION}") != f"closed|{SESSION}|true":
             raise AssertionError("controlled close did not release the real browser writer")
         if process.wait(timeout=90) != 0:

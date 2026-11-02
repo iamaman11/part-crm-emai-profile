@@ -518,7 +518,313 @@ def prove_claim_denial_and_windows_owner_preflight() -> None:
             agent.close()
 
 
+def prove_receipt_failure_diagnostics() -> None:
+    """A consumed job must remain UNKNOWN on receipt I/O, decode, parse or shape failure."""
+    import contextlib
+    import io
+
+    runtime = runtime_module()
+    cli_spec = importlib.util.spec_from_file_location(
+        "owned_receipt_cli", ROOT / "scripts" / "camouhost-agent.py"
+    )
+    assert cli_spec and cli_spec.loader
+    cli = importlib.util.module_from_spec(cli_spec)
+    cli_spec.loader.exec_module(cli)
+
+    with tempfile.TemporaryDirectory(prefix="owned-agent-receipt-") as temp:
+        base = Path(temp).resolve()
+        agent = runtime.LocalPlaywrightAgent(str(base), "session_receipt")
+        source = base / "receipt-probe.py"
+        source.write_text("result = 'execute-only-once'\n", encoding="utf-8")
+        args = [
+            "camouhost-agent", "--directory", str(base),
+            "--pid", str(os.getpid()), "--script", str(source), "--timeout", "1",
+        ]
+        read_text = Path.read_text
+        cases = [
+            ("receipt_read", b'{"status":"ok"}', True),
+            ("receipt_decode", b"\xff\xfe", False),
+            ("receipt_parse", b'{"status":', False),
+            ("receipt_shape", b'[]', False),
+        ]
+        try:
+            for phase, raw_receipt, deny_read in cases:
+                job_id = secrets.token_hex(16)
+                receipt = agent.results / f"{job_id}.json"
+                receipt.write_bytes(raw_receipt)
+
+                def read_with_optional_denial(path: Path, *a: object, **kw: object) -> str:
+                    if deny_read and path == receipt:
+                        raise PermissionError(13, "receipt temporarily unreadable")
+                    return read_text(path, *a, **kw)
+
+                errors = io.StringIO()
+                output = io.StringIO()
+                with patch.object(cli.secrets, "token_hex", return_value=job_id), \
+                        patch.object(Path, "read_text", read_with_optional_denial), \
+                        patch.object(sys, "argv", args), \
+                        contextlib.redirect_stderr(errors), \
+                        contextlib.redirect_stdout(output):
+                    exit_code = cli.run()
+                assert exit_code == 125, (phase, exit_code, errors.getvalue())
+                assert f"phase={phase}" in errors.getvalue(), errors.getvalue()
+                assert f"job={job_id}" in errors.getvalue(), errors.getvalue()
+                if deny_read:
+                    assert "errno=13" in errors.getvalue(), errors.getvalue()
+                assert receipt.read_bytes() == raw_receipt, "original receipt lost"
+                assert (agent.requests / f"{job_id}.py").exists(), "request replayed or erased"
+                assert not (agent.requests / f"{job_id}.running").exists(), "job was executed"
+        finally:
+            agent.close()
+
+
+def prove_pid_reuse_fails_closed() -> None:
+    """D03: a live foreign process with recycled PID is not the original owner."""
+    import contextlib
+    import io
+
+    runtime = runtime_module()
+    spec = importlib.util.spec_from_file_location(
+        "owned_pid_reuse_cli", ROOT / "scripts" / "camouhost-agent.py"
+    )
+    assert spec and spec.loader
+    cli = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(cli)
+    with tempfile.TemporaryDirectory(prefix="owned-agent-pid-reuse-") as temp:
+        base = Path(temp).resolve()
+        agent = runtime.LocalPlaywrightAgent(str(base), "session_pid_reuse")
+        script = base / "probe.py"
+        script.write_text("result = 'must-not-run'\n", encoding="utf-8")
+        args = [
+            "camouhost-agent", "--directory", str(base), "--pid", str(os.getpid()),
+            "--script", str(script), "--timeout", "0.1",
+        ]
+        try:
+            original = cli.process_instance(os.getpid())
+            descriptor = json.loads(agent.descriptor.read_text(encoding="utf-8"))
+            assert descriptor["process"] == original
+            assert [x["pid"] for x in cli.sessions(base)] == [os.getpid()]
+            foreign = dict(original, image="C:\\reused\\chrome.exe")
+            assert foreign != original
+            with patch.object(cli, "process_instance", return_value=foreign):
+                assert cli.sessions(base) == [], "reused PID advertised as an owner"
+            assert agent.descriptor.is_file(), "stale evidence deleted"
+
+            # OS identity changes after discovery but before the CLI creates a job.
+            with patch.object(cli, "process_instance", side_effect=[original, foreign]), \
+                    patch.object(sys, "argv", args), \
+                    contextlib.redirect_stderr(io.StringIO()) as error_out:
+                assert cli.run() == 126
+                assert "PROCESS_INSTANCE_MISMATCH" in error_out.getvalue()
+            assert not list(agent.requests.iterdir()), "stale owner received a job"
+
+            # The instance changes after durable staging, immediately before rename.
+            # Keep the staged bytes for diagnosis; never publish the submitted script.
+            with patch.object(cli, "process_instance", side_effect=[original, original, foreign]), \
+                    patch.object(sys, "argv", args), \
+                    contextlib.redirect_stderr(io.StringIO()) as error_out:
+                assert cli.run() == 126
+                assert "phase=request_publish" in error_out.getvalue()
+            assert not list(agent.requests.glob("*.py"))
+            assert list(agent.requests.glob("*.part")), "staged evidence was removed"
+            assert not agent.run_one(Context()), "stale process received Playwright work"
+        finally:
+            agent.close()
+
+
+def prove_close_failure_witness_preserves_order() -> None:
+    """F02: original typed OS failure and callback chronology survive redacted reporting."""
+    import contextlib
+    import io
+
+    runtime = runtime_module()
+    class EventPage:
+        def __init__(self) -> None:
+            self.handlers: dict[str, object] = {}
+        def on(self, name: str, callback: object) -> None:
+            self.handlers[name] = callback
+
+    class EventContext:
+        def __init__(self, page: EventPage) -> None:
+            self.pages = [page]
+            self.handlers: dict[str, object] = {}
+        def on(self, name: str, callback: object) -> None:
+            self.handlers[name] = callback
+
+    class SyntheticWindowsFailure(OSError):
+        winerror = 32
+
+    page = EventPage()
+    state = runtime.install_controlled_close_observation(EventContext(page))
+    assert state["callback_events"] == ["page"]
+    page.handlers["close"](None)
+    assert state["callback_events"] == ["page", "close"]
+
+    problem = SyntheticWindowsFailure(13, "private profile path must not appear in diagnostics")
+    captured = io.StringIO()
+    with contextlib.redirect_stderr(captured):
+        runtime.report_close_observation_detail(state, problem)
+    raw = captured.getvalue()
+    lines = raw.splitlines()
+    assert len(lines) == 2, lines
+    assert lines[0].startswith("camouhost_close_observation_detail ")
+    assert lines[1].startswith("camouhost_close_witness ")
+    report = json.loads(lines[0].split(" ", 1)[1])
+    assert "exception=SyntheticWindowsFailure" in lines[1]
+    assert "errno=13 winerror=32" in lines[1]
+    assert "events=page,close" in lines[1]
+    assert report["exception_type"] == "SyntheticWindowsFailure"
+    assert report["errno"] == 13 and report["winerror"] == 32
+    assert report["tracked"] == 1 and report["closed"] == 1
+    assert report["callback_events"] == ["page", "close"]
+    assert report["callback_event_count"] == 2
+    assert "private profile path" not in raw
+    for _ in range(100):
+        runtime.record_close_callback(state, "page")
+    assert len(state["callback_events"]) == 64, "unbounded callback diagnostic"
+    assert state["callback_event_count"] == 102
+    assert state["callback_events"] == ["page"] * 64
+
+    page.handlers["crash"](None)
+    assert state["callback_events"][-1] == "crash"
+    assert state["callback_event_count"] == 103
+    assert not runtime.controlled_close_candidate(state), "crash became successful closure"
+
+
+def prove_wm_close_exit_timing_requires_native_success() -> None:
+    """F02: a close-event/Windows zero-exit race must not masquerade as a crash.
+
+    Negative controls preserve the original error when the process did not
+    cleanly exit, a close callback is missing, or a crash event was observed.
+    """
+    runtime = runtime_module()
+
+    class TargetClosedError(RuntimeError):
+        pass
+
+    class EventContext:
+        def __init__(self, error: Exception) -> None:
+            self.error = error
+
+        def wait_for_event(self, event: str, timeout: int) -> None:
+            assert event == "page" and timeout == 100
+            raise self.error
+
+    class NativeExit:
+        def __init__(self, eventually_zero: bool) -> None:
+            self.eventually_zero = eventually_zero
+            self.exited = False
+            self.waits: list[int] = []
+
+        def safely_exited(self, wait_millis: int = 0) -> bool:
+            self.waits.append(wait_millis)
+            assert 0 <= wait_millis <= 250, "unbounded wait would hide a hung browser"
+            if wait_millis == 250 and self.eventually_zero:
+                self.exited = True
+            return self.exited
+
+    def state(witness: NativeExit, *, closed: bool = True, crashed: bool = False) -> dict:
+        return {
+            "tracked_pages": {1},
+            "closed_pages": {1} if closed else set(),
+            "crashed": crashed,
+            "browser_exit": witness,
+        }
+
+    # All page callbacks observed, native Windows root exits normally just
+    # after the Playwright API reports TargetClosedError.
+    clean = NativeExit(True)
+    observed = runtime.observe_controlled_close(
+        EventContext(TargetClosedError("browser target closed")), state(clean)
+    )
+    assert observed is True
+    assert clean.waits == [250, 0], clean.waits
+
+    # A nonzero/unknown native process status can NEVER be counted as Saved.
+    failed = NativeExit(False)
+    try:
+        runtime.observe_controlled_close(
+            EventContext(TargetClosedError("unverified process death")), state(failed)
+        )
+    except TargetClosedError:
+        pass
+    else:
+        raise AssertionError("unverified process exit was accepted as normal close")
+    assert failed.waits == [250], failed.waits
+
+    # No normal callback means no native wait and no positive close, even if
+    # a process could exit with status zero.
+    incomplete = NativeExit(True)
+    try:
+        runtime.observe_controlled_close(
+            EventContext(TargetClosedError("no page close callback")),
+            state(incomplete, closed=False),
+        )
+    except TargetClosedError:
+        pass
+    else:
+        raise AssertionError("missing page-close callback was accepted")
+    assert not incomplete.waits
+
+    crashed = NativeExit(True)
+    try:
+        runtime.observe_controlled_close(
+            EventContext(TargetClosedError("crashed page")),
+            state(crashed, crashed=True),
+        )
+    except TargetClosedError:
+        pass
+    else:
+        raise AssertionError("crashed page was accepted as clean")
+    assert not crashed.waits
+
+    pending = NativeExit(False)
+    assert runtime.observe_controlled_close(
+        EventContext(TimeoutError("no new page")), state(pending, closed=False)
+    ) is False
+    assert not pending.waits, "ordinary pending close should never wait on process"
+
+
+def prove_owned_job_execution_witness() -> None:
+    """D02: mark only a live owner-thread job, never a saved browser or stale job."""
+    runtime = runtime_module()
+    with tempfile.TemporaryDirectory(prefix="owned-agent-busy-witness-") as temp:
+        agent = runtime.LocalPlaywrightAgent(str(Path(temp).resolve()), "session_job_witness")
+        fake = Context()
+        marker = agent.run / "agent-executing"
+        try:
+            assert not marker.exists()
+            request = committed_request(
+                agent.requests, "result = {'pages': len(context.pages)}\n"
+            )
+            with agent.executing_witness():
+                assert marker.is_file()
+                assert agent.run_one(fake)
+                assert marker.is_file()
+            assert not marker.exists(), "finished job remains falsely busy"
+            assert json.loads((agent.results / f"{request}.json").read_text(encoding="utf-8")) == {
+                "status": "ok", "result": {"pages": 1},
+            }
+            assert not agent.run_one(fake), "completed job executed again"
+            try:
+                with agent.executing_witness():
+                    assert marker.is_file()
+                    raise OSError(13, "simulated owner-thread I/O failure")
+            except OSError:
+                pass
+            else:
+                raise AssertionError("failure silently accepted")
+            assert not marker.exists(), "failed job left a permanently busy marker"
+        finally:
+            agent.close()
+
+
 def main() -> int:
+    prove_receipt_failure_diagnostics()
+    prove_close_failure_witness_preserves_order()
+    prove_wm_close_exit_timing_requires_native_success()
+    prove_owned_job_execution_witness()
+    prove_pid_reuse_fails_closed()
     prove_agent()
     prove_claim_denial_and_windows_owner_preflight()
     prove_owner_thread_polling()

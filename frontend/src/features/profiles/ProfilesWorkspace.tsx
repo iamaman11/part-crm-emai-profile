@@ -1,7 +1,7 @@
 import { openBrowserProfile } from './api';
 import { newIdempotencyKey } from '../../shared/api/idempotency';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
-import { useEffect, useState, type FormEvent } from 'react';
+import { useEffect, useRef, useState, type FormEvent } from 'react';
 import { useTenant } from '../../app/TenantContext';
 import {
   changeGenerationActivation,
@@ -24,6 +24,14 @@ function field(data: FormData, name: string): string {
   return String(data.get(name) ?? '').trim();
 }
 
+type ProfileSelection = { tenantId: string; profileId: string };
+type GenerationActionTarget = ProfileSelection & { generationId: string };
+type GenerationActionCommand = (
+  | { kind: 'verify'; expectedVersion: number; reference: string }
+  | { kind: 'activate' | 'deactivate'; expectedVersion: number }
+  | { kind: 'quarantine'; expectedVersion: number }
+) & { target: GenerationActionTarget };
+
 interface GrantDraft {
   actorId: string;
   role: 'PROFILE_VIEWER' | 'PROFILE_OPERATOR';
@@ -45,11 +53,19 @@ export function ProfilesWorkspace({
   const [generationId, setGenerationId] = useState('');
   const [generation, setGeneration] = useState<GenerationProjection | null>(null);
   const [coordinator, setCoordinator] = useState<CoordinatorResponse | null>(null);
+  const [generationRefreshUnconfirmed, setGenerationRefreshUnconfirmed] = useState(false);
+  const selected = useRef({ tenantId, profileId, generationId });
+  selected.current = { tenantId, profileId, generationId };
 
   const launch = useMutation({ mutationFn: () => openBrowserProfile(tenantId, profileId, newIdempotencyKey()) });
   const lookup = useMutation({
-    mutationFn: (id: string) => getProfile(tenantId, id),
-    onSuccess: (data) => setProfile(data ?? null),
+    mutationFn: (target: ProfileSelection) => getProfile(target.tenantId, target.profileId),
+    onSuccess: (data, target) => {
+      // Late readback for the previous profile/tenant must never replace the
+      // newly selected profile, even if the previous request succeeded.
+      if (selected.current.tenantId === target.tenantId
+        && selected.current.profileId === target.profileId) setProfile(data ?? null);
+    },
   });
   const create = useLogicalCommandMutation((id: string, idempotencyKey) => createProfile(tenantId, id, idempotencyKey), {
     onSuccess: (receipt) => {
@@ -66,30 +82,65 @@ export function ProfilesWorkspace({
       input.revoke,
     ), {});
   const generationLookup = useMutation({
-    mutationFn: (id: string) => getGeneration(tenantId, profileId, id),
-    onSuccess: (data) => setGeneration(data ?? null),
+    mutationFn: (target: GenerationActionTarget) =>
+      getGeneration(target.tenantId, target.profileId, target.generationId),
+    onSuccess: (data, target) => {
+      // A stale generation from another selection can never authorize actions.
+      if (selected.current.tenantId === target.tenantId
+        && selected.current.profileId === target.profileId
+        && selected.current.generationId === target.generationId) setGeneration(data ?? null);
+    },
   });
   const generationRegister = useLogicalCommandMutation((input: { generationId: string; objectKey: string; metadataDigest: string; containerDigest: string }, idempotencyKey) =>
     registerGeneration(tenantId, profileId, input, idempotencyKey));
-  const generationAction = useLogicalCommandMutation((input:
-      | { kind: 'verify'; expectedVersion: number; reference: string }
-      | { kind: 'activate' | 'deactivate'; expectedVersion: number }
-      | { kind: 'quarantine'; expectedVersion: number }, idempotencyKey) => {
+  async function refreshGenerationProjection(
+    requested: GenerationActionTarget = { tenantId, profileId, generationId },
+  ): Promise<void> {
+    // Refresh is read-only and does not repeat the successful generation action.
+    // Use the invocation target for successful mutations: a later selection
+    // must never inherit a previous profile's mutation receipt.
+    const [profileResult, generationResult, directoryResult] = await Promise.allSettled([
+      getProfile(requested.tenantId, requested.profileId),
+      getGeneration(requested.tenantId, requested.profileId, requested.generationId),
+      cache.invalidateQueries({ queryKey: ['operator-query', requested.tenantId, 'profiles'] }),
+    ]);
+    if (selected.current.tenantId !== requested.tenantId
+      || selected.current.profileId !== requested.profileId
+      || selected.current.generationId !== requested.generationId) return;
+    if (profileResult.status === 'fulfilled' && generationResult.status === 'fulfilled'
+      && directoryResult.status === 'fulfilled') {
+      setProfile(profileResult.value ?? null);
+      setGeneration(generationResult.value ?? null);
+      setGenerationRefreshUnconfirmed(false);
+    } else {
+      // Fail closed: a stale READY snapshot cannot authorize another Open.
+      setGenerationRefreshUnconfirmed(true);
+    }
+  }
+
+  const generationAction = useLogicalCommandMutation((input: GenerationActionCommand, idempotencyKey) => {
+      const { tenantId: commandTenant, profileId: commandProfile, generationId: commandGeneration } = input.target;
       if (input.kind === 'verify') {
-        return verifyGeneration(tenantId, profileId, generationId, {
+        return verifyGeneration(commandTenant, commandProfile, commandGeneration, {
           expectedGenerationVersion: input.expectedVersion,
           verificationReference: input.reference,
         }, idempotencyKey);
       }
       if (input.kind === 'quarantine') {
-        return quarantineGeneration(tenantId, profileId, generationId, input.expectedVersion, idempotencyKey);
+        return quarantineGeneration(commandTenant, commandProfile, commandGeneration, input.expectedVersion, idempotencyKey);
       }
-      return changeGenerationActivation(tenantId, profileId, generationId, input.expectedVersion, input.kind === 'activate', idempotencyKey);
+      return changeGenerationActivation(commandTenant, commandProfile, commandGeneration, input.expectedVersion, input.kind === 'activate', idempotencyKey);
+    }, {
+      onSuccess: (_receipt, input) => refreshGenerationProjection(input.target),
     },
   );
   const coordinatorLookup = useMutation({
-    mutationFn: () => getCoordinator(tenantId, profileId),
-    onSuccess: (data) => setCoordinator(data ?? null),
+    mutationFn: (target: ProfileSelection) => getCoordinator(target.tenantId, target.profileId),
+    onSuccess: (data, target) => {
+      // Never show a stale owner/lease projection for the newly selected profile.
+      if (selected.current.tenantId === target.tenantId
+        && selected.current.profileId === target.profileId) setCoordinator(data ?? null);
+    },
   });
   const coordinatorCommand = useLogicalCommandMutation((command: import('./api').CoordinatorCommandDto, idempotencyKey) => {
       if (!coordinator) throw new Error('Load the coordinator snapshot before issuing a command.');
@@ -110,17 +161,24 @@ export function ProfilesWorkspace({
     setGenerationId('');
     setGeneration(null);
     setCoordinator(null);
-    if (tenantId && nextProfileId) lookup.mutate(nextProfileId);
+    setGenerationRefreshUnconfirmed(false);
+    if (tenantId && nextProfileId) lookup.mutate({ tenantId, profileId: nextProfileId });
   }, [tenantId, selectedProfileId]);
 
   useEffect(() => {
-    const refresh = () => { if (tenantId && selectedProfileId) lookup.mutate(selectedProfileId); };
+    const refresh = () => {
+      if (tenantId && selectedProfileId) lookup.mutate({ tenantId, profileId: selectedProfileId });
+    };
     globalThis.addEventListener('focus', refresh);
     return () => globalThis.removeEventListener('focus', refresh);
   }, [tenantId, selectedProfileId]);
 
   const enabled = tenantId.length > 0;
   const profileLoaded = enabled && profileId.length > 0 && profile !== null;
+  const actionTarget = generationAction.variables?.input.target;
+  const actionBelongsToSelection = actionTarget?.tenantId === tenantId
+    && actionTarget.profileId === profileId
+    && actionTarget.generationId === generationId;
 
   return (
     <div className="workspace-grid">
@@ -145,7 +203,7 @@ export function ProfilesWorkspace({
           <p>The selected profile is not visible to the active actor.</p>
         )}
         {profile && <>
-          <button type="button" disabled={launch.isPending || !['DRAFT', 'READY'].includes(profile.status)} onClick={() => launch.mutate()}>{launch.isPending ? 'Opening…' : 'Open browser'}</button>
+          <button type="button" disabled={launch.isPending || generationAction.isPending || generationRefreshUnconfirmed || !['DRAFT', 'READY'].includes(profile.status)} onClick={() => launch.mutate()}>{launch.isPending ? 'Opening…' : 'Open browser'}</button>
           <StatusMessage state={launch.error ?? (launch.isPending ? 'Preparing and opening your profile…' : null)} />
         </>}
         {profile && (
@@ -210,7 +268,7 @@ export function ProfilesWorkspace({
             const id = field(new FormData(event.currentTarget), 'generationId');
             setGenerationId(id);
             setGeneration(null);
-            generationLookup.mutate(id);
+            generationLookup.mutate({ tenantId, profileId, generationId: id });
           }}>
             <label>Generation ID<input name="generationId" placeholder="generation_..." required disabled={!profileLoaded} /></label>
             <button type="submit" disabled={!profileLoaded || generationLookup.isPending}>Lookup generation</button>
@@ -235,14 +293,20 @@ export function ProfilesWorkspace({
           </form>
         </div>
         <StatusMessage state={generationLookup.error ?? generationRegister.error ?? (generationRegister.data ? `${generationRegister.data.resultCode}: ${generationRegister.data.resourceId}` : null)} />
-        {generation && <GenerationActions generation={generation} profileVersion={profile?.version ?? 1} busy={generationAction.isPending} onAction={(input) => generationAction.mutate(input)} onHighImpact={(input) => generationAction.mutateAsync(input).then(() => undefined)} />}
-        <StatusMessage state={generationAction.error ?? (generationAction.data ? `${generationAction.data.resultCode}: ${generationAction.data.resourceId}` : null)} />
+        {generation && <GenerationActions generation={generation} profileVersion={profile?.version ?? 1} busy={generationAction.isPending} onAction={(input) => generationAction.mutate({ ...input, target: { tenantId, profileId, generationId } })} onHighImpact={(input) => generationAction.mutateAsync({ ...input, target: { tenantId, profileId, generationId } }).then(() => undefined)} />}
+        <StatusMessage state={actionBelongsToSelection
+          ? (generationAction.error ?? (generationAction.data ? `${generationAction.data.resultCode}: ${generationAction.data.resourceId}` : null))
+          : null} />
+        {generationRefreshUnconfirmed && <div role="alert">
+          The action completed, but the latest profile status could not be confirmed. Do not repeat the action.
+          <button type="button" onClick={() => { void refreshGenerationProjection(); }}>Refresh current status</button>
+        </div>}
       </section>
 
       <section className="panel full-span">
         <span className="eyebrow">Durable Object lease projection</span>
         <h2>Profile coordinator</h2>
-        <button type="button" disabled={!profileLoaded || coordinatorLookup.isPending} onClick={() => coordinatorLookup.mutate()}>Load coordinator snapshot</button>
+        <button type="button" disabled={!profileLoaded || coordinatorLookup.isPending} onClick={() => coordinatorLookup.mutate({ tenantId, profileId })}>Load coordinator snapshot</button>
         <StatusMessage state={coordinatorLookup.error ?? coordinatorCommand.error ?? (coordinatorLookup.isPending ? 'Loading coordinator…' : null)} />
         {coordinator && (
           <>
