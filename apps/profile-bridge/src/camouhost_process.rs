@@ -999,7 +999,9 @@ fn safe_close_observation_witness(message: &str) -> bool {
     };
     events == "none"
         || (events.split(',').count() <= 8
-            && events.split(',').all(|event| matches!(event, "page" | "close" | "crash")))
+            && events
+                .split(',')
+                .all(|event| matches!(event, "page" | "close" | "crash")))
 }
 
 fn allowlisted_camouhost_diagnostic(line: &[u8]) -> Option<&str> {
@@ -1046,7 +1048,8 @@ fn allowlisted_camouhost_diagnostic(line: &[u8]) -> Option<&str> {
         .strip_prefix("camouhost_pages count=")
         .and_then(|count| count.parse::<u16>().ok())
         .is_some_and(|count| count <= 512);
-    if allowed_failure || allowed_stage || allowed_pages || safe_close_observation_witness(message) {
+    if allowed_failure || allowed_stage || allowed_pages || safe_close_observation_witness(message)
+    {
         return Some(message);
     }
     None
@@ -1430,7 +1433,9 @@ mod tests {
         let now = std::time::Instant::now();
         let standard = Duration::from_secs(5);
         assert!(super::close_observation_expired(
-            now - Duration::from_secs(6), None, standard,
+            now - Duration::from_secs(6),
+            None,
+            standard,
         ));
         assert!(!super::close_observation_expired(
             now - Duration::from_secs(12),
@@ -1442,11 +1447,14 @@ mod tests {
             Some(now - Duration::from_secs(6)),
             standard,
         ));
-        assert!(super::close_observation_expired(
-            now - super::MAX_AGENT_CLOSE_OBSERVATION_WAIT - Duration::from_secs(1),
-            Some(now),
-            standard,
-        ), "a hung diagnostic job cannot hide an IPC failure indefinitely");
+        assert!(
+            super::close_observation_expired(
+                now - super::MAX_AGENT_CLOSE_OBSERVATION_WAIT - Duration::from_secs(1),
+                Some(now),
+                standard,
+            ),
+            "a hung diagnostic job cannot hide an IPC failure indefinitely"
+        );
     }
 
     #[test]
@@ -1468,16 +1476,29 @@ mod tests {
             }))?,
         )?;
         let marker = run.join("agent-executing");
-        assert!(!super::owned_agent_execution_marker(&directory, 4123, &session));
+        assert!(!super::owned_agent_execution_marker(
+            &directory, 4123, &session
+        ));
         fs::write(&marker, b"active read-only test")?;
-        assert!(super::owned_agent_execution_marker(&directory, 4123, &session));
-        assert!(!super::owned_agent_execution_marker(&directory, 4124, &session));
+        assert!(super::owned_agent_execution_marker(
+            &directory, 4123, &session
+        ));
+        assert!(!super::owned_agent_execution_marker(
+            &directory, 4124, &session
+        ));
         let foreign = SessionId::parse("session_01JD02FOREIGN")?;
-        assert!(!super::owned_agent_execution_marker(&directory, 4123, &foreign));
+        assert!(!super::owned_agent_execution_marker(
+            &directory, 4123, &foreign
+        ));
         // A stale descriptor for a different run cannot make our current
         // process look busy, even if it contains a plausible PID.
-        fs::write(&descriptor, br#"{"pid":4123,"session":"session_01JD02OWNEDAGENT","run":"foreign"}"#)?;
-        assert!(!super::owned_agent_execution_marker(&directory, 4123, &session));
+        fs::write(
+            &descriptor,
+            br#"{"pid":4123,"session":"session_01JD02OWNEDAGENT","run":"foreign"}"#,
+        )?;
+        assert!(!super::owned_agent_execution_marker(
+            &directory, 4123, &session
+        ));
         fs::remove_dir_all(root)?;
         Ok(())
     }
@@ -1673,7 +1694,9 @@ mod tests {
         let accepted = b"camouhost_close_witness exception=OSError line=1247 errno=13 winerror=32 tracked=1 closed=1 crashed=0 count=3 events=page,close,close\r\n";
         assert_eq!(
             allowlisted_camouhost_diagnostic(accepted),
-            Some("camouhost_close_witness exception=OSError line=1247 errno=13 winerror=32 tracked=1 closed=1 crashed=0 count=3 events=page,close,close")
+            Some(
+                "camouhost_close_witness exception=OSError line=1247 errno=13 winerror=32 tracked=1 closed=1 crashed=0 count=3 events=page,close,close"
+            )
         );
         for rejected in [
             b"camouhost_close_witness exception=OSError line=1247 errno=13 winerror=32 tracked=1 closed=1 crashed=0 count=3 events=page,private\n".as_slice(),

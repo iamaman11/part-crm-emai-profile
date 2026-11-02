@@ -72,8 +72,8 @@ fn parse_contact_protection_keyring_with_metadata(
     serialized: String,
 ) -> Result<(ContactProtectionKeyring, ContactKeyLifecycleMetadata), ContactKeyringConfigError> {
     let serialized = Zeroizing::new(serialized);
-    let keyring: ContactProtectionKeyringSecret =
-        serde_json::from_str(serialized.as_str()).map_err(|_| ContactKeyringConfigError::InvalidShape)?;
+    let keyring: ContactProtectionKeyringSecret = serde_json::from_str(serialized.as_str())
+        .map_err(|_| ContactKeyringConfigError::InvalidShape)?;
     let active_encryption_version = EncryptionKeyVersion::new(keyring.active_encryption_version)
         .map_err(|_| ContactKeyringConfigError::InvalidVersion)?;
     let active_lookup_version = LookupKeyVersion::new(keyring.active_lookup_version)
@@ -83,7 +83,8 @@ fn parse_contact_protection_keyring_with_metadata(
         .iter()
         .map(|entry| {
             Ok(ContactEncryptionRootKey::new(
-                EncryptionKeyVersion::new(entry.version).map_err(|_| ContactKeyringConfigError::InvalidVersion)?,
+                EncryptionKeyVersion::new(entry.version)
+                    .map_err(|_| ContactKeyringConfigError::InvalidVersion)?,
                 decode_key_hex(&entry.key_hex)?,
             ))
         })
@@ -93,7 +94,8 @@ fn parse_contact_protection_keyring_with_metadata(
         .iter()
         .map(|entry| {
             Ok(ContactLookupRootKey::new(
-                LookupKeyVersion::new(entry.version).map_err(|_| ContactKeyringConfigError::InvalidVersion)?,
+                LookupKeyVersion::new(entry.version)
+                    .map_err(|_| ContactKeyringConfigError::InvalidVersion)?,
                 decode_key_hex(&entry.key_hex)?,
             ))
         })
@@ -183,7 +185,8 @@ fn decode_key_hex(value: &str) -> Result<[u8; 32], ContactKeyringConfigError> {
     let mut decoded = Zeroizing::new([0_u8; 32]);
     for (index, byte) in decoded.iter_mut().enumerate() {
         let high = hex_nibble(bytes[index * 2]).ok_or(ContactKeyringConfigError::InvalidKeyHex)?;
-        let low = hex_nibble(bytes[index * 2 + 1]).ok_or(ContactKeyringConfigError::InvalidKeyHex)?;
+        let low =
+            hex_nibble(bytes[index * 2 + 1]).ok_or(ContactKeyringConfigError::InvalidKeyHex)?;
         *byte = (high << 4) | low;
     }
     Ok(*decoded)
@@ -284,8 +287,15 @@ mod tests {
             ContactKeyringConfigError::InvalidLifecycle,
             ContactKeyringConfigError::InvalidKeySet,
         ] {
-            assert!(code.code().bytes().all(|byte| byte.is_ascii_lowercase() || byte == b'_'));
-            assert!(!code.code().contains(&key), "key material leaked in status category");
+            assert!(
+                code.code()
+                    .bytes()
+                    .all(|byte| byte.is_ascii_lowercase() || byte == b'_')
+            );
+            assert!(
+                !code.code().contains(&key),
+                "key material leaked in status category"
+            );
         }
     }
 

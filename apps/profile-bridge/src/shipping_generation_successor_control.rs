@@ -122,7 +122,9 @@ impl RestartExactLocalCompletionError {
 }
 
 #[cfg(any(windows, test))]
-fn first_seal_recovery_failure(error: SaveAttemptEvidenceError) -> RestartExactLocalCompletionError {
+fn first_seal_recovery_failure(
+    error: SaveAttemptEvidenceError,
+) -> RestartExactLocalCompletionError {
     match error {
         SaveAttemptEvidenceError::SnapshotTooLarge => {
             RestartExactLocalCompletionError::NativeSnapshotTooLarge
@@ -1512,9 +1514,15 @@ mod tests {
         for (source, expected) in [
             (Evidence::SnapshotTooLarge, Failure::NativeSnapshotTooLarge),
             (Evidence::SealingTransport, Failure::PreSealTransport),
-            (Evidence::SealingResponseUncertain, Failure::PreSealResponseUncertain),
+            (
+                Evidence::SealingResponseUncertain,
+                Failure::PreSealResponseUncertain,
+            ),
             (Evidence::SealingRejected, Failure::PreSealRejected),
-            (Evidence::SealingMaterialUnavailable, Failure::PreSealUnavailable),
+            (
+                Evidence::SealingMaterialUnavailable,
+                Failure::PreSealUnavailable,
+            ),
             (Evidence::Changed, Failure::LocalEvidenceChanged),
         ] {
             assert_eq!(first_seal_recovery_failure(source), expected);

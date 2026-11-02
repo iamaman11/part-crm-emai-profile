@@ -4,7 +4,9 @@
 //! call PUT/commit after restart. Only the live retained owner can publish.
 //! Recovery must obtain a fresh authoritative, ACL/fencing-safe decision before
 //! using these exact bytes. Never remove an unknown record during cleanup.
-use crate::dirty_generation::{GenerationSealingMaterialPort, PreparedDirtyGeneration, SealingMaterialFailure};
+use crate::dirty_generation::{
+    GenerationSealingMaterialPort, PreparedDirtyGeneration, SealingMaterialFailure,
+};
 use crate::generation_object_spool::VerifiedGenerationObjectFile;
 use crate::generation_snapshot::{GenerationSnapshotError, WorkspaceSnapshotReader};
 use crate::local_profile::{GenerationWorkspace, MaterializationRoot};
@@ -56,10 +58,18 @@ impl std::fmt::Display for SaveAttemptEvidenceError {
             Self::Io(kind) => write!(formatter, "save-attempt local I/O failure: {kind:?}"),
             Self::Invalid => formatter.write_str("save-attempt evidence is invalid"),
             Self::Changed => formatter.write_str("save-attempt workspace or bytes changed"),
-            Self::SnapshotTooLarge => formatter.write_str("native Firefox snapshot exceeds 512 MiB limit"),
-            Self::SealingMaterialUnavailable => formatter.write_str("generation sealing material unavailable"),
-            Self::SealingTransport => formatter.write_str("generation sealing service transport unavailable"),
-            Self::SealingResponseUncertain => formatter.write_str("generation sealing service response uncertain"),
+            Self::SnapshotTooLarge => {
+                formatter.write_str("native Firefox snapshot exceeds 512 MiB limit")
+            }
+            Self::SealingMaterialUnavailable => {
+                formatter.write_str("generation sealing material unavailable")
+            }
+            Self::SealingTransport => {
+                formatter.write_str("generation sealing service transport unavailable")
+            }
+            Self::SealingResponseUncertain => {
+                formatter.write_str("generation sealing service response uncertain")
+            }
             Self::SealingRejected => formatter.write_str("generation sealing request rejected"),
             Self::Unavailable => formatter.write_str("save-attempt atomic staging unavailable"),
         }
@@ -1680,8 +1690,8 @@ fn persist_streaming_exact_save_attempt_from_native_with_origin<
     {
         return Err(SaveAttemptEvidenceError::Changed);
     }
-    let mut reader = WorkspaceSnapshotReader::new(candidate, &inventory)
-        .map_err(snapshot_preflight_reason)?;
+    let mut reader =
+        WorkspaceSnapshotReader::new(candidate, &inventory).map_err(snapshot_preflight_reason)?;
     let expected_bytes = reader.expected_bytes();
     let mut digest = Sha256::new();
     let mut buffer = [0_u8; 65_536];
@@ -1729,8 +1739,8 @@ fn persist_streaming_exact_save_attempt_from_native_with_origin<
     // The first pass is bound to the original DEK request. Neither a
     // changed key-owner source nor a subsequent same-size edit can change
     // the ciphertext silently: both sealing passes authenticate this digest.
-    let mut comparison = WorkspaceSnapshotReader::new(candidate, &inventory)
-        .map_err(snapshot_preflight_reason)?;
+    let mut comparison =
+        WorkspaceSnapshotReader::new(candidate, &inventory).map_err(snapshot_preflight_reason)?;
     let metadata = GenerationMetadata::for_prehashed_stream(
         GenerationIdentity::new(
             lease.tenant_id().clone(),
@@ -2225,7 +2235,9 @@ mod direct_native_checkpoint_tests {
         inspect_all_pending_for_s1, inspect_streaming_exact_save_attempt,
         persist_local_unsynced_intent, persist_streaming_exact_save_attempt_from_native,
     };
-    use crate::dirty_generation::{GenerationSealingMaterial, GenerationSealingMaterialPort, SealingMaterialFailure};
+    use crate::dirty_generation::{
+        GenerationSealingMaterial, GenerationSealingMaterialPort, SealingMaterialFailure,
+    };
     use crate::local_profile::{GenerationWorkspace, MaterializationRoot};
     use encrypted_generation_domain::{
         GenerationDek, KeyId, NoncePrefix, open_generation_streaming,
@@ -2297,19 +2309,29 @@ mod direct_native_checkpoint_tests {
         persist_local_unsynced_intent(&fixture.root, &source, &fixture.lease)?;
         let before = source.inventory()?;
         for (cause, expected) in [
-            (SealingMaterialFailure::Transport, SaveAttemptEvidenceError::SealingTransport),
+            (
+                SealingMaterialFailure::Transport,
+                SaveAttemptEvidenceError::SealingTransport,
+            ),
             (
                 SealingMaterialFailure::ServerUncertain,
                 SaveAttemptEvidenceError::SealingResponseUncertain,
             ),
-            (SealingMaterialFailure::Rejected, SaveAttemptEvidenceError::SealingRejected),
+            (
+                SealingMaterialFailure::Rejected,
+                SaveAttemptEvidenceError::SealingRejected,
+            ),
             (
                 SealingMaterialFailure::Unavailable,
                 SaveAttemptEvidenceError::SealingMaterialUnavailable,
             ),
         ] {
             let result = persist_streaming_exact_save_attempt_from_native(
-                &fixture.root, &source, &candidate, &fixture.lease, &mut OfflineKeys(cause),
+                &fixture.root,
+                &source,
+                &candidate,
+                &fixture.lease,
+                &mut OfflineKeys(cause),
             );
             assert_eq!(result, Err(expected));
         }
@@ -2318,7 +2340,15 @@ mod direct_native_checkpoint_tests {
         let pending = inspect_all_pending_for_s1(&fixture.root)?;
         assert_eq!(pending.lone_local_unsynced, 1);
         assert_eq!(pending.exact_checkpoints, 0);
-        assert!(!attempt_path(&fixture.root, &fixture.tenant, &fixture.profile, &fixture.next).exists());
+        assert!(
+            !attempt_path(
+                &fixture.root,
+                &fixture.tenant,
+                &fixture.profile,
+                &fixture.next
+            )
+            .exists()
+        );
         Ok(())
     }
 

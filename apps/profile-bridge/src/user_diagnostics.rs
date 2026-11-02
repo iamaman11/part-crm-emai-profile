@@ -622,6 +622,13 @@ impl UserDiagnostic {
                 | crate::operator_flow::GenerationSaveFailureReason::VerificationUnproven => {
                     "The cloud save outcome is not confirmed. Original local profile bytes and the exact save attempt must be retained. Restore connectivity and use the authorized recovery path; never start a new save or delete files to resolve an uncertain reply."
                 }
+                crate::operator_flow::GenerationSaveFailureReason::SealingTransport
+                | crate::operator_flow::GenerationSaveFailureReason::SealingResponseUncertain => {
+                    "The cloud sealing result is uncertain before a checkpoint could be created. The original LOCAL_UNSYNCED Firefox data must be preserved. Obtain fresh server authority before recovery; do not automatically repeat the sealing request or claim Saved."
+                }
+                crate::operator_flow::GenerationSaveFailureReason::SealingRejected => {
+                    "The server rejected this profile sealing request. This is not a network outage or successful save. Preserve LOCAL_UNSYNCED browser bytes and check current Profile Operations authority."
+                }
                 crate::operator_flow::GenerationSaveFailureReason::ControlRejected => {
                     "The server rejected this save request. Check Profile Operations for current access and session authority. This is not evidence of a network outage or cloud success. Keep the local profile and pending save bytes."
                 }

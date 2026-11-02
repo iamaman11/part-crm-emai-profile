@@ -1,4 +1,6 @@
-use crate::dirty_generation::{GenerationSealingMaterial, GenerationSealingMaterialPort, SealingMaterialFailure};
+use crate::dirty_generation::{
+    GenerationSealingMaterial, GenerationSealingMaterialPort, SealingMaterialFailure,
+};
 use crate::generation_reopen::{GenerationDownloadCapability, GenerationReopenControlPort};
 use crate::operator_flow::{EnrollmentFailureKind, EnrollmentPort, OperatorEnrollment};
 use application_ports::{ProfileCoordinatorPort, ProfileCoordinatorRuntimePort};
@@ -618,11 +620,14 @@ where
     fn classify_error(error: &Self::Error) -> SealingMaterialFailure {
         match error {
             ShippingControlPlaneError::Transport => SealingMaterialFailure::Transport,
-            ShippingControlPlaneError::HttpServerUncertain => SealingMaterialFailure::ServerUncertain,
+            ShippingControlPlaneError::HttpServerUncertain => {
+                SealingMaterialFailure::ServerUncertain
+            }
             ShippingControlPlaneError::HttpStatus
             | ShippingControlPlaneError::LaunchLeaseConflict => SealingMaterialFailure::Rejected,
-            ShippingControlPlaneError::InvalidResponse
-            | ShippingControlPlaneError::Clock => SealingMaterialFailure::Unavailable,
+            ShippingControlPlaneError::InvalidResponse | ShippingControlPlaneError::Clock => {
+                SealingMaterialFailure::Unavailable
+            }
         }
     }
 
@@ -1589,7 +1594,8 @@ mod tests {
         for status in [408, 429, 500, 502, 503] {
             assert!(matches!(
                 decode_sealing_material_response(MachineHttpResponse::new(
-                    status, b"secret-payload-to-zeroize".to_vec()
+                    status,
+                    b"secret-payload-to-zeroize".to_vec()
                 )),
                 Err(ShippingControlPlaneError::HttpServerUncertain)
             ));
