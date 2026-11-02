@@ -88,4 +88,48 @@ describe('ProfilesWorkspace generation refresh (#802 F06)', () => {
     expect(activation).toHaveBeenCalledTimes(3); // Read-only recovery, no duplicate command.
     expect(generationLookup).toHaveBeenCalledTimes(5);
   });
+  it('never applies an old generation mutation to a newly selected profile', async () => {
+    let finishOld: (value: Awaited<ReturnType<typeof changeGenerationActivation>>) => void = () => {
+      throw new Error('deferred command was not started');
+    };
+    const oldAction = new Promise<Awaited<ReturnType<typeof changeGenerationActivation>>>((resolve) => {
+      finishOld = resolve;
+    });
+    profileLookup.mockImplementation(async (_tenant, id) => ({
+      profileId: id, status: 'READY', version: 11, linkedClientId: null,
+    }) as Awaited<ReturnType<typeof getProfile>>);
+    generationLookup.mockResolvedValue({
+      generationId: 'generation_old', status: 'VERIFIED', version: 3,
+      verificationReference: null,
+    } as Awaited<ReturnType<typeof getGeneration>>);
+    activation.mockImplementation(() => oldAction);
+    const cache = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const provider = (id: string) => (
+      <QueryClientProvider client={cache}>
+        <TenantProvider loadTenantContexts={async () => ({
+          tenants: [{ tenantId: 'tenant_test', displayName: 'Test tenant', actorId: 'actor_test', role: 'TENANT_OWNER' }],
+        })}>
+          <ProfilesWorkspace selectedProfileId={id} onProfileSelected={() => undefined} />
+        </TenantProvider>
+      </QueryClientProvider>
+    );
+    const view = render(provider('profile_old'));
+    await screen.findByRole('button', { name: 'Open browser' });
+    fireEvent.click(screen.getByText('Administration and diagnostics'));
+    fireEvent.change(screen.getAllByLabelText('Generation ID')[0]!, { target: { value: 'generation_old' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Lookup generation' }));
+    await screen.findByRole('button', { name: 'deactivate generation' });
+    fireEvent.click(screen.getByRole('button', { name: 'deactivate generation' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Confirm deactivate generation' }));
+    await waitFor(() => expect(activation).toHaveBeenCalledTimes(1));
+
+    view.rerender(provider('profile_new'));
+    await screen.findByText('profile_new');
+    finishOld({ resultCode: 'SUCCEEDED', resourceId: 'profile_old' } as Awaited<ReturnType<typeof changeGenerationActivation>>);
+    await waitFor(() => expect((screen.getByRole('button', { name: 'Open browser' }) as HTMLButtonElement).disabled).toBe(false));
+    expect(screen.queryByText('profile_old')).toBeNull();
+    expect(activation).toHaveBeenCalledTimes(1);
+    expect(generationLookup).toHaveBeenCalledTimes(2); // Initial lookup + original readback, never new generation.
+  });
+
 });
