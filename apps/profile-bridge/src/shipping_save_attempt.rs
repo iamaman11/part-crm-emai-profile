@@ -2366,16 +2366,24 @@ mod direct_native_checkpoint_tests {
             SealingMaterialFailure::Transport,
             SealingMaterialFailure::ServerUncertain,
         ] {
-            assert!(persist_streaming_exact_save_attempt_from_native(
-                &fixture.root,
-                &source,
-                &candidate,
-                &fixture.lease,
-                &mut OfflineKeys(failure),
-            )
-            .is_err());
-            assert_eq!(inspect_all_pending_for_s1(&fixture.root)?.lone_local_unsynced, 1);
-            assert_eq!(inspect_all_pending_for_s1(&fixture.root)?.exact_checkpoints, 0);
+            assert!(
+                persist_streaming_exact_save_attempt_from_native(
+                    &fixture.root,
+                    &source,
+                    &candidate,
+                    &fixture.lease,
+                    &mut OfflineKeys(failure),
+                )
+                .is_err()
+            );
+            assert_eq!(
+                inspect_all_pending_for_s1(&fixture.root)?.lone_local_unsynced,
+                1
+            );
+            assert_eq!(
+                inspect_all_pending_for_s1(&fixture.root)?.exact_checkpoints,
+                0
+            );
         }
 
         // Once connectivity recovers, the unchanged local N+1 can be sealed
@@ -2416,7 +2424,10 @@ mod direct_native_checkpoint_tests {
             Err(SaveAttemptEvidenceError::Changed)
         );
         assert_eq!(keys.calls, 1);
-        assert_eq!(inspect_all_pending_for_s1(&fixture.root)?.exact_checkpoints, 1);
+        assert_eq!(
+            inspect_all_pending_for_s1(&fixture.root)?.exact_checkpoints,
+            1
+        );
         Ok(())
     }
 

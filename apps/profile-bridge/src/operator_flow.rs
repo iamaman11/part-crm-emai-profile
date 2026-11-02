@@ -384,7 +384,10 @@ impl GenerationSaveFailureReason {
     /// The actual PUT still requires the normal D1-positive exact decision.
     #[must_use]
     pub const fn allows_bounded_preseal_reconnect(self) -> bool {
-        matches!(self, Self::SealingTransport | Self::SealingResponseUncertain)
+        matches!(
+            self,
+            Self::SealingTransport | Self::SealingResponseUncertain
+        )
     }
 
     /// Stable, redacted user/support code, never a storage key or raw HTTP.
@@ -2533,10 +2536,7 @@ mod tests {
         // Only transport/ambiguous material lookup may repeat locally after
         // a successful current-session heartbeat. Explicit denial, invalid
         // local evidence and oversize must never enter that loop.
-        for reason in [
-            Reason::SealingTransport,
-            Reason::SealingResponseUncertain,
-        ] {
+        for reason in [Reason::SealingTransport, Reason::SealingResponseUncertain] {
             assert!(reason.allows_bounded_preseal_reconnect());
             assert!(!reason.allows_bounded_cloud_reconcile());
         }

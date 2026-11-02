@@ -1258,9 +1258,9 @@ mod windows {
                                     first_seal_pending = reason.allows_bounded_preseal_reconnect();
                                     continue;
                                 }
-                                Err(OperatorFlowError::Stage(OperatorFailureStage::GenerationSave))
-                                    if operator.has_pending_dirty_close() =>
-                                {
+                                Err(OperatorFlowError::Stage(
+                                    OperatorFailureStage::GenerationSave,
+                                )) if operator.has_pending_dirty_close() => {
                                     first_seal_pending = false;
                                     continue;
                                 }
