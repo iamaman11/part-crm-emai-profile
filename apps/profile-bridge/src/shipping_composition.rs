@@ -1699,6 +1699,11 @@ mod tests {
         }
         for local in [
             Restart::LocalEvidenceChanged,
+            Restart::NativeSnapshotTooLarge,
+            Restart::PreSealTransport,
+            Restart::PreSealResponseUncertain,
+            Restart::PreSealRejected,
+            Restart::PreSealUnavailable,
             Restart::WriterOrLockUnresolved,
             Restart::BindingOrRetirementFailed,
             Restart::UploadOrCommitUncertain,
