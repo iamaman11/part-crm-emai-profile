@@ -473,13 +473,21 @@ mod tests {
         }));
 
         let runtime_lock = topology.require("camouhost_runtime_lock")?;
-        assert_eq!(runtime_lock.release_identity_source, "runtime/camouhost/runtime-lock.json");
+        assert_eq!(
+            runtime_lock.release_identity_source,
+            "runtime/camouhost/runtime-lock.json"
+        );
         assert!(runtime_lock.consumed_by("runtime_bundle.files"));
 
         let resolved = topology.resolve(&root())?;
         assert_eq!(resolved.len(), 19);
-        assert!(resolved.iter().any(|input| input.input.input_id == "camouhost_runtime_lock" && input.sha256.len() == 64));
-    for input_id in [
+        assert!(
+            resolved
+                .iter()
+                .any(|input| input.input.input_id == "camouhost_runtime_lock"
+                    && input.sha256.len() == 64)
+        );
+        for input_id in [
             "camouhost_runtime_materializer_policy",
             "camouhost_runtime_packager_policy",
         ] {

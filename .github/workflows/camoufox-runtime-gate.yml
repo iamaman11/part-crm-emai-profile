@@ -148,20 +148,6 @@ jobs:
           & (Join-Path $root 'python/python.exe') -I -c "from camoufox.fpgen_model import is_pinned; assert is_pinned(), 'model not pinned'"
           if ($LASTEXITCODE -ne 0) { throw 'offline fpgen model pin failed' }
 
-      - name: Run Windows Bridge regressions through production crates
-        if: needs.scope.outputs.heavy == 'true'
-        shell: pwsh
-        run: |
-          cargo test --locked -p profile-bridge --lib
-          if ($LASTEXITCODE -ne 0) { throw 'Windows Bridge library tests failed' }
-          $root = Join-Path $env:RUNNER_TEMP 'camouhost-runtime'
-          $env:AR10_REAL_CAMOUFOX = '1'
-          $env:AR10_PYTHON = Join-Path $root 'python/python.exe'
-          $env:AR10_RUNTIME_ROOT = $root
-          $env:AR10_REAL_CAMOUFOX_HEADLESS = 'false'
-          cargo test --locked -p profile-bridge --test real_camoufox_runtime bridge_preflight_launches_real_camoufox_through_managed_ipc -- --exact --nocapture
-          if ($LASTEXITCODE -ne 0) { throw 'production Bridge/Playwright integration failed' }
-
       - name: Package exact compressed Release Set runtime input
         if: needs.scope.outputs.heavy == 'true'
         shell: pwsh
@@ -174,6 +160,22 @@ jobs:
           if ((Get-Item $archive).Length -ge 2GB) { throw 'runtime compressed archive exceeds release asset limit' }
           python scripts/camouhost-runtime-package.py verify-manifest --manifest "$manifest"
           if ($LASTEXITCODE -ne 0) { throw 'compressed runtime manifest invalid' }
+
+      - name: Run Windows Bridge regressions through production crates
+        if: needs.scope.outputs.heavy == 'true'
+        shell: pwsh
+        run: |
+          cargo test --locked -p profile-bridge --lib
+          if ($LASTEXITCODE -ne 0) { throw 'Windows Bridge library tests failed' }
+          $root = Join-Path $env:RUNNER_TEMP 'camouhost-runtime'
+          # Only the existing packager owns the exact runtime manifest.
+          Copy-Item -LiteralPath (Join-Path $env:RUNNER_TEMP 'runtime-manifest.json') -Destination (Join-Path $root 'runtime-manifest.json') -ErrorAction Stop
+          $env:AR10_REAL_CAMOUFOX = '1'
+          $env:AR10_PYTHON = Join-Path $root 'python/python.exe'
+          $env:AR10_RUNTIME_ROOT = $root
+          $env:AR10_REAL_CAMOUFOX_HEADLESS = 'false'
+          cargo test --locked -p profile-bridge --test real_camoufox_runtime bridge_preflight_launches_real_camoufox_through_managed_ipc -- --exact --nocapture
+          if ($LASTEXITCODE -ne 0) { throw 'production Bridge/Playwright integration failed' }
 
       - name: Upload exact PR candidate for installed Windows evaluation
         if: needs.scope.outputs.heavy == 'true'
