@@ -714,7 +714,8 @@ fn replace_native_rescue_intent(
         return Err(SaveAttemptEvidenceError::Changed);
     }
     fs::rename(&path, &canonical)?;
-    File::open(&canonical)?.sync_all()?;
+    OpenOptions::new().read(true).write(true)
+        .open(&canonical)?.sync_all()?;
     #[cfg(unix)]
     File::open(root.path())?.sync_all()?;
     if read_local_unsynced(&canonical)? != *next {
