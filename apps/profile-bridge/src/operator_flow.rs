@@ -1892,6 +1892,21 @@ where
                 RestartExactLocalCompletionError::LocalEvidenceChanged => {
                     GenerationSaveFailureReason::CheckpointIntegrity
                 }
+                RestartExactLocalCompletionError::NativeSnapshotTooLarge => {
+                    GenerationSaveFailureReason::SnapshotTooLarge
+                }
+                RestartExactLocalCompletionError::PreSealTransport => {
+                    GenerationSaveFailureReason::SealingTransport
+                }
+                RestartExactLocalCompletionError::PreSealResponseUncertain => {
+                    GenerationSaveFailureReason::SealingResponseUncertain
+                }
+                RestartExactLocalCompletionError::PreSealRejected => {
+                    GenerationSaveFailureReason::SealingRejected
+                }
+                RestartExactLocalCompletionError::PreSealUnavailable => {
+                    GenerationSaveFailureReason::SealingMaterial
+                }
                 RestartExactLocalCompletionError::WriterOrLockUnresolved
                 | RestartExactLocalCompletionError::BindingOrRetirementFailed => {
                     GenerationSaveFailureReason::OwnerState
