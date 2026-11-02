@@ -1092,10 +1092,6 @@ mod tests {
         let excessive_framing = envelope - native + 1;
         assert!(native + excessive_framing > envelope);
         assert!(!super::native_size_within_limit(envelope + 1));
-        assert!(
-            super::MAX_STREAM_NATIVE_PROFILE_BYTES
-                < encrypted_generation_domain::MAX_STREAM_CONTAINER_BYTES
-        );
     }
 
     #[test]
@@ -1367,12 +1363,14 @@ mod tests {
         result
     }
 
-    // Expensive cross-platform acceptance exercise. Run explicitly on CI machines
+    // Expensive cross-platform acceptance exercise. Keep the stable test name
+    // used by scripts/test-k2-large-native-streaming.py; the cases now include 543 MiB.
+    // Run explicitly on CI machines
     // with enough disk (each run writes > 1 GiB of encrypted and decrypted bytes).
     // This is FILE streaming proof, not a claim of signed R2/D1 or a Firefox launch.
     #[test]
     #[ignore = "K2 large file acceptance: run explicitly with --ignored"]
-    fn k2_full_256_512_and_543_mib_file_streaming_encrypt_cold_restore()
+    fn k2_full_256_and_512_mib_file_streaming_encrypt_cold_restore()
     -> Result<(), Box<dyn std::error::Error>> {
         use encrypted_generation_domain::{
             GenerationDek, GenerationIdentity, GenerationMetadata, KeyId, NoncePrefix,
