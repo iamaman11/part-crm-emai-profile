@@ -157,6 +157,10 @@ export function ProfilesWorkspace({
 
   const enabled = tenantId.length > 0;
   const profileLoaded = enabled && profileId.length > 0 && profile !== null;
+  const actionTarget = generationAction.variables?.input.target;
+  const actionBelongsToSelection = actionTarget?.tenantId === tenantId
+    && actionTarget.profileId === profileId
+    && actionTarget.generationId === generationId;
 
   return (
     <div className="workspace-grid">
@@ -272,7 +276,9 @@ export function ProfilesWorkspace({
         </div>
         <StatusMessage state={generationLookup.error ?? generationRegister.error ?? (generationRegister.data ? `${generationRegister.data.resultCode}: ${generationRegister.data.resourceId}` : null)} />
         {generation && <GenerationActions generation={generation} profileVersion={profile?.version ?? 1} busy={generationAction.isPending} onAction={(input) => generationAction.mutate({ ...input, target: { tenantId, profileId, generationId } })} onHighImpact={(input) => generationAction.mutateAsync({ ...input, target: { tenantId, profileId, generationId } }).then(() => undefined)} />}
-        <StatusMessage state={generationAction.error ?? (generationAction.data ? `${generationAction.data.resultCode}: ${generationAction.data.resourceId}` : null)} />
+        <StatusMessage state={actionBelongsToSelection
+          ? (generationAction.error ?? (generationAction.data ? `${generationAction.data.resultCode}: ${generationAction.data.resourceId}` : null))
+          : null} />
         {generationRefreshUnconfirmed && <div role="alert">
           The action completed, but the latest profile status could not be confirmed. Do not repeat the action.
           <button type="button" onClick={() => { void refreshGenerationProjection(); }}>Refresh current status</button>
