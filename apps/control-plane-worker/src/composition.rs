@@ -94,14 +94,15 @@ pub fn client_registry_projection(env: &Env) -> Result<D1ClientRegistryProjectio
 pub fn client_contact_protection(
     env: &Env,
 ) -> Result<RustCryptoContactProtection<WorkerCryptoNonceSource>> {
-    let secret = env.secret(CLIENT_CONTACT_PROTECTION_KEYRING_BINDING).map_err(|_| {
-        // A missing Worker secret binding and malformed keyring contents are
-        // separate deployment failures. Never print the secret or provider error.
-        eprintln!("CLIENT_CONTACT_KEYRING_INVALID category=binding");
-        Error::RustError("client contact protection keyring unavailable".to_owned())
-    })?;
-    contact_protection_from_serialized_keyring(secret.to_string())
-    .map_err(|error| {
+    let secret = env
+        .secret(CLIENT_CONTACT_PROTECTION_KEYRING_BINDING)
+        .map_err(|_| {
+            // A missing Worker secret binding and malformed keyring contents are
+            // separate deployment failures. Never print the secret or provider error.
+            eprintln!("CLIENT_CONTACT_KEYRING_INVALID category=binding");
+            Error::RustError("client contact protection keyring unavailable".to_owned())
+        })?;
+    contact_protection_from_serialized_keyring(secret.to_string()).map_err(|error| {
         // Fixed-category readiness telemetry only; never log serialized keys.
         eprintln!("CLIENT_CONTACT_KEYRING_INVALID category={}", error.code());
         Error::RustError("invalid client contact protection keyring".to_owned())
