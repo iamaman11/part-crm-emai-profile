@@ -3818,6 +3818,74 @@ mod tests {
     }
 
     #[test]
+    fn denied_native_rescue_preflight_keeps_original_closed_intent()
+    -> Result<(), Box<dyn std::error::Error>> {
+        use crate::shipping_save_attempt::{
+            ScopedPendingSaveEvidence, classify_scoped_pending_save_evidence,
+            native_rescue_interrupted_under_fresh_lease, persist_local_unsynced_intent,
+        };
+
+        let fixture = Fixture::new()?;
+        let tenant = fixture.actor.tenant_scope().tenant_id();
+        let source = fixture
+            .root
+            .open_generation(tenant, &fixture.profile_id, &fixture.generation_id)?;
+        let wal = source.path().join("user_data").join("cookies.sqlite-wal");
+        fs::create_dir_all(wal.parent().ok_or("native WAL parent missing")?)?;
+        fs::write(&wal, b"preflight-denied-original-WAL")?;
+        persist_local_unsynced_intent(&fixture.root, &source, &fixture.lease)?;
+        let inventory = source.inventory()?;
+        let fresh = ProfileLease::issue(
+            tenant.clone(),
+            fixture.profile_id.clone(),
+            SessionId::parse("session_f05_preflight_denied_01")?,
+            fixture.device_id.clone(),
+            fixture.lease.epoch() + 1,
+            FencingToken::parse("fence_f05_preflight_denied_01")?,
+        )?;
+        let mut owner = operator(&fixture, FakeCamouhost::default())?;
+        owner.coordinator.lease = fresh.clone();
+        owner.browser_preflight.allow = false;
+        let result = owner.open_with_materialization(
+            &fixture.claim_uri,
+            &fixture.root,
+            UnixMillis::new(10),
+            (
+                |_coordinator, _lease| {},
+                |_coordinator, _tenant, _profile, _generation, _device, _epoch| Ok(()),
+            ),
+            || Ok(()),
+            |_coordinator, _tenant, _profile, _generation, _lease| {
+                PendingSaveRecovery::NativeRescueRequired
+            },
+        );
+        assert!(matches!(result, Err(OperatorFlowError::Preflight { .. })));
+        assert_eq!(owner.browser_preflight.calls, 1);
+        assert!(owner.process().actions().is_empty());
+        assert_eq!(source.inventory()?, inventory);
+        assert_eq!(fs::read(&wal)?, b"preflight-denied-original-WAL");
+        assert!(!native_rescue_interrupted_under_fresh_lease(
+            &fixture.root,
+            tenant,
+            &fixture.profile_id,
+            &fixture.generation_id,
+            &fresh,
+        )?);
+        match classify_scoped_pending_save_evidence(
+            &fixture.root,
+            tenant,
+            &fixture.profile_id,
+        )? {
+            ScopedPendingSaveEvidence::LocalUnsynced { base_generation, prior_epoch } => {
+                assert_eq!(base_generation, fixture.generation_id);
+                assert_eq!(prior_epoch, fixture.lease.epoch());
+            }
+            _ => return Err("preflight refusal modified original local intent".into()),
+        }
+        Ok(())
+    }
+
+    #[test]
     fn one_managed_native_rescue_open_and_clean_close_publish_new_inventory()
     -> Result<(), Box<dyn std::error::Error>> {
         use crate::shipping_save_attempt::{
