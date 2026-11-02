@@ -2386,6 +2386,49 @@ mod tests {
     }
 
     #[test]
+    fn native_oversize_preflight_rejects_before_any_successor_clone_or_cloud_effect()
+    -> Result<(), Box<dyn std::error::Error>> {
+        use super::{
+            GenerationSaveFailureReason, preflight_retained_native_before_clone,
+        };
+        use crate::generation_snapshot::MAX_STREAM_NATIVE_PROFILE_BYTES;
+
+        let fixture = Fixture::new()?;
+        let tenant = fixture.actor.tenant_scope().tenant_id();
+        let source = fixture
+            .root
+            .open_generation(tenant, &fixture.profile_id, &fixture.generation_id)?;
+        let user_data = source.path().join("user_data");
+        fs::create_dir_all(&user_data)?;
+        let original = user_data.join("oversized-native-profile.bin");
+        let payload = fs::OpenOptions::new()
+            .create_new(true)
+            .write(true)
+            .open(&original)?;
+        payload.set_len(MAX_STREAM_NATIVE_PROFILE_BYTES + 1)?;
+        drop(payload);
+        let original_inventory = source.inventory()?;
+        assert!(original_inventory.total_bytes() > MAX_STREAM_NATIVE_PROFILE_BYTES);
+        assert_eq!(
+            preflight_retained_native_before_clone(&source, &original_inventory),
+            Err(GenerationSaveFailureReason::SnapshotTooLarge),
+        );
+        // No RecoveryClone::create, sealer, PUT or commit is called after this
+        // preflight refusal in the normal retained Save path.
+        assert_eq!(
+            fs::metadata(&original)?.len(),
+            MAX_STREAM_NATIVE_PROFILE_BYTES + 1,
+        );
+        assert_eq!(source.inventory()?, original_inventory);
+        let never_created = GenerationId::parse("generation_native_oversize_forbidden_clone")?;
+        assert!(matches!(
+            fixture.root.open_generation(tenant, &fixture.profile_id, &never_created),
+            Err(LocalProfileError::Io(std::io::ErrorKind::NotFound)),
+        ));
+        Ok(())
+    }
+
+    #[test]
     fn save_owner_maps_control_and_local_causes_without_granting_retries() {
         use super::{
             GenerationSaveFailureReason as Reason, save_checkpoint_read_reason,
