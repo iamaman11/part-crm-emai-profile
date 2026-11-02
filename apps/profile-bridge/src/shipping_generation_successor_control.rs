@@ -5,6 +5,8 @@ use crate::dirty_generation::recover_local_unsynced_native_clone;
 use crate::dirty_generation::{
     GenerationSealingMaterial, GenerationSealingMaterialPort, PreparedDirtyGeneration,
 };
+#[cfg(any(windows, test))]
+use crate::generation_snapshot::{GenerationSnapshotError, WorkspaceSnapshotReader};
 use crate::local_profile::MaterializationRoot;
 #[cfg(any(windows, test))]
 use crate::local_profile::{BridgeWorkspaceLock, LocalGenerationRecord, LocalProfileError};
@@ -719,6 +721,16 @@ where
         let inventory = source
             .inventory()
             .map_err(|_| RestartExactLocalCompletionError::LocalEvidenceChanged)?;
+        // Check the exact canonical native+framing limit under the existing
+        // writer lock BEFORE materializing any second Firefox workspace.
+        // An oversized local browser is a policy refusal, not corrupt bytes;
+        // the original LOCAL_UNSYNCED evidence remains available for rescue.
+        WorkspaceSnapshotReader::new(&source, &inventory).map_err(|error| match error {
+            GenerationSnapshotError::SnapshotTooLarge => {
+                RestartExactLocalCompletionError::NativeSnapshotTooLarge
+            }
+            _ => RestartExactLocalCompletionError::LocalEvidenceChanged,
+        })?;
         let record = LocalGenerationRecord::from_verified_unsynced_close(
             selected_generation.clone(),
             inventory.total_bytes(),
