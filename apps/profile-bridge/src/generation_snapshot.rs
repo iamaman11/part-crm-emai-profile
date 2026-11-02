@@ -1365,11 +1365,11 @@ mod tests {
     }
 
     // Expensive cross-platform acceptance exercise. Run explicitly on CI machines
-    // with enough disk (it writes >= 1 GiB of actual encrypted and decrypted bytes).
+    // with enough disk (each run writes > 1 GiB of encrypted and decrypted bytes).
     // This is FILE streaming proof, not a claim of signed R2/D1 or a Firefox launch.
     #[test]
     #[ignore = "K2 large file acceptance: run explicitly with --ignored"]
-    fn k2_full_256_and_512_mib_file_streaming_encrypt_cold_restore()
+    fn k2_full_256_512_and_543_mib_file_streaming_encrypt_cold_restore()
     -> Result<(), Box<dyn std::error::Error>> {
         use encrypted_generation_domain::{
             GenerationDek, GenerationIdentity, GenerationMetadata, KeyId, NoncePrefix,
@@ -1378,7 +1378,9 @@ mod tests {
         use std::io::{Seek, SeekFrom, Write};
         use std::time::Instant;
 
-        for target_mib in [256_u64, 512] {
+        // 543 MiB exceeds the historical 512 MiB native-profile gate and
+        // covers the 568_329_621-byte physical Windows failure.
+        for target_mib in [256_u64, 512, 543] {
             let fixture = Fixture::new()?;
             let started = Instant::now();
             let result = (|| {
@@ -1390,7 +1392,7 @@ mod tests {
                     &base,
                 )?;
                 // Include the browser-managed native paths and a large opaque
-                // storage payload. set_len intentionally avoids a 512 MiB Vec.
+                // storage payload. set_len avoids a generation-sized Vec.
                 let user_data = source.path().join("user_data");
                 fs::create_dir_all(user_data.join("storage/default"))?;
                 fs::write(source.path().join("prefs.js"), b"user_pref('K2', true);")?;
