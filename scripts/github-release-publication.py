@@ -709,7 +709,7 @@ def probe(
 
 def self_test() -> None:
     release_tag = "runtime-bundle-v3-sha256-" + "a" * 64
-    expected = {"runtime-bundle.tar", "runtime-manifest.json"}
+    expected = {"runtime-bundle.tar.gz", "runtime-manifest.json"}
 
     if analyze_release(None, release_tag, expected).state != "absent":
         fail("absent release self-test failed")
@@ -723,13 +723,13 @@ def self_test() -> None:
     }
     expected_upload = (
         "https://uploads.github.com/repos/owner/repo/releases/10/assets"
-        "?name=runtime-bundle.tar"
+        "?name=runtime-bundle.tar.gz"
     )
     if (
         release_asset_upload_url(
             upload_fixture,
             "owner/repo",
-            "runtime-bundle.tar",
+            "runtime-bundle.tar.gz",
         )
         != expected_upload
     ):
@@ -742,7 +742,7 @@ def self_test() -> None:
         release_asset_upload_url(
             escaped_upload,
             "owner/repo",
-            "runtime-bundle.tar",
+            "runtime-bundle.tar.gz",
         )
     except PublicationError:
         pass
@@ -791,7 +791,7 @@ def self_test() -> None:
         "assets": [
             {
                 "id": 1,
-                "name": "runtime-bundle.tar",
+                "name": "runtime-bundle.tar.gz",
                 "state": "uploaded",
                 "size": 100,
                 "digest": "sha256:" + "1" * 64,
@@ -844,8 +844,8 @@ def self_test() -> None:
         fail("unexpected asset negative self-test unexpectedly passed")
 
     local = LocalAsset(
-        name="runtime-bundle.tar",
-        path=Path("runtime-bundle.tar"),
+        name="runtime-bundle.tar.gz",
+        path=Path("runtime-bundle.tar.gz"),
         size=100,
         digest="sha256:" + "1" * 64,
     )

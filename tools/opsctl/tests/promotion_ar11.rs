@@ -169,7 +169,7 @@ fn release_set() -> Result<LoadedReleaseSet, Box<dyn std::error::Error>> {
             "control_plane": component("control_plane", "control-plane-v2", "components/control-plane.tar", SHA_A, 10),
             "frontend": component("frontend", "control-plane-v2", "components/control-plane.tar", SHA_A, 10),
             "secret_resolver": component("secret_resolver", "resolver-v2", "components/secret-resolver.tar", SHA_B, 11),
-            "runtime_bundle": component("runtime_bundle", "runtime-v2", "components/runtime-bundle.tar", SHA_C, 12),
+            "runtime_bundle": component("runtime_bundle", "runtime-v2", "components/runtime-bundle.tar.gz", SHA_C, 12),
             "profile_bridge": component("profile_bridge", "bridge-v2", "components/profile-bridge.zip", SHA_D, 13)
         },
         "contracts": contracts,
@@ -181,7 +181,7 @@ fn release_set() -> Result<LoadedReleaseSet, Box<dyn std::error::Error>> {
         "artifact_inventory": [
             {"path":"components/control-plane.tar","sha256":SHA_A,"size_bytes":10,"kind":"component"},
             {"path":"components/profile-bridge.zip","sha256":SHA_D,"size_bytes":13,"kind":"component"},
-            {"path":"components/runtime-bundle.tar","sha256":SHA_C,"size_bytes":12,"kind":"component"},
+            {"path":"components/runtime-bundle.tar.gz","sha256":SHA_C,"size_bytes":12,"kind":"component"},
             {"path":"components/secret-resolver.tar","sha256":SHA_B,"size_bytes":11,"kind":"component"}
         ]
     });

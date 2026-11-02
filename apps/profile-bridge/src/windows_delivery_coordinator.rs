@@ -317,7 +317,7 @@ mod tests {
             self.calls.push(asset_name.to_owned());
             let bytes = match asset_name {
                 "profile-bridge.zip" => BRIDGE_ARCHIVE,
-                "runtime-bundle.tar" => RUNTIME_ARCHIVE,
+                "runtime-bundle.tar.gz" => RUNTIME_ARCHIVE,
                 _ => return Err(()),
             };
             fs::write(destination, bytes).map_err(|_| ())
@@ -711,7 +711,7 @@ mod tests {
             fs::read(prepared.staged().runtime_root().join("python/python.exe"))?,
             PYTHON_FILE
         );
-        assert_eq!(fetcher.calls, ["profile-bridge.zip", "runtime-bundle.tar"]);
+        assert_eq!(fetcher.calls, ["profile-bridge.zip", "runtime-bundle.tar.gz"]);
         Ok(())
     }
 

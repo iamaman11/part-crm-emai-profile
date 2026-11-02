@@ -148,7 +148,7 @@ fn fixture_value() -> Result<Value, Box<dyn std::error::Error>> {
             "control_plane": component("control_plane", "control-plane-v2", "components/control-plane.tar", SHA_A, 10),
             "frontend": component("frontend", "control-plane-v2", "components/control-plane.tar", SHA_A, 10),
             "secret_resolver": component("secret_resolver", "resolver-v2", "components/secret-resolver.tar", SHA_B, 11),
-            "runtime_bundle": component("runtime_bundle", "runtime-v2", "components/runtime-bundle.tar", SHA_A, 12),
+            "runtime_bundle": component("runtime_bundle", "runtime-v2", "components/runtime-bundle.tar.gz", SHA_A, 12),
         },
         "contracts": identity.contracts,
         "protocols": identity.protocols,
@@ -158,7 +158,7 @@ fn fixture_value() -> Result<Value, Box<dyn std::error::Error>> {
         "build_provenance": identity.build,
         "artifact_inventory": [
             {"path":"components/control-plane.tar","sha256":SHA_A,"size_bytes":10,"kind":"component"},
-            {"path":"components/runtime-bundle.tar","sha256":SHA_A,"size_bytes":12,"kind":"component"},
+            {"path":"components/runtime-bundle.tar.gz","sha256":SHA_A,"size_bytes":12,"kind":"component"},
             {"path":"components/secret-resolver.tar","sha256":SHA_B,"size_bytes":11,"kind":"component"},
         ],
     });

@@ -56,6 +56,8 @@ sha2.workspace = true
 zeroize.workspace = true
 
 [target.'cfg(windows)'.dependencies]
+flate2 = { version = "=1.1.5", default-features = false, features = ["rust_backend"] }
+tempfile = "=3.23.0"
 windows-device-key = { path = "../../platform/windows-device-key" }
 windows-desktop-ui = { path = "../../platform/windows-desktop-ui" }
 windows-delivery-signature = { path = "../../platform/windows-delivery-signature" }

@@ -80,7 +80,7 @@ fn request_value() -> Value {
             "runtime_bundle": component(
                 "runtime_bundle",
                 "runtime-v1",
-                "components/runtime-bundle.tar",
+                "components/runtime-bundle.tar.gz",
                 '3',
                 13
             ),

@@ -14,6 +14,7 @@ import io
 import json
 import re
 import tarfile
+import gzip
 import tempfile
 from pathlib import Path, PurePosixPath
 from typing import Any, BinaryIO
@@ -24,7 +25,7 @@ GITATTRIBUTES = ROOT / ".gitattributes"
 RUNTIME_CONSUMER = "runtime_bundle.files"
 RELEASE_PREFIX = "runtime-bundle-v3-sha256-"
 MAX_RUNTIME_FILES = 500_000
-MAX_RUNTIME_BYTES = 2 * 1024 * 1024 * 1024
+MAX_RUNTIME_BYTES = 4 * 1024 * 1024 * 1024
 REQUIRED_RUNTIME_PATHS = {
     "browser/camoufox.exe",
     "camouhost/real.py",
@@ -368,16 +369,25 @@ def deterministic_archive(
     if archive_path.exists():
         fail(f"runtime package archive already exists: {archive_path}")
     archive_path.parent.mkdir(parents=True, exist_ok=True)
-    with tarfile.open(archive_path, "w", format=tarfile.PAX_FORMAT) as archive:
-        ordered = [("runtime-manifest.json", None), *files]
-        for name, path in sorted(ordered, key=lambda item: item[0]):
-            if path is None:
-                archive.addfile(
-                    deterministic_member(name, len(manifest_bytes)),
-                    fileobj=io.BytesIO(manifest_bytes),
-                )
-            else:
-                add_streamed_file(archive, name, path)
+    # Stream one deterministic gzip member over the same canonical PAX TAR.
+    # Windows delivery expands it into bounded temporary storage, then invokes
+    # the existing PAX header/path/range validator unchanged.
+    with archive_path.open("xb") as output:
+        with gzip.GzipFile(
+            filename="", mode="wb", fileobj=output, mtime=0, compresslevel=6
+        ) as compressed:
+            with tarfile.open(
+                fileobj=compressed, mode="w|", format=tarfile.PAX_FORMAT
+            ) as archive:
+                ordered = [("runtime-manifest.json", None), *files]
+                for name, path in sorted(ordered, key=lambda item: item[0]):
+                    if path is None:
+                        archive.addfile(
+                            deterministic_member(name, len(manifest_bytes)),
+                            fileobj=io.BytesIO(manifest_bytes),
+                        )
+                    else:
+                        add_streamed_file(archive, name, path)
 
 
 def package_runtime(
@@ -415,7 +425,7 @@ def assert_archive(
     archive_path: Path,
     expected_files: list[str],
 ) -> None:
-    with tarfile.open(archive_path, "r:") as archive:
+    with tarfile.open(archive_path, "r:gz") as archive:
         members = archive.getmembers()
         expected_names = sorted(["runtime-manifest.json", *expected_files])
         if [member.name for member in members] != expected_names:
@@ -442,9 +452,9 @@ def self_test() -> None:
         runtime_root = temp / "runtime"
         write_fixture_runtime(runtime_root)
         expected_files = [relative for relative, _ in runtime_tree_files(runtime_root)]
-        first_archive = temp / "first.tar"
+        first_archive = temp / "first.tar.gz"
         first_manifest = temp / "first.json"
-        second_archive = temp / "second.tar"
+        second_archive = temp / "second.tar.gz"
         second_manifest = temp / "second.json"
         package_runtime(
             runtime_root=runtime_root,

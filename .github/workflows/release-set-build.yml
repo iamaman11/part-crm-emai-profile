@@ -190,7 +190,7 @@ jobs:
           "release_id=$releaseId" >> $env:GITHUB_OUTPUT
 
           $probePath = 'artifacts/ar11-runtime-component/runtime-release-probe.json'
-          python scripts/github-release-publication.py probe --repository "$env:GITHUB_REPOSITORY" --release-id "$releaseId" --expected-asset runtime-bundle.tar --expected-asset runtime-manifest.json --output "$probePath"
+          python scripts/github-release-publication.py probe --repository "$env:GITHUB_REPOSITORY" --release-id "$releaseId" --expected-asset runtime-bundle.tar.gz --expected-asset runtime-manifest.json --output "$probePath"
           if ($LASTEXITCODE -ne 0) { throw 'runtime publication probe failed' }
           $probe = Get-Content $probePath -Raw | ConvertFrom-Json
           if ($probe.release_id -ne $releaseId) { throw 'runtime publication probe identity mismatch' }
@@ -252,7 +252,7 @@ jobs:
           RUNTIME_RELEASE_ID: ${{ steps.runtime-identity.outputs.release_id }}
         run: |
           $runtimeRoot = Join-Path $env:RUNNER_TEMP 'camouhost-runtime'
-          python scripts/camouhost-runtime-package.py package --runtime-root "$runtimeRoot" --archive artifacts/ar11-runtime-component/runtime-bundle.tar --manifest artifacts/ar11-runtime-component/runtime-manifest.json
+          python scripts/camouhost-runtime-package.py package --runtime-root "$runtimeRoot" --archive artifacts/ar11-runtime-component/runtime-bundle.tar.gz --manifest artifacts/ar11-runtime-component/runtime-manifest.json
           python scripts/camouhost-runtime-package.py verify-manifest --manifest artifacts/ar11-runtime-component/runtime-manifest.json | Out-Null
           $manifest = Get-Content artifacts/ar11-runtime-component/runtime-manifest.json -Raw | ConvertFrom-Json
           if ($manifest.release_id -ne $env:RUNTIME_RELEASE_ID) { throw 'built runtime identity differs from exact current inputs' }
@@ -263,7 +263,7 @@ jobs:
         env:
           RUNTIME_RELEASE_ID: ${{ steps.runtime-identity.outputs.release_id }}
         run: |
-          $archive = 'artifacts/ar11-runtime-component/runtime-bundle.tar'
+          $archive = 'artifacts/ar11-runtime-component/runtime-bundle.tar.gz'
           $manifest = 'artifacts/ar11-runtime-component/runtime-manifest.json'
           $size = (Get-Item -LiteralPath $archive).Length
           Write-Host "Publishing exact immutable runtime component $env:RUNTIME_RELEASE_ID ($size bytes)."
@@ -291,7 +291,7 @@ jobs:
           gh api "repos/$env:GITHUB_REPOSITORY/releases/tags/$env:RUNTIME_RELEASE_ID" > artifacts/ar11-runtime-component/runtime-release.json
           $release = Get-Content artifacts/ar11-runtime-component/runtime-release.json -Raw | ConvertFrom-Json
           if ($release.tag_name -ne $env:RUNTIME_RELEASE_ID) { throw 'runtime release tag mismatch' }
-          $runtimeAssets = @($release.assets | Where-Object { $_.name -eq 'runtime-bundle.tar' -and $_.state -eq 'uploaded' })
+          $runtimeAssets = @($release.assets | Where-Object { $_.name -eq 'runtime-bundle.tar.gz' -and $_.state -eq 'uploaded' })
           $manifestAssets = @($release.assets | Where-Object { $_.name -eq 'runtime-manifest.json' -and $_.state -eq 'uploaded' })
           if ($runtimeAssets.Count -ne 1 -or $manifestAssets.Count -ne 1 -or @($release.assets).Count -ne 2) { throw 'runtime release asset inventory mismatch' }
           $runtimeAsset = $runtimeAssets[0]
@@ -305,7 +305,7 @@ jobs:
             schema_version = 1
             kind = 'WINDOWS_RUNTIME_COMPONENT_OBSERVATION'
             release_id = $env:RUNTIME_RELEASE_ID
-            artifact_path = 'components/runtime-bundle.tar'
+            artifact_path = 'components/runtime-bundle.tar.gz'
             artifact_sha256 = $runtimeSha
             artifact_size_bytes = [UInt64]$runtimeAsset.size
             component_manifest_sha256 = $manifestSha
@@ -383,7 +383,7 @@ jobs:
           runtime_source_sha="$SOURCE_SHA"
           bridge_protocol="$(jq -er '.protocol_version' "$bridge_manifest")"
           test "$(jq -er '.release_id' "$runtime_observation")" = "$runtime_release_id"
-          test "$(jq -er '.artifact_path' "$runtime_observation")" = "components/runtime-bundle.tar"
+          test "$(jq -er '.artifact_path' "$runtime_observation")" = "components/runtime-bundle.tar.gz"
 
           if [[ "$resolver_release_id" =~ ^(.+)-sha256-[0-9a-f]{64}$ ]]; then
             resolver_protocol="${BASH_REMATCH[1]}"
@@ -474,7 +474,7 @@ jobs:
                 control_plane:{component_id:"control_plane",release_id:$control_release_id,source_commit_sha:$control_source_sha,artifact_path:"components/control-plane.tar",artifact_sha256:$control_sha,artifact_size_bytes:$control_size,component_manifest_sha256:$control_manifest_sha},
                 frontend:{component_id:"frontend",release_id:$control_release_id,source_commit_sha:$control_source_sha,artifact_path:"components/control-plane.tar",artifact_sha256:$control_sha,artifact_size_bytes:$control_size,component_manifest_sha256:$control_manifest_sha},
                 secret_resolver:{component_id:"secret_resolver",release_id:$resolver_release_id,source_commit_sha:$resolver_source_sha,artifact_path:"components/secret-resolver.tar",artifact_sha256:$resolver_sha,artifact_size_bytes:$resolver_size,component_manifest_sha256:$resolver_manifest_sha},
-                runtime_bundle:{component_id:"runtime_bundle",release_id:$runtime_release_id,source_commit_sha:$runtime_source_sha,artifact_path:"components/runtime-bundle.tar",artifact_sha256:$runtime_sha,artifact_size_bytes:$runtime_size,component_manifest_sha256:$runtime_manifest_sha},
+                runtime_bundle:{component_id:"runtime_bundle",release_id:$runtime_release_id,source_commit_sha:$runtime_source_sha,artifact_path:"components/runtime-bundle.tar.gz",artifact_sha256:$runtime_sha,artifact_size_bytes:$runtime_size,component_manifest_sha256:$runtime_manifest_sha},
                 profile_bridge:{component_id:"profile_bridge",release_id:$bridge_release_id,source_commit_sha:$bridge_source_sha,artifact_path:"components/profile-bridge.zip",artifact_sha256:$bridge_sha,artifact_size_bytes:$bridge_size,component_manifest_sha256:$bridge_manifest_sha}
               },
               evidence_artifacts:{

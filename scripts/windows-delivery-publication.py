@@ -212,7 +212,7 @@ def render_manifest(
     runtime = component_identity(
         release_set,
         key="runtime_bundle",
-        expected_path="components/runtime-bundle.tar",
+        expected_path="components/runtime-bundle.tar.gz",
         prefix=RUNTIME_PREFIX,
         source_sha=source_sha,
     )
@@ -494,7 +494,7 @@ def self_test() -> None:
                 "component_id": "runtime_bundle",
                 "release_id": runtime_id,
                 "source_commit_sha": source_sha,
-                "artifact_path": "components/runtime-bundle.tar",
+                "artifact_path": "components/runtime-bundle.tar.gz",
                 "artifact_sha256": "7" * 64,
                 "artifact_size_bytes": 11,
                 "component_manifest_sha256": "8" * 64,
