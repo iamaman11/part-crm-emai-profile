@@ -588,6 +588,35 @@ impl RecoveryClone {
         &self.clone
     }
 
+    /// Flush an independently verified native rescue copy before allowing
+    /// any later managed browser write of the original. This never grants
+    /// browser Open or a cloud effect.
+    pub fn sync_verified_reserve(&self) -> Result<GenerationInventory, LocalProfileError> {
+        let original = self.verify_clone_only()?;
+        for entry in original.entries() {
+            File::open(self.clone.path().join(entry.relative_path()))?.sync_all()?;
+        }
+        File::open(self.clone.path().join(GENERATION_MARKER))?.sync_all()?;
+        #[cfg(unix)]
+        {
+            let mut directories = std::collections::BTreeSet::new();
+            directories.insert(self.clone.path().to_path_buf());
+            for entry in original.entries() {
+                let mut path = self.clone.path().join(entry.relative_path());
+                while path.pop() && path.starts_with(self.clone.path()) {
+                    directories.insert(path.clone());
+                    if path == self.clone.path() {
+                        break;
+                    }
+                }
+            }
+            for path in directories.iter().rev() {
+                File::open(path)?.sync_all()?;
+            }
+        }
+        self.verify_clone_only()
+    }
+
     pub fn verify_clone_only(&self) -> Result<GenerationInventory, LocalProfileError> {
         if self.source.inventory()? != self.source_inventory {
             return Err(LocalProfileError::SourceChanged);
