@@ -15,12 +15,14 @@ use crate::dirty_generation::PreparedDirtyGeneration;
 use crate::dirty_generation::{DirtyGenerationError, GenerationSealingMaterialPort};
 #[cfg(any(test, feature = "synthetic-test-bin"))]
 use crate::dirty_generation_finalize::DirtyGenerationCommitClientPort;
+#[cfg(any(windows, test))]
+use crate::generation_snapshot::{GenerationSnapshotError, WorkspaceSnapshotReader};
 use crate::generation_reopen::{
     GenerationObjectDownloadError, GenerationObjectDownloadPort, GenerationReopenControlError,
     GenerationReopenControlPort,
 };
 #[cfg(any(windows, test))]
-use crate::local_profile::RecoveryClone;
+use crate::local_profile::{GenerationInventory, RecoveryClone};
 use crate::local_profile::{
     BridgeWorkspaceLock, GenerationWorkspace, LocalGenerationRecord, LocalGenerationState,
     LocalProfileError, MaterializationRoot,
@@ -493,6 +495,25 @@ fn save_checkpoint_read_reason(source: SaveAttemptEvidenceError) -> GenerationSa
             GenerationSaveFailureReason::CheckpointIntegrity
         }
     }
+}
+
+/// Check the canonical native+framing limit against the ORIGINAL closed
+/// browser under its already-retained Bridge writer lock, before constructing
+/// a second generation-sized RecoveryClone. This is a preflight only, never
+/// a Save, cloud retry, local repair or permission to open stale N.
+#[cfg(any(windows, test))]
+fn preflight_retained_native_before_clone(
+    source: &GenerationWorkspace,
+    inventory: &GenerationInventory,
+) -> Result<(), GenerationSaveFailureReason> {
+    WorkspaceSnapshotReader::new(source, inventory)
+        .map(|_| ())
+        .map_err(|error| match error {
+            GenerationSnapshotError::SnapshotTooLarge => {
+                GenerationSaveFailureReason::SnapshotTooLarge
+            }
+            _ => GenerationSaveFailureReason::NativeSourceChanged,
+        })
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -1777,6 +1798,11 @@ where
                     .map_err(|_| OperatorFlowError::GenerationSave {
                         reason: GenerationSaveFailureReason::NativeSourceChanged,
                     })?;
+            // F05: a 576 MiB native limit or excessive BPGW framing must
+            // refuse before the expensive full Firefox N+1 clone is created.
+            // Original LOCAL_UNSYNCED and WAL remain in the source workspace.
+            preflight_retained_native_before_clone(&workspace, &source_inventory)
+                .map_err(|reason| OperatorFlowError::GenerationSave { reason })?;
             let candidate =
                 match RecoveryClone::create(&workspace, root, tenant, profile, &candidate_id) {
                     Ok(clone) => {
