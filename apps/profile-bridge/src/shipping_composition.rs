@@ -103,6 +103,39 @@ fn retryable_reconnect_observation(
     )
 }
 
+/// Diagnostic only. A failed recovery never grants permission to replay
+/// a sealing request, mutate a LOCAL_UNSYNCED profile or open stale N.
+/// Keep the next action specific so an oversized native snapshot or unknown
+/// cloud effect is not presented as an ordinary safe retry.
+#[cfg(any(windows, test))]
+fn recovery_next_safe_step(
+    error: crate::shipping_generation_successor_control::RestartExactLocalCompletionError,
+) -> &'static str {
+    use crate::shipping_control_plane::ShippingControlPlaneError as Http;
+    use crate::shipping_generation_successor_control::RestartExactLocalCompletionError as Restart;
+    match error {
+        Restart::NativeSnapshotTooLarge => "PRESERVE_LOCAL_BYTES;NATIVE_RESCUE_REQUIRED",
+        Restart::PreSealTransport
+        | Restart::PreSealResponseUncertain
+        | Restart::UploadOrCommitUncertain
+        | Restart::ControlPlane(Http::Transport | Http::HttpServerUncertain) => {
+            "PRESERVE_LOCAL_BYTES;FRESH_AUTHORIZED_OBSERVATION"
+        }
+        Restart::PreSealRejected
+        | Restart::ControlPlane(Http::HttpStatus | Http::LaunchLeaseConflict) => {
+            "PRESERVE_LOCAL_BYTES;CHECK_SERVER_AUTHORITY"
+        }
+        Restart::PreSealUnavailable => "PRESERVE_LOCAL_BYTES;CHECK_SEALING_SERVICE",
+        Restart::LocalEvidenceChanged => "PRESERVE_LOCAL_BYTES;CHECK_LOCAL_EVIDENCE",
+        Restart::WriterOrLockUnresolved => "PRESERVE_LOCAL_BYTES;CHECK_NATIVE_WRITER",
+        Restart::BindingOrRetirementFailed => "PRESERVE_LOCAL_BYTES;RECONCILE_ACTIVE_EXACT",
+        Restart::ControlPlane(Http::InvalidResponse) => {
+            "PRESERVE_LOCAL_BYTES;INSPECT_SERVER_RESPONSE"
+        }
+        Restart::ControlPlane(Http::Clock) => "PRESERVE_LOCAL_BYTES;CHECK_CLOCK",
+    }
+}
+
 #[cfg(any(windows, test))]
 fn open_with_one_fresh_claim<Open, NewClaim>(
     original: &ClaimUri,
@@ -768,20 +801,10 @@ mod windows {
                                     false
                                 }
                                 Err(error) => {
-                                    let next_step = if matches!(
-                                        error,
-                                        RestartExactLocalCompletionError::NativeSnapshotTooLarge
-                                    ) {
-                                        // Retrying the same native bytes cannot succeed.
-                                        // Do not delete the oversized LOCAL_UNSYNCED or
-                                        // open stale N as if recovery had completed.
-                                        "PRESERVE_LOCAL_BYTES;NATIVE_RESCUE_REQUIRED"
-                                    } else {
-                                        "RETRY_OWNED_RECOVERY"
-                                    };
                                     eprintln!(
-                                        "P3_RECOVERY={};NEXT_SAFE_STEP={next_step}",
-                                        error.code()
+                                        "P3_RECOVERY={};NEXT_SAFE_STEP={}",
+                                        error.code(),
+                                        recovery_next_safe_step(error)
                                     );
                                     false
                                 }
@@ -835,8 +858,9 @@ mod windows {
                                 }
                                 Err(error) => {
                                     eprintln!(
-                                        "P3_RECOVERY={};NEXT_SAFE_STEP=RETRY_OWNED_RECOVERY",
-                                        error.code()
+                                        "P3_RECOVERY={};NEXT_SAFE_STEP={}",
+                                        error.code(),
+                                        recovery_next_safe_step(error)
                                     );
                                     false
                                 }
@@ -870,8 +894,9 @@ mod windows {
                         }
                         Err(error) => {
                             eprintln!(
-                                "P3_RECOVERY={};NEXT_SAFE_STEP=RETRY_OWNED_RECOVERY",
-                                error.code()
+                                "P3_RECOVERY={};NEXT_SAFE_STEP={}",
+                                error.code(),
+                                recovery_next_safe_step(error)
                             );
                             PendingSaveRecovery::Blocked
                         }
@@ -1527,8 +1552,8 @@ mod windows {
 mod tests {
     use super::{
         ConfirmedSaveTrigger, ShippingCompositionError, confirmed_save_trigger,
-        open_with_one_fresh_claim, retire_historical_probe_only_after_proof,
-        retryable_reconnect_observation,
+        open_with_one_fresh_claim, recovery_next_safe_step,
+        retire_historical_probe_only_after_proof, retryable_reconnect_observation,
     };
     #[cfg(not(windows))]
     use super::{ShippingDeliveryCommand, run_claim, run_delivery_command};
@@ -1710,6 +1735,36 @@ mod tests {
             Restart::UploadOrCommitUncertain,
         ] {
             assert!(!retryable_reconnect_observation(local));
+        }
+    }
+
+    #[test]
+    fn failed_recovery_advises_only_safe_actions_without_replay_or_stale_open() {
+        use crate::shipping_control_plane::ShippingControlPlaneError as Http;
+        use crate::shipping_generation_successor_control::RestartExactLocalCompletionError as Restart;
+
+        for (failure, expected) in [
+            (Restart::NativeSnapshotTooLarge, "PRESERVE_LOCAL_BYTES;NATIVE_RESCUE_REQUIRED"),
+            (Restart::PreSealTransport, "PRESERVE_LOCAL_BYTES;FRESH_AUTHORIZED_OBSERVATION"),
+            (Restart::PreSealResponseUncertain, "PRESERVE_LOCAL_BYTES;FRESH_AUTHORIZED_OBSERVATION"),
+            (Restart::UploadOrCommitUncertain, "PRESERVE_LOCAL_BYTES;FRESH_AUTHORIZED_OBSERVATION"),
+            (Restart::PreSealRejected, "PRESERVE_LOCAL_BYTES;CHECK_SERVER_AUTHORITY"),
+            (Restart::PreSealUnavailable, "PRESERVE_LOCAL_BYTES;CHECK_SEALING_SERVICE"),
+            (Restart::LocalEvidenceChanged, "PRESERVE_LOCAL_BYTES;CHECK_LOCAL_EVIDENCE"),
+            (Restart::WriterOrLockUnresolved, "PRESERVE_LOCAL_BYTES;CHECK_NATIVE_WRITER"),
+            (Restart::BindingOrRetirementFailed, "PRESERVE_LOCAL_BYTES;RECONCILE_ACTIVE_EXACT"),
+            (Restart::ControlPlane(Http::Transport), "PRESERVE_LOCAL_BYTES;FRESH_AUTHORIZED_OBSERVATION"),
+            (Restart::ControlPlane(Http::HttpServerUncertain), "PRESERVE_LOCAL_BYTES;FRESH_AUTHORIZED_OBSERVATION"),
+            (Restart::ControlPlane(Http::HttpStatus), "PRESERVE_LOCAL_BYTES;CHECK_SERVER_AUTHORITY"),
+            (Restart::ControlPlane(Http::LaunchLeaseConflict), "PRESERVE_LOCAL_BYTES;CHECK_SERVER_AUTHORITY"),
+            (Restart::ControlPlane(Http::InvalidResponse), "PRESERVE_LOCAL_BYTES;INSPECT_SERVER_RESPONSE"),
+            (Restart::ControlPlane(Http::Clock), "PRESERVE_LOCAL_BYTES;CHECK_CLOCK"),
+        ] {
+            let step = recovery_next_safe_step(failure);
+            assert_eq!(step, expected);
+            assert!(step.starts_with("PRESERVE_LOCAL_BYTES;"));
+            assert!(!step.contains("RETRY_OWNED_RECOVERY"));
+            assert!(!step.contains("CONTINUE_OPEN"));
         }
     }
 
