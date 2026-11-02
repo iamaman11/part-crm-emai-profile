@@ -479,14 +479,14 @@ def load_runtime_lock() -> tuple[dict[str, Any], str]:
 def verify_python_components(lock: dict[str, Any]) -> None:
     components = lock.get("components")
     if not isinstance(components, dict) or set(components) != {
-        "browserforge",
         "camoufox_python",
+        "fpgen",
         "playwright",
     }:
         raise RuntimeContractError("runtime component lock is invalid")
     distributions = {
-        "browserforge": "browserforge",
         "camoufox_python": "camoufox",
+        "fpgen": "fpgen",
         "playwright": "playwright",
     }
     for key, distribution in distributions.items():
@@ -842,6 +842,9 @@ def default_addon_exclusions() -> list[Any]:
 def touch_runtime_preferences(config: dict[str, Any]) -> dict[str, int]:
     """Project generation-owned touch identity into the pinned Firefox compatibility layer."""
     value = config.get("navigator.maxTouchPoints")
+    if value is None:
+        # Camoufox 158/fpgen does not emit the former BrowserForge touch field.
+        return {}
     if isinstance(value, bool) or not isinstance(value, int) or not 0 <= value <= 64:
         raise RuntimeContractError("materialized navigator.maxTouchPoints identity is invalid")
     return {
@@ -1387,7 +1390,6 @@ def materialize_candidate_identity(root: Path) -> dict[str, str]:
             fingerprint=fingerprint,
             headless=headless_mode,
             i_know_what_im_doing=True,
-            locale=fingerprint.navigator.languages,
             os="windows",
         )
     config = extract_camoufox_config(options)
@@ -1395,8 +1397,9 @@ def materialize_candidate_identity(root: Path) -> dict[str, str]:
     # falsy BrowserForge values, and normalizes negative screen offsets. Preserve only those known
     # conversion gaps from this exact generated fingerprint; never substitute host-derived facts.
     # The real-browser pre-navigation probe below proves that the pinned browser reproduces them.
-    preserve_generated_browserforge_projection(config, fingerprint)
-    verify_generated_webgl2_choice(config, options)
+    # Official Camoufox 158/fpgen supplies canonical config directly; do not
+    # project the old BrowserForge object or regenerate identity on Reopen.
+    generation_webgl2_enabled(config)
     config_bytes = canonical_json(config)
     config_path.write_bytes(config_bytes)
     config_sha256 = sha256_bytes(config_bytes)
