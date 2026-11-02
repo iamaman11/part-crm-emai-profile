@@ -2699,11 +2699,14 @@ mod tests {
                 Err(RestartExactLocalCompletionError::NativeSnapshotTooLarge),
             );
             assert_eq!(network.paths.len(), 1);
-            assert!(network.paths[0].ends_with(
-                "/generation-successor/local-unsynced/retry-decision"
-            ));
+            assert!(
+                network.paths[0].ends_with("/generation-successor/local-unsynced/retry-decision")
+            );
             assert_eq!(upload.calls, 0);
-            assert!(root.open_generation(&fixture.tenant, &fixture.profile, &candidate).is_err());
+            assert!(
+                root.open_generation(&fixture.tenant, &fixture.profile, &candidate)
+                    .is_err()
+            );
             assert_eq!(source.inventory()?, original_inventory);
             assert_eq!(std::fs::read(&wal)?, b"original-oversized-native-wal");
             assert_eq!(std::fs::read(source.path().join("prefs.js"))?, b"save");
