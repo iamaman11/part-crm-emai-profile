@@ -691,6 +691,100 @@ def prove_close_failure_witness_preserves_order() -> None:
     assert not runtime.controlled_close_candidate(state), "crash became successful closure"
 
 
+def prove_wm_close_exit_timing_requires_native_success() -> None:
+    """F02: a close-event/Windows zero-exit race must not masquerade as a crash.
+
+    Negative controls preserve the original error when the process did not
+    cleanly exit, a close callback is missing, or a crash event was observed.
+    """
+    runtime = runtime_module()
+
+    class TargetClosedError(RuntimeError):
+        pass
+
+    class EventContext:
+        def __init__(self, error: Exception) -> None:
+            self.error = error
+
+        def wait_for_event(self, event: str, timeout: int) -> None:
+            assert event == "page" and timeout == 100
+            raise self.error
+
+    class NativeExit:
+        def __init__(self, eventually_zero: bool) -> None:
+            self.eventually_zero = eventually_zero
+            self.exited = False
+            self.waits: list[int] = []
+
+        def safely_exited(self, wait_millis: int = 0) -> bool:
+            self.waits.append(wait_millis)
+            assert 0 <= wait_millis <= 250, "unbounded wait would hide a hung browser"
+            if wait_millis == 250 and self.eventually_zero:
+                self.exited = True
+            return self.exited
+
+    def state(witness: NativeExit, *, closed: bool = True, crashed: bool = False) -> dict:
+        return {
+            "tracked_pages": {1},
+            "closed_pages": {1} if closed else set(),
+            "crashed": crashed,
+            "browser_exit": witness,
+        }
+
+    # All page callbacks observed, native Windows root exits normally just
+    # after the Playwright API reports TargetClosedError.
+    clean = NativeExit(True)
+    observed = runtime.observe_controlled_close(
+        EventContext(TargetClosedError("browser target closed")), state(clean)
+    )
+    assert observed is True
+    assert clean.waits == [250, 0], clean.waits
+
+    # A nonzero/unknown native process status can NEVER be counted as Saved.
+    failed = NativeExit(False)
+    try:
+        runtime.observe_controlled_close(
+            EventContext(TargetClosedError("unverified process death")), state(failed)
+        )
+    except TargetClosedError:
+        pass
+    else:
+        raise AssertionError("unverified process exit was accepted as normal close")
+    assert failed.waits == [250], failed.waits
+
+    # No normal callback means no native wait and no positive close, even if
+    # a process could exit with status zero.
+    incomplete = NativeExit(True)
+    try:
+        runtime.observe_controlled_close(
+            EventContext(TargetClosedError("no page close callback")),
+            state(incomplete, closed=False),
+        )
+    except TargetClosedError:
+        pass
+    else:
+        raise AssertionError("missing page-close callback was accepted")
+    assert not incomplete.waits
+
+    crashed = NativeExit(True)
+    try:
+        runtime.observe_controlled_close(
+            EventContext(TargetClosedError("crashed page")),
+            state(crashed, crashed=True),
+        )
+    except TargetClosedError:
+        pass
+    else:
+        raise AssertionError("crashed page was accepted as clean")
+    assert not crashed.waits
+
+    pending = NativeExit(False)
+    assert runtime.observe_controlled_close(
+        EventContext(TimeoutError("no new page")), state(pending, closed=False)
+    ) is False
+    assert not pending.waits, "ordinary pending close should never wait on process"
+
+
 def prove_owned_job_execution_witness() -> None:
     """D02: mark only a live owner-thread job, never a saved browser or stale job."""
     runtime = runtime_module()
@@ -728,6 +822,7 @@ def prove_owned_job_execution_witness() -> None:
 def main() -> int:
     prove_receipt_failure_diagnostics()
     prove_close_failure_witness_preserves_order()
+    prove_wm_close_exit_timing_requires_native_success()
     prove_owned_job_execution_witness()
     prove_pid_reuse_fails_closed()
     prove_agent()
