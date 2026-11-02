@@ -1057,11 +1057,20 @@ mod windows {
                 {
                     return Err(ShippingCompositionError::HeartbeatAuthorityUncertain);
                 }
+                // Pre-seal transport uncertainty precedes BPAT creation.
+                // Reattempt only the original local seal after a confirmed
+                // live heartbeat; ordinary D1 retry fencing still guards PUT.
+                let mut first_seal_pending = matches!(
+                    &initial,
+                    Err(OperatorFlowError::GenerationSave { reason })
+                        if reason.allows_bounded_preseal_reconnect()
+                );
                 match initial {
                     Ok(completion) if completion.is_saved() => return Ok(()),
                     Ok(_) => return Err(ShippingCompositionError::CommittedRecoveryRequired),
                     Err(OperatorFlowError::GenerationSave { reason })
-                        if !reason.allows_bounded_cloud_reconcile() =>
+                        if !reason.allows_bounded_cloud_reconcile()
+                            && !reason.allows_bounded_preseal_reconnect() =>
                     {
                         return Err(ShippingCompositionError::Operator(
                             OperatorFlowError::GenerationSave { reason },
@@ -1133,33 +1142,38 @@ mod windows {
                                 .retained_save_lease()
                                 .cloned()
                                 .ok_or(ShippingCompositionError::CommittedRecoveryRequired)?;
-                            match confirm_retained_exact_retry_nonapplication(
-                                &materialization_root,
-                                &original,
-                                &mut recovery_observation_transport,
-                            ) {
-                                Ok(true) => {}
-                                Ok(false) => {
-                                    return Err(
-                                        ShippingCompositionError::CommittedRecoveryRequired,
-                                    );
-                                }
-                                Err(error) if retryable_reconnect_observation(error) => {
-                                    // No D1-positive decision was observed. Wait
-                                    // only within the confirmed writer deadline.
-                                    continue;
-                                }
-                                Err(error) => {
-                                    // Definitive 401/403/404, malformed response,
-                                    // clock or changed local evidence are NOT
-                                    // transient network failures. Preserve N+1.
-                                    eprintln!(
-                                        "P3_RECOVERY={};NEXT_SAFE_STEP=PRESERVE_LOCAL_BYTES",
-                                        error.code()
-                                    );
-                                    return Err(
-                                        ShippingCompositionError::CommittedRecoveryRequired,
-                                    );
+                            // No exact BPAT exists after a transient first-seal
+                            // failure. The retained Save must still prove
+                            // the exact descriptor in D1 before any cloud PUT.
+                            if !first_seal_pending {
+                                match confirm_retained_exact_retry_nonapplication(
+                                    &materialization_root,
+                                    &original,
+                                    &mut recovery_observation_transport,
+                                ) {
+                                    Ok(true) => {}
+                                    Ok(false) => {
+                                        return Err(
+                                            ShippingCompositionError::CommittedRecoveryRequired,
+                                        );
+                                    }
+                                    Err(error) if retryable_reconnect_observation(error) => {
+                                        // No D1-positive decision was observed. Wait
+                                        // only within the confirmed writer deadline.
+                                        continue;
+                                    }
+                                    Err(error) => {
+                                        // Definitive 401/403/404, malformed response,
+                                        // clock or changed local evidence are NOT
+                                        // transient network failures. Preserve N+1.
+                                        eprintln!(
+                                            "P3_RECOVERY={};NEXT_SAFE_STEP=PRESERVE_LOCAL_BYTES",
+                                            error.code()
+                                        );
+                                        return Err(
+                                            ShippingCompositionError::CommittedRecoveryRequired,
+                                        );
+                                    }
                                 }
                             }
                             let timing = operator
@@ -1229,16 +1243,25 @@ mod windows {
                                     );
                                 }
                                 Err(OperatorFlowError::GenerationSave { reason })
-                                    if !reason.allows_bounded_cloud_reconcile() =>
+                                    if !reason.allows_bounded_cloud_reconcile()
+                                        && !reason.allows_bounded_preseal_reconnect() =>
                                 {
                                     return Err(ShippingCompositionError::Operator(
                                         OperatorFlowError::GenerationSave { reason },
                                     ));
                                 }
-                                Err(
-                                    OperatorFlowError::Stage(OperatorFailureStage::GenerationSave)
-                                    | OperatorFlowError::GenerationSave { .. },
-                                ) if operator.has_pending_dirty_close() => {
+                                Err(OperatorFlowError::GenerationSave { reason })
+                                    if operator.has_pending_dirty_close() =>
+                                {
+                                    // A retry after first seal can reach D1/R2.
+                                    // Next iteration must gate any exact BPAT.
+                                    first_seal_pending = reason.allows_bounded_preseal_reconnect();
+                                    continue;
+                                }
+                                Err(OperatorFlowError::Stage(OperatorFailureStage::GenerationSave))
+                                    if operator.has_pending_dirty_close() =>
+                                {
+                                    first_seal_pending = false;
                                     continue;
                                 }
                                 Err(error) => {
