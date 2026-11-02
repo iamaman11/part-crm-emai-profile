@@ -1312,6 +1312,20 @@ where
                 return Err(self.fail_before_local_use(OperatorFailureStage::LocalWorkspace, lease));
             }
         };
+        if let Err(error) = self.browser_preflight.evaluate_before_launch(
+            &workspace,
+            &device_id,
+            lease.epoch(),
+            &runtime_bundle,
+        ) {
+            let reason = B::operational_rejection_reason(&error);
+            return Err(self.fail_preflight_with_lock_before_use(
+                reason,
+                lease,
+                workspace_lock,
+                &workspace,
+            ));
+        }
         if native_rescue_required {
             #[cfg(any(windows, test))]
             if begin_native_rescue_edit(root, &workspace, &lease).is_err() {
@@ -1325,20 +1339,6 @@ where
             #[cfg(not(any(windows, test)))]
             return Err(self.fail_with_lock_before_use(
                 OperatorFailureStage::GenerationSave,
-                lease,
-                workspace_lock,
-                &workspace,
-            ));
-        }
-        if let Err(error) = self.browser_preflight.evaluate_before_launch(
-            &workspace,
-            &device_id,
-            lease.epoch(),
-            &runtime_bundle,
-        ) {
-            let reason = B::operational_rejection_reason(&error);
-            return Err(self.fail_preflight_with_lock_before_use(
-                reason,
                 lease,
                 workspace_lock,
                 &workspace,
