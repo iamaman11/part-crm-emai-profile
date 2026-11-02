@@ -378,6 +378,15 @@ impl GenerationSaveFailureReason {
         )
     }
 
+    /// The first BPAT may not exist when the sealing-material request lost
+    /// its response. This is a separate, local-only retry: the original
+    /// LOCAL_UNSYNCED inventory and the current heartbeat must be re-proved.
+    /// The actual PUT still requires the normal D1-positive exact decision.
+    #[must_use]
+    pub const fn allows_bounded_preseal_reconnect(self) -> bool {
+        matches!(self, Self::SealingTransport | Self::SealingResponseUncertain)
+    }
+
     /// Stable, redacted user/support code, never a storage key or raw HTTP.
     #[must_use]
     pub const fn code(self) -> &'static str {
@@ -2519,6 +2528,29 @@ mod tests {
             Reason::ControlInvalidResponse,
         ] {
             assert!(!reason.allows_bounded_cloud_reconcile());
+        }
+        // Pre-seal recovery does NOT grant the sealed-BPAT retry path.
+        // Only transport/ambiguous material lookup may repeat locally after
+        // a successful current-session heartbeat. Explicit denial, invalid
+        // local evidence and oversize must never enter that loop.
+        for reason in [
+            Reason::SealingTransport,
+            Reason::SealingResponseUncertain,
+        ] {
+            assert!(reason.allows_bounded_preseal_reconnect());
+            assert!(!reason.allows_bounded_cloud_reconcile());
+        }
+        for reason in [
+            Reason::SealingRejected,
+            Reason::SealingMaterial,
+            Reason::SnapshotTooLarge,
+            Reason::NativeSourceChanged,
+            Reason::CheckpointIntegrity,
+            Reason::ControlRejected,
+            Reason::ControlTransport,
+            Reason::UploadOutcomeUncertain,
+        ] {
+            assert!(!reason.allows_bounded_preseal_reconnect());
         }
         for reason in [
             Reason::ControlTransport,
