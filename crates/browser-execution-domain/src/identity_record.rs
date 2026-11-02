@@ -6,6 +6,7 @@ use super::{
 use std::collections::BTreeMap;
 
 const RECORD_SCHEMA: &str = "profile-stable-browser-identity-v1";
+const CAMOUFOX_RECORD_SCHEMA: &str = "camoufox-native-identity-v1";
 const RECORD_FIELD_COUNT: usize = 39;
 const NONE: &str = "none";
 
@@ -18,7 +19,26 @@ impl BrowserIdentityManifest {
     /// not independent fingerprint authorities.
     #[must_use]
     pub fn to_canonical_record(&self) -> String {
-        let stable = self.profile_stable_identity();
+        let Some(stable) = self.profile_stable_identity() else {
+            return format!(
+                concat!(
+                    "schema={}\n",
+                    "compatibility_version={}\n",
+                    "fingerprint_policy_version={}\n",
+                    "runtime_version={}\n",
+                    "runtime_inventory_sha256={}\n",
+                    "fingerprint_source={}\n",
+                    "fingerprint_config_sha256={}\n",
+                ),
+                CAMOUFOX_RECORD_SCHEMA,
+                self.compatibility_version(),
+                self.fingerprint_policy_version(),
+                self.runtime_version(),
+                self.runtime_inventory_sha256(),
+                self.fingerprint_source(),
+                self.fingerprint_config_sha256(),
+            );
+        };
         let browser = stable.browser_os();
         let hardware = stable.hardware();
         let display = stable.display();
@@ -120,6 +140,23 @@ impl BrowserIdentityManifest {
 
     pub fn from_canonical_record(record: &str) -> Result<Self, BrowserExecutionError> {
         let values = parse_record(record)?;
+        if required(&values, "schema")? == CAMOUFOX_RECORD_SCHEMA {
+            if values.len() != 7 {
+                return Err(BrowserExecutionError::InvalidIdentityToken);
+            }
+            let identity = Self::new_native(
+                parse_number(&values, "compatibility_version")?,
+                required(&values, "fingerprint_policy_version")?,
+                required(&values, "runtime_version")?,
+                required(&values, "runtime_inventory_sha256")?,
+                required(&values, "fingerprint_source")?,
+                required(&values, "fingerprint_config_sha256")?,
+            )?;
+            if identity.to_canonical_record() != record {
+                return Err(BrowserExecutionError::InvalidIdentityToken);
+            }
+            return Ok(identity);
+        }
         if values.len() != RECORD_FIELD_COUNT || required(&values, "schema")? != RECORD_SCHEMA {
             return Err(BrowserExecutionError::InvalidIdentityToken);
         }
@@ -302,6 +339,42 @@ mod tests {
     }
 
     #[test]
+    fn camoufox_native_record_is_opaque_and_fail_closed() -> Result<(), Box<dyn std::error::Error>>
+    {
+        let identity = BrowserIdentityManifest::new_native(
+            2,
+            "profile-stability-v1",
+            "158.0.1-beta.41",
+            digest('a'),
+            "profile-stability-v1-probe-bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+            digest('c'),
+        )?;
+        let record = identity.to_canonical_record();
+        assert!(record.starts_with("schema=camoufox-native-identity-v1\n"));
+        assert!(!record.contains("webgl_"));
+        assert!(!record.contains("canvas_seed_"));
+        assert_eq!(
+            BrowserIdentityManifest::from_canonical_record(&record)?,
+            identity
+        );
+        assert!(
+            BrowserIdentityManifest::from_canonical_record(&record.replace(
+                "fingerprint_config_sha256=",
+                "webgl_vendor=wrong\nfingerprint_config_sha256=",
+            ))
+            .is_err()
+        );
+        assert!(
+            BrowserIdentityManifest::from_canonical_record(&record.replace(
+                "fingerprint_config_sha256=",
+                "fingerprint_config_sha256=wrong",
+            ))
+            .is_err()
+        );
+        Ok(())
+    }
+
+    #[test]
     fn canonical_record_round_trips_without_semantic_loss() -> Result<(), Box<dyn std::error::Error>>
     {
         let identity = identity()?;
@@ -324,6 +397,7 @@ mod tests {
         assert_eq!(
             restored
                 .profile_stable_identity()
+                .ok_or("legacy fixture must have structured identity")?
                 .hardware()
                 .device_memory_gib(),
             None

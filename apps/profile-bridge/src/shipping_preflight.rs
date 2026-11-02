@@ -1,6 +1,6 @@
 mod camoufox_identity;
 
-pub use camoufox_identity::profile_stable_identity_from_config_bytes;
+pub use camoufox_identity::validate_camoufox_config_bytes;
 
 use crate::browser_execution::{BrowserLaunchBlocker, load_materialization_binding};
 use crate::browser_preflight::classify_browser_launch_blocker;
@@ -9,7 +9,7 @@ use crate::local_profile::GenerationWorkspace;
 use crate::operator_flow::{BrowserLaunchPreflightPort, OperationalRejectionReason};
 use crate::runtime_bundle::ApprovedRuntimeBundle;
 use crate::shipping_network::GenerationNetworkEvidence;
-use camoufox_identity::{CamoufoxIdentityProjectionError, verify_materialized_camoufox_identity};
+use camoufox_identity::{CamoufoxConfigError, verify_materialized_camoufox_identity};
 use profile_platform_primitives::DeviceId;
 
 /// Shipping adapter that resolves the exact generation binding only after redemption has selected
@@ -62,14 +62,12 @@ impl BrowserLaunchPreflightPort for ShippingBrowserLaunchPreflight {
     }
 }
 
-fn map_identity_projection_error(error: CamoufoxIdentityProjectionError) -> BrowserLaunchBlocker {
+fn map_identity_projection_error(error: CamoufoxConfigError) -> BrowserLaunchBlocker {
     match error {
-        CamoufoxIdentityProjectionError::InvalidMaterialization => {
+        CamoufoxConfigError::InvalidMaterialization => {
             BrowserLaunchBlocker::InvalidMaterializationEvidence
         }
-        CamoufoxIdentityProjectionError::IdentityMismatch => {
-            BrowserLaunchBlocker::MaterializationStale
-        }
+        CamoufoxConfigError::IdentityMismatch => BrowserLaunchBlocker::MaterializationStale,
     }
 }
 

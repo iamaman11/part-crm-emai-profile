@@ -349,9 +349,8 @@ mod p3_fixture {
         if lower_hex(&Sha256::digest(&config_bytes)) != report.fingerprint_config_sha256 {
             return Err("materialization report config digest mismatch".into());
         }
-        let stable =
-            crate::shipping_preflight::profile_stable_identity_from_config_bytes(&config_bytes)?;
-        let identity = browser_execution_domain::BrowserIdentityManifest::new(
+        crate::shipping_preflight::validate_camoufox_config_bytes(&config_bytes)?;
+        let identity = browser_execution_domain::BrowserIdentityManifest::new_native(
             2,
             report.fingerprint_policy_version.clone(),
             bundle.manifest().runtime_version(),
@@ -361,7 +360,6 @@ mod p3_fixture {
                 report.fingerprint_policy_version, report.profile_stable_probe_sha256
             ),
             report.fingerprint_config_sha256,
-            stable,
         )?;
         let binding = MaterializationBinding::new(
             TenantId::parse(TENANT)?,

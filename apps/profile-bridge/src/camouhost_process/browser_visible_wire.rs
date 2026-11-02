@@ -101,6 +101,14 @@ struct WireSpeechVoice {
     is_default: bool,
 }
 
+/// Parse the native browser's actual observation for host/runtime checks.
+/// Fingerprint semantics and fidelity remain exclusively with Camoufox.
+pub(super) fn inspect_browser_visible_payload(
+    payload: &[u8],
+) -> Result<HostRuntimeEvidence, BrowserVisibleWireError> {
+    host_runtime_evidence(&parse_browser_visible_payload(payload)?)
+}
+
 pub(super) fn verify_browser_visible_payload(
     expected: &ProfileStableIdentity,
     payload: &[u8],
@@ -415,7 +423,9 @@ mod tests {
         // The fixture expects NVIDIA; a different observed vendor is not a launch veto.
         assert!(
             verify_browser_visible_payload(
-                identity.profile_stable_identity(),
+                identity
+                    .profile_stable_identity()
+                    .ok_or("structured synthetic identity expected")?,
                 MATCHING_PAYLOAD.as_bytes()
             )
             .is_ok()
@@ -432,8 +442,13 @@ mod tests {
             Ok(browser_execution_domain::host_compatibility::HostGraphicsBackend::Unavailable)
         );
         assert!(
-            verify_browser_visible_payload(identity.profile_stable_identity(), &unavailable)
-                .is_ok()
+            verify_browser_visible_payload(
+                identity
+                    .profile_stable_identity()
+                    .ok_or("structured synthetic identity expected")?,
+                &unavailable
+            )
+            .is_ok()
         );
         let mut missing_context = payload.clone();
         missing_context["graphics"]
@@ -447,7 +462,9 @@ mod tests {
         payload["user_agent"] = serde_json::json!("Mozilla/5.0 Firefox/151.0");
         assert_eq!(
             verify_browser_visible_payload(
-                identity.profile_stable_identity(),
+                identity
+                    .profile_stable_identity()
+                    .ok_or("structured synthetic identity expected")?,
                 &serde_json::to_vec(&payload)?
             ),
             Err(BrowserVisibleWireError::IdentityMismatch)

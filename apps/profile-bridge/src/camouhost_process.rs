@@ -1,7 +1,9 @@
 mod browser_visible_wire;
 mod initial_identity;
 
-use self::browser_visible_wire::{HostRuntimeEvidence, verify_browser_visible_payload};
+use self::browser_visible_wire::{
+    HostRuntimeEvidence, inspect_browser_visible_payload, verify_browser_visible_payload,
+};
 use crate::ProcessControlPort;
 use crate::browser_execution::BrowserLaunchBlocker;
 use crate::browser_preflight::{BoundBrowserLaunchPreflight, BrowserRuntimeObservationPort};
@@ -108,7 +110,7 @@ struct RuntimeLaunchBinding {
     runtime_lock_sha256: String,
     fingerprint_config_sha256: String,
     profile_stable_probe_sha256: String,
-    profile_stable_identity: ProfileStableIdentity,
+    profile_stable_identity: Option<ProfileStableIdentity>,
     entrypoint_sha256: String,
     #[cfg(windows)]
     browser_sha256: String,
@@ -199,7 +201,7 @@ fn validate_runtime_identity(
         runtime_lock_sha256,
         fingerprint_config_sha256: config_sha256,
         profile_stable_probe_sha256: probe_sha256.to_owned(),
-        profile_stable_identity: browser_identity.profile_stable_identity().clone(),
+        profile_stable_identity: browser_identity.profile_stable_identity().cloned(),
         entrypoint_sha256,
         #[cfg(windows)]
         browser_sha256,
@@ -537,7 +539,7 @@ impl ProcessControlPort for ManagedCamouhostProcess {
         state.stdin = Some(stdin);
         state.responses = Some(spawn_response_reader(stdout));
         state.active_session = Some(session_id.clone());
-        state.profile_stable_identity = Some(binding.profile_stable_identity);
+        state.profile_stable_identity = binding.profile_stable_identity;
         state.navigation_target = self.config.initial_url.clone();
         state.agent_directory = Some(agent_directory);
         state.child = Some(child);
@@ -660,13 +662,16 @@ fn verify_managed_browser_visible_identity(
         if state.active_session.as_ref() != Some(session_id) {
             return Err(BridgePortError::InvalidResponse);
         }
-        state
-            .profile_stable_identity
-            .clone()
-            .ok_or(BridgePortError::InvalidResponse)?
+        state.profile_stable_identity.clone()
     };
-    let host_runtime_evidence = verify_browser_visible_payload(&expected, &payload)
-        .map_err(|_| BridgePortError::InvalidResponse)?;
+    // Official Camoufox owns fingerprint semantics. Its config is sealed before
+    // spawn; live observations remain strict transport/host diagnostics, not a
+    // second fingerprint admission policy.
+    let host_runtime_evidence = match expected {
+        Some(identity) => verify_browser_visible_payload(&identity, &payload),
+        None => inspect_browser_visible_payload(&payload),
+    }
+    .map_err(|_| BridgePortError::InvalidResponse)?;
     verify_host_compatibility(display_mode, host_runtime_evidence)?;
 
     Ok(())

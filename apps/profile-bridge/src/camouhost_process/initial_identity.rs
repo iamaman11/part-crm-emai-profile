@@ -1,6 +1,6 @@
 //! First identity materialization belongs to the existing pinned Camouhost process owner.
 use super::*;
-use crate::shipping_preflight::profile_stable_identity_from_config_bytes;
+use crate::shipping_preflight::validate_camoufox_config_bytes;
 use browser_execution_domain::BrowserIdentityManifest;
 use serde::Deserialize;
 use std::io::{BufRead, BufReader, Read};
@@ -191,11 +191,11 @@ impl ManagedCamouhostConfig {
             );
             BridgePortError::Unavailable
         })?;
-        let stable = profile_stable_identity_from_config_bytes(&config).map_err(|error| {
-            eprintln!("INITIAL_IDENTITY_FAILURE=config_projection;category={error:?}");
+        validate_camoufox_config_bytes(&config).map_err(|error| {
+            eprintln!("INITIAL_IDENTITY_FAILURE=config_shape;category={error:?}");
             BridgePortError::InvalidResponse
         })?;
-        BrowserIdentityManifest::new(
+        BrowserIdentityManifest::new_native(
             IDENTITY_COMPATIBILITY_VERSION,
             report.fingerprint_policy_version,
             bundle.manifest().runtime_version(),
@@ -205,7 +205,6 @@ impl ManagedCamouhostConfig {
                 report.profile_stable_probe_sha256
             ),
             report.fingerprint_config_sha256,
-            stable,
         )
         .map_err(|error| {
             eprintln!("INITIAL_IDENTITY_FAILURE=identity_manifest;category={error:?}");

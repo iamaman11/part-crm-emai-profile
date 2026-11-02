@@ -31,7 +31,7 @@ pub struct BrowserIdentityManifest {
     runtime_inventory_sha256: String,
     fingerprint_source: String,
     fingerprint_config_sha256: String,
-    profile_stable_identity: ProfileStableIdentity,
+    profile_stable_identity: Option<ProfileStableIdentity>,
 }
 
 impl BrowserIdentityManifest {
@@ -44,6 +44,47 @@ impl BrowserIdentityManifest {
         fingerprint_source: impl Into<String>,
         fingerprint_config_sha256: impl Into<String>,
         profile_stable_identity: ProfileStableIdentity,
+    ) -> Result<Self, BrowserExecutionError> {
+        Self::new_with_identity(
+            compatibility_version,
+            fingerprint_policy_version,
+            runtime_version,
+            runtime_inventory_sha256,
+            fingerprint_source,
+            fingerprint_config_sha256,
+            Some(profile_stable_identity),
+        )
+    }
+
+    /// Official Camoufox owns all browser fingerprint semantics; the immutable config
+    /// and its digest are the complete generation-owned identity.
+    pub fn new_native(
+        compatibility_version: u32,
+        fingerprint_policy_version: impl Into<String>,
+        runtime_version: impl Into<String>,
+        runtime_inventory_sha256: impl Into<String>,
+        fingerprint_source: impl Into<String>,
+        fingerprint_config_sha256: impl Into<String>,
+    ) -> Result<Self, BrowserExecutionError> {
+        Self::new_with_identity(
+            compatibility_version,
+            fingerprint_policy_version,
+            runtime_version,
+            runtime_inventory_sha256,
+            fingerprint_source,
+            fingerprint_config_sha256,
+            None,
+        )
+    }
+
+    fn new_with_identity(
+        compatibility_version: u32,
+        fingerprint_policy_version: impl Into<String>,
+        runtime_version: impl Into<String>,
+        runtime_inventory_sha256: impl Into<String>,
+        fingerprint_source: impl Into<String>,
+        fingerprint_config_sha256: impl Into<String>,
+        profile_stable_identity: Option<ProfileStableIdentity>,
     ) -> Result<Self, BrowserExecutionError> {
         if compatibility_version == 0 {
             return Err(BrowserExecutionError::InvalidCompatibilityVersion);
@@ -106,8 +147,8 @@ impl BrowserIdentityManifest {
     }
 
     #[must_use]
-    pub const fn profile_stable_identity(&self) -> &ProfileStableIdentity {
-        &self.profile_stable_identity
+    pub fn profile_stable_identity(&self) -> Option<&ProfileStableIdentity> {
+        self.profile_stable_identity.as_ref()
     }
 
     #[must_use]

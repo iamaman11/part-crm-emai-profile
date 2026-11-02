@@ -1,568 +1,132 @@
-use browser_execution_domain::browser_visible_observation::{
-    BrowserKeyValueObservation, BrowserValue, BrowserVisibleSha256Port, SpeechVoiceObservation,
-    canonical_audio_seed_sha256, canonical_canvas_seed_sha256, canonical_context_attributes_sha256,
-    canonical_font_set_sha256, canonical_font_spacing_seed_sha256,
-    canonical_navigator_languages_sha256, canonical_shader_precision_sha256,
-    canonical_speech_voices_sha256, canonical_webgl_extensions_sha256,
-    canonical_webgl_parameters_sha256, canonical_webgl2_disabled_sha256,
-    canonical_webgl2_parameters_sha256,
-};
-use browser_execution_domain::{
-    BrowserIdentityManifest, BrowserOsIdentity, DisplayIdentity, FontIdentity, GraphicsIdentity,
-    HardwareCapabilityIdentity, LocaleIdentity, OriginDeterminismMode, OriginDeterministicIdentity,
-    ProfileStableIdentity,
-};
-use serde_json::{Map, Value};
+//! Camoufox owns fingerprints. Rust only checks the sealed config bytes and file safety.
+use browser_execution_domain::BrowserIdentityManifest;
+use serde_json::Value;
 use sha2::{Digest, Sha256};
-use std::fs;
-use std::path::Path;
+use std::{fs, path::Path};
 
 const CONFIG_NAME: &str = "camoufox-config.json";
 const MAX_CONFIG_BYTES: u64 = 1024 * 1024;
-const MAX_JSON_DEPTH: usize = 32;
-const PROFILE_STABLE_SCHEMA_VERSION: u32 = 2;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum CamoufoxIdentityProjectionError {
+pub enum CamoufoxConfigError {
     InvalidMaterialization,
     IdentityMismatch,
 }
 
-impl core::fmt::Display for CamoufoxIdentityProjectionError {
-    fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        formatter.write_str(match self {
-            Self::InvalidMaterialization => "materialized Camoufox identity projection is invalid",
-            Self::IdentityMismatch => {
-                "materialized Camoufox identity does not match generation identity"
-            }
+impl core::fmt::Display for CamoufoxConfigError {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.write_str(match self {
+            Self::InvalidMaterialization => "Camoufox config is not a valid bounded JSON object",
+            Self::IdentityMismatch => "Camoufox config bytes differ from the sealed generation",
         })
     }
 }
+impl std::error::Error for CamoufoxConfigError {}
 
-impl std::error::Error for CamoufoxIdentityProjectionError {}
-
-/// Verify one materialized Camoufox config against the generation-owned browser identity.
-///
-/// The adapter owns only Camoufox JSON field mapping and filesystem effects. All semantic digest
-/// canonicalization is delegated to `browser-execution-domain`; raw config SHA remains integrity
-/// evidence and is never used as the Profile-Stable semantic identity.
-pub fn verify_materialized_camoufox_identity(
-    profile_root: &Path,
-    expected: &BrowserIdentityManifest,
-) -> Result<(), CamoufoxIdentityProjectionError> {
-    let raw = read_regular_bounded(&profile_root.join(CONFIG_NAME))?;
-    if sha256_hex(&raw) != expected.fingerprint_config_sha256() {
-        return Err(CamoufoxIdentityProjectionError::IdentityMismatch);
+/// Validates transport shape, never the set of upstream fingerprint keys.
+pub fn validate_camoufox_config_bytes(raw: &[u8]) -> Result<(), CamoufoxConfigError> {
+    if raw.is_empty() || raw.len() as u64 > MAX_CONFIG_BYTES {
+        return Err(CamoufoxConfigError::InvalidMaterialization);
     }
-    let projected = profile_stable_identity_from_config_bytes(&raw)?;
-    if &projected != expected.profile_stable_identity() {
-        return Err(CamoufoxIdentityProjectionError::IdentityMismatch);
+    let value: Value =
+        serde_json::from_slice(raw).map_err(|_| CamoufoxConfigError::InvalidMaterialization)?;
+    if !value.as_object().is_some_and(|object| !object.is_empty()) {
+        return Err(CamoufoxConfigError::InvalidMaterialization);
     }
     Ok(())
 }
 
-/// Parse a canonical Camoufox config projection into the typed domain identity.
-///
-/// This is public for exact-runtime acceptance tests; shipping calls
-/// `verify_materialized_camoufox_identity`, so tests no longer own a parallel hash convention.
-pub fn profile_stable_identity_from_config_bytes(
-    raw: &[u8],
-) -> Result<ProfileStableIdentity, CamoufoxIdentityProjectionError> {
-    if raw.is_empty()
-        || u64::try_from(raw.len())
-            .ok()
-            .is_none_or(|len| len > MAX_CONFIG_BYTES)
-    {
-        return Err(CamoufoxIdentityProjectionError::InvalidMaterialization);
-    }
-    let config: Value = serde_json::from_slice(raw)
-        .map_err(|_| CamoufoxIdentityProjectionError::InvalidMaterialization)?;
-    let object = config
-        .as_object()
-        .ok_or(CamoufoxIdentityProjectionError::InvalidMaterialization)?;
-    let mut digester = Sha256Adapter;
-
-    let user_agent = required_string(object, "navigator.userAgent")?;
-    let webgl_extensions = required_string_list(object, "webGl:supportedExtensions")?;
-    // Pinned Camoufox legitimately disables WebGL2 on some generated profiles.
-    // Either *all* WebGL2 config surfaces exist or none may exist; partial
-    // materialization cannot be accepted as a disabled browser capability.
-    let webgl2_enabled = object.keys().any(|key| key.starts_with("webGl2:"));
-    let webgl2_extensions = if webgl2_enabled {
-        required_string_list(object, "webGl2:supportedExtensions")?
-    } else {
-        Vec::new()
-    };
-    let webgl_parameters = required_key_values(object, "webGl:parameters")?;
-    let webgl2_parameters = if webgl2_enabled {
-        required_key_values(object, "webGl2:parameters")?
-    } else {
-        Vec::new()
-    };
-    let webgl_shader = required_key_values(object, "webGl:shaderPrecisionFormats")?;
-    let webgl2_shader = if webgl2_enabled {
-        required_key_values(object, "webGl2:shaderPrecisionFormats")?
-    } else {
-        Vec::new()
-    };
-    let webgl_context = required_key_values(object, "webGl:contextAttributes")?;
-    let webgl2_context = if webgl2_enabled {
-        required_key_values(object, "webGl2:contextAttributes")?
-    } else {
-        Vec::new()
-    };
-    let fonts = required_string_list(object, "fonts")?;
-    let languages = required_string_list(object, "navigator.languages")?;
-    let speech_voices = optional_speech_voices(object)?;
-
-    ProfileStableIdentity::new(
-        PROFILE_STABLE_SCHEMA_VERSION,
-        BrowserOsIdentity::new(
-            user_agent.clone(),
-            firefox_major(&user_agent)?,
-            required_string(object, "navigator.platform")?,
-            required_string(object, "navigator.oscpu")?,
-        )
-        .map_err(|_| CamoufoxIdentityProjectionError::InvalidMaterialization)?,
-        HardwareCapabilityIdentity::new(
-            required_u16(object, "navigator.hardwareConcurrency")?,
-            optional_u16(object, "navigator.deviceMemory")?,
-            required_u16(object, "navigator.maxTouchPoints")?,
-        )
-        .map_err(|_| CamoufoxIdentityProjectionError::InvalidMaterialization)?,
-        DisplayIdentity::new(
-            required_u32(object, "screen.width")?,
-            required_u32(object, "screen.height")?,
-            required_u32(object, "screen.availWidth")?,
-            required_u32(object, "screen.availHeight")?,
-            required_i32(object, "screen.availLeft")?,
-            required_i32(object, "screen.availTop")?,
-            required_u16(object, "screen.colorDepth")?,
-            required_u16(object, "screen.pixelDepth")?,
-            required_dpr_milli(object)?,
-        )
-        .map_err(|_| CamoufoxIdentityProjectionError::InvalidMaterialization)?,
-        GraphicsIdentity::new(
-            required_string(object, "webGl:vendor")?,
-            required_string(object, "webGl:renderer")?,
-            canonical_webgl_extensions_sha256(&webgl_extensions, &webgl2_extensions, &mut digester)
-                .ok_or(CamoufoxIdentityProjectionError::InvalidMaterialization)?,
-            canonical_webgl_parameters_sha256(&webgl_parameters, &mut digester)
-                .ok_or(CamoufoxIdentityProjectionError::InvalidMaterialization)?,
-            if webgl2_enabled {
-                canonical_webgl2_parameters_sha256(&webgl2_parameters, &mut digester)
-            } else {
-                canonical_webgl2_disabled_sha256(&mut digester)
-            }
-            .ok_or(CamoufoxIdentityProjectionError::InvalidMaterialization)?,
-            canonical_shader_precision_sha256(&webgl_shader, &webgl2_shader, &mut digester)
-                .ok_or(CamoufoxIdentityProjectionError::InvalidMaterialization)?,
-            canonical_context_attributes_sha256(&webgl_context, &webgl2_context, &mut digester)
-                .ok_or(CamoufoxIdentityProjectionError::InvalidMaterialization)?,
-        )
-        .map_err(|_| CamoufoxIdentityProjectionError::InvalidMaterialization)?,
-        FontIdentity::new(
-            canonical_font_set_sha256(&fonts, &mut digester)
-                .ok_or(CamoufoxIdentityProjectionError::InvalidMaterialization)?,
-            canonical_font_spacing_seed_sha256(
-                &required_browser_value(object, "fonts:spacing_seed")?,
-                &mut digester,
-            )
-            .ok_or(CamoufoxIdentityProjectionError::InvalidMaterialization)?,
-        )
-        .map_err(|_| CamoufoxIdentityProjectionError::InvalidMaterialization)?,
-        OriginDeterministicIdentity::new(
-            OriginDeterminismMode::ProfileGenerationSeed,
-            canonical_canvas_seed_sha256(
-                &required_browser_value(object, "canvas:seed")?,
-                &mut digester,
-            )
-            .ok_or(CamoufoxIdentityProjectionError::InvalidMaterialization)?,
-            canonical_audio_seed_sha256(
-                &required_browser_value(object, "audio:seed")?,
-                &mut digester,
-            )
-            .ok_or(CamoufoxIdentityProjectionError::InvalidMaterialization)?,
-        )
-        .map_err(|_| CamoufoxIdentityProjectionError::InvalidMaterialization)?,
-        LocaleIdentity::new(
-            required_string(object, "navigator.language")?,
-            canonical_navigator_languages_sha256(&languages, &mut digester)
-                .ok_or(CamoufoxIdentityProjectionError::InvalidMaterialization)?,
-            speech_voices
-                .as_deref()
-                .map(|voices| {
-                    canonical_speech_voices_sha256(voices, &mut digester)
-                        .ok_or(CamoufoxIdentityProjectionError::InvalidMaterialization)
-                })
-                .transpose()?,
-        )
-        .map_err(|_| CamoufoxIdentityProjectionError::InvalidMaterialization)?,
-    )
-    .map_err(|_| CamoufoxIdentityProjectionError::InvalidMaterialization)
-}
-
-struct Sha256Adapter;
-
-impl BrowserVisibleSha256Port for Sha256Adapter {
-    type Error = core::convert::Infallible;
-
-    fn sha256(&mut self, canonical_bytes: &[u8]) -> Result<[u8; 32], Self::Error> {
-        Ok(Sha256::digest(canonical_bytes).into())
-    }
-}
-
-fn read_regular_bounded(path: &Path) -> Result<Vec<u8>, CamoufoxIdentityProjectionError> {
-    let metadata = fs::symlink_metadata(path)
-        .map_err(|_| CamoufoxIdentityProjectionError::InvalidMaterialization)?;
-    if metadata.file_type().is_symlink()
-        || !metadata.is_file()
+/// Pre-spawn: only exact immutable Camoufox config; no Rust fingerprint projection.
+pub fn verify_materialized_camoufox_identity(
+    profile_root: &Path,
+    expected: &BrowserIdentityManifest,
+) -> Result<(), CamoufoxConfigError> {
+    let path = profile_root.join(CONFIG_NAME);
+    let metadata =
+        fs::symlink_metadata(&path).map_err(|_| CamoufoxConfigError::InvalidMaterialization)?;
+    if !metadata.is_file()
+        || metadata.file_type().is_symlink()
         || metadata.len() == 0
         || metadata.len() > MAX_CONFIG_BYTES
     {
-        return Err(CamoufoxIdentityProjectionError::InvalidMaterialization);
+        return Err(CamoufoxConfigError::InvalidMaterialization);
     }
-    fs::read(path).map_err(|_| CamoufoxIdentityProjectionError::InvalidMaterialization)
-}
-
-fn sha256_hex(bytes: &[u8]) -> String {
-    let digest = Sha256::digest(bytes);
-    let mut output = String::with_capacity(64);
-    for byte in digest {
-        use core::fmt::Write as _;
-        let _ = write!(output, "{byte:02x}");
+    let raw = fs::read(path).map_err(|_| CamoufoxConfigError::InvalidMaterialization)?;
+    validate_camoufox_config_bytes(&raw)?;
+    let actual = Sha256::digest(&raw);
+    let mut hex = String::with_capacity(64);
+    use core::fmt::Write as _;
+    for byte in actual {
+        let _ = write!(hex, "{byte:02x}");
     }
-    output
-}
-
-fn required<'a>(
-    object: &'a Map<String, Value>,
-    key: &str,
-) -> Result<&'a Value, CamoufoxIdentityProjectionError> {
-    object
-        .get(key)
-        .ok_or(CamoufoxIdentityProjectionError::InvalidMaterialization)
-}
-
-fn required_string(
-    object: &Map<String, Value>,
-    key: &str,
-) -> Result<String, CamoufoxIdentityProjectionError> {
-    required(object, key)?
-        .as_str()
-        .filter(|value| !value.is_empty())
-        .map(str::to_owned)
-        .ok_or(CamoufoxIdentityProjectionError::InvalidMaterialization)
-}
-
-fn required_bool(
-    object: &Map<String, Value>,
-    key: &str,
-) -> Result<bool, CamoufoxIdentityProjectionError> {
-    required(object, key)?
-        .as_bool()
-        .ok_or(CamoufoxIdentityProjectionError::InvalidMaterialization)
-}
-
-fn integer(value: &Value) -> Result<i64, CamoufoxIdentityProjectionError> {
-    if let Some(value) = value.as_i64() {
-        return Ok(value);
+    if hex != expected.fingerprint_config_sha256() {
+        return Err(CamoufoxConfigError::IdentityMismatch);
     }
-    if let Some(value) = value.as_u64().and_then(|value| i64::try_from(value).ok()) {
-        return Ok(value);
-    }
-    let value = value
-        .as_f64()
-        .ok_or(CamoufoxIdentityProjectionError::InvalidMaterialization)?;
-    if !value.is_finite()
-        || value.fract() != 0.0
-        || value < i64::MIN as f64
-        || value > i64::MAX as f64
-    {
-        return Err(CamoufoxIdentityProjectionError::InvalidMaterialization);
-    }
-    Ok(value as i64)
-}
-
-fn required_u16(
-    object: &Map<String, Value>,
-    key: &str,
-) -> Result<u16, CamoufoxIdentityProjectionError> {
-    u16::try_from(integer(required(object, key)?)?)
-        .map_err(|_| CamoufoxIdentityProjectionError::InvalidMaterialization)
-}
-
-fn optional_u16(
-    object: &Map<String, Value>,
-    key: &str,
-) -> Result<Option<u16>, CamoufoxIdentityProjectionError> {
-    object
-        .get(key)
-        .map(|value| {
-            u16::try_from(integer(value)?)
-                .map_err(|_| CamoufoxIdentityProjectionError::InvalidMaterialization)
-        })
-        .transpose()
-}
-
-fn required_u32(
-    object: &Map<String, Value>,
-    key: &str,
-) -> Result<u32, CamoufoxIdentityProjectionError> {
-    u32::try_from(integer(required(object, key)?)?)
-        .map_err(|_| CamoufoxIdentityProjectionError::InvalidMaterialization)
-}
-
-fn required_i32(
-    object: &Map<String, Value>,
-    key: &str,
-) -> Result<i32, CamoufoxIdentityProjectionError> {
-    i32::try_from(integer(required(object, key)?)?)
-        .map_err(|_| CamoufoxIdentityProjectionError::InvalidMaterialization)
-}
-
-fn required_dpr_milli(object: &Map<String, Value>) -> Result<u32, CamoufoxIdentityProjectionError> {
-    let value = required(object, "window.devicePixelRatio")?
-        .as_f64()
-        .ok_or(CamoufoxIdentityProjectionError::InvalidMaterialization)?;
-    let milli = value * 1000.0;
-    if !milli.is_finite() || milli <= 0.0 || (milli.round() - milli).abs() > f64::EPSILON {
-        return Err(CamoufoxIdentityProjectionError::InvalidMaterialization);
-    }
-    u32::try_from(milli.round() as u64)
-        .map_err(|_| CamoufoxIdentityProjectionError::InvalidMaterialization)
-}
-
-fn firefox_major(user_agent: &str) -> Result<u16, CamoufoxIdentityProjectionError> {
-    let major = user_agent
-        .rsplit_once("Firefox/")
-        .map(|(_, suffix)| suffix)
-        .and_then(|suffix| suffix.split('.').next())
-        .filter(|major| !major.is_empty() && major.bytes().all(|byte| byte.is_ascii_digit()))
-        .ok_or(CamoufoxIdentityProjectionError::InvalidMaterialization)?;
-    major
-        .parse()
-        .map_err(|_| CamoufoxIdentityProjectionError::InvalidMaterialization)
-}
-
-fn required_string_list(
-    object: &Map<String, Value>,
-    key: &str,
-) -> Result<Vec<String>, CamoufoxIdentityProjectionError> {
-    let values = required(object, key)?
-        .as_array()
-        .ok_or(CamoufoxIdentityProjectionError::InvalidMaterialization)?;
-    values
-        .iter()
-        .map(|value| {
-            value
-                .as_str()
-                .filter(|value| !value.is_empty())
-                .map(str::to_owned)
-                .ok_or(CamoufoxIdentityProjectionError::InvalidMaterialization)
-        })
-        .collect()
-}
-
-fn required_key_values(
-    object: &Map<String, Value>,
-    key: &str,
-) -> Result<Vec<BrowserKeyValueObservation>, CamoufoxIdentityProjectionError> {
-    let values = required(object, key)?
-        .as_object()
-        .ok_or(CamoufoxIdentityProjectionError::InvalidMaterialization)?;
-    map_key_values(values, 0)
-}
-
-fn required_browser_value(
-    object: &Map<String, Value>,
-    key: &str,
-) -> Result<BrowserValue, CamoufoxIdentityProjectionError> {
-    browser_value(required(object, key)?, 0)
-}
-
-fn map_key_values(
-    object: &Map<String, Value>,
-    depth: usize,
-) -> Result<Vec<BrowserKeyValueObservation>, CamoufoxIdentityProjectionError> {
-    if depth > MAX_JSON_DEPTH {
-        return Err(CamoufoxIdentityProjectionError::InvalidMaterialization);
-    }
-    object
-        .iter()
-        .map(|(name, value)| {
-            Ok(BrowserKeyValueObservation {
-                name: name.clone(),
-                value: browser_value(value, depth + 1)?,
-            })
-        })
-        .collect()
-}
-
-fn browser_value(
-    value: &Value,
-    depth: usize,
-) -> Result<BrowserValue, CamoufoxIdentityProjectionError> {
-    if depth > MAX_JSON_DEPTH {
-        return Err(CamoufoxIdentityProjectionError::InvalidMaterialization);
-    }
-    match value {
-        Value::Null => Ok(BrowserValue::Null),
-        Value::Bool(value) => Ok(BrowserValue::Bool(*value)),
-        Value::Number(value) => Ok(BrowserValue::Number(value.to_string())),
-        Value::String(value) if !value.is_empty() => Ok(BrowserValue::Text(value.clone())),
-        Value::String(_) => Err(CamoufoxIdentityProjectionError::InvalidMaterialization),
-        Value::Array(values) => values
-            .iter()
-            .map(|value| browser_value(value, depth + 1))
-            .collect::<Result<Vec<_>, _>>()
-            .map(BrowserValue::List),
-        Value::Object(values) => map_key_values(values, depth + 1).map(BrowserValue::Map),
-    }
-}
-
-fn optional_speech_voices(
-    object: &Map<String, Value>,
-) -> Result<Option<Vec<SpeechVoiceObservation>>, CamoufoxIdentityProjectionError> {
-    let Some(value) = object.get("voices") else {
-        return Ok(None);
-    };
-    let voices = value
-        .as_array()
-        .ok_or(CamoufoxIdentityProjectionError::InvalidMaterialization)?;
-    voices
-        .iter()
-        .map(|voice| {
-            let voice = voice
-                .as_object()
-                .ok_or(CamoufoxIdentityProjectionError::InvalidMaterialization)?;
-            // Exact pinned Camoufox `MaskConfig::MVoices()` and its generator consume `voiceUri`.
-            // Do not accept the inconsistent `voiceURI` JVV spelling as a compatibility fallback.
-            Ok(SpeechVoiceObservation {
-                language: required_string(voice, "lang")?,
-                name: required_string(voice, "name")?,
-                voice_uri: required_string(voice, "voiceUri")?,
-                local_service: required_bool(voice, "isLocalService")?,
-                is_default: required_bool(voice, "isDefault")?,
-            })
-        })
-        .collect::<Result<Vec<_>, _>>()
-        .map(Some)
+    Ok(())
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{CamoufoxIdentityProjectionError, profile_stable_identity_from_config_bytes};
-
-    fn config(number: &str) -> String {
-        concat!(
-            "{",
-            "\"navigator.userAgent\":\"Mozilla/5.0 Firefox/152.0\",",
-            "\"navigator.platform\":\"Win32\",",
-            "\"navigator.oscpu\":\"Windows NT 10.0; Win64; x64\",",
-            "\"navigator.hardwareConcurrency\":8,",
-            "\"navigator.deviceMemory\":8,",
-            "\"navigator.maxTouchPoints\":0,",
-            "\"screen.width\":1920,\"screen.height\":1080,",
-            "\"screen.availWidth\":1920,\"screen.availHeight\":1040,",
-            "\"screen.availLeft\":0,\"screen.availTop\":0,",
-            "\"screen.colorDepth\":24,\"screen.pixelDepth\":24,",
-            "\"window.devicePixelRatio\":1,",
-            "\"webGl:vendor\":\"Vendor\",\"webGl:renderer\":\"Renderer\",",
-            "\"webGl:supportedExtensions\":[\"EXT_b\",\"EXT_a\"],",
-            "\"webGl2:supportedExtensions\":[\"EXT_c\"],",
-            "\"webGl:parameters\":{\"MAX_TEXTURE_SIZE\":4096,\"VALUE\":$NUMBER},",
-            "\"webGl2:parameters\":{\"MAX_TEXTURE_SIZE\":4096},",
-            "\"webGl:shaderPrecisionFormats\":{\"HIGH_FLOAT\":{\"precision\":23}},",
-            "\"webGl2:shaderPrecisionFormats\":{\"HIGH_FLOAT\":{\"precision\":23}},",
-            "\"webGl:contextAttributes\":{\"alpha\":true},",
-            "\"webGl2:contextAttributes\":{\"alpha\":true},",
-            "\"fonts\":[\"Arial\",\"Segoe UI\"],",
-            "\"fonts:spacing_seed\":1,\"canvas:seed\":2,\"audio:seed\":3,",
-            "\"navigator.language\":\"en-US\",",
-            "\"navigator.languages\":[\"en-US\",\"en\"],",
-            "\"voices\":[{\"isLocalService\":true,\"isDefault\":true,",
-            "\"voiceUri\":\"urn:voice:one\",\"name\":\"Voice One\",\"lang\":\"en-US\"}]",
-            "}"
-        )
-        .replace("$NUMBER", number)
-    }
+    use super::*;
+    use std::time::{SystemTime, UNIX_EPOCH};
 
     #[test]
-    fn typed_projection_uses_domain_numeric_canonicalization()
-    -> Result<(), Box<dyn std::error::Error>> {
-        let integer = profile_stable_identity_from_config_bytes(config("1").as_bytes())?;
-        let decimal = profile_stable_identity_from_config_bytes(config("1.0").as_bytes())?;
-        let exponent = profile_stable_identity_from_config_bytes(config("1e0").as_bytes())?;
-        assert_eq!(integer, decimal);
-        assert_eq!(integer, exponent);
-        assert_eq!(integer.schema_version(), 2);
-        Ok(())
-    }
-
-    #[test]
-    fn voice_uri_is_identity_bearing() -> Result<(), Box<dyn std::error::Error>> {
-        let first = profile_stable_identity_from_config_bytes(config("1").as_bytes())?;
-        let changed = config("1").replace("urn:voice:one", "urn:voice:two");
-        let second = profile_stable_identity_from_config_bytes(changed.as_bytes())?;
-        assert_ne!(first, second);
-        Ok(())
-    }
-
-    #[test]
-    fn runtime_voice_field_name_is_exact_and_has_no_schema_typo_fallback() {
-        let malformed = config("1").replace(
-            "\"voiceUri\":\"urn:voice:one\"",
-            "\"voiceURI\":\"urn:voice:one\"",
-        );
-        assert_eq!(
-            profile_stable_identity_from_config_bytes(malformed.as_bytes()),
-            Err(CamoufoxIdentityProjectionError::InvalidMaterialization)
-        );
-    }
-
-    #[test]
-    fn missing_required_semantic_field_fails_closed() {
-        let malformed =
-            config("1").replace("\"navigator.oscpu\":\"Windows NT 10.0; Win64; x64\",", "");
-        assert_eq!(
-            profile_stable_identity_from_config_bytes(malformed.as_bytes()),
-            Err(CamoufoxIdentityProjectionError::InvalidMaterialization)
-        );
-    }
-    #[test]
-    fn disabled_webgl2_is_valid_only_when_every_webgl2_surface_is_absent()
-    -> Result<(), Box<dyn std::error::Error>> {
-        let original = config("1");
-        let enabled = profile_stable_identity_from_config_bytes(original.as_bytes())?;
-        let mut disabled: serde_json::Value = serde_json::from_str(&original)?;
-        let object = disabled.as_object_mut().ok_or("invalid test config")?;
-        for name in [
-            "webGl2:supportedExtensions",
-            "webGl2:parameters",
-            "webGl2:shaderPrecisionFormats",
-            "webGl2:contextAttributes",
-        ] {
-            assert!(
-                object.remove(name).is_some(),
-                "missing test fixture field {name}"
+    fn accepts_official_config_without_rust_fingerprint_contracts() {
+        // Official Camoufox need not serialize canvas seed, DPR, navigator languages,
+        // touch points, font spacing, or any particular WebGL implementation.
+        let valid = br#"{"navigator.userAgent":"Mozilla/5.0 Firefox/158.0","audio:seed":123}"#;
+        assert_eq!(validate_camoufox_config_bytes(valid), Ok(()));
+        for bad in [b"".as_slice(), b"[]", b"{}", b"null", b"{", b"not-json"] {
+            assert_eq!(
+                validate_camoufox_config_bytes(bad),
+                Err(CamoufoxConfigError::InvalidMaterialization)
             );
         }
-        let valid_disabled = serde_json::to_vec(&disabled)?;
-        let stable = profile_stable_identity_from_config_bytes(&valid_disabled)?;
-        assert_ne!(
-            stable.graphics().webgl2_parameters_sha256(),
-            enabled.graphics().webgl2_parameters_sha256()
-        );
+    }
 
-        // A partly materialized WebGL2 context must fail closed, not be
-        // interpreted as a deliberately disabled context.
-        let object = disabled.as_object_mut().ok_or("invalid test config")?;
-        object.insert("webGl2:parameters".to_owned(), serde_json::json!({}));
+    #[test]
+    fn exact_bytes_are_bound_and_changed_or_invalid_files_fail_closed()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let root = std::env::temp_dir().join(format!(
+            "camoufox-config-seal-{}-{}",
+            std::process::id(),
+            SystemTime::now().duration_since(UNIX_EPOCH)?.as_nanos()
+        ));
+        fs::create_dir(&root)?;
+        let valid = br#"{"browser":"camoufox158","audio:seed":123}"#;
+        let digest = Sha256::digest(valid)
+            .iter()
+            .map(|byte| format!("{byte:02x}"))
+            .collect::<String>();
+        let identity = BrowserIdentityManifest::new_native(
+            2,
+            "profile-stability-v1",
+            "158.0.1-beta.41",
+            "a".repeat(64),
+            "profile-stability-v1-probe-bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+            digest,
+        )?;
+        let config = root.join(CONFIG_NAME);
         assert_eq!(
-            profile_stable_identity_from_config_bytes(&serde_json::to_vec(&disabled)?),
-            Err(CamoufoxIdentityProjectionError::InvalidMaterialization)
+            verify_materialized_camoufox_identity(&root, &identity),
+            Err(CamoufoxConfigError::InvalidMaterialization)
         );
+        fs::write(&config, valid)?;
+        assert_eq!(
+            verify_materialized_camoufox_identity(&root, &identity),
+            Ok(())
+        );
+        fs::write(&config, br#"{"browser":"different","audio:seed":123}"#)?;
+        assert_eq!(
+            verify_materialized_camoufox_identity(&root, &identity),
+            Err(CamoufoxConfigError::IdentityMismatch)
+        );
+        fs::write(&config, b"not-json")?;
+        assert_eq!(
+            verify_materialized_camoufox_identity(&root, &identity),
+            Err(CamoufoxConfigError::InvalidMaterialization)
+        );
+        fs::remove_dir_all(root)?;
         Ok(())
     }
 }
