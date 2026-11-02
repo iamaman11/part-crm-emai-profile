@@ -54,6 +54,9 @@ describe('ProfilesWorkspace generation refresh (#802 F06)', () => {
 
     const open = await screen.findByRole('button', { name: 'Open browser' }) as HTMLButtonElement;
     expect(open.disabled).toBe(false);
+    // The Generation controls are intentionally inside a collapsed advanced
+    // disclosure. Exercise the real operator path rather than querying hidden UI.
+    fireEvent.click(screen.getByText('Administration and diagnostics'));
     fireEvent.change(screen.getAllByLabelText('Generation ID')[0]!, { target: { value: 'generation_test' } });
     fireEvent.click(screen.getByRole('button', { name: 'Lookup generation' }));
     await screen.findByRole('button', { name: 'deactivate generation' });
