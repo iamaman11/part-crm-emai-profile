@@ -4,6 +4,7 @@
 //! call PUT/commit after restart. Only the live retained owner can publish.
 //! Recovery must obtain a fresh authoritative, ACL/fencing-safe decision before
 //! using these exact bytes. Never remove an unknown record during cleanup.
+use crate::browser_execution::browser_writer_locks_absent;
 use crate::dirty_generation::{
     GenerationSealingMaterialPort, PreparedDirtyGeneration, SealingMaterialFailure,
 };
@@ -217,6 +218,25 @@ struct LocalUnsyncedIntent {
     device_fingerprint: Option<String>,
     source_inventory: u64,
     source_bytes: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    rescue: Option<NativeRescueCheckpoint>,
+}
+
+/// F05 crash-evidence nested in the existing local intent; not a new SM.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+enum NativeRescuePhase {
+    Editing,
+    Closed,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct NativeRescueCheckpoint {
+    reserve_generation: String,
+    original_inventory: u64,
+    original_bytes: u64,
+    phase: NativeRescuePhase,
 }
 
 const MAX_LOCAL_UNSYNCED_BYTES: usize = 2_048;
@@ -253,6 +273,7 @@ pub(crate) fn persist_local_unsynced_intent(
         )),
         source_inventory: inventory.inventory_digest(),
         source_bytes: inventory.total_bytes(),
+        rescue: None,
     };
     let bytes = serde_json::to_vec(&intent).map_err(|_| SaveAttemptEvidenceError::Invalid)?;
     if bytes.is_empty() || bytes.len() > MAX_LOCAL_UNSYNCED_BYTES {
@@ -261,8 +282,28 @@ pub(crate) fn persist_local_unsynced_intent(
     let canonical = local_unsynced_path(root, lease.tenant_id(), lease.profile_id());
     match fs::symlink_metadata(&canonical) {
         Ok(_) => {
-            if read_local_unsynced(&canonical)? == intent {
+            let old = read_local_unsynced(&canonical)?;
+            if old == intent {
                 return Ok(());
+            }
+            if old.rescue.as_ref().is_some_and(|checkpoint| {
+                checkpoint.phase == NativeRescuePhase::Editing
+            })
+                && old.tenant == intent.tenant
+                && old.profile == intent.profile
+                && old.base_generation == intent.base_generation
+                && old.epoch == intent.epoch
+                && old.session_fingerprint == intent.session_fingerprint
+                && old.fencing_fingerprint == intent.fencing_fingerprint
+                && old.device_fingerprint == intent.device_fingerprint
+                && matches!(browser_writer_locks_absent(source), Ok(true))
+            {
+                let mut completed = intent;
+                let mut checkpoint = old.rescue.clone().ok_or(SaveAttemptEvidenceError::Changed)?;
+                verify_native_rescue_reserve(root, lease.tenant_id(), lease.profile_id(), &checkpoint)?;
+                checkpoint.phase = NativeRescuePhase::Closed;
+                completed.rescue = Some(checkpoint);
+                return replace_native_rescue_intent(root, source, &old, &completed);
             }
             return Err(SaveAttemptEvidenceError::Changed);
         }
@@ -613,6 +654,163 @@ pub(crate) fn reserve_original_native_for_rescue(
         original_inventory: inventory.inventory_digest(),
         original_bytes: inventory.total_bytes(),
     })
+}
+
+fn verify_native_rescue_reserve(
+    root: &MaterializationRoot,
+    tenant: &TenantId,
+    profile: &ProfileId,
+    checkpoint: &NativeRescueCheckpoint,
+) -> Result<(), SaveAttemptEvidenceError> {
+    let reserve_id = GenerationId::parse(checkpoint.reserve_generation.clone())
+        .map_err(|_| SaveAttemptEvidenceError::Invalid)?;
+    let reserve = root.open_generation(tenant, profile, &reserve_id)
+        .map_err(|_| SaveAttemptEvidenceError::Changed)?;
+    let inventory = reserve.inventory().map_err(|_| SaveAttemptEvidenceError::Changed)?;
+    if inventory.inventory_digest() != checkpoint.original_inventory
+        || inventory.total_bytes() != checkpoint.original_bytes
+    {
+        return Err(SaveAttemptEvidenceError::Changed);
+    }
+    Ok(())
+}
+
+/// Publish a new exact native-inventory intent with fsynced staging and
+/// same-directory atomic replacement. The old marker is not removed first.
+/// An uncompleted Editing phase always blocks ordinary Save after a crash.
+fn replace_native_rescue_intent(
+    root: &MaterializationRoot,
+    source: &GenerationWorkspace,
+    original: &LocalUnsyncedIntent,
+    next: &LocalUnsyncedIntent,
+) -> Result<(), SaveAttemptEvidenceError> {
+    let canonical = local_unsynced_path(root, source.tenant_id(), source.profile_id());
+    let data = serde_json::to_vec(next).map_err(|_| SaveAttemptEvidenceError::Invalid)?;
+    if data.is_empty() || data.len() > MAX_LOCAL_UNSYNCED_BYTES {
+        return Err(SaveAttemptEvidenceError::Invalid);
+    }
+    let mut staged = None;
+    for _ in 0..STAGE_TRIES {
+        let seq = STAGE_SEQUENCE.fetch_add(1, Ordering::Relaxed);
+        let path = root.path().join(format!(".bridge-rescue-stage-{}-{seq}", std::process::id()));
+        match OpenOptions::new().write(true).create_new(true).open(&path) {
+            Ok(file) => { staged = Some((path, file)); break; }
+            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {}
+            Err(error) => return Err(error.into()),
+        }
+    }
+    let (path, mut file) = staged.ok_or(SaveAttemptEvidenceError::Unavailable)?;
+    file.write_all(&data)?;
+    file.sync_all()?;
+    drop(file);
+    if read_local_unsynced(&canonical)? != *original {
+        return Err(SaveAttemptEvidenceError::Changed);
+    }
+    let current = source.inventory().map_err(|_| SaveAttemptEvidenceError::Changed)?;
+    if next.rescue.as_ref().is_some_and(|r| r.phase == NativeRescuePhase::Closed)
+        && (next.source_inventory != current.inventory_digest()
+            || next.source_bytes != current.total_bytes())
+    {
+        return Err(SaveAttemptEvidenceError::Changed);
+    }
+    fs::rename(&path, &canonical)?;
+    File::open(&canonical)?.sync_all()?;
+    #[cfg(unix)]
+    File::open(root.path())?.sync_all()?;
+    if read_local_unsynced(&canonical)? != *next {
+        return Err(SaveAttemptEvidenceError::Changed);
+    }
+    Ok(())
+}
+
+/// Only the existing Coordinator claim owner may call this under native OS
+/// admission and a positive independent D1 nonapplication observation.
+/// Publishing Editing is mandatory BEFORE managed Camoufox mutates Firefox.
+#[cfg(any(windows, test))]
+pub(crate) fn begin_native_rescue_edit(
+    root: &MaterializationRoot,
+    source: &GenerationWorkspace,
+    lease: &ProfileLease,
+) -> Result<(), SaveAttemptEvidenceError> {
+    let tenant = lease.tenant_id();
+    let profile = lease.profile_id();
+    let (attempt, marker) = scan_scoped_pending_candidate(root, tenant, profile)?;
+    if attempt.is_some() || !marker || source.tenant_id() != tenant
+        || source.profile_id() != profile
+        || !matches!(browser_writer_locks_absent(source), Ok(true))
+        || !local_unsynced_matches_fresh_lease(root, tenant, profile, source.generation_id(), lease)?
+    {
+        return Err(SaveAttemptEvidenceError::Changed);
+    }
+    let original = read_local_unsynced(&local_unsynced_path(root, tenant, profile))?;
+    let current = source.inventory().map_err(|_| SaveAttemptEvidenceError::Changed)?;
+    let checkpoint = match original.rescue.as_ref() {
+        Some(checkpoint) => {
+            verify_native_rescue_reserve(root, tenant, profile, checkpoint)?;
+            if checkpoint.phase == NativeRescuePhase::Closed
+                && (original.source_inventory != current.inventory_digest()
+                    || original.source_bytes != current.total_bytes())
+            {
+                return Err(SaveAttemptEvidenceError::Changed);
+            }
+            checkpoint.clone()
+        }
+        None => {
+            if original.source_inventory != current.inventory_digest()
+                || original.source_bytes != current.total_bytes()
+            {
+                return Err(SaveAttemptEvidenceError::Changed);
+            }
+            let reserve = reserve_original_native_for_rescue(root, source, lease)?;
+            NativeRescueCheckpoint {
+                reserve_generation: reserve.generation_id.as_str().to_owned(),
+                original_inventory: reserve.original_inventory,
+                original_bytes: reserve.original_bytes,
+                phase: NativeRescuePhase::Editing,
+            }
+        }
+    };
+    let mut next = original.clone();
+    next.epoch = lease.epoch();
+    next.session_fingerprint = credential_fingerprint(b"session", lease.session_id().as_str());
+    next.fencing_fingerprint = credential_fingerprint(b"fencing", lease.fencing_token().as_str());
+    next.device_fingerprint = Some(credential_fingerprint(b"device", lease.device_id().as_str()));
+    next.rescue = Some(NativeRescueCheckpoint {
+        phase: NativeRescuePhase::Editing,
+        ..checkpoint
+    });
+    replace_native_rescue_intent(root, source, &original, &next)
+}
+
+/// Read-only diagnosis of an interrupted edit; not a browser Open grant.
+#[cfg(any(windows, test))]
+pub(crate) fn native_rescue_interrupted_under_fresh_lease(
+    root: &MaterializationRoot,
+    tenant: &TenantId,
+    profile: &ProfileId,
+    selected: &GenerationId,
+    lease: &ProfileLease,
+) -> Result<bool, SaveAttemptEvidenceError> {
+    let original = match read_local_unsynced(&local_unsynced_path(root, tenant, profile)) {
+        Ok(value) => value,
+        Err(SaveAttemptEvidenceError::Io(std::io::ErrorKind::NotFound)) => return Ok(false),
+        Err(error) => return Err(error),
+    };
+    let Some(checkpoint) = original.rescue.as_ref() else { return Ok(false) };
+    if checkpoint.phase != NativeRescuePhase::Editing { return Ok(false); }
+    let (attempt, marker) = scan_scoped_pending_candidate(root, tenant, profile)?;
+    if attempt.is_some() || !marker || original.base_generation != selected.as_str()
+        || !local_unsynced_matches_fresh_lease(root, tenant, profile, selected, lease)?
+    {
+        return Err(SaveAttemptEvidenceError::Changed);
+    }
+    verify_native_rescue_reserve(root, tenant, profile, checkpoint)?;
+    let source = root.open_generation(tenant, profile, selected)
+        .map_err(|_| SaveAttemptEvidenceError::Changed)?;
+    if !matches!(browser_writer_locks_absent(&source), Ok(true)) || source.inventory().is_err() {
+        return Err(SaveAttemptEvidenceError::Changed);
+    }
+    Ok(true)
 }
 
 /// At the FIRST controlled close derive the same immutable N+1 as all later
@@ -1432,6 +1630,11 @@ pub(crate) fn classify_scoped_pending_save_evidence(
             }
         } else {
             let intent = read_local_unsynced(&marker)?;
+            if intent.rescue.as_ref().is_some_and(|value| {
+                value.phase == NativeRescuePhase::Editing
+            }) {
+                return Err(SaveAttemptEvidenceError::Changed);
+            }
             if intent.schema != "bridge-p3-local-unsynced-v1"
                 || intent.tenant != tenant.as_str()
                 || intent.profile != profile.as_str()
@@ -3089,6 +3292,7 @@ mod local_unsynced_publication_tests {
             device_fingerprint: Some("c".repeat(64)),
             source_inventory: 42,
             source_bytes: 11,
+            rescue: None,
         };
         let serialized = serde_json::to_vec(&intent)?;
         let mut f = File::create(&stage)?;
