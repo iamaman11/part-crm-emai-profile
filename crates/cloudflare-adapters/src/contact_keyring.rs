@@ -275,8 +275,10 @@ mod tests {
             "44".repeat(32),
             "22".repeat(32),
         );
-        let (original_keys, _) = parse_contact_protection_keyring_with_metadata(original)?;
-        let (rotated_keys, metadata) = parse_contact_protection_keyring_with_metadata(rotated)?;
+        let (original_keys, _) = parse_contact_protection_keyring_with_metadata(original)
+            .expect("valid original keyring fixture");
+        let (rotated_keys, metadata) = parse_contact_protection_keyring_with_metadata(rotated)
+            .expect("valid rotated keyring fixture");
         let original_protector = RustCryptoContactProtection::new(original_keys, FixedNonce);
         let rotated_protector = RustCryptoContactProtection::new(rotated_keys, FixedNonce);
         let tenant = TenantId::parse("tenant_01JKEYROTATE")?;
@@ -327,7 +329,7 @@ mod tests {
         assert_eq!(rotated_tokens[0].key_version().value(), 2);
         assert_eq!(rotated_tokens[1].key_version().value(), 1);
         assert_eq!(rotated_tokens[1].bytes(), old_tokens[0].bytes());
-        assert_eq!(format!("{metadata:?}").contains("retained_encryption_versions"), true);
+        assert!(format!("{metadata:?}").contains("retained_encryption_versions"));
         Ok(())
     }
 
