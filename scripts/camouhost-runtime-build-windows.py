@@ -275,6 +275,28 @@ def install_python_components(build_python: Path, lock: dict[str, Any], python_r
         if subprocess.run(command, cwd=ROOT, check=False).returncode != 0: fail("exact locked Python wheel installation failed")
 
 
+
+def pin_official_fpgen_model(python_root: Path) -> None:
+    """Prepare Camoufox's own checksum-pinned fpgen model at build time, never on user Open."""
+    python = python_root / "python.exe"
+    program = (
+        "from camoufox.fpgen_model import ensure_fpgen_model,is_pinned;"
+        "ensure_fpgen_model();"
+        "assert is_pinned(), 'pinned Camoufox fpgen model verification failed'"
+    )
+    result = subprocess.run(
+        [str(python), "-I", "-c", program],
+        cwd=python_root,
+        text=True,
+        capture_output=True,
+        check=False,
+        timeout=90,
+    )
+    if result.returncode != 0:
+        fail(f"official Camoufox fpgen model pre-install failed: exit={result.returncode}")
+
+
+
 def remove_python_caches(root: Path) -> None:
     for path in sorted(root.rglob("__pycache__"), reverse=True):
         if path.is_symlink() or not path.is_dir(): fail("Python cache path is unsafe")
@@ -295,6 +317,21 @@ def verify_runtime_tree(output: Path, lock: dict[str, Any], candidate_provenance
     try: observed = json.loads(completed.stdout.strip())
     except json.JSONDecodeError as error: raise RuntimeBuildError("embedded Python verification output is invalid") from error
     if completed.returncode != 0 or observed != expected: fail("materialized Python component identity mismatch")
+    model_probe = subprocess.run(
+        [
+            str(output / "python/python.exe"),
+            "-I", "-c",
+            "from camoufox.fpgen_model import is_pinned; "
+            "raise SystemExit(0 if is_pinned() else 1)",
+        ],
+        cwd=output,
+        capture_output=True,
+        text=True,
+        check=False,
+        timeout=30,
+    )
+    if model_probe.returncode != 0:
+        fail("pinned official fpgen model is missing or corrupt")
     inventory=[]; total=0
     for path in sorted(output.rglob("*")):
         if path.is_symlink(): fail("materialized runtime contains symlink")
@@ -345,6 +382,7 @@ def materialize(
             extract_exact_zip(browser_archive, output / "browser")
             rewrite_embedded_python_path(output / "python")
             install_python_components(build_python, lock, output / "python", distribution_cache)
+            pin_official_fpgen_model(output / "python")
             camouhost = output / "camouhost"
             camouhost.mkdir()
             shutil.copyfile(runtime_source, camouhost / "real.py")
