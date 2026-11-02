@@ -214,10 +214,10 @@ function validatePublicationWiring(authority, workflow = fs.readFileSync(release
     '--expected-asset runtime-bundle.tar.gz',
     '--expected-asset runtime-manifest.json',
     'python scripts/github-release-publication.py publish',
-    'CAMOUFOX_ARTIFACT_SHA256=$artifactSha',
-    '$releaseId = "camoufox-v1-windows-sha256-$artifactSha"',
-    'gh release download "$releaseId"',
-    "if ($artifactSha -notmatch '^[0-9a-f]{64}$' -or $buildSourceCommit -notmatch '^[0-9a-f]{40}$')",
+    'python scripts/camouhost-runtime-build-windows.py build',
+    '--runtime-lock runtime/camouhost/runtime-lock.json',
+    '--runtime-source runtime/camouhost/real.py',
+    '--output "$runtimeRoot" --build-python "$buildPython"',
   ]) {
     if (!workflow.includes(marker)) fail(`Release Set build workflow lacks required publication wiring: ${marker}`);
   }
