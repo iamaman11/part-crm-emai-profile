@@ -24,6 +24,13 @@ function field(data: FormData, name: string): string {
   return String(data.get(name) ?? '').trim();
 }
 
+type GenerationActionTarget = { tenantId: string; profileId: string; generationId: string };
+type GenerationActionCommand = (
+  | { kind: 'verify'; expectedVersion: number; reference: string }
+  | { kind: 'activate' | 'deactivate'; expectedVersion: number }
+  | { kind: 'quarantine'; expectedVersion: number }
+) & { target: GenerationActionTarget };
+
 interface GrantDraft {
   actorId: string;
   role: 'PROFILE_VIEWER' | 'PROFILE_OPERATOR';
@@ -74,9 +81,12 @@ export function ProfilesWorkspace({
   });
   const generationRegister = useLogicalCommandMutation((input: { generationId: string; objectKey: string; metadataDigest: string; containerDigest: string }, idempotencyKey) =>
     registerGeneration(tenantId, profileId, input, idempotencyKey));
-  async function refreshGenerationProjection(): Promise<void> {
+  async function refreshGenerationProjection(
+    requested: GenerationActionTarget = { tenantId, profileId, generationId },
+  ): Promise<void> {
     // Refresh is read-only and does not repeat the successful generation action.
-    const requested = { tenantId, profileId, generationId };
+    // Use the invocation target for successful mutations: a later selection
+    // must never inherit a previous profile's mutation receipt.
     const [profileResult, generationResult, directoryResult] = await Promise.allSettled([
       getProfile(requested.tenantId, requested.profileId),
       getGeneration(requested.tenantId, requested.profileId, requested.generationId),
@@ -96,22 +106,20 @@ export function ProfilesWorkspace({
     }
   }
 
-  const generationAction = useLogicalCommandMutation((input:
-      | { kind: 'verify'; expectedVersion: number; reference: string }
-      | { kind: 'activate' | 'deactivate'; expectedVersion: number }
-      | { kind: 'quarantine'; expectedVersion: number }, idempotencyKey) => {
+  const generationAction = useLogicalCommandMutation((input: GenerationActionCommand, idempotencyKey) => {
+      const { tenantId: commandTenant, profileId: commandProfile, generationId: commandGeneration } = input.target;
       if (input.kind === 'verify') {
-        return verifyGeneration(tenantId, profileId, generationId, {
+        return verifyGeneration(commandTenant, commandProfile, commandGeneration, {
           expectedGenerationVersion: input.expectedVersion,
           verificationReference: input.reference,
         }, idempotencyKey);
       }
       if (input.kind === 'quarantine') {
-        return quarantineGeneration(tenantId, profileId, generationId, input.expectedVersion, idempotencyKey);
+        return quarantineGeneration(commandTenant, commandProfile, commandGeneration, input.expectedVersion, idempotencyKey);
       }
-      return changeGenerationActivation(tenantId, profileId, generationId, input.expectedVersion, input.kind === 'activate', idempotencyKey);
+      return changeGenerationActivation(commandTenant, commandProfile, commandGeneration, input.expectedVersion, input.kind === 'activate', idempotencyKey);
     }, {
-      onSuccess: refreshGenerationProjection,
+      onSuccess: (_receipt, input) => refreshGenerationProjection(input.target),
     },
   );
   const coordinatorLookup = useMutation({
@@ -263,7 +271,7 @@ export function ProfilesWorkspace({
           </form>
         </div>
         <StatusMessage state={generationLookup.error ?? generationRegister.error ?? (generationRegister.data ? `${generationRegister.data.resultCode}: ${generationRegister.data.resourceId}` : null)} />
-        {generation && <GenerationActions generation={generation} profileVersion={profile?.version ?? 1} busy={generationAction.isPending} onAction={(input) => generationAction.mutate(input)} onHighImpact={(input) => generationAction.mutateAsync(input).then(() => undefined)} />}
+        {generation && <GenerationActions generation={generation} profileVersion={profile?.version ?? 1} busy={generationAction.isPending} onAction={(input) => generationAction.mutate({ ...input, target: { tenantId, profileId, generationId } })} onHighImpact={(input) => generationAction.mutateAsync({ ...input, target: { tenantId, profileId, generationId } }).then(() => undefined)} />}
         <StatusMessage state={generationAction.error ?? (generationAction.data ? `${generationAction.data.resultCode}: ${generationAction.data.resourceId}` : null)} />
         {generationRefreshUnconfirmed && <div role="alert">
           The action completed, but the latest profile status could not be confirmed. Do not repeat the action.
