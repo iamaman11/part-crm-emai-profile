@@ -2352,6 +2352,74 @@ mod direct_native_checkpoint_tests {
         Ok(())
     }
 
+    #[test]
+    fn retry_first_seal_after_temporary_offline_preserves_one_successor_and_wal()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let fixture = Fixture::new()?;
+        let (source, candidate) = fixture.native()?;
+        persist_local_unsynced_intent(&fixture.root, &source, &fixture.lease)?;
+        let before = source.inventory()?;
+        let wal = source.path().join("user_data/cookies.sqlite-wal");
+        let wal_bytes = fs::read(&wal)?;
+
+        for failure in [
+            SealingMaterialFailure::Transport,
+            SealingMaterialFailure::ServerUncertain,
+        ] {
+            assert!(persist_streaming_exact_save_attempt_from_native(
+                &fixture.root,
+                &source,
+                &candidate,
+                &fixture.lease,
+                &mut OfflineKeys(failure),
+            )
+            .is_err());
+            assert_eq!(inspect_all_pending_for_s1(&fixture.root)?.lone_local_unsynced, 1);
+            assert_eq!(inspect_all_pending_for_s1(&fixture.root)?.exact_checkpoints, 0);
+        }
+
+        // Once connectivity recovers, the unchanged local N+1 can be sealed
+        // under the retained live writer. This creates NO cloud grant: the
+        // caller must still obtain D1-positive nonapplication before PUT.
+        let mut keys = Keys {
+            calls: 0,
+            mutate: None,
+        };
+        persist_streaming_exact_save_attempt_from_native(
+            &fixture.root,
+            &source,
+            &candidate,
+            &fixture.lease,
+            &mut keys,
+        )?;
+        assert_eq!(keys.calls, 1);
+        let checkpoint = discover_unresolved_streaming_exact_save_attempt(
+            &fixture.root,
+            &fixture.tenant,
+            &fixture.profile,
+        )?
+        .ok_or("missing recovered exact checkpoint")?;
+        assert_eq!(checkpoint.successor_id(), fixture.next.as_str());
+        assert!(checkpoint.original_lease(&fixture.lease));
+        assert_eq!(source.inventory()?, before);
+        assert_eq!(fs::read(&wal)?, wal_bytes);
+        // A repeated seal, even under the same lease, cannot replace BPAT
+        // or request fresh key material after one exact publication.
+        assert_eq!(
+            persist_streaming_exact_save_attempt_from_native(
+                &fixture.root,
+                &source,
+                &candidate,
+                &fixture.lease,
+                &mut keys,
+            ),
+            Err(SaveAttemptEvidenceError::Changed)
+        );
+        assert_eq!(keys.calls, 1);
+        assert_eq!(inspect_all_pending_for_s1(&fixture.root)?.exact_checkpoints, 1);
+        Ok(())
+    }
+
     struct Fixture {
         path: PathBuf,
         root: MaterializationRoot,
