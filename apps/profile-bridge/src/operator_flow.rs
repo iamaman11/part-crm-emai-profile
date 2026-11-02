@@ -1193,15 +1193,17 @@ where
                 // never be hidden by the read-only oversize diagnosis.
                 let failure =
                     self.fail_before_local_use(OperatorFailureStage::GenerationSave, lease);
-                return Err(if recovered == PendingSaveRecovery::NativeSnapshotTooLarge
-                    && failure == OperatorFlowError::Stage(OperatorFailureStage::GenerationSave)
-                {
-                    OperatorFlowError::GenerationSave {
-                        reason: GenerationSaveFailureReason::SnapshotTooLarge,
-                    }
-                } else {
-                    failure
-                });
+                return Err(
+                    if recovered == PendingSaveRecovery::NativeSnapshotTooLarge
+                        && failure == OperatorFlowError::Stage(OperatorFailureStage::GenerationSave)
+                    {
+                        OperatorFlowError::GenerationSave {
+                            reason: GenerationSaveFailureReason::SnapshotTooLarge,
+                        }
+                    } else {
+                        failure
+                    },
+                );
             }
         }
 
@@ -3699,16 +3701,17 @@ mod tests {
         use super::{CleanupFailures, GenerationSaveFailureReason};
         let fixture = Fixture::new()?;
         let tenant = fixture.actor.tenant_scope().tenant_id();
-        let source = fixture.root.open_generation(
-            tenant,
-            &fixture.profile_id,
-            &fixture.generation_id,
-        )?;
+        let source =
+            fixture
+                .root
+                .open_generation(tenant, &fixture.profile_id, &fixture.generation_id)?;
         let original_wal = source.path().join("user_data").join("cookies.sqlite-wal");
         fs::create_dir_all(original_wal.parent().ok_or("missing native directory")?)?;
         fs::write(&original_wal, b"F05-original-native-WAL")?;
         crate::shipping_save_attempt::persist_local_unsynced_intent(
-            &fixture.root, &source, &fixture.lease
+            &fixture.root,
+            &source,
+            &fixture.lease,
         )?;
         let inventory = source.inventory()?;
         for refuse_release in [false, true] {
@@ -3757,7 +3760,9 @@ mod tests {
             assert_eq!(fs::read(&original_wal)?, b"F05-original-native-WAL");
             assert!(
                 crate::shipping_save_attempt::has_unresolved_save_attempt_for_profile(
-                    &fixture.root, tenant, &fixture.profile_id
+                    &fixture.root,
+                    tenant,
+                    &fixture.profile_id
                 )?
             );
         }
