@@ -87,6 +87,11 @@ jobs:
           ref: ${{ github.event.pull_request.head.sha || github.sha }}
           persist-credentials: false
 
+      - name: Verify exact source checkout
+        env:
+          EXPECTED_SOURCE_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: python -c "import os, subprocess; actual = subprocess.check_output(['git', 'rev-parse', 'HEAD'], text=True).strip(); assert actual == os.environ['EXPECTED_SOURCE_SHA'], 'source SHA mismatch'"
+
       - name: Run existing Rust Bridge tests
         if: needs.scope.outputs.heavy == 'true'
         run: cargo test --locked -p profile-bridge --lib
@@ -109,6 +114,11 @@ jobs:
         with:
           ref: ${{ github.event.pull_request.head.sha || github.sha }}
           persist-credentials: false
+
+      - name: Verify exact source checkout
+        env:
+          EXPECTED_SOURCE_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: python -c "import os, subprocess; actual = subprocess.check_output(['git', 'rev-parse', 'HEAD'], text=True).strip(); assert actual == os.environ['EXPECTED_SOURCE_SHA'], 'source SHA mismatch'"
 
       - name: Set up exact build Python
         if: needs.scope.outputs.heavy == 'true'
