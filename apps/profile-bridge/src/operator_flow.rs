@@ -3821,15 +3821,16 @@ mod tests {
     fn one_managed_native_rescue_open_and_clean_close_publish_new_inventory()
     -> Result<(), Box<dyn std::error::Error>> {
         use crate::shipping_save_attempt::{
-            ScopedPendingSaveEvidence, SaveAttemptEvidenceError,
+            SaveAttemptEvidenceError, ScopedPendingSaveEvidence,
             classify_scoped_pending_save_evidence, persist_local_unsynced_intent,
         };
 
         let fixture = Fixture::new()?;
         let tenant = fixture.actor.tenant_scope().tenant_id();
-        let source = fixture
-            .root
-            .open_generation(tenant, &fixture.profile_id, &fixture.generation_id)?;
+        let source =
+            fixture
+                .root
+                .open_generation(tenant, &fixture.profile_id, &fixture.generation_id)?;
         let wal = source.path().join("user_data").join("cookies.sqlite-wal");
         fs::create_dir_all(wal.parent().ok_or("native WAL parent missing")?)?;
         fs::write(&wal, b"original native WAL; must survive rescue")?;
@@ -3874,9 +3875,7 @@ mod tests {
         assert_eq!(prelaunch.get(), 1);
         assert_eq!(source.inventory()?, original);
         assert!(matches!(
-            classify_scoped_pending_save_evidence(
-                &fixture.root, tenant, &fixture.profile_id,
-            ),
+            classify_scoped_pending_save_evidence(&fixture.root, tenant, &fixture.profile_id,),
             Err(SaveAttemptEvidenceError::Changed)
         ));
         // One managed Camoufox owns the original source until native Close.
@@ -3885,12 +3884,11 @@ mod tests {
         assert_eq!(owner.active_session_id(), None);
         assert_eq!(fs::read(&wal)?, b"edited smaller WAL");
         assert_ne!(source.inventory()?, original);
-        match classify_scoped_pending_save_evidence(
-            &fixture.root,
-            tenant,
-            &fixture.profile_id,
-        )? {
-            ScopedPendingSaveEvidence::LocalUnsynced { base_generation, prior_epoch } => {
+        match classify_scoped_pending_save_evidence(&fixture.root, tenant, &fixture.profile_id)? {
+            ScopedPendingSaveEvidence::LocalUnsynced {
+                base_generation,
+                prior_epoch,
+            } => {
                 assert_eq!(base_generation, fixture.generation_id);
                 assert_eq!(prior_epoch, fresh.epoch());
             }
