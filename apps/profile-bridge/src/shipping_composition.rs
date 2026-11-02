@@ -218,7 +218,7 @@ mod windows {
         SharedControlPlaneCoordinator, ShippingControlPlaneError,
     };
     use crate::shipping_generation_successor_control::{
-        RestartExactCommitObservation, RestartExactLocalCompletion,
+        RestartExactCommitObservation, RestartExactLocalCompletion, RestartExactLocalCompletionError,
         complete_active_exact_after_restart, confirm_retained_exact_retry_nonapplication,
         resume_exact_successor_under_fresh_lease, resume_lone_local_unsynced_under_fresh_lease,
     };
@@ -767,8 +767,19 @@ mod windows {
                                     false
                                 }
                                 Err(error) => {
+                                    let next_step = if matches!(
+                                        error,
+                                        RestartExactLocalCompletionError::NativeSnapshotTooLarge
+                                    ) {
+                                        // Retrying the same native bytes cannot succeed.
+                                        // Do not delete the oversized LOCAL_UNSYNCED or
+                                        // open stale N as if recovery had completed.
+                                        "PRESERVE_LOCAL_BYTES;NATIVE_RESCUE_REQUIRED"
+                                    } else {
+                                        "RETRY_OWNED_RECOVERY"
+                                    };
                                     eprintln!(
-                                        "P3_RECOVERY={};NEXT_SAFE_STEP=RETRY_OWNED_RECOVERY",
+                                        "P3_RECOVERY={};NEXT_SAFE_STEP={next_step}",
                                         error.code()
                                     );
                                     false
