@@ -1192,17 +1192,22 @@ where
             // A recovery callback never overrides the conservative guard.
             // Only the specific fully completed checkpoint may disappear; a
             // torn sibling, unsafe writer or failed local binding still blocks.
-            if !native_rescue_required
-                && (recovered != PendingSaveRecovery::ReadySelected
-                    || !matches!(
-                        has_unresolved_save_attempt_for_profile(
-                            root,
-                            enrollment.actor().tenant_scope().tenant_id(),
-                            enrollment.profile_id(),
-                        ),
-                        Ok(false)
-                    ))
-            {
+            let unresolved_blocker = if recovered != PendingSaveRecovery::ReadySelected {
+                // A separately admitted native rescue is the ONLY non-ACTIVE
+                // path allowed to continue; it must still prove its reserve
+                // and journal before the managed browser starts.
+                !native_rescue_required
+            } else {
+                !matches!(
+                    has_unresolved_save_attempt_for_profile(
+                        root,
+                        enrollment.actor().tenant_scope().tenant_id(),
+                        enrollment.profile_id(),
+                    ),
+                    Ok(false)
+                )
+            };
+            if unresolved_blocker {
                 // Always release the newly claimed coordinator lease FIRST.
                 // A failed release is a stronger terminal failure and must
                 // never be hidden by the read-only oversize diagnosis.
