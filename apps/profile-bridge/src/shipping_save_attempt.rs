@@ -2967,6 +2967,25 @@ mod direct_native_checkpoint_tests {
             &GenerationId::parse(evidence.reserve_generation)?,
         )?;
         assert_eq!(original_copy.inventory()?, original);
+        // A foreign or modified reserve must not become the sole working
+        // original on the next fresh rescue claim.
+        fs::write(
+            original_copy.path().join("user_data/cookies.sqlite-wal"),
+            b"tampered reserve WAL",
+        )?;
+        let later = ProfileLease::issue(
+            fixture.tenant.clone(),
+            fixture.profile.clone(),
+            SessionId::parse("session_rescue_edit_later_01")?,
+            fixture.lease.device_id().clone(),
+            next.epoch() + 1,
+            FencingToken::parse("fence_rescue_edit_later_01")?,
+        )?;
+        assert_eq!(
+            begin_native_rescue_edit(&fixture.root, &source, &later),
+            Err(SaveAttemptEvidenceError::Changed),
+        );
+        assert_eq!(source.inventory()?, final_inventory);
         Ok(())
     }
 
