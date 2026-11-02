@@ -2675,7 +2675,10 @@ mod tests {
                     ShippingControlPlaneError::Transport
                 ))
             );
-            assert_eq!(transport.paths.len(), if first_decision_confirmed { 2 } else { 1 });
+            assert_eq!(
+                transport.paths.len(),
+                if first_decision_confirmed { 2 } else { 1 }
+            );
             assert_eq!(upload.calls, 0, "cloud PUT without fresh D1 authority");
             assert_eq!(std::fs::read(source.path().join("prefs.js"))?, original);
             assert!(
@@ -2683,12 +2686,20 @@ mod tests {
                 "offline LOCAL_UNSYNCED or first sealed BPAT was discarded"
             );
             let sealed = discover_unresolved_streaming_exact_save_attempt(
-                &root, &fixture.tenant, &fixture.profile,
+                &root,
+                &fixture.tenant,
+                &fixture.profile,
             );
             if first_decision_confirmed {
-                assert!(sealed?.is_some(), "first seal must remain durable for next claim");
+                assert!(
+                    sealed?.is_some(),
+                    "first seal must remain durable for next claim"
+                );
             } else {
-                assert!(sealed.is_err(), "unsealed intent must not be treated as a BPAT");
+                assert!(
+                    sealed.is_err(),
+                    "unsealed intent must not be treated as a BPAT"
+                );
             }
         }
         Ok(())
