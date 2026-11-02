@@ -12,9 +12,13 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 pub(crate) const WORKSPACE_SNAPSHOT_MAGIC: &[u8; 8] = b"BPGW0001";
 pub(crate) const MAX_WORKSPACE_SNAPSHOT_BYTES: usize = 67_108_864;
-/// Maximum native Firefox bytes, separate from snapshot's framing overhead.
+/// The strict upper bound for native Firefox bytes is the already validated
+/// streaming plaintext envelope. BPGW framing consumes part of this budget:
+/// the canonical encoded size is checked separately before writing or cloning.
+/// There is no smaller, arbitrary 512 MiB native-profile limit.
 #[allow(dead_code)] // K2 shipping integration is still gated.
-pub(crate) const MAX_STREAM_NATIVE_PROFILE_BYTES: u64 = 536_870_912; // 512 MiB
+pub(crate) const MAX_STREAM_NATIVE_PROFILE_BYTES: u64 =
+    encrypted_generation_domain::MAX_STREAM_PLAINTEXT_BYTES;
 /// The same encrypted-generation-domain bound applies to BPGW0001 encoded
 /// bytes, so no successful snapshot can later fail encryption from a smaller
 /// policy limit. Legacy Vec API remains capped at 64 MiB.
@@ -77,10 +81,9 @@ pub(crate) fn encode_workspace_snapshot_streaming(
     expected_inventory: &GenerationInventory,
     output: &mut impl Write,
 ) -> Result<StreamedWorkspaceSnapshot, GenerationSnapshotError> {
-    // Check *native* size and the exact BPGW0001 wire size before writing
-    // a single byte to the unpublished spool. Metadata overhead from many
-    // tiny Firefox files must not disqualify an otherwise valid 512 MiB
-    // native profile, nor can a huge inventory fill disk before rejection.
+    // Check the native upper bound AND the exact BPGW0001 wire size before
+    // writing any bytes. Profiles larger than 512 MiB can fit if their
+    // real native content plus framing is within the existing 576 MiB envelope.
     let expected_length = encoded_stream_snapshot_size(expected_inventory)?;
     let count = u32::try_from(expected_inventory.entries().len())
         .map_err(|_| GenerationSnapshotError::SnapshotTooLarge)?;
@@ -161,8 +164,8 @@ fn encoded_stream_snapshot_size(
         return Err(GenerationSnapshotError::SnapshotTooLarge);
     }
     if !native_size_within_limit(inventory.total_bytes()) {
-        // Bounded, non-sensitive size evidence. A 512 MiB IndexedDB payload
-        // can exceed the policy once real Firefox WAL and preferences count.
+        // Bounded, non-sensitive evidence. Native+framing must fit the
+        // streaming plaintext limit; never silently discard Firefox files.
         // No browser/profile files are changed by this refusal.
         eprintln!(
             "BRIDGE_NATIVE_SNAPSHOT_SIZE_REFUSED native_bytes={} limit_bytes={}",
@@ -1070,7 +1073,26 @@ mod tests {
         assert!(super::native_size_within_limit(maximum - 1));
         assert!(super::native_size_within_limit(maximum));
         assert!(!super::native_size_within_limit(maximum + 1));
-        assert!(!super::native_size_within_limit(568_329_621));
+        assert!(super::native_size_within_limit(568_329_621));
+    }
+
+    #[test]
+    fn physical_oversized_native_512_mib_can_fit_existing_stream_envelope() {
+        // Measured Firefox bytes from the physical Windows failure, no
+        // 568 MiB allocation or large sparse file required for this boundary.
+        let native = 568_329_621_u64;
+        let envelope = super::MAX_STREAM_WORKSPACE_SNAPSHOT_BYTES;
+        assert_eq!(envelope, 603_979_776);
+        assert!(super::native_size_within_limit(native));
+        // Path framing is included in the real encoded_stream_snapshot_size
+        // check. These examples demonstrate why native-only 512 MiB
+        // rejection was unnecessary and cannot be used as cloud evidence.
+        let typical_framing = 12 + 10_000_u64 * (2 + 100 + 8);
+        assert!(native + typical_framing <= envelope);
+        let excessive_framing = envelope - native + 1;
+        assert!(native + excessive_framing > envelope);
+        assert!(!super::native_size_within_limit(envelope + 1));
+        assert!(super::MAX_STREAM_NATIVE_PROFILE_BYTES < encrypted_generation_domain::MAX_STREAM_CONTAINER_BYTES);
     }
 
     #[test]
@@ -1079,7 +1101,7 @@ mod tests {
         let max_file_count = 100_000_u64;
         let max_path_bytes = 512_u64;
         let encoded = 12 + raw + max_file_count * (2 + max_path_bytes + 8);
-        assert_eq!(super::MAX_STREAM_NATIVE_PROFILE_BYTES, raw);
+        assert!(super::native_size_within_limit(raw));
         assert_eq!(
             super::MAX_STREAM_WORKSPACE_SNAPSHOT_BYTES,
             encrypted_generation_domain::MAX_STREAM_PLAINTEXT_BYTES,
