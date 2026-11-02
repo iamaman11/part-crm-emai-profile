@@ -118,6 +118,10 @@ pub enum PendingSaveRecovery {
     /// Exact N+1 committed while this claim still selected N.
     /// Never launch N; release the unused claim only with fresh native proof.
     CommittedNewerRequiresClaim,
+    /// An authorized Save-retry observed a native snapshot beyond the
+    /// supported encrypted envelope. This is diagnostic only: it MUST NOT
+    /// allow launching the old N or bypass the pending-save guard.
+    NativeSnapshotTooLarge,
     /// Unknown, blocked, conflicting or incomplete recovery.
     Blocked,
 }
@@ -1184,7 +1188,20 @@ where
                     Ok(false)
                 )
             {
-                return Err(self.fail_before_local_use(OperatorFailureStage::GenerationSave, lease));
+                // Always release the newly claimed coordinator lease FIRST.
+                // A failed release is a stronger terminal failure and must
+                // never be hidden by the read-only oversize diagnosis.
+                let failure =
+                    self.fail_before_local_use(OperatorFailureStage::GenerationSave, lease);
+                return Err(if recovered == PendingSaveRecovery::NativeSnapshotTooLarge
+                    && failure == OperatorFlowError::Stage(OperatorFailureStage::GenerationSave)
+                {
+                    OperatorFlowError::GenerationSave {
+                        reason: GenerationSaveFailureReason::SnapshotTooLarge,
+                    }
+                } else {
+                    failure
+                });
             }
         }
 
@@ -3673,6 +3690,77 @@ mod tests {
         assert_eq!(unauthorized_starts.get(), 0);
         assert!(rejected.process().actions().is_empty());
         assert_eq!(fs::read(&pending)?, b"torn-attempt");
+        Ok(())
+    }
+
+    #[test]
+    fn oversize_pending_recovery_preserves_typed_cause_only_after_safe_lease_release()
+    -> Result<(), Box<dyn std::error::Error>> {
+        use super::{CleanupFailures, GenerationSaveFailureReason};
+        let fixture = Fixture::new()?;
+        let tenant = fixture.actor.tenant_scope().tenant_id();
+        let source = fixture.root.open_generation(
+            tenant,
+            &fixture.profile_id,
+            &fixture.generation_id,
+        )?;
+        let original_wal = source.path().join("user_data").join("cookies.sqlite-wal");
+        fs::create_dir_all(original_wal.parent().ok_or("missing native directory")?)?;
+        fs::write(&original_wal, b"F05-original-native-WAL")?;
+        crate::shipping_save_attempt::persist_local_unsynced_intent(
+            &fixture.root, &source, &fixture.lease
+        )?;
+        let inventory = source.inventory()?;
+        for refuse_release in [false, true] {
+            let mut owner = operator(&fixture, FakeCamouhost::default())?;
+            owner.coordinator.close_fail = refuse_release;
+            let observed = Cell::new(0_u32);
+            let result = owner.open_with_materialization(
+                &fixture.claim_uri,
+                &fixture.root,
+                UnixMillis::new(10),
+                (
+                    |_coordinator, _lease| {},
+                    |_coordinator, _tenant, _profile, _generation, _device, _epoch| {
+                        panic!("oversized LOCAL_UNSYNCED cannot be materialized or reopened")
+                    },
+                ),
+                || panic!("oversized LOCAL_UNSYNCED cannot launch Camoufox"),
+                |_coordinator, _tenant, _profile, _selected, _lease| {
+                    observed.set(observed.get() + 1);
+                    PendingSaveRecovery::NativeSnapshotTooLarge
+                },
+            );
+            let expected = if refuse_release {
+                OperatorFlowError::Terminal {
+                    stage: OperatorFailureStage::GenerationSave,
+                    local_state: LocalGenerationState::MaterializedClean,
+                    cleanup: CleanupFailures {
+                        process: false,
+                        workspace_lock: false,
+                        coordinator_lease: true,
+                    },
+                }
+            } else {
+                OperatorFlowError::GenerationSave {
+                    reason: GenerationSaveFailureReason::SnapshotTooLarge,
+                }
+            };
+            assert_eq!(result, Err(expected));
+            assert_eq!(observed.get(), 1);
+            assert_eq!(owner.coordinator().claimed, 1);
+            assert_eq!(owner.coordinator().closed, 1);
+            assert_eq!(owner.coordinator().clean_closed, 0);
+            assert_eq!(owner.cleanup_blocked(), refuse_release);
+            assert!(owner.process().actions().is_empty());
+            assert_eq!(source.inventory()?, inventory);
+            assert_eq!(fs::read(&original_wal)?, b"F05-original-native-WAL");
+            assert!(
+                crate::shipping_save_attempt::has_unresolved_save_attempt_for_profile(
+                    &fixture.root, tenant, &fixture.profile_id
+                )?
+            );
+        }
         Ok(())
     }
 

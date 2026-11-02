@@ -84,6 +84,22 @@ fn confirmed_save_trigger<E>(observation: Result<bool, E>) -> Result<ConfirmedSa
     })
 }
 
+/// The existing pending-recovery observation is read-only. Preserve an
+/// exact native-size refusal through the Open owner's normal lease cleanup;
+/// all other errors remain blocked without synthetic browser authority.
+#[cfg(any(windows, test))]
+fn pending_recovery_failure_disposition(
+    error: crate::shipping_generation_successor_control::RestartExactLocalCompletionError,
+) -> crate::operator_flow::PendingSaveRecovery {
+    use crate::operator_flow::PendingSaveRecovery;
+    use crate::shipping_generation_successor_control::RestartExactLocalCompletionError;
+    if error == RestartExactLocalCompletionError::NativeSnapshotTooLarge {
+        PendingSaveRecovery::NativeSnapshotTooLarge
+    } else {
+        PendingSaveRecovery::Blocked
+    }
+}
+
 /// One user-triggered Open may continue once after its local N->N+1
 /// recovery was proved committed and its unused Coordinator lease was
 /// released cleanly. The existing machine authority issues a fresh claim;
@@ -235,7 +251,8 @@ pub fn run_delivery_command(
 mod windows {
     use super::{
         ConfirmedSaveTrigger, ShippingCompositionError, ShippingDeliveryCommand,
-        confirmed_save_trigger, open_with_one_fresh_claim, recovery_next_safe_step,
+        confirmed_save_trigger, open_with_one_fresh_claim,
+        pending_recovery_failure_disposition, recovery_next_safe_step,
         retire_historical_probe_only_after_proof, retryable_reconnect_observation,
     };
     use crate::camouhost_process::{
@@ -805,7 +822,7 @@ mod windows {
                                         error.code(),
                                         recovery_next_safe_step(error)
                                     );
-                                    false
+                                    return pending_recovery_failure_disposition(error);
                                 }
                             };
                             if committed {
@@ -861,7 +878,7 @@ mod windows {
                                         error.code(),
                                         recovery_next_safe_step(error)
                                     );
-                                    false
+                                    return pending_recovery_failure_disposition(error);
                                 }
                             };
                             // First-sealed LOCAL_UNSYNCED uses the same exact
@@ -897,7 +914,7 @@ mod windows {
                                 error.code(),
                                 recovery_next_safe_step(error)
                             );
-                            PendingSaveRecovery::Blocked
+                            pending_recovery_failure_disposition(error)
                         }
                     };
                     recovered
@@ -1584,7 +1601,7 @@ mod windows {
 mod tests {
     use super::{
         ConfirmedSaveTrigger, ShippingCompositionError, confirmed_save_trigger,
-        open_with_one_fresh_claim, recovery_next_safe_step,
+        open_with_one_fresh_claim, pending_recovery_failure_disposition, recovery_next_safe_step,
         retire_historical_probe_only_after_proof, retryable_reconnect_observation,
     };
     #[cfg(not(windows))]
@@ -1736,6 +1753,29 @@ mod tests {
         );
         assert_eq!(calls.get(), 5);
         Ok(())
+    }
+
+    #[test]
+    fn native_oversize_recovery_reports_exact_cause_without_open_or_retry_authority() {
+        use crate::operator_flow::PendingSaveRecovery;
+        use crate::shipping_control_plane::ShippingControlPlaneError as Http;
+        use crate::shipping_generation_successor_control::RestartExactLocalCompletionError as Restart;
+
+        assert_eq!(
+            pending_recovery_failure_disposition(Restart::NativeSnapshotTooLarge),
+            PendingSaveRecovery::NativeSnapshotTooLarge
+        );
+        for other in [
+            Restart::LocalEvidenceChanged,
+            Restart::WriterOrLockUnresolved,
+            Restart::PreSealTransport,
+            Restart::ControlPlane(Http::HttpStatus),
+        ] {
+            assert_eq!(
+                pending_recovery_failure_disposition(other),
+                PendingSaveRecovery::Blocked
+            );
+        }
     }
 
     #[test]
