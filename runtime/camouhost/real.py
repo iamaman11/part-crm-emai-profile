@@ -1184,11 +1184,16 @@ class WindowsBrowserExitWitness:
                 raise RuntimeContractError("Cannot retain Camoufox browser process witness")
             self.handles.append(handle)
 
-    def safely_exited(self) -> bool:
+    def safely_exited(self, wait_millis: int = 0) -> bool:
         # A page-close callback is NOT proof. The exact browser root must have
         # finished with exit code zero, never STILL_ACTIVE, killed or unknown.
+        # A bounded wait is permitted only after all normal page-close callbacks;
+        # GUI WM_CLOSE may deliver Playwright TargetClosedError just before the
+        # native zero-exit witness becomes observable. No synthetic exit proof.
+        if not 0 <= wait_millis <= 250:
+            raise ValueError("browser close witness wait exceeds safe limit")
         for handle in self.handles:
-            if self.wait(handle, 0) != 0:
+            if self.wait(handle, wait_millis) != 0:
                 return False
             code = self.ctypes.wintypes.DWORD()
             if not self.get_exit(handle, self.ctypes.byref(code)) or code.value != 0:
@@ -1250,14 +1255,18 @@ def install_controlled_close_observation(context: Any, owner_pid: int | None = N
     return state
 
 
-def controlled_close_candidate(state: dict[str, Any] | None) -> bool:
+def controlled_close_candidate(
+    state: dict[str, Any] | None, *, exit_wait_millis: int = 0
+) -> bool:
     if state is None or state["crashed"]:
         return False
     tracked = state["tracked_pages"]
     if not tracked or tracked != state["closed_pages"]:
         return False
     witness = state.get("browser_exit")
-    return witness is None or witness.safely_exited()
+    # Only the actual retained browser-process handle may attest normal exit;
+    # callback closure and a bounded wait never authorize Save on their own.
+    return witness is None or witness.safely_exited(exit_wait_millis)
 
 
 def report_close_observation_detail(state: dict[str, Any] | None, error: BaseException) -> None:
@@ -1324,7 +1333,12 @@ def observe_controlled_close(context: Any, state: dict[str, Any] | None) -> bool
         # can reject the pending wait after delivering page-close callbacks. All other
         # failures may be ignored ONLY if the positive non-crashed witness already exists;
         # a disappearing process without close callbacks is still an IPC/runtime failure.
-        if type(error).__name__ != "TimeoutError" and not controlled_close_candidate(state):
+        if type(error).__name__ != "TimeoutError" and not controlled_close_candidate(
+            state, exit_wait_millis=250
+        ):
+            # All page close callbacks plus a verified exit code zero are still
+            # required. Crashes, nonzero exit, missing callback and unknown
+            # Windows process state preserve the original exception.
             raise
     return controlled_close_candidate(state)
 
