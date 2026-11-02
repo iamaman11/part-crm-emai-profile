@@ -547,13 +547,19 @@ pub(crate) fn reserve_original_native_for_rescue(
                 if base_generation == *source.generation_id() && fresh_lease.epoch() > prior_epoch
         )
         || !local_unsynced_matches_fresh_lease(
-            root, tenant, profile, source.generation_id(), fresh_lease,
+            root,
+            tenant,
+            profile,
+            source.generation_id(),
+            fresh_lease,
         )?
     {
         return Err(SaveAttemptEvidenceError::Changed);
     }
     let original = read_local_unsynced(&local_unsynced_path(root, tenant, profile))?;
-    let inventory = source.inventory().map_err(|_| SaveAttemptEvidenceError::Changed)?;
+    let inventory = source
+        .inventory()
+        .map_err(|_| SaveAttemptEvidenceError::Changed)?;
     if inventory.inventory_digest() != original.source_inventory
         || inventory.total_bytes() != original.source_bytes
     {
@@ -562,11 +568,16 @@ pub(crate) fn reserve_original_native_for_rescue(
     let mut digest = Sha256::new();
     digest.update(b"bridge-p3-native-rescue-original-reserve-v1");
     digest.update(serde_json::to_vec(&original).map_err(|_| SaveAttemptEvidenceError::Invalid)?);
-    let generation_id = GenerationId::parse(format!("generation_rescue_{}", hex(&digest.finalize())))
-        .map_err(|_| SaveAttemptEvidenceError::Invalid)?;
+    let generation_id =
+        GenerationId::parse(format!("generation_rescue_{}", hex(&digest.finalize())))
+            .map_err(|_| SaveAttemptEvidenceError::Invalid)?;
     let reserve = match root.open_generation(tenant, profile, &generation_id) {
         Ok(existing) => {
-            if existing.inventory().map_err(|_| SaveAttemptEvidenceError::Changed)? != inventory {
+            if existing
+                .inventory()
+                .map_err(|_| SaveAttemptEvidenceError::Changed)?
+                != inventory
+            {
                 return Err(SaveAttemptEvidenceError::Changed);
             }
             existing
@@ -574,13 +585,21 @@ pub(crate) fn reserve_original_native_for_rescue(
         Err(LocalProfileError::Io(std::io::ErrorKind::NotFound)) => {
             let clone = RecoveryClone::create(source, root, tenant, profile, &generation_id)
                 .map_err(|_| SaveAttemptEvidenceError::Unavailable)?;
-            clone.sync_verified_reserve().map_err(|_| SaveAttemptEvidenceError::Unavailable)?;
+            clone
+                .sync_verified_reserve()
+                .map_err(|_| SaveAttemptEvidenceError::Unavailable)?;
             clone.workspace().clone()
         }
         Err(_) => return Err(SaveAttemptEvidenceError::Changed),
     };
-    if reserve.inventory().map_err(|_| SaveAttemptEvidenceError::Changed)? != inventory
-        || source.inventory().map_err(|_| SaveAttemptEvidenceError::Changed)? != inventory
+    if reserve
+        .inventory()
+        .map_err(|_| SaveAttemptEvidenceError::Changed)?
+        != inventory
+        || source
+            .inventory()
+            .map_err(|_| SaveAttemptEvidenceError::Changed)?
+            != inventory
         || !matches!(
             classify_scoped_pending_save_evidence(root, tenant, profile),
             Ok(ScopedPendingSaveEvidence::LocalUnsynced { base_generation, .. })
@@ -2584,21 +2603,31 @@ mod direct_native_checkpoint_tests {
         let (source, _candidate) = fixture.native()?;
         persist_local_unsynced_intent(&fixture.root, &source, &fixture.lease)?;
         let fresh = ProfileLease::issue(
-            fixture.tenant.clone(), fixture.profile.clone(),
+            fixture.tenant.clone(),
+            fixture.profile.clone(),
             SessionId::parse("session_native_rescue_fresh_01")?,
-            fixture.lease.device_id().clone(), fixture.lease.epoch() + 1,
+            fixture.lease.device_id().clone(),
+            fixture.lease.epoch() + 1,
             FencingToken::parse("fence_native_rescue_fresh_01")?,
         )?;
         let original = source.inventory()?;
         let first = reserve_original_native_for_rescue(&fixture.root, &source, &fresh)?;
-        assert_eq!(first, reserve_original_native_for_rescue(&fixture.root, &source, &fresh)?);
+        assert_eq!(
+            first,
+            reserve_original_native_for_rescue(&fixture.root, &source, &fresh)?
+        );
         assert_eq!(first.original_inventory, original.inventory_digest());
         assert_eq!(first.original_bytes, original.total_bytes());
         let reserve = fixture.root.open_generation(
-            &fixture.tenant, &fixture.profile, &first.generation_id,
+            &fixture.tenant,
+            &fixture.profile,
+            &first.generation_id,
         )?;
         assert_eq!(reserve.inventory()?, original);
-        fs::write(source.path().join("user_data/cookies.sqlite-wal"), b"rescue edited WAL")?;
+        fs::write(
+            source.path().join("user_data/cookies.sqlite-wal"),
+            b"rescue edited WAL",
+        )?;
         assert_eq!(
             reserve_original_native_for_rescue(&fixture.root, &source, &fresh),
             Err(SaveAttemptEvidenceError::Changed),
