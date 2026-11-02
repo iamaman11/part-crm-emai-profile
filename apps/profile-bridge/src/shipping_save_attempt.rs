@@ -2537,7 +2537,9 @@ mod direct_native_checkpoint_tests {
         SaveAttemptEvidenceError, attempt_path, discover_unresolved_streaming_exact_save_attempt,
         inspect_all_pending_for_s1, inspect_streaming_exact_save_attempt,
         persist_local_unsynced_intent, persist_streaming_exact_save_attempt_from_native,
-        reserve_original_native_for_rescue,
+        reserve_original_native_for_rescue, begin_native_rescue_edit,
+        native_rescue_interrupted_under_fresh_lease,
+        classify_scoped_pending_save_evidence, ScopedPendingSaveEvidence,
     };
     use crate::dirty_generation::{
         GenerationSealingMaterial, GenerationSealingMaterialPort, SealingMaterialFailure,
@@ -2836,6 +2838,72 @@ mod direct_native_checkpoint_tests {
             Err(SaveAttemptEvidenceError::Changed),
         );
         assert_eq!(reserve.inventory()?, original);
+        Ok(())
+    }
+
+    #[test]
+    fn native_rescue_edit_crash_and_clean_close_preserve_original_and_new_intent()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let fixture = Fixture::new()?;
+        let (source, _candidate) = fixture.native()?;
+        persist_local_unsynced_intent(&fixture.root, &source, &fixture.lease)?;
+        let first = ProfileLease::issue(
+            fixture.tenant.clone(),
+            fixture.profile.clone(),
+            SessionId::parse("session_rescue_edit_first_01")?,
+            fixture.lease.device_id().clone(),
+            fixture.lease.epoch() + 1,
+            FencingToken::parse("fence_rescue_edit_first_01")?,
+        )?;
+        let original = source.inventory()?;
+        begin_native_rescue_edit(&fixture.root, &source, &first)?;
+        assert_eq!(
+            classify_scoped_pending_save_evidence(
+                &fixture.root, &fixture.tenant, &fixture.profile,
+            ),
+            Err(SaveAttemptEvidenceError::Changed),
+        );
+        // Simulate power loss after the owned Firefox session changed WAL,
+        // but before a clean Close could publish the new native inventory.
+        fs::write(source.path().join("user_data/cookies.sqlite-wal"), b"crash dirty WAL")?;
+        let next = ProfileLease::issue(
+            fixture.tenant.clone(),
+            fixture.profile.clone(),
+            SessionId::parse("session_rescue_edit_second_01")?,
+            fixture.lease.device_id().clone(),
+            first.epoch() + 1,
+            FencingToken::parse("fence_rescue_edit_second_01")?,
+        )?;
+        assert!(native_rescue_interrupted_under_fresh_lease(
+            &fixture.root, &fixture.tenant, &fixture.profile, &fixture.n, &next,
+        )?);
+        begin_native_rescue_edit(&fixture.root, &source, &next)?;
+        fs::write(source.path().join("user_data/cookies.sqlite-wal"), b"clean smaller WAL")?;
+        persist_local_unsynced_intent(&fixture.root, &source, &next)?;
+        match classify_scoped_pending_save_evidence(
+            &fixture.root, &fixture.tenant, &fixture.profile,
+        )? {
+            ScopedPendingSaveEvidence::LocalUnsynced { base_generation, prior_epoch } => {
+                assert_eq!(base_generation, fixture.n);
+                assert_eq!(prior_epoch, next.epoch());
+            }
+            _ => return Err("clean rescue did not publish exact LOCAL_UNSYNCED".into()),
+        }
+        let final_inventory = source.inventory()?;
+        assert_ne!(final_inventory, original);
+        // Preserve independent ORIGINAL while new intent is being sealed.
+        let old_reserve = reserve_original_native_for_rescue(&fixture.root, &source, &next);
+        assert!(old_reserve.is_err()); // no new reserve from edited inventory
+        let record = super::read_local_unsynced(
+            &super::local_unsynced_path(&fixture.root, &fixture.tenant, &fixture.profile)
+        )?;
+        let evidence = record.rescue.ok_or("missing original rescue reserve")?;
+        let original_copy = fixture.root.open_generation(
+            &fixture.tenant,
+            &fixture.profile,
+            &GenerationId::parse(evidence.reserve_generation)?,
+        )?;
+        assert_eq!(original_copy.inventory()?, original);
         Ok(())
     }
 
