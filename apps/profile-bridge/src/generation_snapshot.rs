@@ -1092,7 +1092,10 @@ mod tests {
         let excessive_framing = envelope - native + 1;
         assert!(native + excessive_framing > envelope);
         assert!(!super::native_size_within_limit(envelope + 1));
-        assert!(super::MAX_STREAM_NATIVE_PROFILE_BYTES < encrypted_generation_domain::MAX_STREAM_CONTAINER_BYTES);
+        assert!(
+            super::MAX_STREAM_NATIVE_PROFILE_BYTES
+                < encrypted_generation_domain::MAX_STREAM_CONTAINER_BYTES
+        );
     }
 
     #[test]
