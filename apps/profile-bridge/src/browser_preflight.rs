@@ -142,9 +142,7 @@ where
     }
 }
 
-fn validate_camoufox_config(
-    workspace: &GenerationWorkspace,
-) -> Result<(), BrowserLaunchBlocker> {
+fn validate_camoufox_config(workspace: &GenerationWorkspace) -> Result<(), BrowserLaunchBlocker> {
     // The official Camoufox/fpgen stack owns WebGL and all fingerprint values.
     // Preflight only rejects missing/malformed identity material before spawn.
     const MAX_CONFIG_BYTES: u64 = 1024 * 1024;
@@ -408,7 +406,8 @@ mod tests {
     }
 
     #[test]
-    fn the_official_fingerprint_payload_is_owned_by_camoufox() -> Result<(), Box<dyn std::error::Error>> {
+    fn the_official_fingerprint_payload_is_owned_by_camoufox()
+    -> Result<(), Box<dyn std::error::Error>> {
         let path = root_path()?;
         let root = MaterializationRoot::open_or_create(&path)?;
         let tenant = TenantId::parse("tenant_01JPREFLIGHT")?;
