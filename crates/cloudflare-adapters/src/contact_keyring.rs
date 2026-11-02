@@ -298,12 +298,14 @@ mod tests {
         ))?;
         assert_eq!(old_ciphertext.key_version().value(), 1);
         assert_eq!(
-            rotated_protector.decrypt_contact_display(
-                &tenant,
-                &contact,
-                ContactProtectionVersion::V1,
-                &old_ciphertext,
-            )?.as_str(),
+            rotated_protector
+                .decrypt_contact_display(
+                    &tenant,
+                    &contact,
+                    ContactProtectionVersion::V1,
+                    &old_ciphertext,
+                )?
+                .as_str(),
             "legacy@example.com",
         );
         let new_ciphertext = block_on(rotated_protector.encrypt_contact_display(
