@@ -353,11 +353,17 @@ impl GenerationWorkspace {
     pub fn sync_native_reserve_contents(&self) -> Result<GenerationInventory, LocalProfileError> {
         let before = self.inventory()?;
         for entry in before.entries() {
-            OpenOptions::new().read(true).write(true)
-                .open(self.path().join(entry.relative_path()))?.sync_all()?;
+            OpenOptions::new()
+                .read(true)
+                .write(true)
+                .open(self.path().join(entry.relative_path()))?
+                .sync_all()?;
         }
-        OpenOptions::new().read(true).write(true)
-            .open(self.path().join(GENERATION_MARKER))?.sync_all()?;
+        OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open(self.path().join(GENERATION_MARKER))?
+            .sync_all()?;
         #[cfg(unix)]
         {
             let mut dirs = std::collections::BTreeSet::new();

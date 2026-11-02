@@ -286,9 +286,10 @@ pub(crate) fn persist_local_unsynced_intent(
             if old == intent {
                 return Ok(());
             }
-            if old.rescue.as_ref().is_some_and(|checkpoint| {
-                checkpoint.phase == NativeRescuePhase::Editing
-            })
+            if old
+                .rescue
+                .as_ref()
+                .is_some_and(|checkpoint| checkpoint.phase == NativeRescuePhase::Editing)
                 && old.tenant == intent.tenant
                 && old.profile == intent.profile
                 && old.base_generation == intent.base_generation
@@ -299,8 +300,16 @@ pub(crate) fn persist_local_unsynced_intent(
                 && matches!(browser_writer_locks_absent(source), Ok(true))
             {
                 let mut completed = intent;
-                let mut checkpoint = old.rescue.clone().ok_or(SaveAttemptEvidenceError::Changed)?;
-                verify_native_rescue_reserve(root, lease.tenant_id(), lease.profile_id(), &checkpoint)?;
+                let mut checkpoint = old
+                    .rescue
+                    .clone()
+                    .ok_or(SaveAttemptEvidenceError::Changed)?;
+                verify_native_rescue_reserve(
+                    root,
+                    lease.tenant_id(),
+                    lease.profile_id(),
+                    &checkpoint,
+                )?;
                 checkpoint.phase = NativeRescuePhase::Closed;
                 completed.rescue = Some(checkpoint);
                 return replace_native_rescue_intent(root, source, &old, &completed);
@@ -664,9 +673,12 @@ fn verify_native_rescue_reserve(
 ) -> Result<(), SaveAttemptEvidenceError> {
     let reserve_id = GenerationId::parse(checkpoint.reserve_generation.clone())
         .map_err(|_| SaveAttemptEvidenceError::Invalid)?;
-    let reserve = root.open_generation(tenant, profile, &reserve_id)
+    let reserve = root
+        .open_generation(tenant, profile, &reserve_id)
         .map_err(|_| SaveAttemptEvidenceError::Changed)?;
-    let inventory = reserve.inventory().map_err(|_| SaveAttemptEvidenceError::Changed)?;
+    let inventory = reserve
+        .inventory()
+        .map_err(|_| SaveAttemptEvidenceError::Changed)?;
     if inventory.inventory_digest() != checkpoint.original_inventory
         || inventory.total_bytes() != checkpoint.original_bytes
     {
@@ -692,9 +704,14 @@ fn replace_native_rescue_intent(
     let mut staged = None;
     for _ in 0..STAGE_TRIES {
         let seq = STAGE_SEQUENCE.fetch_add(1, Ordering::Relaxed);
-        let path = root.path().join(format!(".bridge-rescue-stage-{}-{seq}", std::process::id()));
+        let path = root
+            .path()
+            .join(format!(".bridge-rescue-stage-{}-{seq}", std::process::id()));
         match OpenOptions::new().write(true).create_new(true).open(&path) {
-            Ok(file) => { staged = Some((path, file)); break; }
+            Ok(file) => {
+                staged = Some((path, file));
+                break;
+            }
             Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {}
             Err(error) => return Err(error.into()),
         }
@@ -706,16 +723,24 @@ fn replace_native_rescue_intent(
     if read_local_unsynced(&canonical)? != *original {
         return Err(SaveAttemptEvidenceError::Changed);
     }
-    let current = source.inventory().map_err(|_| SaveAttemptEvidenceError::Changed)?;
-    if next.rescue.as_ref().is_some_and(|r| r.phase == NativeRescuePhase::Closed)
+    let current = source
+        .inventory()
+        .map_err(|_| SaveAttemptEvidenceError::Changed)?;
+    if next
+        .rescue
+        .as_ref()
+        .is_some_and(|r| r.phase == NativeRescuePhase::Closed)
         && (next.source_inventory != current.inventory_digest()
             || next.source_bytes != current.total_bytes())
     {
         return Err(SaveAttemptEvidenceError::Changed);
     }
     fs::rename(&path, &canonical)?;
-    OpenOptions::new().read(true).write(true)
-        .open(&canonical)?.sync_all()?;
+    OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open(&canonical)?
+        .sync_all()?;
     #[cfg(unix)]
     File::open(root.path())?.sync_all()?;
     if read_local_unsynced(&canonical)? != *next {
@@ -736,15 +761,25 @@ pub(crate) fn begin_native_rescue_edit(
     let tenant = lease.tenant_id();
     let profile = lease.profile_id();
     let (attempt, marker) = scan_scoped_pending_candidate(root, tenant, profile)?;
-    if attempt.is_some() || !marker || source.tenant_id() != tenant
+    if attempt.is_some()
+        || !marker
+        || source.tenant_id() != tenant
         || source.profile_id() != profile
         || !matches!(browser_writer_locks_absent(source), Ok(true))
-        || !local_unsynced_matches_fresh_lease(root, tenant, profile, source.generation_id(), lease)?
+        || !local_unsynced_matches_fresh_lease(
+            root,
+            tenant,
+            profile,
+            source.generation_id(),
+            lease,
+        )?
     {
         return Err(SaveAttemptEvidenceError::Changed);
     }
     let original = read_local_unsynced(&local_unsynced_path(root, tenant, profile))?;
-    let current = source.inventory().map_err(|_| SaveAttemptEvidenceError::Changed)?;
+    let current = source
+        .inventory()
+        .map_err(|_| SaveAttemptEvidenceError::Changed)?;
     let checkpoint = match original.rescue.as_ref() {
         Some(checkpoint) => {
             verify_native_rescue_reserve(root, tenant, profile, checkpoint)?;
@@ -775,7 +810,10 @@ pub(crate) fn begin_native_rescue_edit(
     next.epoch = lease.epoch();
     next.session_fingerprint = credential_fingerprint(b"session", lease.session_id().as_str());
     next.fencing_fingerprint = credential_fingerprint(b"fencing", lease.fencing_token().as_str());
-    next.device_fingerprint = Some(credential_fingerprint(b"device", lease.device_id().as_str()));
+    next.device_fingerprint = Some(credential_fingerprint(
+        b"device",
+        lease.device_id().as_str(),
+    ));
     next.rescue = Some(NativeRescueCheckpoint {
         phase: NativeRescuePhase::Editing,
         ..checkpoint
@@ -797,16 +835,23 @@ pub(crate) fn native_rescue_interrupted_under_fresh_lease(
         Err(SaveAttemptEvidenceError::Io(std::io::ErrorKind::NotFound)) => return Ok(false),
         Err(error) => return Err(error),
     };
-    let Some(checkpoint) = original.rescue.as_ref() else { return Ok(false) };
-    if checkpoint.phase != NativeRescuePhase::Editing { return Ok(false); }
+    let Some(checkpoint) = original.rescue.as_ref() else {
+        return Ok(false);
+    };
+    if checkpoint.phase != NativeRescuePhase::Editing {
+        return Ok(false);
+    }
     let (attempt, marker) = scan_scoped_pending_candidate(root, tenant, profile)?;
-    if attempt.is_some() || !marker || original.base_generation != selected.as_str()
+    if attempt.is_some()
+        || !marker
+        || original.base_generation != selected.as_str()
         || !local_unsynced_matches_fresh_lease(root, tenant, profile, selected, lease)?
     {
         return Err(SaveAttemptEvidenceError::Changed);
     }
     verify_native_rescue_reserve(root, tenant, profile, checkpoint)?;
-    let source = root.open_generation(tenant, profile, selected)
+    let source = root
+        .open_generation(tenant, profile, selected)
         .map_err(|_| SaveAttemptEvidenceError::Changed)?;
     if !matches!(browser_writer_locks_absent(&source), Ok(true)) || source.inventory().is_err() {
         return Err(SaveAttemptEvidenceError::Changed);
@@ -1631,9 +1676,11 @@ pub(crate) fn classify_scoped_pending_save_evidence(
             }
         } else {
             let intent = read_local_unsynced(&marker)?;
-            if intent.rescue.as_ref().is_some_and(|value| {
-                value.phase == NativeRescuePhase::Editing
-            }) {
+            if intent
+                .rescue
+                .as_ref()
+                .is_some_and(|value| value.phase == NativeRescuePhase::Editing)
+            {
                 return Err(SaveAttemptEvidenceError::Changed);
             }
             if intent.schema != "bridge-p3-local-unsynced-v1"
@@ -2535,12 +2582,12 @@ fn native_snapshot_size_refusal_keeps_distinct_error_provenance() {
 #[cfg(test)]
 mod direct_native_checkpoint_tests {
     use super::{
-        SaveAttemptEvidenceError, attempt_path, discover_unresolved_streaming_exact_save_attempt,
-        inspect_all_pending_for_s1, inspect_streaming_exact_save_attempt,
+        SaveAttemptEvidenceError, ScopedPendingSaveEvidence, attempt_path,
+        begin_native_rescue_edit, classify_scoped_pending_save_evidence,
+        discover_unresolved_streaming_exact_save_attempt, inspect_all_pending_for_s1,
+        inspect_streaming_exact_save_attempt, native_rescue_interrupted_under_fresh_lease,
         persist_local_unsynced_intent, persist_streaming_exact_save_attempt_from_native,
-        reserve_original_native_for_rescue, begin_native_rescue_edit,
-        native_rescue_interrupted_under_fresh_lease,
-        classify_scoped_pending_save_evidence, ScopedPendingSaveEvidence,
+        reserve_original_native_for_rescue,
     };
     use crate::dirty_generation::{
         GenerationSealingMaterial, GenerationSealingMaterialPort, SealingMaterialFailure,
@@ -2859,14 +2906,15 @@ mod direct_native_checkpoint_tests {
         let original = source.inventory()?;
         begin_native_rescue_edit(&fixture.root, &source, &first)?;
         assert!(matches!(
-            classify_scoped_pending_save_evidence(
-                &fixture.root, &fixture.tenant, &fixture.profile,
-            ),
+            classify_scoped_pending_save_evidence(&fixture.root, &fixture.tenant, &fixture.profile,),
             Err(SaveAttemptEvidenceError::Changed),
         ));
         // Simulate power loss after the owned Firefox session changed WAL,
         // but before a clean Close could publish the new native inventory.
-        fs::write(source.path().join("user_data/cookies.sqlite-wal"), b"crash dirty WAL")?;
+        fs::write(
+            source.path().join("user_data/cookies.sqlite-wal"),
+            b"crash dirty WAL",
+        )?;
         let next = ProfileLease::issue(
             fixture.tenant.clone(),
             fixture.profile.clone(),
@@ -2876,15 +2924,27 @@ mod direct_native_checkpoint_tests {
             FencingToken::parse("fence_rescue_edit_second_01")?,
         )?;
         assert!(native_rescue_interrupted_under_fresh_lease(
-            &fixture.root, &fixture.tenant, &fixture.profile, &fixture.n, &next,
+            &fixture.root,
+            &fixture.tenant,
+            &fixture.profile,
+            &fixture.n,
+            &next,
         )?);
         begin_native_rescue_edit(&fixture.root, &source, &next)?;
-        fs::write(source.path().join("user_data/cookies.sqlite-wal"), b"clean smaller WAL")?;
+        fs::write(
+            source.path().join("user_data/cookies.sqlite-wal"),
+            b"clean smaller WAL",
+        )?;
         persist_local_unsynced_intent(&fixture.root, &source, &next)?;
         match classify_scoped_pending_save_evidence(
-            &fixture.root, &fixture.tenant, &fixture.profile,
+            &fixture.root,
+            &fixture.tenant,
+            &fixture.profile,
         )? {
-            ScopedPendingSaveEvidence::LocalUnsynced { base_generation, prior_epoch } => {
+            ScopedPendingSaveEvidence::LocalUnsynced {
+                base_generation,
+                prior_epoch,
+            } => {
                 assert_eq!(base_generation, fixture.n);
                 assert_eq!(prior_epoch, next.epoch());
             }
@@ -2895,9 +2955,11 @@ mod direct_native_checkpoint_tests {
         // Preserve independent ORIGINAL while new intent is being sealed.
         let old_reserve = reserve_original_native_for_rescue(&fixture.root, &source, &next);
         assert!(old_reserve.is_err()); // no new reserve from edited inventory
-        let record = super::read_local_unsynced(
-            &super::local_unsynced_path(&fixture.root, &fixture.tenant, &fixture.profile)
-        )?;
+        let record = super::read_local_unsynced(&super::local_unsynced_path(
+            &fixture.root,
+            &fixture.tenant,
+            &fixture.profile,
+        ))?;
         let evidence = record.rescue.ok_or("missing original rescue reserve")?;
         let original_copy = fixture.root.open_generation(
             &fixture.tenant,

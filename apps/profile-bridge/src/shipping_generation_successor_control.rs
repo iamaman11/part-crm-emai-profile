@@ -347,11 +347,22 @@ pub(crate) fn complete_active_exact_after_restart<T: MachineHttpPort>(
     // inventory. It is NOT ordinary LOCAL_UNSYNCED, and must not attempt
     // cloud first-seal until a fresh browser rescue closes cleanly.
     if native_rescue_interrupted_under_fresh_lease(
-        root, tenant_id, profile_id, selected_generation, fresh_lease,
-    ).map_err(|_| RestartExactLocalCompletionError::LocalEvidenceChanged)? {
+        root,
+        tenant_id,
+        profile_id,
+        selected_generation,
+        fresh_lease,
+    )
+    .map_err(|_| RestartExactLocalCompletionError::LocalEvidenceChanged)?
+    {
         let verdict = request_local_unsynced_retry_decision(
-            tenant_id, profile_id, selected_generation, fresh_lease, transport,
-        ).map_err(RestartExactLocalCompletionError::ControlPlane)?;
+            tenant_id,
+            profile_id,
+            selected_generation,
+            fresh_lease,
+            transport,
+        )
+        .map_err(RestartExactLocalCompletionError::ControlPlane)?;
         return Ok(match verdict {
             BridgeGenerationSuccessorRetryVerdict::NotAppliedRetryable => {
                 RestartExactLocalCompletion::NativeRescueRequired
