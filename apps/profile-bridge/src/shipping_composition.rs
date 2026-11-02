@@ -269,6 +269,7 @@ mod windows {
     };
     use crate::shipping_generation_successor_control::{
         RestartExactCommitObservation, RestartExactLocalCompletion,
+        RestartExactLocalCompletionError,
         complete_active_exact_after_restart, confirm_retained_exact_retry_nonapplication,
         resume_exact_successor_under_fresh_lease, resume_lone_local_unsynced_under_fresh_lease,
     };
