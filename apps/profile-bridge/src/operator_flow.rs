@@ -15,18 +15,18 @@ use crate::dirty_generation::PreparedDirtyGeneration;
 use crate::dirty_generation::{DirtyGenerationError, GenerationSealingMaterialPort};
 #[cfg(any(test, feature = "synthetic-test-bin"))]
 use crate::dirty_generation_finalize::DirtyGenerationCommitClientPort;
-#[cfg(any(windows, test))]
-use crate::generation_snapshot::{GenerationSnapshotError, WorkspaceSnapshotReader};
 use crate::generation_reopen::{
     GenerationObjectDownloadError, GenerationObjectDownloadPort, GenerationReopenControlError,
     GenerationReopenControlPort,
 };
 #[cfg(any(windows, test))]
-use crate::local_profile::{GenerationInventory, RecoveryClone};
+use crate::generation_snapshot::{GenerationSnapshotError, WorkspaceSnapshotReader};
 use crate::local_profile::{
     BridgeWorkspaceLock, GenerationWorkspace, LocalGenerationRecord, LocalGenerationState,
     LocalProfileError, MaterializationRoot,
 };
+#[cfg(any(windows, test))]
+use crate::local_profile::{GenerationInventory, RecoveryClone};
 use crate::runtime_bundle::{
     ApprovedRuntimeBundle, RuntimeLaunchError, RuntimeSessionOrchestrator,
 };
@@ -2388,16 +2388,15 @@ mod tests {
     #[test]
     fn native_oversize_preflight_rejects_before_any_successor_clone_or_cloud_effect()
     -> Result<(), Box<dyn std::error::Error>> {
-        use super::{
-            GenerationSaveFailureReason, preflight_retained_native_before_clone,
-        };
+        use super::{GenerationSaveFailureReason, preflight_retained_native_before_clone};
         use crate::generation_snapshot::MAX_STREAM_NATIVE_PROFILE_BYTES;
 
         let fixture = Fixture::new()?;
         let tenant = fixture.actor.tenant_scope().tenant_id();
-        let source = fixture
-            .root
-            .open_generation(tenant, &fixture.profile_id, &fixture.generation_id)?;
+        let source =
+            fixture
+                .root
+                .open_generation(tenant, &fixture.profile_id, &fixture.generation_id)?;
         let user_data = source.path().join("user_data");
         fs::create_dir_all(&user_data)?;
         let original = user_data.join("oversized-native-profile.bin");
@@ -2422,7 +2421,9 @@ mod tests {
         assert_eq!(source.inventory()?, original_inventory);
         let never_created = GenerationId::parse("generation_native_oversize_forbidden_clone")?;
         assert!(matches!(
-            fixture.root.open_generation(tenant, &fixture.profile_id, &never_created),
+            fixture
+                .root
+                .open_generation(tenant, &fixture.profile_id, &never_created),
             Err(LocalProfileError::Io(std::io::ErrorKind::NotFound)),
         ));
         Ok(())
