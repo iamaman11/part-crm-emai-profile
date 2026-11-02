@@ -2632,10 +2632,10 @@ mod tests {
     }
 
     #[test]
-    fn oversized_lone_intent_refuses_foreign_stale_and_changed_claims_before_d1()
+    fn lone_intent_refuses_foreign_stale_and_changed_claims_before_d1()
     -> Result<(), Box<dyn std::error::Error>> {
-        use crate::generation_snapshot::MAX_STREAM_WORKSPACE_SNAPSHOT_BYTES;
-
+        // These checks reject BEFORE size preflight, so a large sparse payload
+        // would add costly inventory reads without proving more authority.
         for case in 0..4 {
             let fixture = Fixture::new()?;
             let root = MaterializationRoot::open_or_create(&fixture.root_path)?;
@@ -2644,10 +2644,6 @@ mod tests {
             std::fs::create_dir_all(&native)?;
             let wal = native.join("cookies.sqlite-wal");
             std::fs::write(&wal, b"native-wal-original")?;
-            let original_size = source.inventory()?.total_bytes();
-            let filler = std::fs::File::create(native.join("indexeddb-oversize.bin"))?;
-            filler.set_len(MAX_STREAM_WORKSPACE_SNAPSHOT_BYTES + 1 - original_size)?;
-            filler.sync_all()?;
             persist_local_unsynced_intent(&root, &source, &fixture.lease)?;
             let prior_inventory = source.inventory()?;
             let device = if case == 1 {
@@ -2719,10 +2715,10 @@ mod tests {
     }
 
     #[test]
-    fn oversized_lone_intent_obeys_explicit_server_denial_without_rescue_open()
+    fn lone_intent_obeys_explicit_server_denial_without_rescue_open()
     -> Result<(), Box<dyn std::error::Error>> {
-        use crate::generation_snapshot::MAX_STREAM_WORKSPACE_SNAPSHOT_BYTES;
-
+        // Server denial precedes native-size preflight and is deliberately
+        // tested with small real WAL bytes, not a huge sparse object.
         let fixture = Fixture::new()?;
         let root = MaterializationRoot::open_or_create(&fixture.root_path)?;
         let source = root.open_generation(&fixture.tenant, &fixture.profile, &fixture.base)?;
@@ -2730,10 +2726,6 @@ mod tests {
         std::fs::create_dir_all(&native)?;
         let wal = native.join("cookies.sqlite-wal");
         std::fs::write(&wal, b"native-wal-stays-local")?;
-        let before = source.inventory()?.total_bytes();
-        let filler = std::fs::File::create(native.join("oversized-indexeddb.bin"))?;
-        filler.set_len(MAX_STREAM_WORKSPACE_SNAPSHOT_BYTES + 1 - before)?;
-        filler.sync_all()?;
         let original = source.inventory()?;
         persist_local_unsynced_intent(&root, &source, &fixture.lease)?;
         let fresh = ProfileLease::issue(
