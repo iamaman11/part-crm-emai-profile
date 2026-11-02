@@ -1266,7 +1266,14 @@ def controlled_close_candidate(
     witness = state.get("browser_exit")
     # Only the actual retained browser-process handle may attest normal exit;
     # callback closure and a bounded wait never authorize Save on their own.
-    return witness is None or witness.safely_exited(exit_wait_millis)
+    if witness is None:
+        return True
+    # Keep the existing zero-wait witness API (including supported observers)
+    # unchanged. A timed wait is used only after a TargetClosedError with
+    # complete page-close callbacks and an independently retained native PID.
+    if exit_wait_millis == 0:
+        return witness.safely_exited()
+    return witness.safely_exited(exit_wait_millis)
 
 
 def report_close_observation_detail(state: dict[str, Any] | None, error: BaseException) -> None:
