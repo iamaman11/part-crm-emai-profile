@@ -711,7 +711,10 @@ mod tests {
             fs::read(prepared.staged().runtime_root().join("python/python.exe"))?,
             PYTHON_FILE
         );
-        assert_eq!(fetcher.calls, ["profile-bridge.zip", "runtime-bundle.tar.gz"]);
+        assert_eq!(
+            fetcher.calls,
+            ["profile-bridge.zip", "runtime-bundle.tar.gz"]
+        );
         Ok(())
     }
 
