@@ -494,6 +494,13 @@ def verify_python_components(lock: dict[str, Any]) -> None:
         if not isinstance(expected, str) or importlib.metadata.version(distribution) != expected:
             raise RuntimeContractError("installed runtime component does not match lock")
 
+    # The pinned upstream model must be present before Camoufox can import fpgen.
+    # No first-launch network fetch or hidden refresh is allowed.
+    from camoufox.fpgen_model import is_pinned
+
+    if not is_pinned():
+        raise RuntimeContractError("official Camoufox fpgen model missing or corrupt")
+
 
 def resolve_headless_mode() -> bool | str:
     value = os.environ.get(HEADLESS_MODE_ENV, "false")
