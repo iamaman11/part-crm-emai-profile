@@ -1,8 +1,8 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { TenantProvider } from '../../app/TenantContext';
-import { changeGenerationActivation, getGeneration, getProfile } from './api';
+import { changeGenerationActivation, getCoordinator, getGeneration, getProfile } from './api';
 import { ProfilesWorkspace } from './ProfilesWorkspace';
 
 vi.mock('./api', () => ({
@@ -21,6 +21,7 @@ vi.mock('./api', () => ({
 
 const profileLookup = vi.mocked(getProfile);
 const generationLookup = vi.mocked(getGeneration);
+const coordinatorLookup = vi.mocked(getCoordinator);
 const activation = vi.mocked(changeGenerationActivation);
 
 describe('ProfilesWorkspace generation refresh (#802 F06)', () => {
@@ -131,6 +132,90 @@ describe('ProfilesWorkspace generation refresh (#802 F06)', () => {
     expect(screen.queryByText('SUCCEEDED: profile_old')).toBeNull();
     expect(activation).toHaveBeenCalledTimes(1);
     expect(generationLookup).toHaveBeenCalledTimes(2); // Initial lookup + original readback, never new generation.
+  });
+
+  it('does not show a delayed profile lookup from a previous selection', async () => {
+    let resolveOld: (value: Awaited<ReturnType<typeof getProfile>>) => void = () => undefined;
+    const oldRead = new Promise<Awaited<ReturnType<typeof getProfile>>>((resolve) => {
+      resolveOld = resolve;
+    });
+    profileLookup.mockImplementation((_tenant, id) => id === 'profile_old'
+      ? oldRead
+      : Promise.resolve({ profileId: id, status: 'READY', version: 8, linkedClientId: null }
+        as Awaited<ReturnType<typeof getProfile>>));
+    const cache = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const provider = (id: string) => (
+      <QueryClientProvider client={cache}>
+        <TenantProvider loadTenantContexts={async () => ({
+          tenants: [{ tenantId: 'tenant_test', displayName: 'Test tenant', actorId: 'actor_test', role: 'TENANT_OWNER' }],
+        })}>
+          <ProfilesWorkspace selectedProfileId={id} onProfileSelected={() => undefined} />
+        </TenantProvider>
+      </QueryClientProvider>
+    );
+    const view = render(provider('profile_old'));
+    await waitFor(() => expect(profileLookup).toHaveBeenCalledWith('tenant_test', 'profile_old'));
+    view.rerender(provider('profile_new'));
+    await screen.findByText('profile_new');
+    await act(async () => {
+      resolveOld({
+        profileId: 'profile_old', status: 'SUSPENDED', version: 18, linkedClientId: null,
+      } as Awaited<ReturnType<typeof getProfile>>);
+      await oldRead;
+    });
+    expect(screen.queryByText('profile_old')).toBeNull();
+    expect(screen.getByText('profile_new')).toBeTruthy();
+    expect((screen.getByRole('button', { name: 'Open browser' }) as HTMLButtonElement).disabled).toBe(false);
+  });
+
+  it('does not render stale generation or coordinator after switching profiles', async () => {
+    let resolveGeneration: (value: Awaited<ReturnType<typeof getGeneration>>) => void = () => undefined;
+    let resolveCoordinator: (value: Awaited<ReturnType<typeof getCoordinator>>) => void = () => undefined;
+    const oldGeneration = new Promise<Awaited<ReturnType<typeof getGeneration>>>((resolve) => {
+      resolveGeneration = resolve;
+    });
+    const oldCoordinator = new Promise<Awaited<ReturnType<typeof getCoordinator>>>((resolve) => {
+      resolveCoordinator = resolve;
+    });
+    profileLookup.mockImplementation(async (_tenant, id) => ({
+      profileId: id, status: 'READY', version: 9, linkedClientId: null,
+    }) as Awaited<ReturnType<typeof getProfile>>);
+    generationLookup.mockReturnValue(oldGeneration);
+    coordinatorLookup.mockReturnValue(oldCoordinator);
+    const cache = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const provider = (id: string) => (
+      <QueryClientProvider client={cache}>
+        <TenantProvider loadTenantContexts={async () => ({
+          tenants: [{ tenantId: 'tenant_test', displayName: 'Test tenant', actorId: 'actor_test', role: 'TENANT_OWNER' }],
+        })}>
+          <ProfilesWorkspace selectedProfileId={id} onProfileSelected={() => undefined} />
+        </TenantProvider>
+      </QueryClientProvider>
+    );
+    const view = render(provider('profile_old'));
+    await screen.findByRole('button', { name: 'Open browser' });
+    fireEvent.click(screen.getByText('Administration and diagnostics'));
+    fireEvent.change(screen.getAllByLabelText('Generation ID')[0]!, { target: { value: 'generation_old' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Lookup generation' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Load coordinator snapshot' }));
+    await waitFor(() => expect(generationLookup).toHaveBeenCalledWith('tenant_test', 'profile_old', 'generation_old'));
+    await waitFor(() => expect(coordinatorLookup).toHaveBeenCalledWith('tenant_test', 'profile_old'));
+
+    view.rerender(provider('profile_new'));
+    await screen.findByText('profile_new');
+    await act(async () => {
+      resolveGeneration({
+        generationId: 'generation_old', status: 'VERIFIED', version: 3, verificationReference: null,
+      } as Awaited<ReturnType<typeof getGeneration>>);
+      resolveCoordinator({
+        version: 7, sequence: 6, projection: { status: 'Active' },
+      } as Awaited<ReturnType<typeof getCoordinator>>);
+      await Promise.all([oldGeneration, oldCoordinator]);
+    });
+    expect(screen.queryByRole('button', { name: 'deactivate generation' })).toBeNull();
+    expect(screen.queryByText('Active session')).toBeNull();
+    expect(screen.getByText('profile_new')).toBeTruthy();
+    expect((screen.getByRole('button', { name: 'Open browser' }) as HTMLButtonElement).disabled).toBe(false);
   });
 
 });

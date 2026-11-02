@@ -24,7 +24,8 @@ function field(data: FormData, name: string): string {
   return String(data.get(name) ?? '').trim();
 }
 
-type GenerationActionTarget = { tenantId: string; profileId: string; generationId: string };
+type ProfileSelection = { tenantId: string; profileId: string };
+type GenerationActionTarget = ProfileSelection & { generationId: string };
 type GenerationActionCommand = (
   | { kind: 'verify'; expectedVersion: number; reference: string }
   | { kind: 'activate' | 'deactivate'; expectedVersion: number }
@@ -58,8 +59,13 @@ export function ProfilesWorkspace({
 
   const launch = useMutation({ mutationFn: () => openBrowserProfile(tenantId, profileId, newIdempotencyKey()) });
   const lookup = useMutation({
-    mutationFn: (id: string) => getProfile(tenantId, id),
-    onSuccess: (data) => setProfile(data ?? null),
+    mutationFn: (target: ProfileSelection) => getProfile(target.tenantId, target.profileId),
+    onSuccess: (data, target) => {
+      // Late readback for the previous profile/tenant must never replace the
+      // newly selected profile, even if the previous request succeeded.
+      if (selected.current.tenantId === target.tenantId
+        && selected.current.profileId === target.profileId) setProfile(data ?? null);
+    },
   });
   const create = useLogicalCommandMutation((id: string, idempotencyKey) => createProfile(tenantId, id, idempotencyKey), {
     onSuccess: (receipt) => {
@@ -76,8 +82,14 @@ export function ProfilesWorkspace({
       input.revoke,
     ), {});
   const generationLookup = useMutation({
-    mutationFn: (id: string) => getGeneration(tenantId, profileId, id),
-    onSuccess: (data) => setGeneration(data ?? null),
+    mutationFn: (target: GenerationActionTarget) =>
+      getGeneration(target.tenantId, target.profileId, target.generationId),
+    onSuccess: (data, target) => {
+      // A stale generation from another selection can never authorize actions.
+      if (selected.current.tenantId === target.tenantId
+        && selected.current.profileId === target.profileId
+        && selected.current.generationId === target.generationId) setGeneration(data ?? null);
+    },
   });
   const generationRegister = useLogicalCommandMutation((input: { generationId: string; objectKey: string; metadataDigest: string; containerDigest: string }, idempotencyKey) =>
     registerGeneration(tenantId, profileId, input, idempotencyKey));
@@ -123,8 +135,12 @@ export function ProfilesWorkspace({
     },
   );
   const coordinatorLookup = useMutation({
-    mutationFn: () => getCoordinator(tenantId, profileId),
-    onSuccess: (data) => setCoordinator(data ?? null),
+    mutationFn: (target: ProfileSelection) => getCoordinator(target.tenantId, target.profileId),
+    onSuccess: (data, target) => {
+      // Never show a stale owner/lease projection for the newly selected profile.
+      if (selected.current.tenantId === target.tenantId
+        && selected.current.profileId === target.profileId) setCoordinator(data ?? null);
+    },
   });
   const coordinatorCommand = useLogicalCommandMutation((command: import('./api').CoordinatorCommandDto, idempotencyKey) => {
       if (!coordinator) throw new Error('Load the coordinator snapshot before issuing a command.');
@@ -146,11 +162,13 @@ export function ProfilesWorkspace({
     setGeneration(null);
     setCoordinator(null);
     setGenerationRefreshUnconfirmed(false);
-    if (tenantId && nextProfileId) lookup.mutate(nextProfileId);
+    if (tenantId && nextProfileId) lookup.mutate({ tenantId, profileId: nextProfileId });
   }, [tenantId, selectedProfileId]);
 
   useEffect(() => {
-    const refresh = () => { if (tenantId && selectedProfileId) lookup.mutate(selectedProfileId); };
+    const refresh = () => {
+      if (tenantId && selectedProfileId) lookup.mutate({ tenantId, profileId: selectedProfileId });
+    };
     globalThis.addEventListener('focus', refresh);
     return () => globalThis.removeEventListener('focus', refresh);
   }, [tenantId, selectedProfileId]);
@@ -250,7 +268,7 @@ export function ProfilesWorkspace({
             const id = field(new FormData(event.currentTarget), 'generationId');
             setGenerationId(id);
             setGeneration(null);
-            generationLookup.mutate(id);
+            generationLookup.mutate({ tenantId, profileId, generationId: id });
           }}>
             <label>Generation ID<input name="generationId" placeholder="generation_..." required disabled={!profileLoaded} /></label>
             <button type="submit" disabled={!profileLoaded || generationLookup.isPending}>Lookup generation</button>
@@ -288,7 +306,7 @@ export function ProfilesWorkspace({
       <section className="panel full-span">
         <span className="eyebrow">Durable Object lease projection</span>
         <h2>Profile coordinator</h2>
-        <button type="button" disabled={!profileLoaded || coordinatorLookup.isPending} onClick={() => coordinatorLookup.mutate()}>Load coordinator snapshot</button>
+        <button type="button" disabled={!profileLoaded || coordinatorLookup.isPending} onClick={() => coordinatorLookup.mutate({ tenantId, profileId })}>Load coordinator snapshot</button>
         <StatusMessage state={coordinatorLookup.error ?? coordinatorCommand.error ?? (coordinatorLookup.isPending ? 'Loading coordinator…' : null)} />
         {coordinator && (
           <>
