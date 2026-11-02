@@ -788,10 +788,10 @@ def prove_external_windows_gui_close(
         second_url = f"http://127.0.0.1:{server.server_port}/second"
         script = agent_dir / "open-second-native-window.py"
         script.write_text(
-            "page = context.new_page()\\n"
-            f"page.goto({second_url!r}, wait_until='domcontentloaded', timeout=30000)\\n"
-            f"assert page.title() == {second_title!r}\\n"
-            "result = {'second_window_opened': True}\\n",
+            "page = context.new_page()\n"
+            f"page.goto({second_url!r}, wait_until='domcontentloaded', timeout=30000)\n"
+            f"assert page.title() == {second_title!r}\n"
+            "result = {'second_window_opened': True}\n",
             encoding="utf-8",
         )
         agent_command = subprocess.run(
