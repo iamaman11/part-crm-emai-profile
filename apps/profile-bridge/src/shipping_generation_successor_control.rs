@@ -2670,7 +2670,10 @@ mod tests {
                 fixture.base.clone()
             };
             if case == 3 {
-                std::fs::write(source.path().join("prefs.js"), b"source-changed-after-close")?;
+                std::fs::write(
+                    source.path().join("prefs.js"),
+                    b"source-changed-after-close",
+                )?;
                 assert_ne!(source.inventory()?, prior_inventory);
             }
             let bytes_before = source.inventory()?;
@@ -2701,7 +2704,10 @@ mod tests {
                 }),
                 "case={case}"
             );
-            assert!(network.paths.is_empty(), "case={case}: D1 must not be called");
+            assert!(
+                network.paths.is_empty(),
+                "case={case}: D1 must not be called"
+            );
             assert_eq!(upload.calls, 0, "case={case}: R2 must not be called");
             assert_eq!(source.inventory()?, bytes_before);
             assert_eq!(std::fs::read(&wal)?, b"native-wal-original");
@@ -2769,7 +2775,10 @@ mod tests {
         assert_eq!(network.paths.len(), 1);
         assert!(network.paths[0].ends_with("/generation-successor/local-unsynced/retry-decision"));
         assert_eq!(upload.calls, 0);
-        assert!(root.open_generation(&fixture.tenant, &fixture.profile, &candidate).is_err());
+        assert!(
+            root.open_generation(&fixture.tenant, &fixture.profile, &candidate)
+                .is_err()
+        );
         assert_eq!(source.inventory()?, original);
         assert_eq!(std::fs::read(&wal)?, b"native-wal-stays-local");
         assert!(has_unresolved_save_attempt_for_profile(
