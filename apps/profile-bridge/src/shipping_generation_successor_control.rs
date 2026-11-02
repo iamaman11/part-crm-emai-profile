@@ -32,6 +32,7 @@ use crate::shipping_save_attempt::{
 use crate::shipping_save_attempt::{
     SaveAttemptEvidenceError, ScopedPendingSaveEvidence, classify_scoped_pending_save_evidence,
     deterministic_lone_unsynced_successor, local_unsynced_matches_fresh_lease,
+    native_rescue_interrupted_under_fresh_lease,
     persist_streaming_exact_save_attempt_from_lone_intent,
     retire_active_exact_attempt_after_restart, retire_active_streamed_attempt_after_restart,
     retire_matching_local_unsynced_after_restart,
@@ -78,6 +79,9 @@ pub enum RestartExactLocalCompletion {
     /// Verified local source exists, but no cloud effect has been proved.
     /// Requires a *new* D1 affirmative decision and fresh writer fence.
     LocalUnsyncedAuthorizedAwaitingFirstSeal,
+    /// Fresh N launch claim, independent D1 nonapplication and locally
+    /// verifiable original rescue bytes. Actual editing journal still pending.
+    NativeRescueRequired,
     NotActiveExact,
     /// D1 positively proved nonapplication; exact same-attempt resume is still pending.
     RetryDecisionConfirmedAwaitingResumption,
@@ -338,6 +342,24 @@ pub(crate) fn complete_active_exact_after_restart<T: MachineHttpPort>(
         || fresh_lease.epoch() == 0
     {
         return Err(RestartExactLocalCompletionError::WriterOrLockUnresolved);
+    }
+    // An interrupted managed edit intentionally has a changed native
+    // inventory. It is NOT ordinary LOCAL_UNSYNCED, and must not attempt
+    // cloud first-seal until a fresh browser rescue closes cleanly.
+    if native_rescue_interrupted_under_fresh_lease(
+        root, tenant_id, profile_id, selected_generation, fresh_lease,
+    ).map_err(|_| RestartExactLocalCompletionError::LocalEvidenceChanged)? {
+        let verdict = request_local_unsynced_retry_decision(
+            tenant_id, profile_id, selected_generation, fresh_lease, transport,
+        ).map_err(RestartExactLocalCompletionError::ControlPlane)?;
+        return Ok(match verdict {
+            BridgeGenerationSuccessorRetryVerdict::NotAppliedRetryable => {
+                RestartExactLocalCompletion::NativeRescueRequired
+            }
+            BridgeGenerationSuccessorRetryVerdict::Blocked => {
+                RestartExactLocalCompletion::RetryDecisionBlocked
+            }
+        });
     }
     // Inspect the ONE canonical BPAT with bounded memory before the legacy
     // lone-intent classifier: a 512 MiB verified checkpoint must not hit the

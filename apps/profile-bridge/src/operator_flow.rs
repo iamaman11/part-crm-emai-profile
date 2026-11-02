@@ -46,6 +46,8 @@ use crate::shipping_generation_successor_control::GenerationSuccessorControlErro
 use crate::shipping_generation_successor_control::{
     RestartExactLocalCompletionError, publish_streamed_exact_under_writer,
 };
+#[cfg(any(windows, test))]
+use crate::shipping_save_attempt::begin_native_rescue_edit;
 use crate::shipping_save_attempt::{
     SaveAttemptEvidenceError, discover_unresolved_streaming_exact_save_attempt,
     has_unresolved_save_attempt_for_profile, persist_local_unsynced_intent,
@@ -122,6 +124,10 @@ pub enum PendingSaveRecovery {
     /// supported encrypted envelope. This is diagnostic only: it MUST NOT
     /// allow launching the old N or bypass the pending-save guard.
     NativeSnapshotTooLarge,
+    /// Only a fresh Coordinator Open claim selects the original N; D1 must
+    /// also positively rule out a pending N+1. The OS lock and original
+    /// rescue journal remain mandatory before any managed browser write.
+    NativeRescueRequired,
     /// Unknown, blocked, conflicting or incomplete recovery.
     Blocked,
 }
@@ -1093,6 +1099,8 @@ where
         // It shares this exact verified cursor and is owned by composition.
         on_claim(&mut self.coordinator, &lease);
 
+        let mut native_rescue_required = false;
+
         // Any surviving exact save or interrupted checkpoint stage is unresolved
         // recovery evidence. Even if the old cloud pointer is still accessible,
         // launching it as a clean browser could discard newer local SQLite/WAL.
@@ -1175,10 +1183,17 @@ where
                     });
                 }
             }
+            // This is an ordinary freshly claimed Coordinator writer, not
+            // browser authority inferred from a Save retry-decision. Recheck
+            // the native original and durably journal rescue under OS admission.
+            if recovered == PendingSaveRecovery::NativeRescueRequired {
+                native_rescue_required = true;
+            }
             // A recovery callback never overrides the conservative guard.
             // Only the specific fully completed checkpoint may disappear; a
             // torn sibling, unsafe writer or failed local binding still blocks.
-            if recovered != PendingSaveRecovery::ReadySelected
+            if !native_rescue_required
+                && (recovered != PendingSaveRecovery::ReadySelected
                 || !matches!(
                     has_unresolved_save_attempt_for_profile(
                         root,
@@ -1186,7 +1201,7 @@ where
                         enrollment.profile_id(),
                     ),
                     Ok(false)
-                )
+                ))
             {
                 // Always release the newly claimed coordinator lease FIRST.
                 // A failed release is a stronger terminal failure and must
@@ -1207,6 +1222,7 @@ where
             }
         }
 
+        if !native_rescue_required {
         if let Err(reason) = ensure_materialized(
             &mut self.coordinator,
             enrollment.actor().tenant_scope().tenant_id(),
@@ -1242,6 +1258,7 @@ where
                 self.cleanup_blocked = true;
             }
             return Err(OperatorFlowError::AuthoritativeGeneration { reason, cleanup });
+        }
         }
 
         let workspace = match root.open_generation(
@@ -1290,6 +1307,18 @@ where
                 return Err(self.fail_before_local_use(OperatorFailureStage::LocalWorkspace, lease));
             }
         };
+        if native_rescue_required {
+            #[cfg(any(windows, test))]
+            if begin_native_rescue_edit(root, &workspace, &lease).is_err() {
+                return Err(self.fail_with_lock_before_use(
+                    OperatorFailureStage::GenerationSave, lease, workspace_lock, &workspace,
+                ));
+            }
+            #[cfg(not(any(windows, test)))]
+            return Err(self.fail_with_lock_before_use(
+                OperatorFailureStage::GenerationSave, lease, workspace_lock, &workspace,
+            ));
+        }
         if let Err(error) = self.browser_preflight.evaluate_before_launch(
             &workspace,
             &device_id,

@@ -831,6 +831,10 @@ mod windows {
                                 PendingSaveRecovery::Blocked
                             }
                         }
+                        Ok(RestartExactLocalCompletion::NativeRescueRequired) => {
+                            eprintln!("P3_RECOVERY=NATIVE_RESCUE_REQUESTED;NEXT_SAFE_STEP=FRESH_CLAIM_NATIVE_JOURNAL");
+                            PendingSaveRecovery::NativeRescueRequired
+                        }
                         Ok(RestartExactLocalCompletion::RetryDecisionBlocked) => {
                             eprintln!("P3_RECOVERY=RETRY_BLOCKED;NEXT_SAFE_STEP=PRESERVE_LOCAL_BYTES");
                             PendingSaveRecovery::Blocked
@@ -871,6 +875,15 @@ mod windows {
                                         "P3_RECOVERY=FIRST_SEAL_BLOCKED;NEXT_SAFE_STEP=PRESERVE_LOCAL_BYTES"
                                     );
                                     false
+                                }
+                                Err(RestartExactLocalCompletionError::NativeSnapshotTooLarge) => {
+                                    // Not a PUT retry grant. This Open already owns
+                                    // a freshly redeemed/current N writer claim;
+                                    // the operator must also acquire native OS
+                                    // admission, verify the original and publish
+                                    // rescue-in-progress before Camoufox launch.
+                                    eprintln!("P3_RECOVERY=NATIVE_RESCUE_REQUIRED;NEXT_SAFE_STEP=VERIFY_ORIGINAL_AND_JOURNAL");
+                                    return PendingSaveRecovery::NativeRescueRequired;
                                 }
                                 Err(error) => {
                                     eprintln!(
