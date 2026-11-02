@@ -59,7 +59,7 @@ impl std::fmt::Display for SaveAttemptEvidenceError {
             Self::Invalid => formatter.write_str("save-attempt evidence is invalid"),
             Self::Changed => formatter.write_str("save-attempt workspace or bytes changed"),
             Self::SnapshotTooLarge => {
-                formatter.write_str("native Firefox snapshot exceeds 512 MiB limit")
+                formatter.write_str("native Firefox snapshot and framing exceed the 576 MiB streaming plaintext limit")
             }
             Self::SealingMaterialUnavailable => {
                 formatter.write_str("generation sealing material unavailable")
