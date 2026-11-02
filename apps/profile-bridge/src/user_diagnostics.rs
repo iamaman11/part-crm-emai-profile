@@ -152,7 +152,12 @@ impl ReadOnlyProfileDiagnosis {
                         "NOT_CONFIRMED"
                     };
                     diagnosis.state = "BLOCKED_LOCAL_BYTES_RETAINED_OR_UNKNOWN";
-                    diagnosis.next_safe_step = "PRESERVE_BYTES_CHECK_CAUSE";
+                    diagnosis.next_safe_step = match *reason {
+                        crate::operator_flow::GenerationSaveFailureReason::SnapshotTooLarge => {
+                            "PRESERVE_LOCAL_BYTES;NATIVE_RESCUE_REQUIRED"
+                        }
+                        _ => "PRESERVE_BYTES_CHECK_CAUSE",
+                    };
                 }
             }
             Err(OperatorFlowError::Stage(_)) => {
@@ -919,6 +924,45 @@ const fn operator_code(error: crate::operator_flow::OperatorFlowError) -> &'stat
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn oversized_native_close_reports_safe_rescue_without_claiming_a_saved_profile() {
+        use crate::local_profile::LocalGenerationState;
+        use crate::operator_flow::{
+            GenerationSaveFailureReason, OperatorDiagnosticFacts, OperatorFlowError,
+            OperatorGenerationSaveCompletion,
+        };
+        let facts = OperatorDiagnosticFacts {
+            active_local: None,
+            retained_local: Some(LocalGenerationState::DirtyLocal),
+            candidate_prepared: false,
+            cleanup_blocked: false,
+        };
+        for (reason, expected_step) in [
+            (
+                GenerationSaveFailureReason::SnapshotTooLarge,
+                "PRESERVE_LOCAL_BYTES;NATIVE_RESCUE_REQUIRED",
+            ),
+            (
+                GenerationSaveFailureReason::SealingTransport,
+                "PRESERVE_BYTES_CHECK_CAUSE",
+            ),
+            (
+                GenerationSaveFailureReason::ControlRejected,
+                "PRESERVE_BYTES_CHECK_CAUSE",
+            ),
+        ] {
+            let failed: Result<OperatorGenerationSaveCompletion, OperatorFlowError> =
+                Err(OperatorFlowError::GenerationSave { reason });
+            let diagnosis = ReadOnlyProfileDiagnosis::after_save(facts, &failed);
+            let record = diagnosis.redacted_record();
+            assert!(record.contains(&format!("CAUSE={}", reason.code())));
+            assert!(record.contains(&format!("NEXT_SAFE_STEP={expected_step}")));
+            assert!(record.contains("LOCAL=DIRTY_BYTES_RETAINED"));
+            assert!(!record.contains("CLOUD=COMMITTED_EXACT"));
+            assert!(!record.contains("P3_OWNER_DIAG=CLOUD_SAVED"));
+        }
+    }
 
     #[test]
     fn verified_offline_intent_diagnosis_never_claims_cloud_saved() {
