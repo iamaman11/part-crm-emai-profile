@@ -1222,43 +1222,43 @@ where
             }
         }
 
-        if !native_rescue_required {
-            if let Err(reason) = ensure_materialized(
+        if !native_rescue_required
+            && let Err(reason) = ensure_materialized(
                 &mut self.coordinator,
                 enrollment.actor().tenant_scope().tenant_id(),
                 enrollment.profile_id(),
                 enrollment.generation_id(),
                 &device_id,
                 lease.epoch(),
-            ) {
-                // The natural materialization owner certifies no writes only for a failed read
-                // before workspace creation. Verify exact absence again before requesting the
-                // typed no-browser-use release. Any new directory, dirty/unknown evidence,
-                // failed cleanup, stale fence or potential writer remains Uncertain.
-                let clean_no_use = reason.proves_no_local_write_and_absent_workspace()
-                    && matches!(
-                        root.open_generation(
-                            enrollment.actor().tenant_scope().tenant_id(),
-                            enrollment.profile_id(),
-                            enrollment.generation_id(),
-                        ),
-                        Err(LocalProfileError::Io(std::io::ErrorKind::NotFound))
-                    );
-                let coordinator_lease = if clean_no_use {
-                    self.coordinator.close_without_browser_use(&lease).is_err()
-                } else {
-                    self.coordinator.close_lease(&lease).is_err()
-                };
-                let cleanup = CleanupFailures {
-                    process: false,
-                    workspace_lock: false,
-                    coordinator_lease,
-                };
-                if cleanup.any() {
-                    self.cleanup_blocked = true;
-                }
-                return Err(OperatorFlowError::AuthoritativeGeneration { reason, cleanup });
+            )
+        {
+            // The natural materialization owner certifies no writes only for a failed read
+            // before workspace creation. Verify exact absence again before requesting the
+            // typed no-browser-use release. Any new directory, dirty/unknown evidence,
+            // failed cleanup, stale fence or potential writer remains Uncertain.
+            let clean_no_use = reason.proves_no_local_write_and_absent_workspace()
+                && matches!(
+                    root.open_generation(
+                        enrollment.actor().tenant_scope().tenant_id(),
+                        enrollment.profile_id(),
+                        enrollment.generation_id(),
+                    ),
+                    Err(LocalProfileError::Io(std::io::ErrorKind::NotFound))
+                );
+            let coordinator_lease = if clean_no_use {
+                self.coordinator.close_without_browser_use(&lease).is_err()
+            } else {
+                self.coordinator.close_lease(&lease).is_err()
+            };
+            let cleanup = CleanupFailures {
+                process: false,
+                workspace_lock: false,
+                coordinator_lease,
+            };
+            if cleanup.any() {
+                self.cleanup_blocked = true;
             }
+            return Err(OperatorFlowError::AuthoritativeGeneration { reason, cleanup });
         }
 
         let workspace = match root.open_generation(
