@@ -3718,6 +3718,8 @@ mod tests {
             let mut owner = operator(&fixture, FakeCamouhost::default())?;
             owner.coordinator.close_fail = refuse_release;
             let observed = Cell::new(0_u32);
+            let materializations = Cell::new(0_u32);
+            let runtime_starts = Cell::new(0_u32);
             let result = owner.open_with_materialization(
                 &fixture.claim_uri,
                 &fixture.root,
@@ -3725,10 +3727,14 @@ mod tests {
                 (
                     |_coordinator, _lease| {},
                     |_coordinator, _tenant, _profile, _generation, _device, _epoch| {
-                        panic!("oversized LOCAL_UNSYNCED cannot be materialized or reopened")
+                        materializations.set(materializations.get() + 1);
+                        Ok(())
                     },
                 ),
-                || panic!("oversized LOCAL_UNSYNCED cannot launch Camoufox"),
+                || {
+                    runtime_starts.set(runtime_starts.get() + 1);
+                    Ok(())
+                },
                 |_coordinator, _tenant, _profile, _selected, _lease| {
                     observed.set(observed.get() + 1);
                     PendingSaveRecovery::NativeSnapshotTooLarge
@@ -3751,6 +3757,8 @@ mod tests {
             };
             assert_eq!(result, Err(expected));
             assert_eq!(observed.get(), 1);
+            assert_eq!(materializations.get(), 0);
+            assert_eq!(runtime_starts.get(), 0);
             assert_eq!(owner.coordinator().claimed, 1);
             assert_eq!(owner.coordinator().closed, 1);
             assert_eq!(owner.coordinator().clean_closed, 0);
