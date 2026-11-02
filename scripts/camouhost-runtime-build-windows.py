@@ -1,15 +1,13 @@
 #!/usr/bin/env python3
 """Materialize the exact clean-host Windows Camouhost runtime tree.
 
-The browser is never downloaded here. A trusted build workflow must provide the
-patched Camoufox candidate archive plus canonical provenance. This script verifies
-that pair against the repository-owned patch lock before materialization.
+Official Windows Camoufox and Python wheels are SHA-256 pinned by the single
+runtime-lock and materialized with bounded download/extraction and no fork.
 """
 from __future__ import annotations
 
 import argparse
 import hashlib
-import importlib.util
 import json
 import os
 import re
@@ -26,11 +24,9 @@ from typing import Any
 
 ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_LOCK = ROOT / "runtime/camouhost/runtime-lock.json"
-DEFAULT_PATCH_LOCK = ROOT / "runtime/camouhost/camoufox-patch-lock.json"
 DEFAULT_RUNTIME_SOURCE = ROOT / "runtime/camouhost/real.py"
-VERIFY_CANDIDATE = ROOT / "scripts/verify-camoufox-patched-candidate.py"
-MAX_DOWNLOAD_BYTES = 1024 * 1024 * 1024
-MAX_EXTRACTED_BYTES = 2 * 1024 * 1024 * 1024
+MAX_DOWNLOAD_BYTES = 2 * 1024 * 1024 * 1024
+MAX_EXTRACTED_BYTES = 4 * 1024 * 1024 * 1024
 MAX_ARCHIVE_FILES = 500_000
 MAX_PYTHON_PACKAGES = 256
 CHUNK_BYTES = 1024 * 1024
@@ -102,7 +98,7 @@ def validate_python_packages(python: dict[str, Any], components: dict[str, Any])
         seen_names.add(name); seen_files.add(filename.casefold()); ordering.append((name, version, filename)); versions[name] = version
     if ordering != sorted(ordering):
         fail("Windows Python package graph is not deterministically ordered")
-    expected = {"browserforge": components.get("browserforge"), "camoufox": components.get("camoufox_python"), "playwright": components.get("playwright")}
+    expected = {"fpgen": components.get("fpgen"), "camoufox": components.get("camoufox_python"), "playwright": components.get("playwright")}
     if any(versions.get(name) != version for name, version in expected.items()):
         fail("Windows Python package graph disagrees with runtime component lock")
     return packages
@@ -114,7 +110,7 @@ def load_lock(path: Path) -> dict[str, Any]:
     if set(value) != required or value.get("schema_version") != 1 or value.get("runtime_role") != "real_camoufox":
         fail("runtime lock identity/shape is unsupported")
     components = value.get("components")
-    if not isinstance(components, dict) or set(components) != {"browserforge", "camoufox_python", "playwright"}:
+    if not isinstance(components, dict) or set(components) != {"camoufox_python", "fpgen", "playwright"}:
         fail("runtime component lock shape is invalid")
     distribution = value.get("windows_distribution")
     if not isinstance(distribution, dict) or set(distribution) != {"architecture", "browser", "python"} or distribution.get("architecture") != "x86_64":
@@ -280,13 +276,13 @@ def remove_python_caches(root: Path) -> None:
 
 
 def verify_runtime_tree(output: Path, lock: dict[str, Any], candidate_provenance: dict[str, Any]) -> dict[str, Any]:
-    required = [output/"python/python.exe", output/"browser/camoufox.exe", output/"camouhost/real.py", output/"camouhost/runtime-lock.json", output/"camouhost/browser-candidate-provenance.json"]
+    required = [output/"python/python.exe", output/"browser/camoufox.exe", output/"camouhost/real.py", output/"camouhost/runtime-lock.json", output/"camouhost/browser-official-provenance.json"]
     for path in required:
         if path.is_symlink() or not path.is_file() or path.stat().st_size == 0: fail(f"materialized runtime file missing/not regular: {path}")
     components = lock["components"]
-    probe = "import importlib.metadata,json,sys;print(json.dumps({'python':'.'.join(map(str,sys.version_info[:3])),'camoufox':importlib.metadata.version('camoufox'),'browserforge':importlib.metadata.version('browserforge'),'playwright':importlib.metadata.version('playwright')},sort_keys=True,separators=(',',':')))"
+    probe = "import importlib.metadata,json,sys;print(json.dumps({'python':'.'.join(map(str,sys.version_info[:3])),'camoufox':importlib.metadata.version('camoufox'),'fpgen':importlib.metadata.version('fpgen'),'playwright':importlib.metadata.version('playwright')},sort_keys=True,separators=(',',':')))"
     completed = subprocess.run([str(output/"python/python.exe"), "-I", "-c", probe], cwd=output, text=True, capture_output=True, check=False)
-    expected = {"python":"3.12.10", "camoufox":components["camoufox_python"], "browserforge":components["browserforge"], "playwright":components["playwright"]}
+    expected = {"python":"3.12.10", "camoufox":components["camoufox_python"], "fpgen":components["fpgen"], "playwright":components["playwright"]}
     try: observed = json.loads(completed.stdout.strip())
     except json.JSONDecodeError as error: raise RuntimeBuildError("embedded Python verification output is invalid") from error
     if completed.returncode != 0 or observed != expected: fail("materialized Python component identity mismatch")
