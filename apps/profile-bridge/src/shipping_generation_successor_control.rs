@@ -2632,6 +2632,69 @@ mod tests {
     }
 
     #[test]
+    fn offline_first_seal_transport_loss_preserves_exact_native_intent_without_put()
+    -> Result<(), Box<dyn std::error::Error>> {
+        // Two interruption points: before the first fresh D1 decision and
+        // after sealing exactly one N+1 but before the second D1 decision.
+        // Neither may turn the old fence into upload authority.
+        for first_decision_confirmed in [false, true] {
+            let fixture = Fixture::new()?;
+            let root = MaterializationRoot::open_or_create(&fixture.root_path)?;
+            let source = root.open_generation(&fixture.tenant, &fixture.profile, &fixture.base)?;
+            let original = std::fs::read(source.path().join("prefs.js"))?;
+            persist_local_unsynced_intent(&root, &source, &fixture.lease)?;
+            let fresh = ProfileLease::issue(
+                fixture.tenant.clone(),
+                fixture.profile.clone(),
+                SessionId::parse("session_offline_transport_reconnect")?,
+                fixture.lease.device_id().clone(),
+                fixture.lease.epoch() + 1,
+                FencingToken::parse("fence_offline_transport_reconnect")?,
+            )?;
+            let mut transport = Transport::default();
+            if first_decision_confirmed {
+                transport.responses.push_back(MachineHttpResponse::new(
+                    200,
+                    br#"{"verdict":"NOT_APPLIED_RETRYABLE"}"#.to_vec(),
+                ));
+            }
+            let mut sealer = Sealer;
+            let mut upload = RecoveryPut::default();
+            assert_eq!(
+                super::resume_lone_local_unsynced_under_fresh_lease(
+                    &root,
+                    &fixture.tenant,
+                    &fixture.profile,
+                    &fixture.base,
+                    &fresh,
+                    &mut sealer,
+                    &mut transport,
+                    &mut upload,
+                ),
+                Err(RestartExactLocalCompletionError::ControlPlane(
+                    ShippingControlPlaneError::Transport
+                ))
+            );
+            assert_eq!(transport.paths.len(), if first_decision_confirmed { 2 } else { 1 });
+            assert_eq!(upload.calls, 0, "cloud PUT without fresh D1 authority");
+            assert_eq!(std::fs::read(source.path().join("prefs.js"))?, original);
+            assert!(
+                has_unresolved_save_attempt_for_profile(&root, &fixture.tenant, &fixture.profile)?,
+                "offline LOCAL_UNSYNCED or first sealed BPAT was discarded"
+            );
+            let sealed = discover_unresolved_streaming_exact_save_attempt(
+                &root, &fixture.tenant, &fixture.profile,
+            );
+            if first_decision_confirmed {
+                assert!(sealed?.is_some(), "first seal must remain durable for next claim");
+            } else {
+                assert!(sealed.is_err(), "unsealed intent must not be treated as a BPAT");
+            }
+        }
+        Ok(())
+    }
+
+    #[test]
     fn fresh_lone_intent_first_seals_then_commit_and_next_claim_finishes_active_exact()
     -> Result<(), Box<dyn std::error::Error>> {
         // The third case is above the former 64 MiB in-memory limit. It
