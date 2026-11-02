@@ -1072,8 +1072,12 @@ mod windows {
                         if !reason.allows_bounded_cloud_reconcile()
                             && !reason.allows_bounded_preseal_reconnect() =>
                     {
-                        if reason == crate::operator_flow::GenerationSaveFailureReason::SnapshotTooLarge {
-                            eprintln!("P3_RECOVERY=NATIVE_SNAPSHOT_TOO_LARGE;NEXT_SAFE_STEP=PRESERVE_LOCAL_BYTES;NATIVE_RESCUE_REQUIRED");
+                        if reason
+                            == crate::operator_flow::GenerationSaveFailureReason::SnapshotTooLarge
+                        {
+                            eprintln!(
+                                "P3_RECOVERY=NATIVE_SNAPSHOT_TOO_LARGE;NEXT_SAFE_STEP=PRESERVE_LOCAL_BYTES;NATIVE_RESCUE_REQUIRED"
+                            );
                         }
                         return Err(ShippingCompositionError::Operator(
                             OperatorFlowError::GenerationSave { reason },

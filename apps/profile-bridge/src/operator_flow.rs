@@ -2405,11 +2405,10 @@ mod tests {
 
         let fixture = Fixture::new()?;
         let tenant = fixture.actor.tenant_scope().tenant_id();
-        let source = fixture.root.open_generation(
-            tenant,
-            &fixture.profile_id,
-            &fixture.generation_id,
-        )?;
+        let source =
+            fixture
+                .root
+                .open_generation(tenant, &fixture.profile_id, &fixture.generation_id)?;
         let base_bytes = source.inventory()?.total_bytes();
         let observed_native = 568_329_621_u64; // Physical 512 MiB IndexedDB payload + Firefox overhead.
         assert!(base_bytes < observed_native);
@@ -2452,7 +2451,9 @@ mod tests {
         assert_eq!(source.inventory()?, native_refused);
         let forbidden = GenerationId::parse("generation_f05_framing_no_successor")?;
         assert!(matches!(
-            fixture.root.open_generation(tenant, &fixture.profile_id, &forbidden),
+            fixture
+                .root
+                .open_generation(tenant, &fixture.profile_id, &forbidden),
             Err(LocalProfileError::Io(std::io::ErrorKind::NotFound))
         ));
         Ok(())
