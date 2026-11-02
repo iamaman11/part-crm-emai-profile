@@ -935,12 +935,11 @@ fn exchange_frame_shared(
     // finishes. Under the SAME lock used to send the frame, return a negative
     // observation immediately instead of blocking the process-control owner.
     // This is never evidence for Save; only the real positive frame can Save.
-    if let Some(session) = frame.strip_prefix("observe_close|") {
-        if state.active_session.as_ref().map(SessionId::as_str) == Some(session)
-            && agent_execution_active(&state)
-        {
-            return Ok(format!("close_observed|{session}|false"));
-        }
+    if let Some(session) = frame.strip_prefix("observe_close|")
+        && state.active_session.as_ref().map(SessionId::as_str) == Some(session)
+        && agent_execution_active(&state)
+    {
+        return Ok(format!("close_observed|{session}|false"));
     }
     let stdin = state.stdin.as_mut().ok_or(BridgePortError::Unavailable)?;
     stdin
