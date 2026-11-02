@@ -28,7 +28,7 @@ use crate::shipping_save_attempt::{
 };
 #[cfg(any(windows, test))]
 use crate::shipping_save_attempt::{
-    ScopedPendingSaveEvidence, classify_scoped_pending_save_evidence,
+    SaveAttemptEvidenceError, ScopedPendingSaveEvidence, classify_scoped_pending_save_evidence,
     deterministic_lone_unsynced_successor, local_unsynced_matches_fresh_lease,
     persist_streaming_exact_save_attempt_from_lone_intent,
     retire_active_exact_attempt_after_restart, retire_active_streamed_attempt_after_restart,
@@ -88,6 +88,11 @@ pub enum RestartExactLocalCompletion {
 #[cfg(any(windows, test))]
 pub enum RestartExactLocalCompletionError {
     LocalEvidenceChanged,
+    NativeSnapshotTooLarge,
+    PreSealTransport,
+    PreSealResponseUncertain,
+    PreSealRejected,
+    PreSealUnavailable,
     WriterOrLockUnresolved,
     BindingOrRetirementFailed,
     /// Signed PUT or commit outcome is uncertain; never discard original bytes.
@@ -101,11 +106,38 @@ impl RestartExactLocalCompletionError {
     pub const fn code(self) -> &'static str {
         match self {
             Self::LocalEvidenceChanged => "P3_RECOVERY_LOCAL_EVIDENCE_CHANGED",
+            Self::NativeSnapshotTooLarge => "P3_RECOVERY_NATIVE_SNAPSHOT_TOO_LARGE",
+            Self::PreSealTransport => "P3_RECOVERY_PRESEAL_TRANSPORT_UNKNOWN",
+            Self::PreSealResponseUncertain => "P3_RECOVERY_PRESEAL_RESPONSE_UNCERTAIN",
+            Self::PreSealRejected => "P3_RECOVERY_PRESEAL_REJECTED",
+            Self::PreSealUnavailable => "P3_RECOVERY_PRESEAL_UNAVAILABLE",
             Self::WriterOrLockUnresolved => "P3_RECOVERY_WRITER_UNRESOLVED",
             Self::BindingOrRetirementFailed => "P3_RECOVERY_LOCAL_COMPLETION_BLOCKED",
             Self::UploadOrCommitUncertain => "P3_RECOVERY_UPLOAD_OR_COMMIT_UNCERTAIN",
             Self::ControlPlane(_) => "P3_RECOVERY_CLOUD_OBSERVATION_FAILED",
         }
+    }
+}
+
+#[cfg(any(windows, test))]
+fn first_seal_recovery_failure(error: SaveAttemptEvidenceError) -> RestartExactLocalCompletionError {
+    match error {
+        SaveAttemptEvidenceError::SnapshotTooLarge => {
+            RestartExactLocalCompletionError::NativeSnapshotTooLarge
+        }
+        SaveAttemptEvidenceError::SealingTransport => {
+            RestartExactLocalCompletionError::PreSealTransport
+        }
+        SaveAttemptEvidenceError::SealingResponseUncertain => {
+            RestartExactLocalCompletionError::PreSealResponseUncertain
+        }
+        SaveAttemptEvidenceError::SealingRejected => {
+            RestartExactLocalCompletionError::PreSealRejected
+        }
+        SaveAttemptEvidenceError::SealingMaterialUnavailable => {
+            RestartExactLocalCompletionError::PreSealUnavailable
+        }
+        _ => RestartExactLocalCompletionError::LocalEvidenceChanged,
     }
 }
 
@@ -710,7 +742,7 @@ where
             fresh_lease,
             sealer,
         )
-        .map_err(|_| RestartExactLocalCompletionError::LocalEvidenceChanged)?;
+        .map_err(first_seal_recovery_failure)?;
         let mut verified =
             discover_unresolved_streaming_exact_save_attempt(root, tenant_id, profile_id)
                 .map_err(|_| RestartExactLocalCompletionError::LocalEvidenceChanged)?
@@ -1459,6 +1491,23 @@ mod tests {
     use std::sync::atomic::{AtomicU64, Ordering};
 
     static FIXTURE_SEQUENCE: AtomicU64 = AtomicU64::new(1);
+
+    #[test]
+    fn first_seal_recovery_does_not_call_oversize_corruption_or_grant_retry() {
+        use super::first_seal_recovery_failure;
+        use crate::shipping_save_attempt::SaveAttemptEvidenceError as Evidence;
+        use RestartExactLocalCompletionError as Failure;
+        for (source, expected) in [
+            (Evidence::SnapshotTooLarge, Failure::NativeSnapshotTooLarge),
+            (Evidence::SealingTransport, Failure::PreSealTransport),
+            (Evidence::SealingResponseUncertain, Failure::PreSealResponseUncertain),
+            (Evidence::SealingRejected, Failure::PreSealRejected),
+            (Evidence::SealingMaterialUnavailable, Failure::PreSealUnavailable),
+            (Evidence::Changed, Failure::LocalEvidenceChanged),
+        ] {
+            assert_eq!(first_seal_recovery_failure(source), expected);
+        }
+    }
 
     #[test]
     fn save_http_diagnostics_never_include_tenant_profile_or_untrusted_route() {
