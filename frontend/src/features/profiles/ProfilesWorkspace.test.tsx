@@ -211,7 +211,7 @@ describe('ProfilesWorkspace generation refresh (#802 F06)', () => {
       } as Awaited<ReturnType<typeof getGeneration>>);
       resolveCoordinator({
         version: 7, sequence: 6, projection: { status: 'Active' },
-      } as Awaited<ReturnType<typeof getCoordinator>>);
+      } as unknown as Awaited<ReturnType<typeof getCoordinator>>);
       await Promise.all([oldGeneration, oldCoordinator]);
     });
     expect(screen.queryByRole('button', { name: 'deactivate generation' })).toBeNull();
