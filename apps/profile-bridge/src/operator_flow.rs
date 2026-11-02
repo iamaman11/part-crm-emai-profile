@@ -3827,9 +3827,10 @@ mod tests {
 
         let fixture = Fixture::new()?;
         let tenant = fixture.actor.tenant_scope().tenant_id();
-        let source = fixture
-            .root
-            .open_generation(tenant, &fixture.profile_id, &fixture.generation_id)?;
+        let source =
+            fixture
+                .root
+                .open_generation(tenant, &fixture.profile_id, &fixture.generation_id)?;
         let wal = source.path().join("user_data").join("cookies.sqlite-wal");
         fs::create_dir_all(wal.parent().ok_or("native WAL parent missing")?)?;
         fs::write(&wal, b"preflight-denied-original-WAL")?;
@@ -3871,12 +3872,11 @@ mod tests {
             &fixture.generation_id,
             &fresh,
         )?);
-        match classify_scoped_pending_save_evidence(
-            &fixture.root,
-            tenant,
-            &fixture.profile_id,
-        )? {
-            ScopedPendingSaveEvidence::LocalUnsynced { base_generation, prior_epoch } => {
+        match classify_scoped_pending_save_evidence(&fixture.root, tenant, &fixture.profile_id)? {
+            ScopedPendingSaveEvidence::LocalUnsynced {
+                base_generation,
+                prior_epoch,
+            } => {
                 assert_eq!(base_generation, fixture.generation_id);
                 assert_eq!(prior_epoch, fixture.lease.epoch());
             }
