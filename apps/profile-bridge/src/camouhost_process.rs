@@ -1851,7 +1851,7 @@ mod tests {
         let workspace = root.create_generation(&tenant, &profile, &generation)?;
         let lock = BridgeWorkspaceLock::acquire(&workspace, &device, 7)?;
 
-        let config = b"{}\n";
+        let config = b"{\"navigator:language\":\"en-US\"}\n";
         fs::write(workspace.path().join("camoufox-config.json"), config)?;
         let approved = bundle(&"b".repeat(64))?;
         let expected = binding(
@@ -1889,7 +1889,7 @@ mod tests {
         let device = DeviceId::parse("device_01JAR10DRIFT")?;
         let workspace = root.create_generation(&tenant, &profile, &generation)?;
         let lock = BridgeWorkspaceLock::acquire(&workspace, &device, 8)?;
-        let config = b"{}\n";
+        let config = b"{\"navigator:language\":\"en-US\"}\n";
         fs::write(workspace.path().join("camoufox-config.json"), config)?;
         let approved = bundle(&"b".repeat(64))?;
         let expected = binding(
