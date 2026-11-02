@@ -2398,6 +2398,67 @@ mod tests {
     }
 
     #[test]
+    fn physical_indexeddb_overhead_and_bpgw_framing_are_checked_before_clone()
+    -> Result<(), Box<dyn std::error::Error>> {
+        use super::{GenerationSaveFailureReason, preflight_retained_native_before_clone};
+        use crate::generation_snapshot::MAX_STREAM_NATIVE_PROFILE_BYTES;
+
+        let fixture = Fixture::new()?;
+        let tenant = fixture.actor.tenant_scope().tenant_id();
+        let source = fixture.root.open_generation(
+            tenant,
+            &fixture.profile_id,
+            &fixture.generation_id,
+        )?;
+        let base_bytes = source.inventory()?.total_bytes();
+        let observed_native = 568_329_621_u64; // Physical 512 MiB IndexedDB payload + Firefox overhead.
+        assert!(base_bytes < observed_native);
+        let user_data = source.path().join("user_data");
+        fs::create_dir_all(&user_data)?;
+        let original = user_data.join("indexeddb-native-overhead.bin");
+        let payload = fs::OpenOptions::new()
+            .create_new(true)
+            .write(true)
+            .open(&original)?;
+
+        // Large logical file, no 568 MiB test allocation or plaintext spool.
+        payload.set_len(observed_native - base_bytes)?;
+        let accepted = source.inventory()?;
+        assert_eq!(accepted.total_bytes(), observed_native);
+        assert_eq!(
+            preflight_retained_native_before_clone(&source, &accepted),
+            Ok(())
+        );
+
+        // Native bytes can still fit while BPGW path framing cannot.
+        let framing_only_native = MAX_STREAM_NATIVE_PROFILE_BYTES - 1;
+        payload.set_len(framing_only_native - base_bytes)?;
+        let framing_refused = source.inventory()?;
+        assert_eq!(framing_refused.total_bytes(), framing_only_native);
+        assert_eq!(
+            preflight_retained_native_before_clone(&source, &framing_refused),
+            Err(GenerationSaveFailureReason::SnapshotTooLarge)
+        );
+        assert_eq!(source.inventory()?, framing_refused);
+
+        // Beyond the native boundary is a distinct early refusal. Neither
+        // case creates N+1, touches Firefox WAL, nor grants a cloud retry.
+        payload.set_len(MAX_STREAM_NATIVE_PROFILE_BYTES + 1 - base_bytes)?;
+        let native_refused = source.inventory()?;
+        assert_eq!(
+            preflight_retained_native_before_clone(&source, &native_refused),
+            Err(GenerationSaveFailureReason::SnapshotTooLarge)
+        );
+        assert_eq!(source.inventory()?, native_refused);
+        let forbidden = GenerationId::parse("generation_f05_framing_no_successor")?;
+        assert!(matches!(
+            fixture.root.open_generation(tenant, &fixture.profile_id, &forbidden),
+            Err(LocalProfileError::Io(std::io::ErrorKind::NotFound))
+        ));
+        Ok(())
+    }
+
+    #[test]
     fn native_oversize_preflight_rejects_before_any_successor_clone_or_cloud_effect()
     -> Result<(), Box<dyn std::error::Error>> {
         use super::{GenerationSaveFailureReason, preflight_retained_native_before_clone};

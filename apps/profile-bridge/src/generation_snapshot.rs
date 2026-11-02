@@ -168,7 +168,7 @@ fn encoded_stream_snapshot_size(
         // streaming plaintext limit; never silently discard Firefox files.
         // No browser/profile files are changed by this refusal.
         eprintln!(
-            "BRIDGE_NATIVE_SNAPSHOT_SIZE_REFUSED native_bytes={} limit_bytes={}",
+            "BRIDGE_NATIVE_SNAPSHOT_SIZE_REFUSED cause=native_bytes native_bytes={} limit_bytes={}",
             inventory.total_bytes(),
             MAX_STREAM_NATIVE_PROFILE_BYTES,
         );
@@ -186,6 +186,15 @@ fn encoded_stream_snapshot_size(
             .and_then(|value| value.checked_add(entry.bytes()))
             .ok_or(GenerationSnapshotError::SnapshotTooLarge)?;
         if size > MAX_STREAM_WORKSPACE_SNAPSHOT_BYTES {
+            // Native bytes may be below the ceiling while the exact BPGW
+            // metadata framing exceeds it. Report both bounded measurements,
+            // not a false integrity/checkpoint error or any Firefox path.
+            eprintln!(
+                "BRIDGE_NATIVE_SNAPSHOT_SIZE_REFUSED cause=encoded_plaintext native_bytes={} encoded_bytes_at_least={} limit_bytes={}",
+                inventory.total_bytes(),
+                size,
+                MAX_STREAM_WORKSPACE_SNAPSHOT_BYTES,
+            );
             return Err(GenerationSnapshotError::SnapshotTooLarge);
         }
     }
