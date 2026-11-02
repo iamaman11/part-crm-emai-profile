@@ -31,6 +31,22 @@ DISALLOWED_LICENSE = re.compile(
     re.IGNORECASE,
 )
 
+# SPDX OR means we may elect a permissive branch, e.g. r-efi's
+# "MIT OR Apache-2.0 OR LGPL-2.1-or-later". AND never waives copyleft.
+PERMISSIVE_SPDX_ALTERNATIVES = frozenset({
+    "MIT", "Apache-2.0", "BSD-2-Clause", "BSD-3-Clause", "ISC", "Zlib",
+})
+
+
+def license_requires_review(expression: str) -> bool:
+    if DISALLOWED_LICENSE.search(expression) is None:
+        return False
+    return not any(
+        alternative.strip() in PERMISSIVE_SPDX_ALTERNATIVES
+        for alternative in re.split(r"\s+OR\s+", expression)
+    )
+
+
 
 def workflow_errors(root: Path) -> list[str]:
     errors: list[str] = []
@@ -190,7 +206,7 @@ def cargo_license_errors(root: Path) -> tuple[list[str], int]:
             if not isinstance(license_file, str) or not license_file.strip():
                 errors.append(f"Cargo dependency has no declared license metadata: {name}")
             continue
-        if DISALLOWED_LICENSE.search(license_expression):
+        if license_requires_review(license_expression):
             errors.append(f"Cargo dependency license requires explicit review: {name}:{license_expression}")
     if checked == 0:
         errors.append("cargo license scan did not inspect any external dependencies")
@@ -266,6 +282,10 @@ def self_test() -> None:
     for expression in ("MIT", "Apache-2.0", "MIT OR Apache-2.0", "BSD-3-Clause", "MPL-2.0"):
         if DISALLOWED_LICENSE.search(expression) is not None:
             raise ValueError(f"permissive/weak-copyleft license fixture unexpectedly failed: {expression}")
+    if license_requires_review("MIT OR Apache-2.0 OR LGPL-2.1-or-later"):
+        raise ValueError("permissive SPDX OR alternative unexpectedly failed")
+    if not license_requires_review("MIT AND LGPL-2.1-only"):
+        raise ValueError("copyleft SPDX AND fixture unexpectedly passed")
 
 
 def main() -> int:
