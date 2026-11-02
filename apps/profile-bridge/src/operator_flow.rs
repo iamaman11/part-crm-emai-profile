@@ -3818,6 +3818,88 @@ mod tests {
     }
 
     #[test]
+    fn one_managed_native_rescue_open_and_clean_close_publish_new_inventory()
+    -> Result<(), Box<dyn std::error::Error>> {
+        use crate::shipping_save_attempt::{
+            ScopedPendingSaveEvidence, SaveAttemptEvidenceError,
+            classify_scoped_pending_save_evidence, persist_local_unsynced_intent,
+        };
+
+        let fixture = Fixture::new()?;
+        let tenant = fixture.actor.tenant_scope().tenant_id();
+        let source = fixture
+            .root
+            .open_generation(tenant, &fixture.profile_id, &fixture.generation_id)?;
+        let wal = source.path().join("user_data").join("cookies.sqlite-wal");
+        fs::create_dir_all(wal.parent().ok_or("native WAL parent missing")?)?;
+        fs::write(&wal, b"original native WAL; must survive rescue")?;
+        persist_local_unsynced_intent(&fixture.root, &source, &fixture.lease)?;
+        let original = source.inventory()?;
+        let fresh = ProfileLease::issue(
+            tenant.clone(),
+            fixture.profile_id.clone(),
+            SessionId::parse("session_f05_managed_rescue_01")?,
+            fixture.device_id.clone(),
+            fixture.lease.epoch() + 1,
+            FencingToken::parse("fence_f05_managed_rescue_01")?,
+        )?;
+        let mut owner = operator(&fixture, FakeCamouhost::default())?;
+        owner.coordinator.lease = fresh.clone();
+        let materializations = Cell::new(0_u32);
+        let prelaunch = Cell::new(0_u32);
+        owner.open_with_materialization(
+            &fixture.claim_uri,
+            &fixture.root,
+            UnixMillis::new(10),
+            (
+                |_coordinator, lease| assert_eq!(lease, &fresh),
+                |_coordinator, _tenant, _profile, _generation, _device, _epoch| {
+                    materializations.set(materializations.get() + 1);
+                    Ok(())
+                },
+            ),
+            || {
+                prelaunch.set(prelaunch.get() + 1);
+                Ok(())
+            },
+            |_coordinator, _tenant, _profile, _selected, _lease| {
+                // Shipping gets this result ONLY after fresh Coordinator N
+                // and separately D1-confirmed nonapplication.
+                PendingSaveRecovery::NativeRescueRequired
+            },
+        )?;
+        assert_eq!(owner.active_session_id(), Some(fresh.session_id()));
+        assert_eq!(owner.coordinator().claimed, 1);
+        assert_eq!(materializations.get(), 0);
+        assert_eq!(prelaunch.get(), 1);
+        assert_eq!(source.inventory()?, original);
+        assert!(matches!(
+            classify_scoped_pending_save_evidence(
+                &fixture.root, tenant, &fixture.profile_id,
+            ),
+            Err(SaveAttemptEvidenceError::Changed)
+        ));
+        // One managed Camoufox owns the original source until native Close.
+        fs::write(&wal, b"edited smaller WAL")?;
+        owner.close_with_durable_local_intent(&fixture.root, UnixMillis::new(20))?;
+        assert_eq!(owner.active_session_id(), None);
+        assert_eq!(fs::read(&wal)?, b"edited smaller WAL");
+        assert_ne!(source.inventory()?, original);
+        match classify_scoped_pending_save_evidence(
+            &fixture.root,
+            tenant,
+            &fixture.profile_id,
+        )? {
+            ScopedPendingSaveEvidence::LocalUnsynced { base_generation, prior_epoch } => {
+                assert_eq!(base_generation, fixture.generation_id);
+                assert_eq!(prior_epoch, fresh.epoch());
+            }
+            _ => return Err("clean managed rescue did not publish current intent".into()),
+        }
+        Ok(())
+    }
+
+    #[test]
     fn rejected_runtime_does_not_consume_the_launch_claim() -> Result<(), Box<dyn std::error::Error>>
     {
         let fixture = Fixture::new()?;
