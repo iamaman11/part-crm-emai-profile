@@ -2632,6 +2632,163 @@ mod tests {
     }
 
     #[test]
+    fn oversized_lone_intent_refuses_foreign_stale_and_changed_claims_before_d1()
+    -> Result<(), Box<dyn std::error::Error>> {
+        use crate::generation_snapshot::MAX_STREAM_WORKSPACE_SNAPSHOT_BYTES;
+
+        for case in 0..4 {
+            let fixture = Fixture::new()?;
+            let root = MaterializationRoot::open_or_create(&fixture.root_path)?;
+            let source = root.open_generation(&fixture.tenant, &fixture.profile, &fixture.base)?;
+            let native = source.path().join("user_data");
+            std::fs::create_dir_all(&native)?;
+            let wal = native.join("cookies.sqlite-wal");
+            std::fs::write(&wal, b"native-wal-original")?;
+            let original_size = source.inventory()?.total_bytes();
+            let filler = std::fs::File::create(native.join("indexeddb-oversize.bin"))?;
+            filler.set_len(MAX_STREAM_WORKSPACE_SNAPSHOT_BYTES + 1 - original_size)?;
+            filler.sync_all()?;
+            persist_local_unsynced_intent(&root, &source, &fixture.lease)?;
+            let prior_inventory = source.inventory()?;
+            let device = if case == 1 {
+                DeviceId::parse("device_foreign_oversize_rescue")?
+            } else {
+                fixture.lease.device_id().clone()
+            };
+            let epoch = if case == 0 {
+                fixture.lease.epoch()
+            } else {
+                fixture.lease.epoch() + 1
+            };
+            let fresh = ProfileLease::issue(
+                fixture.tenant.clone(),
+                fixture.profile.clone(),
+                SessionId::parse("session_oversize_unauthorized_claim")?,
+                device,
+                epoch,
+                FencingToken::parse("fence_oversize_unauthorized_claim")?,
+            )?;
+            let selected = if case == 2 {
+                GenerationId::parse("generation_oversize_foreign_server_selection")?
+            } else {
+                fixture.base.clone()
+            };
+            if case == 3 {
+                std::fs::write(source.path().join("prefs.js"), b"source-changed-after-close")?;
+                assert_ne!(source.inventory()?, prior_inventory);
+            }
+            let bytes_before = source.inventory()?;
+            let mut network = Transport {
+                responses: VecDeque::from([MachineHttpResponse::new(
+                    200,
+                    br#"{"verdict":"NOT_APPLIED_RETRYABLE"}"#.to_vec(),
+                )]),
+                paths: Vec::new(),
+            };
+            let mut sealer = Sealer;
+            let mut upload = RecoveryPut::default();
+            assert_eq!(
+                super::resume_lone_local_unsynced_under_fresh_lease(
+                    &root,
+                    &fixture.tenant,
+                    &fixture.profile,
+                    &selected,
+                    &fresh,
+                    &mut sealer,
+                    &mut network,
+                    &mut upload,
+                ),
+                Err(if case == 3 {
+                    RestartExactLocalCompletionError::LocalEvidenceChanged
+                } else {
+                    RestartExactLocalCompletionError::WriterOrLockUnresolved
+                }),
+                "case={case}"
+            );
+            assert!(network.paths.is_empty(), "case={case}: D1 must not be called");
+            assert_eq!(upload.calls, 0, "case={case}: R2 must not be called");
+            assert_eq!(source.inventory()?, bytes_before);
+            assert_eq!(std::fs::read(&wal)?, b"native-wal-original");
+            assert!(has_unresolved_save_attempt_for_profile(
+                &root,
+                &fixture.tenant,
+                &fixture.profile,
+            )?);
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn oversized_lone_intent_obeys_explicit_server_denial_without_rescue_open()
+    -> Result<(), Box<dyn std::error::Error>> {
+        use crate::generation_snapshot::MAX_STREAM_WORKSPACE_SNAPSHOT_BYTES;
+
+        let fixture = Fixture::new()?;
+        let root = MaterializationRoot::open_or_create(&fixture.root_path)?;
+        let source = root.open_generation(&fixture.tenant, &fixture.profile, &fixture.base)?;
+        let native = source.path().join("user_data");
+        std::fs::create_dir_all(&native)?;
+        let wal = native.join("cookies.sqlite-wal");
+        std::fs::write(&wal, b"native-wal-stays-local")?;
+        let before = source.inventory()?.total_bytes();
+        let filler = std::fs::File::create(native.join("oversized-indexeddb.bin"))?;
+        filler.set_len(MAX_STREAM_WORKSPACE_SNAPSHOT_BYTES + 1 - before)?;
+        filler.sync_all()?;
+        let original = source.inventory()?;
+        persist_local_unsynced_intent(&root, &source, &fixture.lease)?;
+        let fresh = ProfileLease::issue(
+            fixture.tenant.clone(),
+            fixture.profile.clone(),
+            SessionId::parse("session_oversize_denied")?,
+            fixture.lease.device_id().clone(),
+            fixture.lease.epoch() + 1,
+            FencingToken::parse("fence_oversize_denied")?,
+        )?;
+        let candidate = crate::shipping_save_attempt::deterministic_lone_unsynced_successor(
+            &root,
+            &fixture.tenant,
+            &fixture.profile,
+            &fixture.base,
+            &fresh,
+        )?
+        .ok_or("expected deterministic successor")?;
+        let mut network = Transport {
+            responses: VecDeque::from([MachineHttpResponse::new(
+                200,
+                br#"{"verdict":"BLOCKED"}"#.to_vec(),
+            )]),
+            paths: Vec::new(),
+        };
+        let mut sealer = Sealer;
+        let mut upload = RecoveryPut::default();
+        assert_eq!(
+            super::resume_lone_local_unsynced_under_fresh_lease(
+                &root,
+                &fixture.tenant,
+                &fixture.profile,
+                &fixture.base,
+                &fresh,
+                &mut sealer,
+                &mut network,
+                &mut upload,
+            ),
+            Ok(false)
+        );
+        assert_eq!(network.paths.len(), 1);
+        assert!(network.paths[0].ends_with("/generation-successor/local-unsynced/retry-decision"));
+        assert_eq!(upload.calls, 0);
+        assert!(root.open_generation(&fixture.tenant, &fixture.profile, &candidate).is_err());
+        assert_eq!(source.inventory()?, original);
+        assert_eq!(std::fs::read(&wal)?, b"native-wal-stays-local");
+        assert!(has_unresolved_save_attempt_for_profile(
+            &root,
+            &fixture.tenant,
+            &fixture.profile,
+        )?);
+        Ok(())
+    }
+
+    #[test]
     fn fresh_authorized_oversize_recovery_rejects_before_clone_sealing_and_put()
     -> Result<(), Box<dyn std::error::Error>> {
         use crate::generation_snapshot::MAX_STREAM_WORKSPACE_SNAPSHOT_BYTES;
