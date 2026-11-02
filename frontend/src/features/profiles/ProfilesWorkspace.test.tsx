@@ -128,6 +128,7 @@ describe('ProfilesWorkspace generation refresh (#802 F06)', () => {
     finishOld({ resultCode: 'SUCCEEDED', resourceId: 'profile_old' } as Awaited<ReturnType<typeof changeGenerationActivation>>);
     await waitFor(() => expect((screen.getByRole('button', { name: 'Open browser' }) as HTMLButtonElement).disabled).toBe(false));
     expect(screen.queryByText('profile_old')).toBeNull();
+    expect(screen.queryByText('SUCCEEDED: profile_old')).toBeNull();
     expect(activation).toHaveBeenCalledTimes(1);
     expect(generationLookup).toHaveBeenCalledTimes(2); // Initial lookup + original readback, never new generation.
   });
