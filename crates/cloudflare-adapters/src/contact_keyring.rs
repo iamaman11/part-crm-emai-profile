@@ -227,6 +227,111 @@ mod tests {
     }
 
     #[test]
+    fn serialized_key_rotation_preserves_legacy_decrypt_and_lookup()
+    -> Result<(), Box<dyn std::error::Error>> {
+        use crate::contact_protection::{
+            ContactCryptoError, ContactNonceSource, RustCryptoContactProtection,
+        };
+        use application_ports::clients::{ContactEncryptionRequest, ContactProtectionPort};
+        use client_domain::{
+            ContactKind, ContactNormalizationVersion, ContactProtectionVersion,
+            exact_lookup_hmac_input, normalize_contact_value,
+        };
+        use profile_platform_primitives::{ContactPointId, TenantId};
+        use std::future::Future;
+        use std::task::{Context, Poll, Waker};
+
+        struct FixedNonce;
+        impl ContactNonceSource for FixedNonce {
+            fn fill_nonce(&self, nonce: &mut [u8; 24]) -> Result<(), ContactCryptoError> {
+                nonce.copy_from_slice(&[0x55; 24]);
+                Ok(())
+            }
+        }
+
+        fn block_on<F: Future>(future: F) -> F::Output {
+            let waker = Waker::noop();
+            let mut context = Context::from_waker(waker);
+            let mut future = Box::pin(future);
+            loop {
+                match future.as_mut().poll(&mut context) {
+                    Poll::Ready(value) => return value,
+                    Poll::Pending => std::hint::spin_loop(),
+                }
+            }
+        }
+
+        // Start with v1, then rotate to v2 while retaining both old key types.
+        // A newly active version must never re-encrypt historic stored bytes.
+        let original = format!(
+            "{{\"activeEncryptionVersion\":1,\"activeLookupVersion\":1,\"encryption\":[{{\"version\":1,\"keyHex\":\"{}\"}}],\"lookup\":[{{\"version\":1,\"keyHex\":\"{}\"}}]}}",
+            "11".repeat(32),
+            "22".repeat(32),
+        );
+        let rotated = format!(
+            "{{\"activeEncryptionVersion\":2,\"activeLookupVersion\":2,\"encryption\":[{{\"version\":2,\"keyHex\":\"{}\"}},{{\"version\":1,\"keyHex\":\"{}\"}}],\"lookup\":[{{\"version\":2,\"keyHex\":\"{}\"}},{{\"version\":1,\"keyHex\":\"{}\"}}]}}",
+            "33".repeat(32),
+            "11".repeat(32),
+            "44".repeat(32),
+            "22".repeat(32),
+        );
+        let (original_keys, _) = parse_contact_protection_keyring_with_metadata(original)?;
+        let (rotated_keys, metadata) = parse_contact_protection_keyring_with_metadata(rotated)?;
+        let original_protector = RustCryptoContactProtection::new(original_keys, FixedNonce);
+        let rotated_protector = RustCryptoContactProtection::new(rotated_keys, FixedNonce);
+        let tenant = TenantId::parse("tenant_01JKEYROTATE")?;
+        let contact = ContactPointId::parse("contact_01JKEYROTATE")?;
+        let normalized = normalize_contact_value(
+            ContactKind::Email,
+            ContactNormalizationVersion::V1,
+            "Legacy@Example.com",
+        )?;
+        let old_ciphertext = block_on(original_protector.encrypt_contact_display(
+            ContactEncryptionRequest::new(
+                &tenant,
+                &contact,
+                ContactProtectionVersion::V1,
+                &normalized,
+            ),
+        ))?;
+        assert_eq!(old_ciphertext.key_version().value(), 1);
+        assert_eq!(
+            rotated_protector.decrypt_contact_display(
+                &tenant,
+                &contact,
+                ContactProtectionVersion::V1,
+                &old_ciphertext,
+            )?.as_str(),
+            "legacy@example.com",
+        );
+        let new_ciphertext = block_on(rotated_protector.encrypt_contact_display(
+            ContactEncryptionRequest::new(
+                &tenant,
+                &contact,
+                ContactProtectionVersion::V1,
+                &normalized,
+            ),
+        ))?;
+        assert_eq!(new_ciphertext.key_version().value(), 2);
+
+        let lookup_input = exact_lookup_hmac_input(
+            &tenant,
+            ContactKind::Email,
+            ContactNormalizationVersion::V1,
+            &normalized,
+        );
+        let old_tokens = original_protector.derive_lookup_candidates(&tenant, &lookup_input)?;
+        let rotated_tokens = rotated_protector.derive_lookup_candidates(&tenant, &lookup_input)?;
+        assert_eq!(old_tokens.len(), 1);
+        assert_eq!(rotated_tokens.len(), 2);
+        assert_eq!(rotated_tokens[0].key_version().value(), 2);
+        assert_eq!(rotated_tokens[1].key_version().value(), 1);
+        assert_eq!(rotated_tokens[1].bytes(), old_tokens[0].bytes());
+        assert_eq!(format!("{metadata:?}").contains("retained_encryption_versions"), true);
+        Ok(())
+    }
+
+    #[test]
     fn keyring_requires_explicit_present_active_versions_and_valid_entries() {
         assert!(
             parse_contact_protection_keyring(
