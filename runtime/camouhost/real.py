@@ -43,6 +43,8 @@ EXPECTED_PROBE_SHA256_ENV = "CAMOUHOST_EXPECTED_PROBE_SHA256"
 HEADLESS_MODE_ENV = "CAMOUHOST_HEADLESS_MODE"
 PROXY_CONFIG_ENV = "CAMOUHOST_PROXY_CONFIG_PATH"
 AGENT_DIRECTORY_ENV = "CAMOUHOST_AGENT_DIRECTORY"
+# Distinguishable only app-owned Firefox bootstrap, never a generic user about:blank tab.
+MANAGED_BOOTSTRAP_TAB_URL = "about:blank#camouhost-playwright-bootstrap-v1"
 AGENT_REQUEST_PATTERN = re.compile(r"[0-9a-f]{32}\.py\Z")
 
 FINGERPRINT_PROBE = """
@@ -644,11 +646,35 @@ def decode_navigation_target(encoded: str) -> str | None:
     return value
 
 
+def retire_managed_bootstrap_tabs(context: Any) -> None:
+    """Remove only Camouhost's marked launch tab, never a user-created blank tab.
+
+    Playwright 1.60 requires a normal page during Firefox persistent launch. The
+    -new-tab argument creates one on every cold Open; native Firefox SessionStore
+    also restores prior tabs. A distinct about:blank fragment lets us identify
+    our own bootstrap without guessing whether the user's about:blank is safe to
+    close. Do not clean up before Rust identity admission.
+    """
+    pages = list(context.pages)
+    owned = [page for page in pages if page.url == MANAGED_BOOTSTRAP_TAB_URL]
+    if not owned:
+        return
+    other = [page for page in pages if page.url != MANAGED_BOOTSTRAP_TAB_URL]
+    if not other:
+        # Brand-new/otherwise empty window: preserve exactly one visible tab.
+        # This about:blank transition cannot send an external request.
+        owned[0].goto("about:blank", wait_until="domcontentloaded", timeout=5_000)
+        owned = owned[1:]
+    for page in owned:
+        page.close()
+
+
 def admit_navigation(context: Any, target: str | None) -> None:
     if target is not None:
         context.set_offline(False)
         page = context.pages[0] if context.pages else context.new_page()
         page.goto(target, wait_until="domcontentloaded", timeout=90_000)
+        retire_managed_bootstrap_tabs(context)
         return
 
     # The Rust owner has admitted the persisted identity. Firefox alone owns
@@ -689,6 +715,7 @@ def admit_navigation(context: Any, target: str | None) -> None:
                 context.pages[0].wait_for_timeout(250)
             else:
                 time.sleep(0.25)
+    retire_managed_bootstrap_tabs(context)
     print(
         f"camouhost_session_restore native_retry_attempts={retries} "
         f"failures={failed}",
@@ -822,7 +849,7 @@ def camoufox_kwargs(
         # restored tabs are admitted. Unlike Firefox's -offline CLI switch,
         # this is released by Playwright set_offline(False) at admission.
         "offline": True,
-        "args": ["-new-tab", "about:blank"],
+        "args": ["-new-tab", MANAGED_BOOTSTRAP_TAB_URL],
         "i_know_what_im_doing": True,
         "persistent_context": True,
         "proxy": resolve_proxy(),
