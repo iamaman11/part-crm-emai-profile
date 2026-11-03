@@ -97,7 +97,7 @@ jobs:
         run: cargo test --locked -p profile-bridge --lib
 
   bridge-regression-windows:
-    name: Official Camoufox Windows runtime
+    name: Profile Bridge Windows regression
     needs: scope
     if: always()
     runs-on: windows-2025
@@ -229,3 +229,14 @@ jobs:
             ${{ runner.temp }}/runtime-manifest.json
           if-no-files-found: error
           retention-days: 7
+
+  camoufox-required-proof:
+    # Branch protection retains the canonical cold-launch check name. The single
+    # physical Windows runtime job above owns all real Camoufox/Bridge tests.
+    name: Real Camoufox cold-launch proof
+    needs: bridge-regression-windows
+    if: always()
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Require real official Camoufox and Bridge Windows proof
+        run: test "${{ needs.bridge-regression-windows.result }}" = success
