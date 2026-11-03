@@ -54,7 +54,18 @@ pub fn verify_component_manifests(
                     read_unique_tar_member_by_basename(&archive, "release-manifest.json", false)?
                 }
                 "runtime_bundle" => {
-                    read_unique_tar_member_by_basename(&archive, "runtime-manifest.json", true)?
+                    // Only the historical known-good runtime is raw TAR.
+                    // Current official 158 delivery remains exactly gzip TAR.
+                    let gzip = match component.artifact_path.as_str() {
+                        "components/runtime-bundle.tar.gz" => true,
+                        "components/runtime-bundle.tar" => false,
+                        other => {
+                            return Err(mismatch(format!(
+                                "unsupported immutable runtime archive path: {other}"
+                            )));
+                        }
+                    };
+                    read_unique_tar_member_by_basename(&archive, "runtime-manifest.json", gzip)?
                 }
                 other => {
                     return Err(mismatch(format!(

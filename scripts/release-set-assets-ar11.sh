@@ -41,11 +41,12 @@ inventory_sha() {
 
 require_v3_core_inventory() {
   local document="$1"
+  local runtime_path="$2"
   local path
   for path in \
     components/control-plane.tar \
     components/secret-resolver.tar \
-    components/runtime-bundle.tar.gz \
+    "$runtime_path" \
     components/profile-bridge.zip; do
     inventory_has "$document" "$path" || fail "schema v3 inventory missing required core artifact: $path"
   done
@@ -97,8 +98,19 @@ materialize() {
 
   local runtime_release_id=""
   local runtime_external=0
+  local runtime_path=components/runtime-bundle.tar.gz
+  local runtime_asset=runtime-bundle.tar.gz
   if [ "$schema" = 3 ]; then
     runtime_release_id="$(jq -r '.components.runtime_bundle.release_id // ""' "$document")"
+    runtime_path="$(jq -er '.components.runtime_bundle.artifact_path | strings' "$document")"
+    case "$runtime_path" in
+      components/runtime-bundle.tar.gz) ;;
+      components/runtime-bundle.tar)
+        test "$mode" = known-good-v2-v3 || fail "raw TAR runtime forbidden in current target"
+        runtime_asset=runtime-bundle.tar
+        ;;
+      *) fail "unsupported immutable runtime component artifact path: $runtime_path" ;;
+    esac
     if [[ "$runtime_release_id" =~ ^runtime-bundle-v3-sha256-[0-9a-f]{64}$ ]]; then
       runtime_external=1
     fi
@@ -106,7 +118,7 @@ materialize() {
 
   local common=(control-plane.tar secret-resolver.tar profile-bridge.zip)
   if [ "$runtime_external" -eq 0 ]; then
-    common+=(runtime-bundle.tar.gz)
+    common+=("$runtime_asset")
   fi
   local expected=(release-set.json)
 
@@ -121,7 +133,7 @@ materialize() {
       ;;
     3)
       [[ "$release_id" =~ ^release-set-v3-sha256-[0-9a-f]{64}$ ]] || fail "v3 document/id mismatch"
-      require_v3_core_inventory "$document"
+      require_v3_core_inventory "$document" "$runtime_path"
 
       local has_capability=0 has_sbom=0 has_provenance=0
       inventory_has "$document" capability-policy-v1.json && has_capability=1
@@ -196,15 +208,15 @@ materialize() {
     command -v gh >/dev/null 2>&1 || fail "GitHub CLI is required to hydrate exact runtime component"
     local runtime_download
     runtime_download="$(mktemp -d)"
-    if ! gh release download "$runtime_release_id"       --repo "${GITHUB_REPOSITORY:-iamaman11/part-crm-emai-profile}"       --dir "$runtime_download"       --pattern runtime-bundle.tar.gz; then
+    if ! gh release download "$runtime_release_id"       --repo "${GITHUB_REPOSITORY:-iamaman11/part-crm-emai-profile}"       --dir "$runtime_download"       --pattern "$runtime_asset"; then
       rm -rf "$runtime_download"
       fail "exact runtime component download failed: $runtime_release_id"
     fi
-    require_regular_file "$runtime_download/runtime-bundle.tar.gz"
-    cp "$runtime_download/runtime-bundle.tar.gz" "$release_root/components/runtime-bundle.tar.gz"
+    require_regular_file "$runtime_download/$runtime_asset"
+    cp "$runtime_download/$runtime_asset" "$release_root/$runtime_path"
     rm -rf "$runtime_download"
   else
-    cp "$asset_root/runtime-bundle.tar.gz" "$release_root/components/runtime-bundle.tar.gz"
+    cp "$asset_root/$runtime_asset" "$release_root/$runtime_path"
   fi
   cp "$asset_root/profile-bridge.zip" "$release_root/components/profile-bridge.zip"
 
@@ -260,7 +272,7 @@ self_test() {
           > "$dir/windows-delivery-manifest.json"
       fi
       jq -n --argjson schema "$schema" --arg id "$id" --arg source "$source_sha" --argjson inventory "$inventory" \
-        '{schema_version:$schema,release_set_id:$id,source:{commit_sha:$source},components:{runtime_bundle:{release_id:("runtime-bundle-v2-sha256-" + ("8" * 64))}},artifact_inventory:$inventory}' \
+        '{schema_version:$schema,release_set_id:$id,source:{commit_sha:$source},components:{runtime_bundle:{release_id:("runtime-bundle-v2-sha256-" + ("8" * 64)),artifact_path:"components/runtime-bundle.tar.gz"}},artifact_inventory:$inventory}' \
         > "$dir/release-set.json"
     else
       printf '{"schema_version":%s,"release_set_id":"%s"}\n' "$schema" "$id" > "$dir/release-set.json"
@@ -300,13 +312,18 @@ test "$1" = release
 test "$2" = download
 shift 2
 destination=""
+pattern=""
 while [ "$#" -gt 0 ]; do
   case "$1" in
     --dir)
       destination="$2"
       shift 2
       ;;
-    --repo|--pattern)
+    --pattern)
+      pattern="$2"
+      shift 2
+      ;;
+    --repo)
       shift 2
       ;;
     *)
@@ -315,12 +332,30 @@ while [ "$#" -gt 0 ]; do
   esac
 done
 test -n "$destination"
+[[ "$pattern" = runtime-bundle.tar.gz || "$pattern" = runtime-bundle.tar ]]
 mkdir -p "$destination"
-cp "$AR11_RUNTIME_COMPONENT_FIXTURE" "$destination/runtime-bundle.tar.gz"
+cp "$AR11_RUNTIME_COMPONENT_FIXTURE" "$destination/$pattern"
 EOF
   chmod +x "$root/fake-bin/gh"
   PATH="$root/fake-bin:$PATH"     AR11_RUNTIME_COMPONENT_FIXTURE="$root/runtime-component.tar"     materialize current-v3 "$v3" "$root/v3-external" "$root/v3-external-root"
   cmp --silent "$root/runtime-component.tar" "$root/v3-external-root/components/runtime-bundle.tar.gz"
+
+  # A published pre-158 v3 source may be raw TAR for read-only known-good.
+  cp -R "$root/v3-external" "$root/v3-old-raw"
+  jq '.components.runtime_bundle.artifact_path = "components/runtime-bundle.tar"
+      | (.artifact_inventory[] | select(.path == "components/runtime-bundle.tar.gz").path) = "components/runtime-bundle.tar"' \
+    "$root/v3-old-raw/release-set.json" > "$root/v3-old-raw/tmp.json"
+  mv "$root/v3-old-raw/tmp.json" "$root/v3-old-raw/release-set.json"
+  PATH="$root/fake-bin:$PATH" \
+    AR11_RUNTIME_COMPONENT_FIXTURE="$root/runtime-component.tar" \
+    materialize known-good-v2-v3 "$v3" "$root/v3-old-raw" "$root/v3-old-raw-root"
+  cmp --silent "$root/runtime-component.tar" "$root/v3-old-raw-root/components/runtime-bundle.tar"
+  if ( PATH="$root/fake-bin:$PATH" \
+       AR11_RUNTIME_COMPONENT_FIXTURE="$root/runtime-component.tar" \
+       materialize current-v3 "$v3" "$root/v3-old-raw" "$root/should-fail-current-raw" \
+     ) >/dev/null 2>&1; then
+    fail "raw legacy runtime was admitted as current official browser target"
+  fi
 
   make_assets 3 "$v3" "$root/v3-capability" capability
   materialize known-good-v2-v3 "$v3" "$root/v3-capability" "$root/v3-capability-root"

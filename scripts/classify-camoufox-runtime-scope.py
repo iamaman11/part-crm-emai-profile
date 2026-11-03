@@ -26,6 +26,7 @@ EXACT_PROVEN_UNRELATED = frozenset(
         # Staging-only AR11 overlay consumes immutable runtime identities;
         # it is not imported by the official Camoufox/Bridge test owner.
         "scripts/release-core-overlay-ar11.py",
+        "scripts/release-set-assets-ar11.sh",
         # Historical O0 E3A regression fixture: this retired D1-only workflow is
         # intentionally classified from its path even when the file is deleted.
         ".github/workflows/v2-phase-a-d1-command-router.yml",
@@ -81,6 +82,11 @@ def run_self_test() -> None:
         ("d1-workflow", [".github/workflows/d1-migration-executor.yml"], False),
         ("opsctl-only", ["tools/opsctl/src/main.rs"], False),
         ("ar11-overlay-only", ["scripts/release-core-overlay-ar11.py"], False),
+        ("ar11-asset-materializer-only", ["scripts/release-set-assets-ar11.sh"], False),
+        ("ar11-asset-materializer-with-runtime", [
+            "scripts/release-set-assets-ar11.sh",
+            "runtime/camouhost/real.py",
+        ], True),
         ("ar11-overlay-plus-real-runtime", [
             "scripts/release-core-overlay-ar11.py",
             "runtime/camouhost/real.py",
