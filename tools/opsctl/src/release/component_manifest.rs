@@ -1,5 +1,6 @@
 use crate::release::digest::{canonical_json, sha256_hex, sha256_reader_hex};
 use crate::release::model::ReleaseModelError;
+use flate2::read::GzDecoder;
 use opsctl_core::release::{ReleaseComponentIdentity, ReleaseSetV3};
 use serde_json::Value;
 use std::collections::{BTreeMap, BTreeSet};
@@ -50,10 +51,10 @@ pub fn verify_component_manifests(
         } else {
             let bytes = match component.component_id.as_str() {
                 "control_plane" | "frontend" | "secret_resolver" => {
-                    read_unique_tar_member_by_basename(&archive, "release-manifest.json")?
+                    read_unique_tar_member_by_basename(&archive, "release-manifest.json", false)?
                 }
                 "runtime_bundle" => {
-                    read_unique_tar_member_by_basename(&archive, "runtime-manifest.json")?
+                    read_unique_tar_member_by_basename(&archive, "runtime-manifest.json", true)?
                 }
                 other => {
                     return Err(mismatch(format!(
@@ -352,14 +353,22 @@ fn verify_profile_bridge_manifest(
 fn read_unique_tar_member_by_basename(
     archive_path: &Path,
     target_basename: &str,
+    gzip: bool,
 ) -> Result<Vec<u8>, ReleaseModelError> {
     regular_archive(archive_path)?;
-    let mut file = File::open(archive_path).map_err(|error| {
+    let file = File::open(archive_path).map_err(|error| {
         mismatch(format!(
             "cannot open component archive {}: {error}",
             archive_path.display()
         ))
     })?;
+    // The official Camoufox runtime is a gzip stream containing TAR records.
+    // Reuse this exact existing TAR/path/manifest validator for both formats.
+    let mut file: Box<dyn Read> = if gzip {
+        Box::new(GzDecoder::new(file))
+    } else {
+        Box::new(file)
+    };
     let mut found: Option<Vec<u8>> = None;
     let mut pending_path: Option<String> = None;
     loop {
@@ -746,7 +755,7 @@ fn tar_octal(field: &[u8], label: &str) -> Result<u64, ReleaseModelError> {
 }
 
 fn read_tar_payload(
-    file: &mut File,
+    file: &mut dyn Read,
     size: u64,
     limit: u64,
     archive_path: &Path,
@@ -771,32 +780,41 @@ fn read_tar_payload(
 }
 
 fn skip_tar_payload(
-    file: &mut File,
+    file: &mut dyn Read,
     size: u64,
     archive_path: &Path,
 ) -> Result<(), ReleaseModelError> {
     let padded = size
         .checked_add(tar_padding(size))
         .ok_or_else(|| mismatch("tar payload offset overflow"))?;
-    let offset = i64::try_from(padded).map_err(|_| mismatch("tar payload offset too large"))?;
-    file.seek(SeekFrom::Current(offset)).map_err(|error| {
-        mismatch(format!(
-            "cannot skip tar payload in {}: {error}",
+    // A gzip stream cannot seek. Discard in bounded memory, rejecting truncation.
+    let consumed =
+        std::io::copy(&mut file.take(padded), &mut std::io::sink()).map_err(|error| {
+            mismatch(format!(
+                "cannot skip tar payload in {}: {error}",
+                archive_path.display()
+            ))
+        })?;
+    if consumed != padded {
+        return Err(mismatch(format!(
+            "truncated tar payload in {}",
             archive_path.display()
-        ))
-    })?;
+        )));
+    }
     Ok(())
 }
 
-fn skip_padding(file: &mut File, size: u64, archive_path: &Path) -> Result<(), ReleaseModelError> {
-    let padding = tar_padding(size);
-    if padding == 0 {
-        return Ok(());
-    }
-    let offset = i64::try_from(padding).map_err(|_| mismatch("tar padding too large"))?;
-    file.seek(SeekFrom::Current(offset)).map_err(|error| {
+fn skip_padding(
+    file: &mut dyn Read,
+    size: u64,
+    archive_path: &Path,
+) -> Result<(), ReleaseModelError> {
+    let padding =
+        usize::try_from(tar_padding(size)).map_err(|_| mismatch("tar padding too large"))?;
+    let mut discard = [0_u8; TAR_BLOCK];
+    file.read_exact(&mut discard[..padding]).map_err(|error| {
         mismatch(format!(
-            "cannot skip tar padding in {}: {error}",
+            "truncated tar padding in {}: {error}",
             archive_path.display()
         ))
     })?;
@@ -880,6 +898,8 @@ mod tests {
         ZIP_LOCAL_HEADER_SIGNATURE, read_profile_bridge_zip, read_unique_tar_member_by_basename,
         validate_archive_member_path,
     };
+    use flate2::Compression;
+    use flate2::write::GzEncoder;
     use std::fs;
     use std::io::Write;
     use std::path::Path;
@@ -891,7 +911,7 @@ mod tests {
             std::process::id()
         ));
         fs::write(&path, b"not an archive")?;
-        assert!(read_unique_tar_member_by_basename(&path, "release-manifest.json").is_err());
+        assert!(read_unique_tar_member_by_basename(&path, "release-manifest.json", false).is_err());
         assert!(read_profile_bridge_zip(&path).is_err());
         fs::remove_file(path)?;
         Ok(())
@@ -914,7 +934,7 @@ mod tests {
             std::process::id()
         ));
         write_tar_members(&path, &[("../release-manifest.json", b"{}")])?;
-        assert!(read_unique_tar_member_by_basename(&path, "release-manifest.json").is_err());
+        assert!(read_unique_tar_member_by_basename(&path, "release-manifest.json", false).is_err());
         fs::remove_file(path)?;
         Ok(())
     }
@@ -932,8 +952,110 @@ mod tests {
                 ("two/release-manifest.json", b"{}"),
             ],
         )?;
-        assert!(read_unique_tar_member_by_basename(&path, "release-manifest.json").is_err());
+        assert!(read_unique_tar_member_by_basename(&path, "release-manifest.json", false).is_err());
         fs::remove_file(path)?;
+        Ok(())
+    }
+
+    #[test]
+    fn gzip_runtime_manifest_round_trip() -> Result<(), Box<dyn std::error::Error>> {
+        let root = std::env::temp_dir().join(format!(
+            "opsctl-gzip_runtime_manifest_round_trip-{}",
+            std::process::id()
+        ));
+        fs::create_dir_all(&root)?;
+        let plain = root.join("source.tar");
+        let compressed = root.join("runtime-bundle.tar.gz");
+        write_tar_members(&plain, &[("runtime/runtime-manifest.json", b"{}")])?;
+        {
+            let mut encoder =
+                GzEncoder::new(fs::File::create(&compressed)?, Compression::default());
+            std::io::copy(&mut fs::File::open(&plain)?, &mut encoder)?;
+            encoder.finish()?;
+        }
+        assert_eq!(
+            read_unique_tar_member_by_basename(&compressed, "runtime-manifest.json", true)?,
+            b"{}"
+        );
+        assert!(
+            read_unique_tar_member_by_basename(&compressed, "runtime-manifest.json", false)
+                .is_err()
+        );
+        fs::remove_dir_all(root)?;
+        Ok(())
+    }
+
+    #[test]
+    fn gzip_runtime_duplicate_manifest_rejected() -> Result<(), Box<dyn std::error::Error>> {
+        let root = std::env::temp_dir().join(format!(
+            "opsctl-gzip_runtime_duplicate_manifest_rejected-{}",
+            std::process::id()
+        ));
+        fs::create_dir_all(&root)?;
+        let plain = root.join("source.tar");
+        let compressed = root.join("runtime-bundle.tar.gz");
+        write_tar_members(
+            &plain,
+            &[
+                ("one/runtime-manifest.json", b"{}"),
+                ("two/runtime-manifest.json", b"{}"),
+            ],
+        )?;
+        {
+            let mut encoder =
+                GzEncoder::new(fs::File::create(&compressed)?, Compression::default());
+            std::io::copy(&mut fs::File::open(&plain)?, &mut encoder)?;
+            encoder.finish()?;
+        }
+        assert!(
+            read_unique_tar_member_by_basename(&compressed, "runtime-manifest.json", true).is_err()
+        );
+        fs::remove_dir_all(root)?;
+        Ok(())
+    }
+
+    #[test]
+    fn gzip_runtime_path_traversal_rejected() -> Result<(), Box<dyn std::error::Error>> {
+        let root = std::env::temp_dir().join(format!(
+            "opsctl-gzip_runtime_path_traversal_rejected-{}",
+            std::process::id()
+        ));
+        fs::create_dir_all(&root)?;
+        let plain = root.join("source.tar");
+        let compressed = root.join("runtime-bundle.tar.gz");
+        write_tar_members(&plain, &[("../runtime-manifest.json", b"{}")])?;
+        {
+            let mut encoder =
+                GzEncoder::new(fs::File::create(&compressed)?, Compression::default());
+            std::io::copy(&mut fs::File::open(&plain)?, &mut encoder)?;
+            encoder.finish()?;
+        }
+        assert!(
+            read_unique_tar_member_by_basename(&compressed, "runtime-manifest.json", true).is_err()
+        );
+        fs::remove_dir_all(root)?;
+        Ok(())
+    }
+
+    #[test]
+    #[ignore = "requires the exact physically downloaded official 158 runtime archive"]
+    fn real_published_158_gzip_tar_manifest_is_readable() -> Result<(), Box<dyn std::error::Error>>
+    {
+        let archive = std::env::var("AR11_REAL_RUNTIME_ARCHIVE")?;
+        let manifest =
+            read_unique_tar_member_by_basename(Path::new(&archive), "runtime-manifest.json", true)?;
+        let payload: serde_json::Value = serde_json::from_slice(&manifest)?;
+        assert_eq!(
+            payload.get("kind").and_then(serde_json::Value::as_str),
+            Some("CAMOUFOX_WINDOWS_RUNTIME_COMPONENT")
+        );
+        assert_eq!(
+            payload
+                .get("schema_version")
+                .and_then(serde_json::Value::as_u64),
+            Some(3)
+        );
+        println!("AR11_REAL_PUBLISHED_RUNTIME_GZIP_MANIFEST=PHYSICAL_PASS");
         Ok(())
     }
 
