@@ -42,6 +42,121 @@ fn published_windows_runtime_is_consumed_by_shipping_selector()
     Ok(())
 }
 
+// This test is *only* enabled by the existing official-runtime Windows CI job.
+// Read exactly the shipping compressed artifact with the production Rust reader,
+// rather than interpreting the package with a second Python/TAR implementation.
+// Other CI/normal developer tests do not need the multi-GB runtime.
+#[cfg(windows)]
+#[test]
+fn shipping_windows_runtime_archive_is_readable_by_production_delivery_reader()
+-> Result<(), Box<dyn std::error::Error>> {
+    use profile_bridge::windows_delivery_archive::WindowsDeliveryArchiveReader;
+    use profile_bridge::windows_delivery_staging::{
+        DeliveryArchiveEntryKind, DeliveryArchiveReader, DeliveryComponentKind,
+    };
+    use std::collections::BTreeMap;
+
+    let Some(archive) = env::var_os("AR10_PACKAGED_RUNTIME_ARCHIVE") else {
+        return Ok(());
+    };
+    let manifest_path = env::var("AR10_PACKAGED_RUNTIME_MANIFEST")?;
+    let archive = PathBuf::from(archive);
+    let manifest_bytes = fs::read(manifest_path)?;
+    let manifest: serde_json::Value = serde_json::from_slice(&manifest_bytes)?;
+    let files = manifest
+        .get("files")
+        .and_then(|v| v.get("files"))
+        .and_then(serde_json::Value::as_array)
+        .ok_or("packaged runtime manifest file list is missing")?;
+
+    let mut expected: BTreeMap<String, (u64, String)> = BTreeMap::new();
+    for file in files {
+        let path = file
+            .get("path")
+            .and_then(serde_json::Value::as_str)
+            .ok_or("manifest file path missing")?;
+        let size = file
+            .get("size_bytes")
+            .and_then(serde_json::Value::as_u64)
+            .ok_or("manifest file size missing")?;
+        let hash = file
+            .get("sha256")
+            .and_then(serde_json::Value::as_str)
+            .ok_or("manifest file hash missing")?;
+        if expected
+            .insert(path.to_owned(), (size, hash.to_owned()))
+            .is_some()
+        {
+            return Err("duplicate packaged runtime manifest path".into());
+        }
+    }
+    if expected.len() < 4_000 {
+        return Err("the real official Windows runtime was not selected".into());
+    }
+    if expected
+        .insert(
+            "runtime-manifest.json".to_owned(),
+            (manifest_bytes.len() as u64, sha256_hex(&manifest_bytes)),
+        )
+        .is_some()
+    {
+        return Err("runtime manifest collides with an existing runtime file".into());
+    }
+
+    let mut reader = WindowsDeliveryArchiveReader::new();
+    let entries = reader.entries(DeliveryComponentKind::RuntimeBundle, &archive)?;
+    if entries.len() != expected.len() {
+        return Err(format!(
+            "shipping archive inventory mismatch: expected {}, observed {}",
+            expected.len(),
+            entries.len()
+        )
+        .into());
+    }
+    let mut last: Option<&str> = None;
+    for entry in &entries {
+        let path = entry.relative_path();
+        if last.is_some_and(|previous| previous >= path) {
+            return Err("shipping runtime entries are not unique and ordered".into());
+        }
+        last = Some(path);
+        if entry.kind() != DeliveryArchiveEntryKind::RegularFile {
+            return Err("shipping runtime archive contains a link or special file".into());
+        }
+        let (size, sha) = expected
+            .remove(path)
+            .ok_or("shipping runtime archive has an unexpected path")?;
+        if entry.size_bytes() != size || entry.sha256() != sha {
+            return Err(format!("shipping runtime content digest mismatch: {path}").into());
+        }
+    }
+    if !expected.is_empty() {
+        return Err("shipping runtime archive omitted expected paths".into());
+    }
+    for (path, bytes) in [("runtime-manifest.json", manifest_bytes)] {
+        let index = entries
+            .iter()
+            .position(|e| e.relative_path() == path)
+            .ok_or("archive manifest missing")?;
+        let mut streamed = Vec::new();
+        reader.copy_regular_file(
+            DeliveryComponentKind::RuntimeBundle,
+            &archive,
+            index,
+            &mut streamed,
+        )?;
+        if streamed != bytes {
+            return Err("shipping reader returned corrupted manifest bytes".into());
+        }
+    }
+    eprintln!(
+        "REAL_SHIPPING_ARCHIVE_READER=PASS;FILES={};COMPRESSED_BYTES={}",
+        entries.len(),
+        fs::metadata(&archive)?.len()
+    );
+    Ok(())
+}
+
 struct StageTracingCamouhost<C> {
     inner: C,
 }
