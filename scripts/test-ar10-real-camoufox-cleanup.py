@@ -470,7 +470,7 @@ def prove_preexisting_tabs_restored(
             self.wfile.write(page)
 
         def do_POST(self) -> None:  # noqa: N802
-            server.post_count += 1
+            server.post_paths.append(self.path)
             self.rfile.read(int(self.headers.get("Content-Length", "0")))
             self.do_GET()
 
@@ -478,7 +478,7 @@ def prove_preexisting_tabs_restored(
             pass
 
     server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
-    server.post_count = 0
+    server.post_paths = []
     worker = threading.Thread(target=server.serve_forever, daemon=True)
     worker.start()
     proof = r"""
@@ -611,6 +611,15 @@ try:
     retained = present[urls[0]].evaluate("localStorage.getItem('restore-proof')")
     if retained != "retained":
         raise AssertionError("restored tab lost persistent origin state")
+    # A deliberate user POST after admission must still work normally:
+    # Camouhost must not leave a broad network interception layer installed.
+    user_post = context.new_page()
+    user_post.goto(origin + "/user-post-source", wait_until="domcontentloaded", timeout=15000)
+    user_post.evaluate(
+        "() => { const f=document.createElement('form'); f.method='POST'; "
+        "f.action='/user-post'; document.body.appendChild(f); f.submit(); }"
+    )
+    user_post.wait_for_url(origin + "/user-post", timeout=15000)
     witness = runtime.install_controlled_close_observation(context)
     assert not runtime.controlled_close_candidate(witness)
     present[urls[0]].close()
@@ -693,8 +702,14 @@ print(
                     f"rc={result} diagnostic_tail={tail!r}"
                 )
         assert_writer_quiescent(load_runtime(camouhost), root, "restored tabs")
-        assert server.post_count == 1, "SessionStore replayed the submitted POST"
-        print("native_restore_proof stage=passed safe_get=PASS post_replay=0", flush=True)
+        assert server.post_paths == ["/post", "/user-post"], (
+            "native SessionStore silently replayed POST or blocked intentional form submit; "
+            f"observed_paths={server.post_paths!r}"
+        )
+        print(
+            "native_restore_proof stage=passed safe_get=PASS "
+            "post_replay=0 user_post_after_admission=PASS", flush=True,
+        )
     finally:
         server.shutdown()
         server.server_close()
