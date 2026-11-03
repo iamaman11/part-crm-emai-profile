@@ -39,6 +39,10 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--camouhost", type=Path, required=True)
     parser.add_argument("--runtime-lock", type=Path, required=True)
     parser.add_argument("--headless", choices=("false", "virtual"), required=True)
+    parser.add_argument(
+        "--native-restore-only", action="store_true",
+        help="Run actual packaged Firefox SessionStore tabs + POST proof only",
+    )
     return parser.parse_args()
 
 
@@ -1900,6 +1904,18 @@ def main() -> int:
     camouhost = require_regular(args.camouhost, "Camouhost runtime")
     runtime_lock = require_regular(args.runtime_lock, "runtime lock")
     runtime = load_runtime(camouhost)
+
+    # Reuse the shipping Python/Camoufox runtime already materialized by CI;
+    # no second browser or duplicated fixture engine. The normal full proof
+    # remains available unchanged for additional Windows acceptance.
+    if args.native_restore_only:
+        with tempfile.TemporaryDirectory(prefix="ar10-native-restore-only-") as temporary:
+            prove_preexisting_tabs_restored(
+                python, camouhost, runtime_lock, args.headless,
+                Path(temporary) / "restore-tabs",
+            )
+        print("AR10_NATIVE_FIREFOX_SESSIONSTORE=PHYSICAL_PASS", flush=True)
+        return 0
 
     with tempfile.TemporaryDirectory(prefix="ar10-real-camoufox-cleanup-") as temporary:
         root = Path(temporary) / "generation"
