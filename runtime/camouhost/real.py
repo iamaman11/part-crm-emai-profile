@@ -645,11 +645,51 @@ def decode_navigation_target(encoded: str) -> str | None:
 
 
 def admit_navigation(context: Any, target: str | None) -> None:
-    context.set_offline(False)
-    if target is None:
+    if target is not None:
+        context.set_offline(False)
+        page = context.pages[0] if context.pages else context.new_page()
+        page.goto(target, wait_until="domcontentloaded", timeout=90_000)
         return
-    page = context.pages[0] if context.pages else context.new_page()
-    page.goto(target, wait_until="domcontentloaded", timeout=90_000)
+
+    # Firefox SessionStore owns URLs/history. Do not reconstruct a saved tab.
+    # Guard native retry against resubmitting a POST from session history.
+    def safe_restored_request(route: Any) -> None:
+        if route.request.method.upper() not in ("GET", "HEAD"):
+            route.abort()
+        else:
+            route.continue_()
+
+    context.route("**/*", safe_restored_request)
+    try:
+        # Called only after Rust identity admission, never during launch.
+        context.set_offline(False)
+        for attempt in range(4):
+            retried = 0
+            for page in list(context.pages):
+                if not page.url.startswith(("http://", "https://")):
+                    continue
+                try:
+                    document_uri = page.evaluate("document.documentURI")
+                    if not isinstance(document_uri, str) or not document_uri.startswith(
+                        "about:neterror?e=netOffline&"
+                    ):
+                        continue
+                    # Official Firefox 158's locale-independent native retry.
+                    page.locator("#main-button").click(timeout=10_000)
+                    retried += 1
+                except Exception as error:
+                    # An unreachable website must not destroy profile Open.
+                    print(
+                        "camouhost_session_restore retry_failed "
+                        f"category={runtime_failure_category(error)}",
+                        file=sys.stderr, flush=True,
+                    )
+            if retried or attempt == 3 or not context.pages:
+                break
+            # Firefox publishes saved pages asynchronously; yield Playwright.
+            context.pages[0].wait_for_timeout(250)
+    finally:
+        context.unroute("**/*", safe_restored_request)
 
 
 def extract_camoufox_config(options: dict[str, Any]) -> dict[str, Any]:
@@ -760,6 +800,8 @@ def camoufox_kwargs(
         "exclude_addons": default_addon_exclusions(),
         "ff_version": locked_firefox_major(lock),
         "firefox_user_prefs": {
+            # Native Firefox SessionStore restores previous windows and tabs.
+            "browser.startup.page": 3,
             "privacy.baselineFingerprintingProtection": False,
             # Keep native Windows accessibility APIs available to standard GUI automation.
             # This does not enable remote debugging or inspect page content.

@@ -464,14 +464,21 @@ def prove_preexisting_tabs_restored(
             page = b"<!doctype html><title>Disposable Firefox sessionstore proof</title>"
             self.send_response(200)
             self.send_header("Content-Type", "text/html; charset=utf-8")
+            self.send_header("Cache-Control", "no-store")
             self.send_header("Content-Length", str(len(page)))
             self.end_headers()
             self.wfile.write(page)
+
+        def do_POST(self) -> None:  # noqa: N802
+            server.post_count += 1
+            self.rfile.read(int(self.headers.get("Content-Length", "0")))
+            self.do_GET()
 
         def log_message(self, _format: str, *_args: object) -> None:
             pass
 
     server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+    server.post_count = 0
     worker = threading.Thread(target=server.serve_forever, daemon=True)
     worker.start()
     proof = r"""
@@ -492,13 +499,12 @@ spec.loader.exec_module(runtime)
 root = Path(root)
 lock = json.loads(Path(lockfile).read_text(encoding="utf-8"))
 config = json.loads((root / "camoufox-config.json").read_text(encoding="utf-8"))
-prefs = root / "user_data" / "user.js"
-with prefs.open("a", encoding="utf-8", newline="\n") as stream:
-    stream.write('\nuser_pref("browser.startup.page", 3);\n')
 urls = [origin + "/prior-first", origin + "/prior-second"]
 
 def enter():
-    manager = Camoufox(**runtime.camoufox_kwargs(lock, root, config))
+    kwargs = runtime.camoufox_kwargs(lock, root, config)
+    assert kwargs["firefox_user_prefs"]["browser.startup.page"] == 3
+    manager = Camoufox(**kwargs)
     with contextlib.redirect_stdout(sys.stderr):
         context = manager.__enter__()
     context.set_offline(True)
@@ -513,6 +519,15 @@ try:
     second = context.new_page()
     second.goto(urls[1], wait_until="domcontentloaded", timeout=15000)
     assert first.url == urls[0] and second.url == urls[1]
+
+    # Put a real form POST in Firefox's saved navigation history.
+    post_page = context.new_page()
+    post_page.goto(origin + "/post-source", wait_until="domcontentloaded", timeout=15000)
+    post_page.evaluate(
+        "() => { const f=document.createElement('form'); f.method='POST'; "
+        "f.action='/post'; document.body.appendChild(f); f.submit(); }"
+    )
+    post_page.wait_for_url(origin + "/post", timeout=15000)
 
     # INVESTIGATE-05: same actual packaged context and origin, no fake
     # browser/cookie backend. Distinct names avoid masking one mechanism by
@@ -582,6 +597,17 @@ try:
             context.wait_for_event("page", timeout=500)
         except PlaywrightTimeoutError:
             pass
+    assert any(
+        page.evaluate("document.documentURI").startswith("about:neterror?e=netOffline&")
+        for page in present.values()
+    ), "Firefox no-store restore had no pre-admission offline error"
+    runtime.admit_navigation(context, None)
+    assert present[urls[0]].title() == "Disposable Firefox sessionstore proof", (
+        "first saved tab did not retry after identity admission"
+    )
+    assert present[urls[1]].title() == "Disposable Firefox sessionstore proof", (
+        "second saved tab did not retry after identity admission"
+    )
     retained = present[urls[0]].evaluate("localStorage.getItem('restore-proof')")
     if retained != "retained":
         raise AssertionError("restored tab lost persistent origin state")
@@ -617,6 +643,8 @@ try:
     assert urls[0] not in present_third, (
         "intentionally closed tab unexpectedly reopened; classify exact native Quit semantics"
     )
+    runtime.admit_navigation(context, None)
+    assert present_third[urls[1]].title() == "Disposable Firefox sessionstore proof"
     assert present_third[urls[1]].evaluate(
         "localStorage.getItem('restore-proof')"
     ) == "retained", "closing a tab did not preserve its persistent origin storage"
@@ -665,7 +693,8 @@ print(
                     f"rc={result} diagnostic_tail={tail!r}"
                 )
         assert_writer_quiescent(load_runtime(camouhost), root, "restored tabs")
-        print("native_restore_proof stage=passed", flush=True)
+        assert server.post_count == 1, "SessionStore replayed the submitted POST"
+        print("native_restore_proof stage=passed safe_get=PASS post_replay=0", flush=True)
     finally:
         server.shutdown()
         server.server_close()
