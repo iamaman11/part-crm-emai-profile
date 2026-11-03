@@ -651,46 +651,49 @@ def admit_navigation(context: Any, target: str | None) -> None:
         page.goto(target, wait_until="domcontentloaded", timeout=90_000)
         return
 
-    # Firefox SessionStore owns URLs/history. Do not reconstruct a saved tab.
-    # Guard native retry against resubmitting a POST from session history.
-    def safe_restored_request(route: Any) -> None:
-        if route.request.method.upper() not in ("GET", "HEAD"):
-            route.abort()
-        else:
-            route.continue_()
-
-    context.route("**/*", safe_restored_request)
-    try:
-        # Called only after Rust identity admission, never during launch.
-        context.set_offline(False)
-        for attempt in range(4):
-            retried = 0
-            for page in list(context.pages):
-                if not page.url.startswith(("http://", "https://")):
+    # The Rust owner has admitted the persisted identity. Firefox alone owns
+    # SessionStore, the request method, and native resubmission confirmation.
+    # Do not synthesize URLs, force reloads, or install a second network router.
+    context.set_offline(False)
+    retried: set[int] = set()
+    failed = 0
+    retries = 0
+    # SessionStore publishes restored tabs asynchronously on cold Windows
+    # startup. Poll briefly, without delaying Open indefinitely.
+    for attempt in range(12):
+        for page in list(context.pages):
+            if id(page) in retried or not page.url.startswith(("http://", "https://")):
+                continue
+            try:
+                document_uri = page.evaluate("document.documentURI")
+                if not isinstance(document_uri, str) or not document_uri.startswith(
+                    "about:neterror?e=netOffline&"
+                ):
                     continue
-                try:
-                    document_uri = page.evaluate("document.documentURI")
-                    if not isinstance(document_uri, str) or not document_uri.startswith(
-                        "about:neterror?e=netOffline&"
-                    ):
-                        continue
-                    # Official Firefox 158's locale-independent native retry.
-                    page.locator("#main-button").click(timeout=10_000)
-                    retried += 1
-                except Exception as error:
-                    # An unreachable website must not destroy profile Open.
-                    print(
-                        "camouhost_session_restore retry_failed "
-                        f"category={runtime_failure_category(error)}",
-                        file=sys.stderr, flush=True,
-                    )
-            if retried or attempt == 3 or not context.pages:
-                break
-            # Firefox publishes saved pages asynchronously; yield Playwright.
-            context.pages[0].wait_for_timeout(250)
-    finally:
-        context.unroute("**/*", safe_restored_request)
-
+                retried.add(id(page))
+                # Firefox's own error-page retry. Its native session/history
+                # semantics (including any POST confirmation) remain upstream.
+                page.locator("#main-button").click(timeout=5_000)
+                retries += 1
+            except Exception as error:
+                # A dead tab or offline remote origin must not lose the native
+                # workspace or turn an unsuccessful navigation into Saved.
+                failed += 1
+                print(
+                    "camouhost_session_restore retry_failed "
+                    f"category={runtime_failure_category(error)}",
+                    file=sys.stderr, flush=True,
+                )
+        if attempt != 11:
+            if context.pages:
+                context.pages[0].wait_for_timeout(250)
+            else:
+                time.sleep(0.25)
+    print(
+        f"camouhost_session_restore native_retry_attempts={retries} "
+        f"failures={failed}",
+        file=sys.stderr, flush=True,
+    )
 
 def extract_camoufox_config(options: dict[str, Any]) -> dict[str, Any]:
     env = options.get("env")
