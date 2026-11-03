@@ -148,6 +148,29 @@ jobs:
           & (Join-Path $root 'python/python.exe') -I -c "from camoufox.fpgen_model import is_pinned; assert is_pinned(), 'model not pinned'"
           if ($LASTEXITCODE -ne 0) { throw 'offline fpgen model pin failed' }
 
+      - name: Prove official Firefox native restored tabs and POST safety on exact runtime
+        if: needs.scope.outputs.heavy == 'true'
+        shell: pwsh
+        run: |
+          # Use the exact already built official 158 runtime BEFORE expensive Rust regressions.
+          # The fixture uses real SessionStore/no-store pages and actual form POST,
+          # not mocked routes, synthetic browser metadata or a second owner.
+          $root = Join-Path $env:RUNNER_TEMP 'camouhost-runtime'
+          $python = Join-Path $root 'python/python.exe'
+          $log = Join-Path $env:RUNNER_TEMP 'native-sessionstore-restore.log'
+          python scripts/test-ar10-real-camoufox-cleanup.py `
+            --native-restore-only `
+            --python "$python" `
+            --camouhost "$(Join-Path $root 'camouhost/real.py')" `
+            --runtime-lock "$(Join-Path $root 'camouhost/runtime-lock.json')" `
+            --headless false 2>&1 | Tee-Object -FilePath $log
+          if ($LASTEXITCODE -ne 0) { throw 'real native Firefox SessionStore / POST restore failed' }
+          $text = Get-Content -Raw -LiteralPath $log
+          if ($text -notmatch 'native_restore_proof stage=passed safe_get=PASS post_replay=0 user_post_after_admission=PASS' -or
+              $text -notmatch 'AR10_NATIVE_FIREFOX_SESSIONSTORE=PHYSICAL_PASS') {
+            throw 'REAL_NATIVE_FIREFOX_SESSIONSTORE_POST_PROOF_NOT_EXECUTED'
+          }
+
       - name: Package exact compressed Release Set runtime input
         if: needs.scope.outputs.heavy == 'true'
         shell: pwsh
@@ -218,29 +241,6 @@ jobs:
             throw 'REAL_BROWSER_SAVE_REOPEN_NOT_EXECUTED_OR_NOT_PASSED'
           }
           Write-Output 'REAL_BROWSER_SAVE_REOPEN=PHYSICAL_PASS'
-
-      - name: Prove official Firefox native restored tabs and POST safety on exact runtime
-        if: needs.scope.outputs.heavy == 'true'
-        shell: pwsh
-        run: |
-          # Reuse this job's official 158 runtime and the production Camouhost.
-          # The fixture uses real SessionStore/no-store pages and actual form POST,
-          # not mocked routes, synthetic browser metadata or a second owner.
-          $root = Join-Path $env:RUNNER_TEMP 'camouhost-runtime'
-          $python = Join-Path $root 'python/python.exe'
-          $log = Join-Path $env:RUNNER_TEMP 'native-sessionstore-restore.log'
-          python scripts/test-ar10-real-camoufox-cleanup.py `
-            --native-restore-only `
-            --python "$python" `
-            --camouhost runtime/camouhost/real.py `
-            --runtime-lock runtime/camouhost/runtime-lock.json `
-            --headless false 2>&1 | Tee-Object -FilePath $log
-          if ($LASTEXITCODE -ne 0) { throw 'real native Firefox SessionStore / POST restore failed' }
-          $text = Get-Content -Raw -LiteralPath $log
-          if ($text -notmatch 'native_restore_proof stage=passed safe_get=PASS post_replay=0 user_post_after_admission=PASS' -or
-              $text -notmatch 'AR10_NATIVE_FIREFOX_SESSIONSTORE=PHYSICAL_PASS') {
-            throw 'REAL_NATIVE_FIREFOX_SESSIONSTORE_POST_PROOF_NOT_EXECUTED'
-          }
 
       - name: Upload exact PR candidate for installed Windows evaluation
         if: needs.scope.outputs.heavy == 'true'

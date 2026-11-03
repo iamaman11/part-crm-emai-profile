@@ -170,7 +170,8 @@ def materialize(
     if completed.returncode != 0:
         raise AssertionError(
             "candidate identity materialization failed: "
-            f"rc={completed.returncode} err={completed.stderr[-3000:]!r}"
+            f"rc={completed.returncode} diagnostic={completed.stdout[-1200:]!r} "
+            f"err={completed.stderr[-3000:]!r}"
         )
     try:
         report = json.loads(completed.stdout)
