@@ -39,6 +39,10 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--camouhost", type=Path, required=True)
     parser.add_argument("--runtime-lock", type=Path, required=True)
     parser.add_argument("--headless", choices=("false", "virtual"), required=True)
+    parser.add_argument(
+        "--native-restore-only", action="store_true",
+        help="Run actual packaged Firefox SessionStore tabs + POST proof only",
+    )
     return parser.parse_args()
 
 
@@ -166,7 +170,8 @@ def materialize(
     if completed.returncode != 0:
         raise AssertionError(
             "candidate identity materialization failed: "
-            f"rc={completed.returncode} err={completed.stderr[-3000:]!r}"
+            f"rc={completed.returncode} diagnostic={completed.stdout[-1200:]!r} "
+            f"err={completed.stderr[-3000:]!r}"
         )
     try:
         report = json.loads(completed.stdout)
@@ -464,14 +469,21 @@ def prove_preexisting_tabs_restored(
             page = b"<!doctype html><title>Disposable Firefox sessionstore proof</title>"
             self.send_response(200)
             self.send_header("Content-Type", "text/html; charset=utf-8")
+            self.send_header("Cache-Control", "no-store")
             self.send_header("Content-Length", str(len(page)))
             self.end_headers()
             self.wfile.write(page)
+
+        def do_POST(self) -> None:  # noqa: N802
+            server.post_paths.append(self.path)
+            self.rfile.read(int(self.headers.get("Content-Length", "0")))
+            self.do_GET()
 
         def log_message(self, _format: str, *_args: object) -> None:
             pass
 
     server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+    server.post_paths = []
     worker = threading.Thread(target=server.serve_forever, daemon=True)
     worker.start()
     proof = r"""
@@ -492,13 +504,12 @@ spec.loader.exec_module(runtime)
 root = Path(root)
 lock = json.loads(Path(lockfile).read_text(encoding="utf-8"))
 config = json.loads((root / "camoufox-config.json").read_text(encoding="utf-8"))
-prefs = root / "user_data" / "user.js"
-with prefs.open("a", encoding="utf-8", newline="\n") as stream:
-    stream.write('\nuser_pref("browser.startup.page", 3);\n')
 urls = [origin + "/prior-first", origin + "/prior-second"]
 
 def enter():
-    manager = Camoufox(**runtime.camoufox_kwargs(lock, root, config))
+    kwargs = runtime.camoufox_kwargs(lock, root, config)
+    assert kwargs["firefox_user_prefs"]["browser.startup.page"] == 3
+    manager = Camoufox(**kwargs)
     with contextlib.redirect_stdout(sys.stderr):
         context = manager.__enter__()
     context.set_offline(True)
@@ -513,6 +524,15 @@ try:
     second = context.new_page()
     second.goto(urls[1], wait_until="domcontentloaded", timeout=15000)
     assert first.url == urls[0] and second.url == urls[1]
+
+    # Put a real form POST in Firefox's saved navigation history.
+    post_page = context.new_page()
+    post_page.goto(origin + "/post-source", wait_until="domcontentloaded", timeout=15000)
+    post_page.evaluate(
+        "() => { const f=document.createElement('form'); f.method='POST'; "
+        "f.action='/post'; document.body.appendChild(f); f.submit(); }"
+    )
+    post_page.wait_for_url(origin + "/post", timeout=15000)
 
     # INVESTIGATE-05: same actual packaged context and origin, no fake
     # browser/cookie backend. Distinct names avoid masking one mechanism by
@@ -582,9 +602,29 @@ try:
             context.wait_for_event("page", timeout=500)
         except PlaywrightTimeoutError:
             pass
+    assert any(
+        page.evaluate("document.documentURI").startswith("about:neterror?e=netOffline&")
+        for page in present.values()
+    ), "Firefox no-store restore had no pre-admission offline error"
+    runtime.admit_navigation(context, None)
+    assert present[urls[0]].title() == "Disposable Firefox sessionstore proof", (
+        "first saved tab did not retry after identity admission"
+    )
+    assert present[urls[1]].title() == "Disposable Firefox sessionstore proof", (
+        "second saved tab did not retry after identity admission"
+    )
     retained = present[urls[0]].evaluate("localStorage.getItem('restore-proof')")
     if retained != "retained":
         raise AssertionError("restored tab lost persistent origin state")
+    # A deliberate user POST after admission must still work normally:
+    # Camouhost must not leave a broad network interception layer installed.
+    user_post = context.new_page()
+    user_post.goto(origin + "/user-post-source", wait_until="domcontentloaded", timeout=15000)
+    user_post.evaluate(
+        "() => { const f=document.createElement('form'); f.method='POST'; "
+        "f.action='/user-post'; document.body.appendChild(f); f.submit(); }"
+    )
+    user_post.wait_for_url(origin + "/user-post", timeout=15000)
     witness = runtime.install_controlled_close_observation(context)
     assert not runtime.controlled_close_candidate(witness)
     present[urls[0]].close()
@@ -617,6 +657,8 @@ try:
     assert urls[0] not in present_third, (
         "intentionally closed tab unexpectedly reopened; classify exact native Quit semantics"
     )
+    runtime.admit_navigation(context, None)
+    assert present_third[urls[1]].title() == "Disposable Firefox sessionstore proof"
     assert present_third[urls[1]].evaluate(
         "localStorage.getItem('restore-proof')"
     ) == "retained", "closing a tab did not preserve its persistent origin storage"
@@ -665,7 +707,14 @@ print(
                     f"rc={result} diagnostic_tail={tail!r}"
                 )
         assert_writer_quiescent(load_runtime(camouhost), root, "restored tabs")
-        print("native_restore_proof stage=passed", flush=True)
+        assert server.post_paths == ["/post", "/user-post"], (
+            "native SessionStore silently replayed POST or blocked intentional form submit; "
+            f"observed_paths={server.post_paths!r}"
+        )
+        print(
+            "native_restore_proof stage=passed safe_get=PASS "
+            "post_replay=0 user_post_after_admission=PASS", flush=True,
+        )
     finally:
         server.shutdown()
         server.server_close()
@@ -1856,6 +1905,18 @@ def main() -> int:
     camouhost = require_regular(args.camouhost, "Camouhost runtime")
     runtime_lock = require_regular(args.runtime_lock, "runtime lock")
     runtime = load_runtime(camouhost)
+
+    # Reuse the shipping Python/Camoufox runtime already materialized by CI;
+    # no second browser or duplicated fixture engine. The normal full proof
+    # remains available unchanged for additional Windows acceptance.
+    if args.native_restore_only:
+        with tempfile.TemporaryDirectory(prefix="ar10-native-restore-only-") as temporary:
+            prove_preexisting_tabs_restored(
+                python, camouhost, runtime_lock, args.headless,
+                Path(temporary) / "restore-tabs",
+            )
+        print("AR10_NATIVE_FIREFOX_SESSIONSTORE=PHYSICAL_PASS", flush=True)
+        return 0
 
     with tempfile.TemporaryDirectory(prefix="ar10-real-camoufox-cleanup-") as temporary:
         root = Path(temporary) / "generation"
