@@ -1,15 +1,13 @@
 #!/usr/bin/env python3
 """Materialize the exact clean-host Windows Camouhost runtime tree.
 
-The browser is never downloaded here. A trusted build workflow must provide the
-patched Camoufox candidate archive plus canonical provenance. This script verifies
-that pair against the repository-owned patch lock before materialization.
+Official Windows Camoufox and Python wheels are SHA-256 pinned by the single
+runtime-lock and materialized with bounded download/extraction and no fork.
 """
 from __future__ import annotations
 
 import argparse
 import hashlib
-import importlib.util
 import json
 import os
 import re
@@ -26,11 +24,9 @@ from typing import Any
 
 ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_LOCK = ROOT / "runtime/camouhost/runtime-lock.json"
-DEFAULT_PATCH_LOCK = ROOT / "runtime/camouhost/camoufox-patch-lock.json"
 DEFAULT_RUNTIME_SOURCE = ROOT / "runtime/camouhost/real.py"
-VERIFY_CANDIDATE = ROOT / "scripts/verify-camoufox-patched-candidate.py"
-MAX_DOWNLOAD_BYTES = 1024 * 1024 * 1024
-MAX_EXTRACTED_BYTES = 2 * 1024 * 1024 * 1024
+MAX_DOWNLOAD_BYTES = 2 * 1024 * 1024 * 1024
+MAX_EXTRACTED_BYTES = 4 * 1024 * 1024 * 1024
 MAX_ARCHIVE_FILES = 500_000
 MAX_PYTHON_PACKAGES = 256
 CHUNK_BYTES = 1024 * 1024
@@ -102,7 +98,7 @@ def validate_python_packages(python: dict[str, Any], components: dict[str, Any])
         seen_names.add(name); seen_files.add(filename.casefold()); ordering.append((name, version, filename)); versions[name] = version
     if ordering != sorted(ordering):
         fail("Windows Python package graph is not deterministically ordered")
-    expected = {"browserforge": components.get("browserforge"), "camoufox": components.get("camoufox_python"), "playwright": components.get("playwright")}
+    expected = {"fpgen": components.get("fpgen"), "camoufox": components.get("camoufox_python"), "playwright": components.get("playwright")}
     if any(versions.get(name) != version for name, version in expected.items()):
         fail("Windows Python package graph disagrees with runtime component lock")
     return packages
@@ -114,7 +110,7 @@ def load_lock(path: Path) -> dict[str, Any]:
     if set(value) != required or value.get("schema_version") != 1 or value.get("runtime_role") != "real_camoufox":
         fail("runtime lock identity/shape is unsupported")
     components = value.get("components")
-    if not isinstance(components, dict) or set(components) != {"browserforge", "camoufox_python", "playwright"}:
+    if not isinstance(components, dict) or set(components) != {"camoufox_python", "fpgen", "playwright"}:
         fail("runtime component lock shape is invalid")
     distribution = value.get("windows_distribution")
     if not isinstance(distribution, dict) or set(distribution) != {"architecture", "browser", "python"} or distribution.get("architecture") != "x86_64":
@@ -242,14 +238,23 @@ def extract_exact_zip(archive: Path, destination: Path) -> None:
     if files == 0: fail("ZIP distribution contains no files")
 
 
-def verify_candidate(archive: Path, provenance: Path, patch_lock: Path, build_source_commit: str) -> dict[str, Any]:
-    spec = importlib.util.spec_from_file_location("candidate_verify", VERIFY_CANDIDATE)
-    if spec is None or spec.loader is None: fail("candidate verifier cannot be loaded")
-    module = importlib.util.module_from_spec(spec); spec.loader.exec_module(module)
-    try:
-        return module.verify(archive, provenance, patch_lock, "windows", build_source_commit)
-    except Exception as error:
-        raise RuntimeBuildError(f"patched browser candidate verification failed: {error}") from error
+def verify_official_archive(archive: Path, lock: dict[str, Any]) -> dict[str, Any]:
+    """Verify exact official release bytes without any browser patch."""
+    browser = lock["windows_distribution"]["browser"]
+    if archive.is_symlink() or not archive.is_file():
+        fail("official Camoufox archive missing/not regular")
+    if not 0 < archive.stat().st_size <= MAX_DOWNLOAD_BYTES:
+        fail("official Camoufox archive exceeds bounded size")
+    if sha256_file(archive) != browser["artifact_sha256"]:
+        fail("official Camoufox SHA-256 mismatch")
+    release = lock["browser"]
+    return {
+        "artifact_sha256": browser["artifact_sha256"],
+        "artifact_url": browser["artifact_url"],
+        "release_commit": release["release_commit"],
+        "repository": release["repository"],
+        "version": release["version"],
+    }
 
 
 def rewrite_embedded_python_path(root: Path) -> None:
@@ -270,6 +275,28 @@ def install_python_components(build_python: Path, lock: dict[str, Any], python_r
         if subprocess.run(command, cwd=ROOT, check=False).returncode != 0: fail("exact locked Python wheel installation failed")
 
 
+
+def pin_official_fpgen_model(python_root: Path) -> None:
+    """Prepare Camoufox's own checksum-pinned fpgen model at build time, never on user Open."""
+    python = python_root / "python.exe"
+    program = (
+        "from camoufox.fpgen_model import ensure_fpgen_model,is_pinned;"
+        "ensure_fpgen_model();"
+        "assert is_pinned(), 'pinned Camoufox fpgen model verification failed'"
+    )
+    result = subprocess.run(
+        [str(python), "-I", "-c", program],
+        cwd=python_root,
+        text=True,
+        capture_output=True,
+        check=False,
+        timeout=90,
+    )
+    if result.returncode != 0:
+        fail(f"official Camoufox fpgen model pre-install failed: exit={result.returncode}")
+
+
+
 def remove_python_caches(root: Path) -> None:
     for path in sorted(root.rglob("__pycache__"), reverse=True):
         if path.is_symlink() or not path.is_dir(): fail("Python cache path is unsafe")
@@ -280,16 +307,31 @@ def remove_python_caches(root: Path) -> None:
 
 
 def verify_runtime_tree(output: Path, lock: dict[str, Any], candidate_provenance: dict[str, Any]) -> dict[str, Any]:
-    required = [output/"python/python.exe", output/"browser/camoufox.exe", output/"camouhost/real.py", output/"camouhost/runtime-lock.json", output/"camouhost/browser-candidate-provenance.json"]
+    required = [output/"python/python.exe", output/"browser/camoufox.exe", output/"camouhost/real.py", output/"camouhost/runtime-lock.json", output/"camouhost/browser-official-provenance.json"]
     for path in required:
         if path.is_symlink() or not path.is_file() or path.stat().st_size == 0: fail(f"materialized runtime file missing/not regular: {path}")
     components = lock["components"]
-    probe = "import importlib.metadata,json,sys;print(json.dumps({'python':'.'.join(map(str,sys.version_info[:3])),'camoufox':importlib.metadata.version('camoufox'),'browserforge':importlib.metadata.version('browserforge'),'playwright':importlib.metadata.version('playwright')},sort_keys=True,separators=(',',':')))"
+    probe = "import importlib.metadata,json,sys;print(json.dumps({'python':'.'.join(map(str,sys.version_info[:3])),'camoufox':importlib.metadata.version('camoufox'),'fpgen':importlib.metadata.version('fpgen'),'playwright':importlib.metadata.version('playwright')},sort_keys=True,separators=(',',':')))"
     completed = subprocess.run([str(output/"python/python.exe"), "-I", "-c", probe], cwd=output, text=True, capture_output=True, check=False)
-    expected = {"python":"3.12.10", "camoufox":components["camoufox_python"], "browserforge":components["browserforge"], "playwright":components["playwright"]}
+    expected = {"python":"3.12.10", "camoufox":components["camoufox_python"], "fpgen":components["fpgen"], "playwright":components["playwright"]}
     try: observed = json.loads(completed.stdout.strip())
     except json.JSONDecodeError as error: raise RuntimeBuildError("embedded Python verification output is invalid") from error
     if completed.returncode != 0 or observed != expected: fail("materialized Python component identity mismatch")
+    model_probe = subprocess.run(
+        [
+            str(output / "python/python.exe"),
+            "-I", "-c",
+            "from camoufox.fpgen_model import is_pinned; "
+            "raise SystemExit(0 if is_pinned() else 1)",
+        ],
+        cwd=output,
+        capture_output=True,
+        text=True,
+        check=False,
+        timeout=30,
+    )
+    if model_probe.returncode != 0:
+        fail("pinned official fpgen model is missing or corrupt")
     inventory=[]; total=0
     for path in sorted(output.rglob("*")):
         if path.is_symlink(): fail("materialized runtime contains symlink")
@@ -301,32 +343,58 @@ def verify_runtime_tree(output: Path, lock: dict[str, Any], candidate_provenance
     return {"schema_version":1,"kind":"CAMOUHOST_WINDOWS_RESOLVED_RUNTIME","components":observed,"browser_candidate_sha256":candidate_provenance["artifact_sha256"],"browser_candidate_provenance_sha256":hashlib.sha256(canonical(candidate_provenance)).hexdigest(),"files":len(inventory),"inventory_sha256":hashlib.sha256(canonical(inventory)).hexdigest(),"total_size_bytes":total}
 
 
-def materialize(*, runtime_lock: Path, patch_lock: Path, runtime_source: Path, browser_candidate: Path, browser_provenance: Path, build_source_commit: str, output: Path, build_python: Path, distribution_cache: Path | None = None) -> None:
+def materialize(
+    *,
+    runtime_lock: Path,
+    runtime_source: Path,
+    output: Path,
+    build_python: Path,
+    distribution_cache: Path | None = None,
+) -> None:
     if os.name != "nt": fail("Windows runtime materialization requires Windows")
     if output.exists() or output.is_symlink(): fail("runtime output must not already exist")
-    if runtime_source.is_symlink() or not runtime_source.is_file(): fail("real Camouhost source missing/not regular")
+    if runtime_source.is_symlink() or not runtime_source.is_file():
+        fail("real Camouhost source missing/not regular")
     build_python = build_python.resolve(strict=True)
     lock = load_lock(runtime_lock)
-    provenance = verify_candidate(browser_candidate, browser_provenance, patch_lock, build_source_commit)
     with tempfile.TemporaryDirectory(prefix="camouhost-windows-build-") as directory:
-        temp=Path(directory); python_archive=temp/"python.zip"
-        python_lock=lock["windows_distribution"]["python"]
-        download_exact(python_lock["artifact_url"], python_lock["artifact_sha256"], python_archive, distribution_cache)
+        temp = Path(directory)
+        python_archive = temp / "python.zip"
+        browser_archive = temp / "official-camoufox.zip"
+        python_lock = lock["windows_distribution"]["python"]
+        browser_lock = lock["windows_distribution"]["browser"]
+        download_exact(
+            browser_lock["artifact_url"],
+            browser_lock["artifact_sha256"],
+            browser_archive,
+            distribution_cache,
+        )
+        provenance = verify_official_archive(browser_archive, lock)
+        download_exact(
+            python_lock["artifact_url"],
+            python_lock["artifact_sha256"],
+            python_archive,
+            distribution_cache,
+        )
         output.mkdir(parents=True, exist_ok=False)
         try:
-            extract_exact_zip(python_archive, output/"python")
-            extract_exact_zip(browser_candidate, output/"browser")
-            rewrite_embedded_python_path(output/"python")
-            install_python_components(build_python, lock, output/"python", distribution_cache)
-            camouhost=output/"camouhost"; camouhost.mkdir()
-            shutil.copyfile(runtime_source, camouhost/"real.py"); shutil.copyfile(runtime_lock, camouhost/"runtime-lock.json")
-            (camouhost/"browser-candidate-provenance.json").write_bytes(canonical(provenance))
+            extract_exact_zip(python_archive, output / "python")
+            extract_exact_zip(browser_archive, output / "browser")
+            rewrite_embedded_python_path(output / "python")
+            install_python_components(build_python, lock, output / "python", distribution_cache)
+            pin_official_fpgen_model(output / "python")
+            camouhost = output / "camouhost"
+            camouhost.mkdir()
+            shutil.copyfile(runtime_source, camouhost / "real.py")
+            shutil.copyfile(runtime_lock, camouhost / "runtime-lock.json")
+            (camouhost / "browser-official-provenance.json").write_bytes(canonical(provenance))
             remove_python_caches(output)
-            resolved=verify_runtime_tree(output, lock, provenance)
-            (camouhost/"resolved-runtime.json").write_bytes(canonical(resolved))
+            resolved = verify_runtime_tree(output, lock, provenance)
+            (camouhost / "resolved-runtime.json").write_bytes(canonical(resolved))
             verify_runtime_tree(output, lock, provenance)
         except BaseException:
-            shutil.rmtree(output, ignore_errors=True); raise
+            shutil.rmtree(output, ignore_errors=True)
+            raise
 
 
 def self_test() -> None:
@@ -366,21 +434,36 @@ def self_test() -> None:
 
 
 def parser() -> argparse.ArgumentParser:
-    result=argparse.ArgumentParser(); commands=result.add_subparsers(dest="command",required=True)
-    build=commands.add_parser("build")
-    build.add_argument("--runtime-lock",type=Path,default=DEFAULT_LOCK); build.add_argument("--patch-lock",type=Path,default=DEFAULT_PATCH_LOCK); build.add_argument("--runtime-source",type=Path,default=DEFAULT_RUNTIME_SOURCE)
-    build.add_argument("--browser-candidate",type=Path,required=True); build.add_argument("--browser-provenance",type=Path,required=True); build.add_argument("--build-source-commit",required=True); build.add_argument("--output",type=Path,required=True); build.add_argument("--build-python",type=Path,required=True); build.add_argument("--distribution-cache",type=Path,default=None)
-    commands.add_parser("self-test"); return result
+    result = argparse.ArgumentParser()
+    commands = result.add_subparsers(dest="command", required=True)
+    build = commands.add_parser("build")
+    build.add_argument("--runtime-lock", type=Path, default=DEFAULT_LOCK)
+    build.add_argument("--runtime-source", type=Path, default=DEFAULT_RUNTIME_SOURCE)
+    build.add_argument("--output", type=Path, required=True)
+    build.add_argument("--build-python", type=Path, required=True)
+    build.add_argument("--distribution-cache", type=Path, default=None)
+    commands.add_parser("self-test")
+    return result
 
 
 def main() -> int:
-    args=parser().parse_args()
+    args = parser().parse_args()
     try:
-        if args.command=="self-test": self_test()
-        else: materialize(runtime_lock=args.runtime_lock,patch_lock=args.patch_lock,runtime_source=args.runtime_source,browser_candidate=args.browser_candidate,browser_provenance=args.browser_provenance,build_source_commit=args.build_source_commit,output=args.output,build_python=args.build_python,distribution_cache=args.distribution_cache)
+        if args.command == "self-test":
+            self_test()
+        else:
+            materialize(
+                runtime_lock=args.runtime_lock,
+                runtime_source=args.runtime_source,
+                output=args.output,
+                build_python=args.build_python,
+                distribution_cache=args.distribution_cache,
+            )
         return 0
-    except (RuntimeBuildError,OSError,subprocess.SubprocessError) as error:
-        print(f"Windows runtime build error: {error}",file=sys.stderr); return 1
+    except (RuntimeBuildError, OSError, subprocess.SubprocessError) as error:
+        print(f"Windows runtime build error: {error}", file=sys.stderr)
+        return 1
 
 
-if __name__=="__main__": raise SystemExit(main())
+if __name__ == "__main__":
+    raise SystemExit(main())

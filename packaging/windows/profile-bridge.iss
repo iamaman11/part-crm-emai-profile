@@ -154,7 +154,7 @@ end;
 
 function SafeDownloadAsset(const Value: String): Boolean;
 begin
-  Result := (Value = 'profile-bridge.zip') or (Value = 'runtime-bundle.tar');
+  Result := (Value = 'profile-bridge.zip') or (Value = 'runtime-bundle.tar.gz');
 end;
 
 function SafeSignedDeliveryPolicyVerdict(const Value: String): Boolean;

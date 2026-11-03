@@ -117,35 +117,24 @@ fn canonical_repository_topology_still_resolves() -> Result<(), Box<dyn std::err
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
     let topology = ReleaseInputTopology::load(&root)?;
 
-    let patch_lock = topology.require("camoufox_patch_lock")?;
+    let runtime_lock = topology.require("camouhost_runtime_lock")?;
     assert_eq!(
-        patch_lock.release_identity_source,
-        "runtime/camouhost/camoufox-patch-lock.json"
+        runtime_lock.release_identity_source,
+        "runtime/camouhost/runtime-lock.json"
     );
-    assert!(patch_lock.consumed_by("runtime_bundle.files"));
-    assert!(patch_lock.consumed_by("release_set.build_provenance"));
-
-    let patch = topology.require("camoufox_webgl_patch")?;
-    assert_eq!(
-        patch.release_identity_source,
-        "runtime/camouhost/camoufox-patches/0001-webgl-checked-arrays.patch"
-    );
-    assert!(patch.consumed_by("runtime_bundle.files"));
-    assert!(patch.consumed_by("release_set.build_provenance"));
+    assert!(runtime_lock.consumed_by("runtime_bundle.files"));
 
     let resolved = topology.resolve(&root)?;
-    assert_eq!(resolved.len(), 23);
-    assert!(resolved.iter().any(|input| {
-        input.input.input_id == "camoufox_patch_lock" && input.sha256.len() == 64
-    }));
-    assert!(resolved.iter().any(|input| {
-        input.input.input_id == "camoufox_webgl_patch" && input.sha256.len() == 64
-    }));
+    assert_eq!(resolved.len(), 19);
+    assert!(
+        resolved
+            .iter()
+            .any(|input| input.input.input_id == "camouhost_runtime_lock"
+                && input.sha256.len() == 64)
+    );
     for input_id in [
         "camouhost_runtime_materializer_policy",
         "camouhost_runtime_packager_policy",
-        "camoufox_candidate_verifier_policy",
-        "camoufox_webgl_patch_check_policy",
     ] {
         assert!(
             resolved

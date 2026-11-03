@@ -479,20 +479,27 @@ def load_runtime_lock() -> tuple[dict[str, Any], str]:
 def verify_python_components(lock: dict[str, Any]) -> None:
     components = lock.get("components")
     if not isinstance(components, dict) or set(components) != {
-        "browserforge",
         "camoufox_python",
+        "fpgen",
         "playwright",
     }:
         raise RuntimeContractError("runtime component lock is invalid")
     distributions = {
-        "browserforge": "browserforge",
         "camoufox_python": "camoufox",
+        "fpgen": "fpgen",
         "playwright": "playwright",
     }
     for key, distribution in distributions.items():
         expected = components.get(key)
         if not isinstance(expected, str) or importlib.metadata.version(distribution) != expected:
             raise RuntimeContractError("installed runtime component does not match lock")
+
+    # The pinned upstream model must be present before Camoufox can import fpgen.
+    # No first-launch network fetch or hidden refresh is allowed.
+    from camoufox.fpgen_model import is_pinned
+
+    if not is_pinned():
+        raise RuntimeContractError("official Camoufox fpgen model missing or corrupt")
 
 
 def resolve_headless_mode() -> bool | str:
@@ -553,11 +560,8 @@ def stable_probe_digest(page: Any) -> str:
     return sha256_bytes(canonical_json(probe))
 
 
-# The pinned Camoufox launcher samples a coherent GPU record, extracts its
-# webGl2Enabled bit into Firefox's 'webgl.enable-webgl2' preference, and omits
-# WebGL2 maps for GPUs where that context is disabled. We must preserve that
-# original choice when launching the same generation again; an absent map is
-# never an invitation to invent WebGL2 fingerprint values.
+# Only check that persisted Camoufox configuration is structurally coherent.
+# Do not force browser WebGL capabilities from these fields.
 WEBGL_REQUIRED_KEYS = (
     "webGl:parameters",
     "webGl:shaderPrecisionFormats",
@@ -586,14 +590,6 @@ def generation_webgl2_enabled(config: dict[str, Any]) -> bool:
     if any(key.startswith("webGl2:") for key in config):
         raise RuntimeContractError("materialized disabled WebGL2 has stray spoofing values")
     return False
-
-
-def verify_generated_webgl2_choice(config: dict[str, Any], options: dict[str, Any]) -> None:
-    prefs = options.get("firefox_user_prefs")
-    if not isinstance(prefs, dict) or type(prefs.get("webgl.enable-webgl2")) is not bool:
-        raise RuntimeContractError("Camoufox did not publish WebGL2 enablement")
-    if generation_webgl2_enabled(config) != prefs["webgl.enable-webgl2"]:
-        raise RuntimeContractError("Camoufox generated WebGL2 maps disagree with its Firefox preference")
 
 
 def browser_visible_probe_request(config: dict[str, Any]) -> dict[str, Any]:
@@ -679,115 +675,6 @@ def extract_camoufox_config(options: dict[str, Any]) -> dict[str, Any]:
     return value
 
 
-def preserve_generated_integer_projection(
-    config: dict[str, Any],
-    key: str,
-    value: Any,
-    minimum: int,
-    maximum: int,
-) -> None:
-    if (
-        isinstance(value, bool)
-        or not isinstance(value, int)
-        or not minimum <= value <= maximum
-    ):
-        raise RuntimeContractError(f"generated {key} identity is invalid")
-    configured = config.get(key)
-    if configured is not None and configured != value:
-        raise RuntimeContractError(f"materialized {key} identity drifted")
-    config[key] = value
-
-
-def preserve_generated_milliscale_projection(
-    config: dict[str, Any],
-    key: str,
-    value: Any,
-    minimum_milli: int,
-    maximum_milli: int,
-) -> None:
-    if isinstance(value, bool) or not isinstance(value, (int, float)):
-        raise RuntimeContractError(f"generated {key} identity is invalid")
-    numeric = float(value)
-    milli = numeric * 1000.0
-    if (
-        not minimum_milli <= milli <= maximum_milli
-        or abs(round(milli) - milli) > 1e-9
-    ):
-        raise RuntimeContractError(f"generated {key} identity is invalid")
-    configured = config.get(key)
-    if configured is not None:
-        if isinstance(configured, bool) or not isinstance(configured, (int, float)):
-            raise RuntimeContractError(f"materialized {key} identity drifted")
-        if float(configured) != numeric:
-            raise RuntimeContractError(f"materialized {key} identity drifted")
-    config[key] = value
-
-
-def preserve_generated_locale_projection(config: dict[str, Any], navigator: Any) -> None:
-    language = getattr(navigator, "language", None)
-    languages = getattr(navigator, "languages", None)
-    if not isinstance(language, str) or not language or "\n" in language or "\r" in language:
-        raise RuntimeContractError("generated navigator.language identity is invalid")
-    if (
-        not isinstance(languages, list)
-        or not languages
-        or any(
-            not isinstance(value, str) or not value or "\n" in value or "\r" in value
-            for value in languages
-        )
-        or languages[0] != language
-    ):
-        raise RuntimeContractError("generated navigator.languages identity is invalid")
-    for key, value in (
-        ("navigator.language", language),
-        ("navigator.languages", languages),
-    ):
-        configured = config.get(key)
-        if configured is not None and configured != value:
-            raise RuntimeContractError(f"materialized {key} identity drifted")
-        config[key] = copy.deepcopy(value)
-
-
-def preserve_generated_browserforge_projection(config: dict[str, Any], fingerprint: Any) -> None:
-    """Close known Camoufox 0.5.5 BrowserForge conversion gaps for domain-owned identity."""
-    preserve_generated_integer_projection(
-        config,
-        "navigator.maxTouchPoints",
-        fingerprint.navigator.maxTouchPoints,
-        0,
-        64,
-    )
-    preserve_generated_integer_projection(
-        config,
-        "screen.availLeft",
-        fingerprint.screen.availLeft,
-        -(2**31),
-        2**31 - 1,
-    )
-    preserve_generated_integer_projection(
-        config,
-        "screen.availTop",
-        fingerprint.screen.availTop,
-        -(2**31),
-        2**31 - 1,
-    )
-    preserve_generated_milliscale_projection(
-        config,
-        "window.devicePixelRatio",
-        fingerprint.screen.devicePixelRatio,
-        250,
-        8_000,
-    )
-    preserve_generated_locale_projection(config, fingerprint.navigator)
-    voices = config.get("voices")
-    if not isinstance(voices, list) or not voices:
-        raise RuntimeContractError("generated speech voice identity is invalid")
-    block_host_voices = config.get("voices:blockIfNotDefined")
-    if block_host_voices not in (None, True):
-        raise RuntimeContractError("materialized speech voice isolation drifted")
-    config["voices:blockIfNotDefined"] = True
-
-
 def locked_firefox_major(lock: dict[str, Any]) -> int:
     """Project the managed Firefox major only from the immutable runtime lock."""
     browser = lock.get("browser")
@@ -839,17 +726,6 @@ def default_addon_exclusions() -> list[Any]:
     return [DefaultAddons.UBO]
 
 
-def touch_runtime_preferences(config: dict[str, Any]) -> dict[str, int]:
-    """Project generation-owned touch identity into the pinned Firefox compatibility layer."""
-    value = config.get("navigator.maxTouchPoints")
-    if isinstance(value, bool) or not isinstance(value, int) or not 0 <= value <= 64:
-        raise RuntimeContractError("materialized navigator.maxTouchPoints identity is invalid")
-    return {
-        "dom.maxtouchpoints.testing.value": value,
-        "dom.w3c_touch_events.enabled": 1 if value > 0 else 0,
-    }
-
-
 def accessibility_preferences(platform_name: str) -> dict[str, int]:
     """Keep standard OS accessibility available; no remote debugging, no page inspection."""
     return {"accessibility.force_disabled": 0} if platform_name == "nt" else {}
@@ -871,7 +747,7 @@ def camoufox_kwargs(
     root: Path,
     config: dict[str, Any],
 ) -> dict[str, Any]:
-    enabled_webgl2 = generation_webgl2_enabled(config)
+    # WebGL and GPU capabilities belong to Camoufox/Firefox, not CRM.
     user_data_dir = root / USER_DATA_NAME
     if user_data_dir.is_symlink():
         raise RuntimeContractError("browser user-data directory may not be a symlink")
@@ -885,15 +761,12 @@ def camoufox_kwargs(
         "ff_version": locked_firefox_major(lock),
         "firefox_user_prefs": {
             "privacy.baselineFingerprintingProtection": False,
-            "webgl.disabled": False,
-            "webgl.enable-webgl2": enabled_webgl2,
             # Keep native Windows accessibility APIs available to standard GUI automation.
             # This does not enable remote debugging or inspect page content.
             **accessibility_preferences(os.name),
             # Firefox offline mode can allow localhost by default. Block it
             # before restored pages load; admission later releases offline mode.
             "network.disable-localhost-when-offline": True,
-            **touch_runtime_preferences(config),
         },
         "headless": resolve_headless_mode(),
         # A restored Firefox session can open only chrome/internal tabs first.
@@ -1387,16 +1260,11 @@ def materialize_candidate_identity(root: Path) -> dict[str, str]:
             fingerprint=fingerprint,
             headless=headless_mode,
             i_know_what_im_doing=True,
-            locale=fingerprint.navigator.languages,
             os="windows",
         )
     config = extract_camoufox_config(options)
-    # Camoufox 0.5.5 intentionally leaves locale/DPR outside its BrowserForge mapping, ignores
-    # falsy BrowserForge values, and normalizes negative screen offsets. Preserve only those known
-    # conversion gaps from this exact generated fingerprint; never substitute host-derived facts.
-    # The real-browser pre-navigation probe below proves that the pinned browser reproduces them.
-    preserve_generated_browserforge_projection(config, fingerprint)
-    verify_generated_webgl2_choice(config, options)
+    # Persist the canonical Camoufox configuration once; never draw again on Reopen.
+    generation_webgl2_enabled(config)
     config_bytes = canonical_json(config)
     config_path.write_bytes(config_bytes)
     config_sha256 = sha256_bytes(config_bytes)

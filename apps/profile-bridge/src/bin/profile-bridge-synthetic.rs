@@ -47,6 +47,7 @@ use runtime_bundle_domain::{
 use session_domain::ProfileLease;
 use std::env;
 use std::fmt;
+use std::fs;
 use std::future::Future;
 use std::path::PathBuf;
 use std::process::ExitCode;
@@ -85,6 +86,13 @@ where
             &fixture.generation_id,
         )
         .map_err(|_| SyntheticOperatorError::MaterializationGeneration)?;
+    // The synthetic launcher reuses a pinned identity rather than generating one.
+    // Its workspace must satisfy the same pre-spawn config-presence gate.
+    fs::write(
+        workspace.path().join("camoufox-config.json"),
+        b"{\"navigator:language\":\"en-US\"}\n",
+    )
+    .map_err(|_| SyntheticOperatorError::BrowserPreflightFixture)?;
 
     let runtime_bundles = SyntheticRuntimeBundles::new()?;
     let browser_preflight = synthetic_browser_preflight(&workspace, &fixture, &runtime_bundles)?;

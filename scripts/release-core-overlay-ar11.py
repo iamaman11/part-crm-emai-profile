@@ -93,7 +93,7 @@ def verified_runtime_inventory(
     if (
         not isinstance(runtime, dict)
         or runtime.get("component_id") != "runtime_bundle"
-        or runtime.get("artifact_path") != "components/runtime-bundle.tar"
+        or runtime.get("artifact_path") != "components/runtime-bundle.tar.gz"
         or not isinstance(runtime.get("component_manifest_sha256"), str)
         or SHA256_RE.fullmatch(runtime["component_manifest_sha256"]) is None
         or not isinstance(runtime.get("release_id"), str)
@@ -484,7 +484,7 @@ def self_test() -> None:
         runtime_release_set.write_text(json.dumps({
             "schema_version": 3, "release_set_id": release_set_id,
             "components": {"runtime_bundle": {
-                "component_id": "runtime_bundle", "artifact_path": "components/runtime-bundle.tar",
+                "component_id": "runtime_bundle", "artifact_path": "components/runtime-bundle.tar.gz",
                 "component_manifest_sha256": hashlib.sha256(runtime_bytes).hexdigest(),
                 "release_id": runtime_release_id,
             }},
@@ -506,7 +506,7 @@ def self_test() -> None:
         previous_release_set.write_text(json.dumps({
             "schema_version": 3, "release_set_id": previous_release_id,
             "components": {"runtime_bundle": {
-                "component_id": "runtime_bundle", "artifact_path": "components/runtime-bundle.tar",
+                "component_id": "runtime_bundle", "artifact_path": "components/runtime-bundle.tar.gz",
                 "component_manifest_sha256": hashlib.sha256(previous_bytes).hexdigest(),
                 "release_id": previous_component_id,
             }},

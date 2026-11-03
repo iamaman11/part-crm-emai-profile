@@ -45,7 +45,7 @@ require_v3_core_inventory() {
   for path in \
     components/control-plane.tar \
     components/secret-resolver.tar \
-    components/runtime-bundle.tar \
+    components/runtime-bundle.tar.gz \
     components/profile-bridge.zip; do
     inventory_has "$document" "$path" || fail "schema v3 inventory missing required core artifact: $path"
   done
@@ -106,7 +106,7 @@ materialize() {
 
   local common=(control-plane.tar secret-resolver.tar profile-bridge.zip)
   if [ "$runtime_external" -eq 0 ]; then
-    common+=(runtime-bundle.tar)
+    common+=(runtime-bundle.tar.gz)
   fi
   local expected=(release-set.json)
 
@@ -196,15 +196,15 @@ materialize() {
     command -v gh >/dev/null 2>&1 || fail "GitHub CLI is required to hydrate exact runtime component"
     local runtime_download
     runtime_download="$(mktemp -d)"
-    if ! gh release download "$runtime_release_id"       --repo "${GITHUB_REPOSITORY:-iamaman11/part-crm-emai-profile}"       --dir "$runtime_download"       --pattern runtime-bundle.tar; then
+    if ! gh release download "$runtime_release_id"       --repo "${GITHUB_REPOSITORY:-iamaman11/part-crm-emai-profile}"       --dir "$runtime_download"       --pattern runtime-bundle.tar.gz; then
       rm -rf "$runtime_download"
       fail "exact runtime component download failed: $runtime_release_id"
     fi
-    require_regular_file "$runtime_download/runtime-bundle.tar"
-    cp "$runtime_download/runtime-bundle.tar" "$release_root/components/runtime-bundle.tar"
+    require_regular_file "$runtime_download/runtime-bundle.tar.gz"
+    cp "$runtime_download/runtime-bundle.tar.gz" "$release_root/components/runtime-bundle.tar.gz"
     rm -rf "$runtime_download"
   else
-    cp "$asset_root/runtime-bundle.tar" "$release_root/components/runtime-bundle.tar"
+    cp "$asset_root/runtime-bundle.tar.gz" "$release_root/components/runtime-bundle.tar.gz"
   fi
   cp "$asset_root/profile-bridge.zip" "$release_root/components/profile-bridge.zip"
 
@@ -236,14 +236,14 @@ self_test() {
     mkdir -p "$dir"
     : > "$dir/control-plane.tar"
     : > "$dir/secret-resolver.tar"
-    : > "$dir/runtime-bundle.tar"
+    : > "$dir/runtime-bundle.tar.gz"
     : > "$dir/profile-bridge.zip"
 
     if [ "$schema" = 3 ]; then
       local inventory='[
         {"path":"components/control-plane.tar","sha256":"cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"},
         {"path":"components/secret-resolver.tar","sha256":"dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"},
-        {"path":"components/runtime-bundle.tar","sha256":"eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"},
+        {"path":"components/runtime-bundle.tar.gz","sha256":"eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"},
         {"path":"components/profile-bridge.zip","sha256":"ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"}
       ]'
       if [ "$profile" = capability ] || [ "$profile" = windows ]; then
@@ -290,7 +290,7 @@ self_test() {
   cp -R "$root/v3-current" "$root/v3-external"
   jq --arg runtime "$external_runtime" '.components.runtime_bundle.release_id = $runtime'     "$root/v3-external/release-set.json" > "$root/v3-external/release-set.tmp"
   mv "$root/v3-external/release-set.tmp" "$root/v3-external/release-set.json"
-  rm "$root/v3-external/runtime-bundle.tar"
+  rm "$root/v3-external/runtime-bundle.tar.gz"
   printf 'exact-runtime-component' > "$root/runtime-component.tar"
   mkdir -p "$root/fake-bin"
   cat > "$root/fake-bin/gh" <<'EOF'
@@ -316,11 +316,11 @@ while [ "$#" -gt 0 ]; do
 done
 test -n "$destination"
 mkdir -p "$destination"
-cp "$AR11_RUNTIME_COMPONENT_FIXTURE" "$destination/runtime-bundle.tar"
+cp "$AR11_RUNTIME_COMPONENT_FIXTURE" "$destination/runtime-bundle.tar.gz"
 EOF
   chmod +x "$root/fake-bin/gh"
   PATH="$root/fake-bin:$PATH"     AR11_RUNTIME_COMPONENT_FIXTURE="$root/runtime-component.tar"     materialize current-v3 "$v3" "$root/v3-external" "$root/v3-external-root"
-  cmp --silent "$root/runtime-component.tar" "$root/v3-external-root/components/runtime-bundle.tar"
+  cmp --silent "$root/runtime-component.tar" "$root/v3-external-root/components/runtime-bundle.tar.gz"
 
   make_assets 3 "$v3" "$root/v3-capability" capability
   materialize known-good-v2-v3 "$v3" "$root/v3-capability" "$root/v3-capability-root"

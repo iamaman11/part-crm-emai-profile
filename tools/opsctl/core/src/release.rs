@@ -611,7 +611,7 @@ mod tests {
         );
         components.insert(
             "runtime_bundle".to_owned(),
-            component("runtime_bundle", "components/runtime-bundle.tar"),
+            component("runtime_bundle", "components/runtime-bundle.tar.gz"),
         );
         ReleaseSetV3Parts {
             source: ReleaseSetSource {
@@ -655,7 +655,7 @@ mod tests {
                 release_architecture_sha256: SHA.to_owned(),
             },
             artifact_inventory: vec![
-                artifact("components/runtime-bundle.tar"),
+                artifact("components/runtime-bundle.tar.gz"),
                 artifact("components/control-plane.tar"),
                 artifact("components/secret-resolver.tar"),
             ],
@@ -675,7 +675,7 @@ mod tests {
                 .collect::<Vec<_>>(),
             vec![
                 "components/control-plane.tar",
-                "components/runtime-bundle.tar",
+                "components/runtime-bundle.tar.gz",
                 "components/secret-resolver.tar",
             ]
         );

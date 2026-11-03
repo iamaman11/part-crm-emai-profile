@@ -229,7 +229,7 @@ jobs:
             --release-root "$control_root" \
             --deploy-manifest "$RUNNER_TEMP/deploy-manifest.json" \
             --runtime-release-set "$release_root/release-set.json" \
-            --runtime-archive "$release_root/components/runtime-bundle.tar" \
+            --runtime-archive "$release_root/components/runtime-bundle.tar.gz" \
             --environment staging \
             --output "$RUNNER_TEMP/wrangler.staging.json"
           {
@@ -349,9 +349,9 @@ jobs:
             --release-root "$(dirname "$CONTROL_RELEASE_MANIFEST")" \
             --deploy-manifest "$DEPLOY_MANIFEST" \
             --runtime-release-set "$TARGET_RELEASE_MANIFEST" \
-            --runtime-archive "$TARGET_RELEASE_ROOT/components/runtime-bundle.tar" \
+            --runtime-archive "$TARGET_RELEASE_ROOT/components/runtime-bundle.tar.gz" \
             --previous-runtime-release-set "$current_release_manifest" \
-            --previous-runtime-archive "$release_root/components/runtime-bundle.tar" \
+            --previous-runtime-archive "$release_root/components/runtime-bundle.tar.gz" \
             --expected-previous-release-set-id "$current_id" \
             --environment staging --output "$dual_config"
           echo "WRANGLER_CONFIG=$dual_config" >> "$GITHUB_ENV"
@@ -975,7 +975,7 @@ jobs:
             --source-config "$CONTROL_RELEASE_ROOT/deploy/cloudflare/wrangler.jsonc" \
             --release-root "$CONTROL_RELEASE_ROOT" --deploy-manifest "$RUNNER_TEMP/deploy-manifest.json" \
             --runtime-release-set "$RUNNER_TEMP/mutation-release-set/release-set.json" \
-            --runtime-archive "$RUNNER_TEMP/mutation-release-set/components/runtime-bundle.tar" \
+            --runtime-archive "$RUNNER_TEMP/mutation-release-set/components/runtime-bundle.tar.gz" \
             --ready-policy-evidence "$RUNNER_TEMP/ready/ready-to-mutate.json" \
             --expected-previous-release-set-id "$EXPECTED_CURRENT" \
             --environment staging --output "$RUNNER_TEMP/wrangler.staging.json"
@@ -1212,7 +1212,7 @@ jobs:
             --source-config "$(dirname "$manifest")/deploy/cloudflare/wrangler.jsonc" \
             --release-root "$(dirname "$manifest")" --deploy-manifest "$RUNNER_TEMP/deploy-manifest.json" \
             --runtime-release-set "$release_root/release-set.json" \
-            --runtime-archive "$release_root/components/runtime-bundle.tar" \
+            --runtime-archive "$release_root/components/runtime-bundle.tar.gz" \
             --ready-policy-evidence "$ready_root/ready-to-mutate.json" \
             --expected-previous-release-set-id "$previous_id" \
             --environment staging --output "$RUNNER_TEMP/wrangler.staging.json"

@@ -721,7 +721,7 @@ mod tests {
             "components":{
                 "control_plane":component("cp","components/control-plane.tar"),
                 "secret_resolver":component("rs","components/secret-resolver.tar"),
-                "runtime_bundle":component("rt","components/runtime-bundle.tar")
+                "runtime_bundle":component("rt","components/runtime-bundle.tar.gz")
             },
             "contracts":{"files":[{"path":"openapi/v1/openapi.json","sha256":SHA,"size_bytes":1}],"sha256":SHA},
             "protocols":{"public_api_contract_sha256":SHA,"camouhost_ipc_version":1,"profile_bridge_protocol_version":1,"resolver_protocol":"mailbox-secret-resolver-v1"},
@@ -732,7 +732,7 @@ mod tests {
             "artifact_inventory":[
                 {"path":"components/control-plane.tar","sha256":SHA,"size_bytes":1,"kind":"component"},
                 {"path":"components/secret-resolver.tar","sha256":SHA,"size_bytes":1,"kind":"component"},
-                {"path":"components/runtime-bundle.tar","sha256":SHA,"size_bytes":1,"kind":"component"}
+                {"path":"components/runtime-bundle.tar.gz","sha256":SHA,"size_bytes":1,"kind":"component"}
             ]
         });
         let mut identity = value.clone();

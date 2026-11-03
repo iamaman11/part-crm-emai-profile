@@ -185,7 +185,7 @@ mod tests {
             "runtime_bundle".to_owned(),
             component(
                 "runtime_bundle",
-                "components/runtime-bundle.tar",
+                "components/runtime-bundle.tar.gz",
                 &runtime_sha,
                 13,
             ),
@@ -250,7 +250,7 @@ mod tests {
                     kind: "component".to_owned(),
                 },
                 ArtifactIdentityDto {
-                    path: "components/runtime-bundle.tar".to_owned(),
+                    path: "components/runtime-bundle.tar.gz".to_owned(),
                     sha256: runtime_sha,
                     size_bytes: 13,
                     kind: "component".to_owned(),

@@ -26,7 +26,7 @@ use std::time::{Duration, Instant};
 const RELEASE_SET_PREFIX: &str = "release-set-v3-sha256-";
 const RUNTIME_BUNDLE_PREFIX: &str = "runtime-bundle-v3-sha256-";
 const PROFILE_BRIDGE_ASSET: &str = "profile-bridge.zip";
-const RUNTIME_BUNDLE_ASSET: &str = "runtime-bundle.tar";
+const RUNTIME_BUNDLE_ASSET: &str = "runtime-bundle.tar.gz";
 #[cfg(any(test, windows))]
 const RELEASE_BASE_URL: &str =
     "https://github.com/iamaman11/part-crm-emai-profile/releases/download";

@@ -11,9 +11,11 @@ from __future__ import annotations
 import argparse
 import hashlib
 import io
+import os
 import json
 import re
 import tarfile
+import gzip
 import tempfile
 from pathlib import Path, PurePosixPath
 from typing import Any, BinaryIO
@@ -24,7 +26,7 @@ GITATTRIBUTES = ROOT / ".gitattributes"
 RUNTIME_CONSUMER = "runtime_bundle.files"
 RELEASE_PREFIX = "runtime-bundle-v3-sha256-"
 MAX_RUNTIME_FILES = 500_000
-MAX_RUNTIME_BYTES = 2 * 1024 * 1024 * 1024
+MAX_RUNTIME_BYTES = 4 * 1024 * 1024 * 1024
 REQUIRED_RUNTIME_PATHS = {
     "browser/camoufox.exe",
     "camouhost/real.py",
@@ -368,16 +370,81 @@ def deterministic_archive(
     if archive_path.exists():
         fail(f"runtime package archive already exists: {archive_path}")
     archive_path.parent.mkdir(parents=True, exist_ok=True)
-    with tarfile.open(archive_path, "w", format=tarfile.PAX_FORMAT) as archive:
-        ordered = [("runtime-manifest.json", None), *files]
-        for name, path in sorted(ordered, key=lambda item: item[0]):
-            if path is None:
-                archive.addfile(
-                    deterministic_member(name, len(manifest_bytes)),
-                    fileobj=io.BytesIO(manifest_bytes),
-                )
-            else:
-                add_streamed_file(archive, name, path)
+    # Stream one deterministic gzip member over the same canonical PAX TAR.
+    # Windows delivery expands it into bounded temporary storage, then invokes
+    # the existing PAX header/path/range validator unchanged.
+    with archive_path.open("xb") as output:
+        with gzip.GzipFile(
+            filename="", mode="wb", fileobj=output, mtime=0, compresslevel=1
+        ) as compressed:
+            with tarfile.open(
+                fileobj=compressed, mode="w|", format=tarfile.PAX_FORMAT
+            ) as archive:
+                ordered = [("runtime-manifest.json", None), *files]
+                for name, path in sorted(ordered, key=lambda item: item[0]):
+                    if path is None:
+                        archive.addfile(
+                            deterministic_member(name, len(manifest_bytes)),
+                            fileobj=io.BytesIO(manifest_bytes),
+                        )
+                    else:
+                        add_streamed_file(archive, name, path)
+
+
+
+def verify_staged_archive(
+    archive_path: Path,
+    manifest_bytes: bytes,
+) -> None:
+    """Read every archived byte, enforce inventory/digests and reach gzip CRC/EOF."""
+    manifest = json.loads(manifest_bytes)
+    entries = {
+        row["path"]: (row["size_bytes"], row["sha256"])
+        for row in manifest["files"]["files"]
+    }
+    entries["runtime-manifest.json"] = (
+        len(manifest_bytes), sha256_bytes(manifest_bytes)
+    )
+    try:
+        with gzip.open(archive_path, "rb") as decoded:
+            with tarfile.open(fileobj=decoded, mode="r|") as archive:
+                for name, (size, digest) in sorted(entries.items()):
+                    member = archive.next()
+                    if (
+                        member is None
+                        or member.name != name
+                        or not member.isfile()
+                        or member.size != size
+                        or member.uid != 0
+                        or member.gid != 0
+                        or member.mtime != 0
+                        or member.mode != 0o644
+                        or member.uname != ""
+                        or member.gname != ""
+                    ):
+                        fail(f"runtime staged archive entry mismatch: {name}")
+                    source = archive.extractfile(member)
+                    if source is None:
+                        fail(f"runtime staged archive entry unreadable: {name}")
+                    observed = hashlib.sha256()
+                    remaining = size
+                    while remaining:
+                        block = source.read(min(1024 * 1024, remaining))
+                        if not block:
+                            fail(f"runtime staged archive entry truncated: {name}")
+                        observed.update(block)
+                        remaining -= len(block)
+                    if observed.hexdigest() != digest:
+                        fail(f"runtime staged archive digest mismatch: {name}")
+                if archive.next() is not None:
+                    fail("runtime staged archive has unexpected trailing entries")
+            # TAR ends before gzip EOF; read through the gzip footer to prove CRC.
+            while decoded.read(1024 * 1024):
+                pass
+    except (OSError, EOFError, tarfile.TarError) as error:
+        raise RuntimePackageError(
+            f"runtime staged archive gzip/TAR validation failed: {error}"
+        ) from error
 
 
 def package_runtime(
@@ -386,14 +453,50 @@ def package_runtime(
     archive_path: Path,
     manifest_path: Path,
 ) -> None:
-    if manifest_path.exists():
-        fail(f"runtime package manifest already exists: {manifest_path}")
+    if archive_path.exists() or manifest_path.exists():
+        fail("runtime package output already exists; no accepted artifact may be overwritten")
     source_files = runtime_source_files()
     files = runtime_tree_files(runtime_root)
     _, manifest_bytes = runtime_manifest(source_files, files)
-    deterministic_archive(archive_path, manifest_bytes, files)
+    archive_path.parent.mkdir(parents=True, exist_ok=True)
     manifest_path.parent.mkdir(parents=True, exist_ok=True)
-    manifest_path.write_bytes(manifest_bytes)
+
+    # Stage on the destination filesystems. The final archive name becomes
+    # visible only after the entire gzip member and its manifest are verified.
+    with tempfile.TemporaryDirectory(
+        prefix=".camouhost-package-", dir=archive_path.parent
+    ) as archive_stage, tempfile.TemporaryDirectory(
+        prefix=".camouhost-manifest-", dir=manifest_path.parent
+    ) as manifest_stage:
+        staged_archive = Path(archive_stage) / "runtime.tar.gz"
+        staged_manifest = Path(manifest_stage) / "runtime-manifest.json"
+        deterministic_archive(staged_archive, manifest_bytes, files)
+        with staged_archive.open("rb+") as output:
+            os.fsync(output.fileno())
+        if staged_archive.stat().st_size >= 2 * 1024 * 1024 * 1024:
+            fail("compressed runtime archive exceeds 2 GiB release asset bound")
+        verify_staged_archive(staged_archive, manifest_bytes)
+        with staged_manifest.open("xb") as output:
+            output.write(manifest_bytes)
+            output.flush()
+            os.fsync(output.fileno())
+
+        # Hard-link publication is atomic on NTFS/POSIX and refuses to replace
+        # an existing accepted artifact. Publish the archive LAST.
+        try:
+            os.link(staged_manifest, manifest_path)
+        except OSError as error:
+            raise RuntimePackageError(
+                f"runtime manifest atomic publication failed: {error}"
+            ) from error
+        try:
+            os.link(staged_archive, archive_path)
+        except OSError as error:
+            # This manifest was created exclusively by this call.
+            manifest_path.unlink()
+            raise RuntimePackageError(
+                f"runtime archive atomic publication failed: {error}"
+            ) from error
 
 
 def write_fixture_runtime(root: Path) -> None:
@@ -415,7 +518,7 @@ def assert_archive(
     archive_path: Path,
     expected_files: list[str],
 ) -> None:
-    with tarfile.open(archive_path, "r:") as archive:
+    with tarfile.open(archive_path, "r:gz") as archive:
         members = archive.getmembers()
         expected_names = sorted(["runtime-manifest.json", *expected_files])
         if [member.name for member in members] != expected_names:
@@ -442,9 +545,9 @@ def self_test() -> None:
         runtime_root = temp / "runtime"
         write_fixture_runtime(runtime_root)
         expected_files = [relative for relative, _ in runtime_tree_files(runtime_root)]
-        first_archive = temp / "first.tar"
+        first_archive = temp / "first.tar.gz"
         first_manifest = temp / "first.json"
-        second_archive = temp / "second.tar"
+        second_archive = temp / "second.tar.gz"
         second_manifest = temp / "second.json"
         package_runtime(
             runtime_root=runtime_root,
@@ -477,6 +580,29 @@ def self_test() -> None:
         if verify_manifest_file(first_manifest)["release_id"] != release_id:
             fail("runtime manifest current-input verification self-test failed")
         assert_archive(first_archive, expected_files)
+        # Truncated gzip must never be eligible for final-name publication.
+        corrupted = temp / "truncated.tar.gz"
+        corrupted.write_bytes(first_archive.read_bytes()[:-8])
+        try:
+            verify_staged_archive(corrupted, first_manifest.read_bytes())
+        except RuntimePackageError:
+            pass
+        else:
+            fail("truncated gzip negative self-test unexpectedly passed")
+        # A previously published archive/manifest must not be overwritten.
+        original_archive = first_archive.read_bytes()
+        try:
+            package_runtime(
+                runtime_root=runtime_root,
+                archive_path=first_archive,
+                manifest_path=first_manifest,
+            )
+        except RuntimePackageError:
+            pass
+        else:
+            fail("existing-output negative self-test unexpectedly passed")
+        if first_archive.read_bytes() != original_archive:
+            fail("existing accepted runtime archive changed")
 
         observed = set()
         register_casefold_unique_path("alias.txt", observed)

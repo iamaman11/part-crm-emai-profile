@@ -29,7 +29,9 @@ const SHIPPING_COMPONENT_RELEASE_PREFIX: &str = "runtime-bundle-v3-sha256-";
 const MAX_RUNTIME_MANIFEST_BYTES: u64 = 64 * 1024 * 1024;
 const MAX_RUNTIME_FILE_BYTES: u64 = 2 * 1024 * 1024 * 1024;
 const MAX_RUNTIME_FILES: usize = 500_000;
-const MAX_RUNTIME_BYTES: u64 = 2 * 1024 * 1024 * 1024;
+// The official 158 Windows runtime physically exceeds 2 GiB; match the bounded
+// 4 GiB existing materializer/package limits without dropping per-file checks.
+const MAX_RUNTIME_BYTES: u64 = 4 * 1024 * 1024 * 1024;
 const MAX_SOURCE_PATH_BYTES: usize = 1024;
 const FILE_ATTRIBUTE_REPARSE_POINT: u32 = 0x0400;
 const LOWER_HEX: &[u8; 16] = b"0123456789abcdef";

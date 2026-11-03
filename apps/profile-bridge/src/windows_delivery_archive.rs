@@ -3,6 +3,7 @@
 use crate::windows_delivery_staging::{
     DeliveryArchiveEntry, DeliveryArchiveEntryKind, DeliveryArchiveReader, DeliveryComponentKind,
 };
+use flate2::read::GzDecoder;
 use sha2::{Digest, Sha256};
 use std::fmt;
 use std::fs::{self, File, Metadata};
@@ -26,6 +27,7 @@ const TAR_REGULAR_FILE: u8 = b'0';
 const TAR_DIRECTORY: u8 = b'5';
 const MAX_ARCHIVE_ENTRIES: usize = 500_000;
 const MAX_ARCHIVE_BYTES: u64 = 8 * 1024 * 1024 * 1024;
+const MAX_EXPANDED_RUNTIME_TAR_BYTES: u64 = 4 * 1024 * 1024 * 1024;
 const MAX_PAX_HEADER_BYTES: u64 = 1024 * 1024;
 const FILE_ATTRIBUTE_REPARSE_POINT: u32 = 0x0400;
 const LOWER_HEX: &[u8; 16] = b"0123456789abcdef";
@@ -63,6 +65,9 @@ impl DeliveryArchiveReader for WindowsDeliveryArchiveReader {
     ) -> Result<Vec<DeliveryArchiveEntry>, Self::Error> {
         validate_artifact_path(artifact_path)?;
         let mut file = File::open(artifact_path).map_err(|_| WindowsDeliveryArchiveError::Io)?;
+        if component == DeliveryComponentKind::RuntimeBundle {
+            file = decompress_runtime_tar(&mut file)?;
+        }
         let parsed = match component {
             DeliveryComponentKind::ProfileBridge => parse_profile_bridge_zip(&mut file)?,
             DeliveryComponentKind::RuntimeBundle => parse_runtime_pax_tar(&mut file)?,
@@ -316,6 +321,25 @@ fn parse_profile_bridge_zip(
         return Err(WindowsDeliveryArchiveError::InvalidArchive);
     }
     Ok(parsed)
+}
+
+/// Expand one pinned gzip archive into bounded anonymous temporary storage.
+/// The existing PAX TAR owner still validates all paths, headers and ranges.
+fn decompress_runtime_tar(compressed: &mut File) -> Result<File, WindowsDeliveryArchiveError> {
+    let mut unpacked = tempfile::tempfile().map_err(|_| WindowsDeliveryArchiveError::Io)?;
+    let gzip = GzDecoder::new(compressed);
+    let limit = MAX_EXPANDED_RUNTIME_TAR_BYTES
+        .checked_add(1)
+        .ok_or(WindowsDeliveryArchiveError::InvalidArchive)?;
+    let size = std::io::copy(&mut gzip.take(limit), &mut unpacked)
+        .map_err(|_| WindowsDeliveryArchiveError::InvalidArchive)?;
+    if size == 0 || size > MAX_EXPANDED_RUNTIME_TAR_BYTES {
+        return Err(WindowsDeliveryArchiveError::InvalidArchive);
+    }
+    unpacked
+        .seek(SeekFrom::Start(0))
+        .map_err(|_| WindowsDeliveryArchiveError::Io)?;
+    Ok(unpacked)
 }
 
 fn parse_runtime_pax_tar(
@@ -757,6 +781,8 @@ fn metadata_is_link_or_reparse(metadata: &Metadata) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use flate2::Compression;
+    use flate2::write::GzEncoder;
     use std::io;
     use std::sync::atomic::{AtomicU64, Ordering};
 
@@ -966,7 +992,9 @@ mod tests {
             append_tar_member(&mut archive, "runtime/link", &[], b'2')?;
         }
         archive.extend_from_slice(&[0_u8; 1024]);
-        fs::write(path, archive)?;
+        let mut gzip = GzEncoder::new(Vec::new(), Compression::default());
+        gzip.write_all(&archive)?;
+        fs::write(path, gzip.finish()?)?;
         Ok(long_path)
     }
 
@@ -974,7 +1002,7 @@ mod tests {
     fn canonical_bridge_zip_and_runtime_pax_tar_are_streamed_exactly() -> TestResult {
         let directory = TestDirectory::create("canonical")?;
         let bridge = directory.0.join("profile-bridge.zip");
-        let runtime = directory.0.join("runtime-bundle.tar");
+        let runtime = directory.0.join("runtime-bundle.tar.gz");
         write_stored_zip(
             &bridge,
             &[
@@ -1031,7 +1059,7 @@ mod tests {
     #[test]
     fn special_tar_members_are_surfaced_for_staging_rejection() -> TestResult {
         let directory = TestDirectory::create("special")?;
-        let runtime = directory.0.join("runtime-bundle.tar");
+        let runtime = directory.0.join("runtime-bundle.tar.gz");
         write_runtime_tar(&runtime, true)?;
         let mut reader = WindowsDeliveryArchiveReader::new();
         let entries = reader.entries(DeliveryComponentKind::RuntimeBundle, &runtime)?;
@@ -1064,11 +1092,14 @@ mod tests {
             Err(WindowsDeliveryArchiveError::InvalidArchive)
         );
 
-        let runtime = directory.0.join("runtime-bundle.tar");
+        let runtime = directory.0.join("runtime-bundle.tar.gz");
         write_runtime_tar(&runtime, false)?;
-        let mut runtime_bytes = fs::read(&runtime)?;
-        runtime_bytes[0] ^= 1;
-        fs::write(&runtime, runtime_bytes)?;
+        let mut runtime_bytes = Vec::new();
+        GzDecoder::new(File::open(&runtime)?).read_to_end(&mut runtime_bytes)?;
+        runtime_bytes[0] ^= 1; // corrupt the TAR header but retain valid gzip CRC
+        let mut gzip = GzEncoder::new(Vec::new(), Compression::default());
+        gzip.write_all(&runtime_bytes)?;
+        fs::write(&runtime, gzip.finish()?)?;
         assert_eq!(
             reader.entries(DeliveryComponentKind::RuntimeBundle, &runtime),
             Err(WindowsDeliveryArchiveError::InvalidArchive)

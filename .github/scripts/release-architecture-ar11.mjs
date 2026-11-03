@@ -211,13 +211,13 @@ function validatePublicationWiring(authority, workflow = fs.readFileSync(release
     'group: release-set-build-main',
     'runtime-bundle-v3-sha256-',
     'python scripts/github-release-publication.py probe',
-    '--expected-asset runtime-bundle.tar',
+    '--expected-asset runtime-bundle.tar.gz',
     '--expected-asset runtime-manifest.json',
     'python scripts/github-release-publication.py publish',
-    'CAMOUFOX_ARTIFACT_SHA256=$artifactSha',
-    '$releaseId = "camoufox-v1-windows-sha256-$artifactSha"',
-    'gh release download "$releaseId"',
-    "if ($artifactSha -notmatch '^[0-9a-f]{64}$' -or $buildSourceCommit -notmatch '^[0-9a-f]{40}$')",
+    'python scripts/camouhost-runtime-build-windows.py build',
+    '--runtime-lock runtime/camouhost/runtime-lock.json',
+    '--runtime-source runtime/camouhost/real.py',
+    '--output "$runtimeRoot" --build-python "$buildPython"',
   ]) {
     if (!workflow.includes(marker)) fail(`Release Set build workflow lacks required publication wiring: ${marker}`);
   }
@@ -267,8 +267,8 @@ function validatePublicationWiring(authority, workflow = fs.readFileSync(release
     fail('runtime component and aggregate Release Set must share exactly one publication primitive');
   }
   for (const forbidden of [
-    'cp artifacts/ar11-inputs/runtime-bundle.tar "$component_root/runtime-bundle.tar"',
-    'cp "$component_root/runtime-bundle.tar" "$release_dir/components/runtime-bundle.tar"',
+    'cp artifacts/ar11-inputs/runtime-bundle.tar.gz "$component_root/runtime-bundle.tar.gz"',
+    'cp "$component_root/runtime-bundle.tar.gz" "$release_dir/components/runtime-bundle.tar.gz"',
     'gh release download "$env:CAMOUFOX_RELEASE_ID"',
     'group: release-set-build-${{ github.sha }}',
   ]) {

@@ -49,8 +49,8 @@ struct RuntimeBrowserV1 {
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct RuntimeComponentsV1 {
-    #[serde(rename = "browserforge")]
-    _browserforge: String,
+    #[serde(rename = "fpgen")]
+    _fpgen: String,
     #[serde(rename = "camoufox_python")]
     _camoufox_python: String,
     #[serde(rename = "playwright")]

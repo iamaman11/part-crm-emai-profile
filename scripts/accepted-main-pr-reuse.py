@@ -34,14 +34,18 @@ REQUIRED = frozenset({
 # successful workflow with all expensive jobs skipped by a PR scope filter.
 CRITICAL: dict[str, dict[str, tuple[str, ...]]] = {
     "camoufox": {
-        "Real Camoufox cold-launch proof": (
-            "Prove Profile Bridge -> managed IPC -> real Camoufox chain",
-            "Prove authoritative P3 browser-state portability through managed Camoufox",
-        ),
+        # The single Windows owner runs the official browser, native Bridge,
+        # packaged Reader and encrypted state tests on the exact runtime.
         "Profile Bridge Windows regression": (
-            "Prove Windows local owned Playwright agent protocol",
-            "Prove packaged Windows post-launch failure cleanup and immediate relaunch",
-            "Prove clean-host Windows authoritative P3 browser-state portability",
+            "Materialize official browser and verified offline fpgen model",
+            "Read actual compressed official runtime via shipping Rust delivery reader",
+            "Run Windows Bridge regressions through production crates",
+            "Prove native state survives encrypted Save and cold Reopen",
+        ),
+        # The old required cold-launch status must fail closed unless that
+        # same physical Windows owner completed successfully.
+        "Real Camoufox cold-launch proof": (
+            "Require real official Camoufox and Bridge Windows proof",
         ),
     },
     "quality": {

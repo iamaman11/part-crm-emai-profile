@@ -6,33 +6,10 @@ use browser_execution_domain::{
     MaterializationBinding, NetworkIdentityObservation, NetworkIdentityPolicy,
 };
 use profile_platform_primitives::DeviceId;
-use serde_json::{Map, Value};
+use serde_json::Value;
 use std::fs;
 
 const CAMOUFOX_CONFIG_FILE: &str = "camoufox-config.json";
-const WEBGL_PARAMETER_MAPS: [&str; 2] = ["webGl:parameters", "webGl2:parameters"];
-
-#[derive(Clone, Copy)]
-enum WebGlValueContract {
-    F32Array(usize),
-    I32Array(usize),
-    BoolArray(usize),
-    U32Vector,
-}
-
-const WEBGL_ARRAY_CONTRACTS: [(&str, WebGlValueContract); 10] = [
-    ("2928", WebGlValueContract::F32Array(2)),
-    ("33901", WebGlValueContract::F32Array(2)),
-    ("33902", WebGlValueContract::F32Array(2)),
-    ("3106", WebGlValueContract::F32Array(4)),
-    ("32773", WebGlValueContract::F32Array(4)),
-    ("3386", WebGlValueContract::I32Array(2)),
-    ("3088", WebGlValueContract::I32Array(4)),
-    ("2978", WebGlValueContract::I32Array(4)),
-    ("3107", WebGlValueContract::BoolArray(4)),
-    ("34467", WebGlValueContract::U32Vector),
-];
-
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct BrowserRuntimeObservation {
     network: Option<NetworkIdentityObservation>,
@@ -147,7 +124,7 @@ where
             return Err(BrowserLaunchBlocker::MaterializationStale);
         }
 
-        validate_camoufox_webgl_config(workspace)?;
+        validate_camoufox_config(workspace)?;
 
         let observation = self
             .observations
@@ -165,117 +142,34 @@ where
     }
 }
 
-fn validate_camoufox_webgl_config(
-    workspace: &GenerationWorkspace,
-) -> Result<(), BrowserLaunchBlocker> {
+fn validate_camoufox_config(workspace: &GenerationWorkspace) -> Result<(), BrowserLaunchBlocker> {
+    // The official Camoufox/fpgen stack owns WebGL and all fingerprint values.
+    // Preflight only rejects missing/malformed identity material before spawn.
+    const MAX_CONFIG_BYTES: u64 = 1024 * 1024;
     let path = workspace.path().join(CAMOUFOX_CONFIG_FILE);
-    let metadata = match fs::symlink_metadata(&path) {
-        Ok(metadata) => metadata,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
-        Err(_) => return Err(BrowserLaunchBlocker::InvalidMaterializationEvidence),
-    };
-    if metadata.file_type().is_symlink() || !metadata.is_file() {
+    let metadata = fs::symlink_metadata(&path)
+        .map_err(|_| BrowserLaunchBlocker::InvalidMaterializationEvidence)?;
+    if metadata.file_type().is_symlink()
+        || !metadata.is_file()
+        || metadata.len() == 0
+        || metadata.len() > MAX_CONFIG_BYTES
+    {
         return Err(BrowserLaunchBlocker::InvalidMaterializationEvidence);
     }
     let bytes = fs::read(path).map_err(|_| BrowserLaunchBlocker::InvalidMaterializationEvidence)?;
     let config: Value = serde_json::from_slice(&bytes)
         .map_err(|_| BrowserLaunchBlocker::InvalidMaterializationEvidence)?;
-    validate_camoufox_webgl_value(&config)
-}
-
-fn validate_camoufox_webgl_value(config: &Value) -> Result<(), BrowserLaunchBlocker> {
-    let root = config
-        .as_object()
-        .ok_or(BrowserLaunchBlocker::InvalidMaterializationEvidence)?;
-    for map_name in WEBGL_PARAMETER_MAPS {
-        let Some(raw_parameters) = root.get(map_name) else {
-            continue;
-        };
-        let parameters = raw_parameters
-            .as_object()
-            .ok_or(BrowserLaunchBlocker::InvalidMaterializationEvidence)?;
-        validate_known_webgl_parameters(parameters)?;
-    }
-    Ok(())
-}
-
-fn validate_known_webgl_parameters(
-    parameters: &Map<String, Value>,
-) -> Result<(), BrowserLaunchBlocker> {
-    for (pname, contract) in WEBGL_ARRAY_CONTRACTS {
-        let Some(raw) = parameters.get(pname) else {
-            continue;
-        };
-        match contract {
-            WebGlValueContract::F32Array(length) => {
-                validate_fixed_array(raw, length, validate_f32)?;
-            }
-            WebGlValueContract::I32Array(length) => {
-                validate_fixed_array(raw, length, validate_i32)?;
-            }
-            WebGlValueContract::BoolArray(length) => {
-                validate_fixed_array(raw, length, validate_bool)?;
-            }
-            WebGlValueContract::U32Vector => {
-                if raw.is_null() {
-                    continue;
-                }
-                let values = raw
-                    .as_array()
-                    .ok_or(BrowserLaunchBlocker::InvalidMaterializationEvidence)?;
-                if !values.iter().all(validate_u32) {
-                    return Err(BrowserLaunchBlocker::InvalidMaterializationEvidence);
-                }
-            }
-        }
-    }
-    Ok(())
-}
-
-fn validate_fixed_array(
-    raw: &Value,
-    expected_length: usize,
-    validate_item: fn(&Value) -> bool,
-) -> Result<(), BrowserLaunchBlocker> {
-    let values = raw
-        .as_array()
-        .ok_or(BrowserLaunchBlocker::InvalidMaterializationEvidence)?;
-    if values.len() != expected_length || !values.iter().all(validate_item) {
+    if !config.is_object() || config.as_object().is_none_or(serde_json::Map::is_empty) {
         return Err(BrowserLaunchBlocker::InvalidMaterializationEvidence);
     }
     Ok(())
-}
-
-fn validate_f32(value: &Value) -> bool {
-    value
-        .as_f64()
-        .is_some_and(|number| number.is_finite() && number.abs() <= f64::from(f32::MAX))
-}
-
-fn validate_i32(value: &Value) -> bool {
-    value
-        .as_i64()
-        .is_some_and(|number| i32::try_from(number).is_ok())
-        || value
-            .as_u64()
-            .is_some_and(|number| number <= i32::MAX as u64)
-}
-
-fn validate_bool(value: &Value) -> bool {
-    value.is_boolean()
-}
-
-fn validate_u32(value: &Value) -> bool {
-    value
-        .as_u64()
-        .is_some_and(|number| u32::try_from(number).is_ok())
 }
 
 #[cfg(test)]
 mod tests {
     use super::{
         BoundBrowserLaunchPreflight, BrowserRuntimeObservation, BrowserRuntimeObservationPort,
-        CAMOUFOX_CONFIG_FILE, classify_browser_launch_blocker, validate_camoufox_webgl_value,
+        CAMOUFOX_CONFIG_FILE, classify_browser_launch_blocker, validate_camoufox_config,
     };
     use crate::browser_execution::{
         BrowserLaunchBlocker, load_materialization_binding, persist_materialization_binding,
@@ -292,7 +186,6 @@ mod tests {
         BundleRelativePath, InventoryEntry, RuntimeInventory, RuntimeManifest, RuntimePlatform,
         Sha256Digest,
     };
-    use serde_json::json;
     use std::cell::Cell;
     use std::fs;
     use std::path::PathBuf;
@@ -392,7 +285,7 @@ mod tests {
     }
 
     #[test]
-    fn selected_runtime_and_webgl_config_are_validated_before_observation()
+    fn selected_runtime_and_config_integrity_are_validated_before_observation()
     -> Result<(), Box<dyn std::error::Error>> {
         let root_path = root_path()?;
         let root = MaterializationRoot::open_or_create(&root_path)?;
@@ -513,45 +406,31 @@ mod tests {
     }
 
     #[test]
-    fn patched_webgl_array_contract_rejects_shape_type_range_and_vector_drift() {
-        let invalid = [
-            json!({"webGl:parameters": {"2928": [0.0]}}),
-            json!({"webGl:parameters": {"3107": [true, true, true, 1]}}),
-            json!({"webGl:parameters": {"3386": [2_147_483_648_u64, 1]}}),
-            json!({"webGl:parameters": {"2928": [3.5e38, 1.0]}}),
-            json!({"webGl:parameters": {"34467": 33776}}),
-            json!({"webGl:parameters": {"34467": {"unexpected": 33776}}}),
-            json!({"webGl:parameters": {"34467": [-1, 4_294_967_296_u64]}}),
-            json!({"webGl2:parameters": {"3088": [0, 0, 1]}}),
-        ];
-        for config in invalid {
-            assert_eq!(
-                validate_camoufox_webgl_value(&config),
-                Err(BrowserLaunchBlocker::InvalidMaterializationEvidence)
-            );
-        }
-    }
-
-    #[test]
-    fn patched_webgl_array_contract_accepts_exact_native_shapes() {
-        let config = json!({
-            "webGl:parameters": {
-                "2928": [0.0, 1.0],
-                "33901": [1.0, 8192.0],
-                "33902": [1.0, 1.0],
-                "3106": [0.0, 0.0, 0.0, 0.0],
-                "32773": [0.0, 0.0, 0.0, 0.0],
-                "3386": [1920, 1080],
-                "3088": [0, 0, 1920, 1080],
-                "2978": [0, 0, 1920, 1080],
-                "3107": [true, true, true, true],
-                "34467": null
-            },
-            "webGl2:parameters": {
-                "2928": [0.0, 1.0],
-                "34467": []
-            }
-        });
-        assert_eq!(validate_camoufox_webgl_value(&config), Ok(()));
+    fn the_official_fingerprint_payload_is_owned_by_camoufox()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let path = root_path()?;
+        let root = MaterializationRoot::open_or_create(&path)?;
+        let tenant = TenantId::parse("tenant_01JPREFLIGHT")?;
+        let profile = ProfileId::parse("profile_01JPREFLIGHT")?;
+        let generation = GenerationId::parse("generation_01JPREFLIGHT")?;
+        let workspace = root.create_generation(&tenant, &profile, &generation)?;
+        // Arbitrary official WebGL values are not re-interpreted by Rust.
+        fs::write(
+            workspace.path().join(CAMOUFOX_CONFIG_FILE),
+            r#"{"webGl2:parameters":{"2928":[23,42],"unknown_from_future_fpgen":{"gpu":"native"}}}"#,
+        )?;
+        assert_eq!(validate_camoufox_config(&workspace), Ok(()));
+        fs::write(workspace.path().join(CAMOUFOX_CONFIG_FILE), b"{")?;
+        assert_eq!(
+            validate_camoufox_config(&workspace),
+            Err(BrowserLaunchBlocker::InvalidMaterializationEvidence)
+        );
+        fs::remove_file(workspace.path().join(CAMOUFOX_CONFIG_FILE))?;
+        assert_eq!(
+            validate_camoufox_config(&workspace),
+            Err(BrowserLaunchBlocker::InvalidMaterializationEvidence)
+        );
+        remove_test_root(&path)?;
+        Ok(())
     }
 }

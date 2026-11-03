@@ -569,11 +569,10 @@ function camoufoxErrors(workflow, classifier) {
   errors.push(...camoufoxClassifierErrors(classifier));
   for (const [label, block] of [['Linux required context', linux], ['Windows required context', windows]]) {
     errors.push(...requireMarkers(block, [
-      'needs: [scope, patched-candidate]',
+      'needs: scope',
       'if: always()',
-      'Require successful fail-closed scope classification',
+      'Require successful scope classification',
       "needs.scope.outputs.heavy",
-      'Accept mechanically proven runtime-unrelated PR',
     ], label));
   }
   if (!linux.includes("if: needs.scope.outputs.heavy == 'true'")) errors.push('Linux heavy proof is not gated by exact scope output');
