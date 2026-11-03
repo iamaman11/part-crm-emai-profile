@@ -338,6 +338,12 @@ jobs:
             --source-root "$GITHUB_WORKSPACE/known-good-source" --artifact-root "$release_root" \
             | jq -e '.decision == "VALID" and (.release_set_schema_version == 2 or .release_set_schema_version == 3) and .source_accepted == true and .mutation_executed == false' >/dev/null
           current_release_manifest="$policy_dir/release-set.json"
+          # Historical verified source only: do not infer a new target archive.
+          previous_runtime_path="$(jq -er '.components.runtime_bundle.artifact_path' "$current_release_manifest")"
+          case "$previous_runtime_path" in
+            components/runtime-bundle.tar.gz|components/runtime-bundle.tar) ;;
+            *) echo "Unknown previous runtime artifact identity" >&2; exit 1 ;;
+          esac
           echo "CURRENT_RELEASE_MANIFEST=$current_release_manifest" >> "$GITHUB_ENV"
 
           # The existing known-good source and release have both passed native
@@ -351,7 +357,7 @@ jobs:
             --runtime-release-set "$TARGET_RELEASE_MANIFEST" \
             --runtime-archive "$TARGET_RELEASE_ROOT/components/runtime-bundle.tar.gz" \
             --previous-runtime-release-set "$current_release_manifest" \
-            --previous-runtime-archive "$release_root/components/runtime-bundle.tar.gz" \
+            --previous-runtime-archive "$release_root/$previous_runtime_path" \
             --expected-previous-release-set-id "$current_id" \
             --environment staging --output "$dual_config"
           echo "WRANGLER_CONFIG=$dual_config" >> "$GITHUB_ENV"

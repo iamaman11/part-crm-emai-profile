@@ -90,10 +90,15 @@ def verified_runtime_inventory(
         fail("runtime inventory is not bound to the exact accepted Release Set")
     components = release.get("components")
     runtime = components.get("runtime_bundle") if isinstance(components, dict) else None
+    # The target always ships gzip; a verified historical known-good component
+    # may be the original raw TAR without enabling any old-profile launcher.
+    allowed_paths = {"components/runtime-bundle.tar.gz"}
+    if expected_release_set_id != os.environ.get("RELEASE_SET_ID"):
+        allowed_paths.add("components/runtime-bundle.tar")
     if (
         not isinstance(runtime, dict)
         or runtime.get("component_id") != "runtime_bundle"
-        or runtime.get("artifact_path") != "components/runtime-bundle.tar.gz"
+        or runtime.get("artifact_path") not in allowed_paths
         or not isinstance(runtime.get("component_manifest_sha256"), str)
         or SHA256_RE.fullmatch(runtime["component_manifest_sha256"]) is None
         or not isinstance(runtime.get("release_id"), str)
@@ -101,6 +106,8 @@ def verified_runtime_inventory(
         fail("accepted Release Set has no exact runtime component manifest identity")
     if archive_path.is_symlink() or not archive_path.is_file():
         fail("accepted runtime archive must be a regular file")
+    if archive_path.name != Path(runtime["artifact_path"]).name:
+        fail("runtime archive filename differs from immutable component identity")
     try:
         with tarfile.open(archive_path, "r:*") as archive:
             entry = archive.getmember("runtime-manifest.json")
@@ -497,7 +504,7 @@ def self_test() -> None:
             "files": {"files": [{"path": "browser/camoufox.exe", "size_bytes": 5, "sha256": "f" * 64}]},
         }
         previous_bytes = json.dumps(previous_document, separators=(",", ":")).encode()
-        previous_archive = root / "previous-runtime.tar"
+        previous_archive = root / "runtime-bundle.tar"
         with tarfile.open(previous_archive, "w") as archive:
             member = tarfile.TarInfo("runtime-manifest.json")
             member.size = len(previous_bytes)
@@ -506,7 +513,7 @@ def self_test() -> None:
         previous_release_set.write_text(json.dumps({
             "schema_version": 3, "release_set_id": previous_release_id,
             "components": {"runtime_bundle": {
-                "component_id": "runtime_bundle", "artifact_path": "components/runtime-bundle.tar.gz",
+                "component_id": "runtime_bundle", "artifact_path": "components/runtime-bundle.tar",
                 "component_manifest_sha256": hashlib.sha256(previous_bytes).hexdigest(),
                 "release_id": previous_component_id,
             }},
