@@ -102,7 +102,7 @@ def verified_runtime_inventory(
     if archive_path.is_symlink() or not archive_path.is_file():
         fail("accepted runtime archive must be a regular file")
     try:
-        with tarfile.open(archive_path, "r:") as archive:
+        with tarfile.open(archive_path, "r:*") as archive:
             entry = archive.getmember("runtime-manifest.json")
             if not entry.isfile() or not (1 <= entry.size <= 2_000_000):
                 fail("runtime manifest tar member is not a bounded regular file")
@@ -110,7 +110,7 @@ def verified_runtime_inventory(
             if stream is None:
                 fail("runtime manifest tar member cannot be read")
             raw = stream.read(2_000_001)
-    except (tarfile.TarError, EOFError) as error:
+    except (tarfile.TarError, EOFError, OSError) as error:
         raise OverlayError("accepted runtime archive is invalid") from error
     if hashlib.sha256(raw).hexdigest() != runtime["component_manifest_sha256"]:
         fail("runtime manifest does not match the verified immutable Release Set")
@@ -475,8 +475,8 @@ def self_test() -> None:
             "release_id": runtime_release_id, "files": {"files": fixture_files},
         }
         runtime_bytes = json.dumps(runtime_document, separators=(",", ":")).encode()
-        runtime_archive = root / "runtime.tar"
-        with tarfile.open(runtime_archive, "w") as archive:
+        runtime_archive = root / "runtime-bundle.tar.gz"
+        with tarfile.open(runtime_archive, "w:gz") as archive:
             member = tarfile.TarInfo("runtime-manifest.json")
             member.size = len(runtime_bytes)
             archive.addfile(member, io.BytesIO(runtime_bytes))
@@ -517,6 +517,19 @@ def self_test() -> None:
         try:
             expected_pin = verified_runtime_inventory(runtime_release_set, runtime_archive)
             old_pin = verified_runtime_inventory(previous_release_set, previous_archive, previous_release_id)
+            # Current shipping runtime is compressed, while older immutable
+            # known-good components may still use raw TAR. Both must be decoded
+            # without relaxing the exact Release Set manifest digest check.
+            if runtime_archive.read_bytes()[:3] != bytes.fromhex("1f8b08"):
+                fail("current runtime archive fixture is not the shipping gzip format")
+            bad_archive = root / "broken-runtime.tar.gz"
+            bad_archive.write_bytes(bytes.fromhex("1f8b08") + b"truncated")
+            try:
+                verified_runtime_inventory(runtime_release_set, bad_archive)
+            except OverlayError:
+                pass
+            else:
+                fail("malformed gzip runtime unexpectedly passed immutable verification")
             if old_pin == expected_pin:
                 fail("runtime compatibility fixture did not produce two distinct inventories")
             if expected_pin != hashlib.sha256(
