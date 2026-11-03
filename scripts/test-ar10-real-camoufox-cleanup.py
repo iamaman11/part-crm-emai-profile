@@ -62,6 +62,52 @@ def load_runtime(camouhost: Path) -> ModuleType:
     return module
 
 
+def prove_managed_bootstrap_tab_contract(runtime: ModuleType) -> None:
+    """A real page may never be closed just because its URL is about:blank."""
+
+    marker = runtime.MANAGED_BOOTSTRAP_TAB_URL
+
+    class Page:
+        def __init__(self, url: str) -> None:
+            self.url = url
+            self.closed = False
+            self.navigations: list[str] = []
+
+        def goto(self, url: str, *, wait_until: str, timeout: int) -> None:
+            assert url == "about:blank" and wait_until == "domcontentloaded"
+            assert timeout == 5_000
+            self.navigations.append(url)
+            self.url = url
+
+        def close(self) -> None:
+            self.closed = True
+
+    def check(pages: list[Page]) -> None:
+        runtime.retire_managed_bootstrap_tabs(SimpleNamespace(pages=pages))
+
+    ordinary = Page("about:blank")
+    real_site = Page("http://127.0.0.1:43187/verify")
+    owned_a, owned_b = Page(marker), Page(marker)
+    check([owned_a, ordinary, real_site, owned_b])
+    assert owned_a.closed and owned_b.closed
+    assert not ordinary.closed and not ordinary.navigations
+    assert not real_site.closed and not real_site.navigations
+
+    sole = Page(marker)
+    check([sole])
+    assert not sole.closed and sole.url == "about:blank"
+    assert sole.navigations == ["about:blank"]
+
+    first, second = Page(marker), Page(marker)
+    check([first, second])
+    assert not first.closed and first.url == "about:blank"
+    assert second.closed
+
+    untouched = Page("about:blank")
+    check([untouched])
+    assert not untouched.closed and not untouched.navigations
+
+
 def prove_controlled_close_dispatch_contract(runtime: ModuleType) -> None:
     """Regression: stdin observer must pump real registered callbacks, not infer process death."""
 
@@ -607,6 +653,9 @@ try:
         for page in present.values()
     ), "Firefox no-store restore had no pre-admission offline error"
     runtime.admit_navigation(context, None)
+    assert not any(
+        page.url == runtime.MANAGED_BOOTSTRAP_TAB_URL for page in context.pages
+    ), "Camouhost's internal bootstrap tab survived a native SessionStore restore"
     assert present[urls[0]].title() == "Disposable Firefox sessionstore proof", (
         "first saved tab did not retry after identity admission"
     )
@@ -658,6 +707,9 @@ try:
         "intentionally closed tab unexpectedly reopened; classify exact native Quit semantics"
     )
     runtime.admit_navigation(context, None)
+    assert not any(
+        page.url == runtime.MANAGED_BOOTSTRAP_TAB_URL for page in context.pages
+    ), "Camouhost's internal bootstrap tab survived a native SessionStore restore"
     assert present_third[urls[1]].title() == "Disposable Firefox sessionstore proof"
     assert present_third[urls[1]].evaluate(
         "localStorage.getItem('restore-proof')"
@@ -1745,6 +1797,7 @@ def prove_failure_observation_contract() -> None:
     source_root = Path(__file__).resolve().parents[1]
     runtime = load_runtime(source_root / "runtime/camouhost/real.py")
     prove_controlled_close_dispatch_contract(runtime)
+    prove_managed_bootstrap_tab_contract(runtime)
     proof = load_runtime(source_root / "scripts/test-ar10-real-camoufox.py")
     proof.prove_managed_environment_projection(runtime)
     for error, category in (
