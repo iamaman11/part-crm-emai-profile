@@ -1,10 +1,11 @@
 #!/usr/bin/env python3
 """Fail-closed PR scope classifier for the Camoufox Runtime Gate.
 
-Accepted main is handled by the workflow and always receives the full proof. This
-classifier is only allowed to suppress heavy PR replay when every changed path is
-mechanically known to be outside the Camoufox/Profile Bridge runtime proof
-surface. Unknown paths are heavy by default.
+Accepted main uses this same policy only after GitHub independently proves
+the exact accepted PR and a previous executed real Camoufox/Bridge Windows test.
+Both PR and main suppress heavy browser replay only when every intervening path
+is mechanically proven outside the runtime/Bridge proof surface. Unknown paths
+are heavy by default.
 """
 
 from __future__ import annotations
@@ -22,6 +23,9 @@ EXACT_PROVEN_UNRELATED = frozenset(
         ".github/scripts/ar8-d-secret-transport-successor.mjs",
         ".github/scripts/release-architecture-ar11.mjs",
         "architecture/release-architecture-ar11.json",
+        # Staging-only AR11 overlay consumes immutable runtime identities;
+        # it is not imported by the official Camoufox/Bridge test owner.
+        "scripts/release-core-overlay-ar11.py",
         # Historical O0 E3A regression fixture: this retired D1-only workflow is
         # intentionally classified from its path even when the file is deleted.
         ".github/workflows/v2-phase-a-d1-command-router.yml",
@@ -76,6 +80,15 @@ def run_self_test() -> None:
         ("docs-only", ["docs/architecture-note.md"], False),
         ("d1-workflow", [".github/workflows/d1-migration-executor.yml"], False),
         ("opsctl-only", ["tools/opsctl/src/main.rs"], False),
+        ("ar11-overlay-only", ["scripts/release-core-overlay-ar11.py"], False),
+        ("ar11-overlay-plus-real-runtime", [
+            "scripts/release-core-overlay-ar11.py",
+            "runtime/camouhost/real.py",
+        ], True),
+        ("ar11-overlay-plus-bridge", [
+            "scripts/release-core-overlay-ar11.py",
+            "apps/profile-bridge/src/main.rs",
+        ], True),
         ("runtime", ["runtime/camouhost/launcher.py"], True),
         ("profile-bridge", ["apps/profile-bridge/src/main.rs"], True),
         ("dependency-lock", ["Cargo.lock"], True),

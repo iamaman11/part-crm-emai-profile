@@ -11,6 +11,8 @@ import argparse
 import json
 import os
 import re
+import runpy
+import subprocess
 import urllib.error
 import urllib.request
 from collections.abc import Callable
@@ -95,7 +97,8 @@ def api_reader(token: str) -> Callable[[str], Any]:
     return read
 
 
-def prove(main_sha: str, gate: str, api: Callable[[str], Any]) -> str:
+def prove(main_sha: str, gate: str, api: Callable[[str], Any],
+          *, require_steps: bool = True) -> str:
     require(bool(SHA.fullmatch(main_sha)), "invalid main commit")
     require(gate in CRITICAL, "unknown gate")
     root = f"repos/{REPOSITORY}"
@@ -143,6 +146,12 @@ def prove(main_sha: str, gate: str, api: Callable[[str], Any]) -> str:
             run.get("status") == "completed" and run.get("conclusion") == "success",
             f"PR workflow not successful: {name}",
         )
+    # A successful, exact-tree PR with its heavy steps skipped is only a
+    # candidate for a separately proven, unchanged prior-runtime receipt.
+    # It must never be used as a standalone physical proof.
+    if not require_steps:
+        require(gate == "camoufox", "only Camoufox has unchanged-input proof reuse")
+        return candidate
     source_run = latest[WORKFLOW[gate]]
     jobs = api(f"{root}/actions/runs/{source_run['id']}/jobs?per_page=100")
     require(
@@ -162,6 +171,69 @@ def prove(main_sha: str, gate: str, api: Callable[[str], Any]) -> str:
         require(all(actual.get(step) == "success" for step in steps),
                 f"required PR test skipped/missing: {name}")
     return candidate
+
+
+def git_changed_paths(old_sha: str, new_sha: str) -> list[str]:
+    """Read exact tracked tree differences; no globs or guessed components."""
+    require(bool(SHA.fullmatch(old_sha) and SHA.fullmatch(new_sha)), "invalid diff SHA")
+    raw = subprocess.check_output(
+        ["git", "diff", "--no-renames", "--name-only", "-z", old_sha, new_sha]
+    )
+    return [name.decode("utf-8") for name in raw.split(b"\0") if name]
+
+
+def git_first_parent(base_sha: str) -> list[str]:
+    require(bool(SHA.fullmatch(base_sha)), "invalid base")
+    lines = subprocess.check_output(
+        ["git", "rev-list", "--first-parent", "--max-count=16", base_sha],
+        text=True,
+    ).splitlines()
+    require(bool(lines) and lines[0] == base_sha, "invalid ancestor chain")
+    require(all(SHA.fullmatch(candidate) for candidate in lines), "invalid ancestor SHA")
+    return lines
+
+
+def camoufox_unrelated(paths: list[str]) -> bool:
+    # One fail-closed path classifier owns both PR gating and main proof reuse.
+    if not paths:
+        return True  # Byte-identical relevant source trees are unchanged.
+    classifier = runpy.run_path(
+        str(Path(__file__).with_name("classify-camoufox-runtime-scope.py"))
+    )["classify"]
+    heavy, _, _ = classifier(paths)
+    return not heavy
+
+
+def prove_unchanged_prior_camoufox(
+    main_sha: str,
+    base_sha: str,
+    api: Callable[[str], Any],
+    ancestors: Callable[[str], list[str]],
+    changed: Callable[[str, str], list[str]],
+    scope_unrelated: Callable[[list[str]], bool],
+) -> str:
+    """Trust a past *executed* official Windows proof only if every diff is safe.
+
+    The current accepted main PR has already passed exact-tree/18-workflow
+    validation. Past proof comes from the existing GitHub PR run and exact-tree
+    squash receipt; no new registry, signing, cache, or source-of-truth.
+    """
+    require(bool(SHA.fullmatch(base_sha)), "invalid current base")
+    chain = ancestors(base_sha)
+    require(bool(chain) and chain[0] == base_sha and len(chain) <= 16,
+            "missing or unbounded first-parent history")
+    for prior in chain:
+        require(bool(SHA.fullmatch(prior)), "invalid historical commit")
+        if not scope_unrelated(changed(prior, main_sha)):
+            # Fail closed at first changed browser/Bridge/shared contract.
+            break
+        try:
+            prove(prior, "camoufox", api)  # MUST have executed real Windows steps.
+            return prior
+        except (Unconfirmed, KeyError, ValueError, TypeError,
+                urllib.error.URLError, OSError):
+            continue
+    raise Unconfirmed("no recent unchanged completed physical Camoufox proof")
 
 
 def fixture(gate: str) -> tuple[dict[str, Any], Callable[[str], Any]]:
@@ -236,6 +308,121 @@ def self_test() -> None:
                 pass
             else:
                 raise AssertionError(f"{gate}: accepted unsafe proof: {mutation}")
+    # Fail-closed historical reuse: current PR has all 18 successful checks
+    # but SKIPPED heavy jobs, while older accepted main has exact real proof.
+    now, _ = fixture("camoufox")
+    root = f"repos/{REPOSITORY}"
+    now_sha, base_sha, prior_head = ("a" * 40, "b" * 40, "f" * 40)
+    current_run = f"{root}/actions/runs?head_sha={'c'*40}&event=pull_request&per_page=100"
+    current_camoufox = next(
+        run for run in now[current_run]["workflow_runs"]
+        if run["name"] == WORKFLOW["camoufox"]
+    )
+    current_jobs = f"{root}/actions/runs/{current_camoufox['id']}/jobs?per_page=100"
+    old_jobs = json.loads(json.dumps(now[current_jobs]))
+    prior_run = f"{root}/actions/runs?head_sha={prior_head}&event=pull_request&per_page=100"
+    prior_runs = json.loads(json.dumps(now[current_run]))
+    for run in prior_runs["workflow_runs"]:
+        run["head_sha"] = prior_head
+        run["id"] += 100
+    prior_camoufox = next(
+        run for run in prior_runs["workflow_runs"]
+        if run["name"] == WORKFLOW["camoufox"]
+    )
+    prior_jobs = f"{root}/actions/runs/{prior_camoufox['id']}/jobs?per_page=100"
+    now[f"{root}/commits/{base_sha}"] = {
+        "sha": base_sha,
+        "parents": [{"sha": "e" * 40}],
+        "commit": {"tree": {"sha": "8" * 40}},
+    }
+    now[f"{root}/commits/{base_sha}/pulls"] = [{
+        "state": "closed", "merged_at": "2026-10-31T00:00:00Z",
+        "merge_commit_sha": base_sha,
+        "base": {
+            "sha": "e" * 40, "ref": "main",
+            "repo": {"full_name": REPOSITORY},
+        },
+        "head": {"sha": prior_head, "repo": {"full_name": REPOSITORY}},
+    }]
+    now[f"{root}/commits/{prior_head}"] = {
+        "sha": prior_head, "commit": {"tree": {"sha": "8" * 40}},
+    }
+    now[prior_run] = prior_runs
+    now[prior_jobs] = old_jobs
+    for job in now[current_jobs]["jobs"]:
+        for step in job["steps"]:
+            step["conclusion"] = "skipped"
+    api = lambda path: now[path]
+    try:
+        prove(now_sha, "camoufox", api)
+    except Unconfirmed:
+        pass
+    else:
+        raise AssertionError("skipped PR steps were treated as physical proof")
+    require(
+        prove(now_sha, "camoufox", api, require_steps=False) == "c" * 40,
+        "successful exact-tree PR receipt lost",
+    )
+    require(
+        prove(base_sha, "camoufox", api) == prior_head,
+        "existing real prior browser proof not accepted",
+    )
+    safe = ["scripts/release-core-overlay-ar11.py"]
+    assert camoufox_unrelated(safe)
+    assert not camoufox_unrelated(safe + ["apps/profile-bridge/src/main.rs"])
+    assert not camoufox_unrelated(safe + ["runtime/camouhost/real.py"])
+    def preserved(_old: str, _new: str) -> list[str]:
+        return safe
+    require(prove_unchanged_prior_camoufox(
+        now_sha, base_sha, api, lambda _: [base_sha],
+        preserved, camoufox_unrelated,
+    ) == base_sha, "unchanged real prior browser proof lost")
+    for unsafe in (
+        ["runtime/camouhost/real.py"],
+        ["apps/profile-bridge/src/main.rs"],
+        [".github/workflows/camoufox-runtime-gate.yml"],
+        ["scripts/classify-camoufox-runtime-scope.py"],
+    ):
+        try:
+            prove_unchanged_prior_camoufox(
+                now_sha, base_sha, api, lambda _: [base_sha],
+                lambda _old, _new: safe + unsafe, camoufox_unrelated,
+            )
+        except Unconfirmed:
+            pass
+        else:
+            raise AssertionError(f"unsafe prior browser proof reused for {unsafe}")
+    prior_camoufox["conclusion"] = "failure"
+    try:
+        prove_unchanged_prior_camoufox(
+            now_sha, base_sha, api, lambda _: [base_sha],
+            preserved, camoufox_unrelated,
+        )
+    except Unconfirmed:
+        pass
+    else:
+        raise AssertionError("failed prior PR workflow reused")
+    prior_camoufox["conclusion"] = "success"
+    now[prior_jobs]["jobs"][0]["steps"][0]["conclusion"] = "skipped"
+    try:
+        prove_unchanged_prior_camoufox(
+            now_sha, base_sha, api, lambda _: [base_sha],
+            preserved, camoufox_unrelated,
+        )
+    except Unconfirmed:
+        pass
+    else:
+        raise AssertionError("skipped prior physical step reused")
+    try:
+        prove_unchanged_prior_camoufox(
+            now_sha, base_sha, api, lambda _: [],
+            preserved, camoufox_unrelated,
+        )
+    except Unconfirmed:
+        pass
+    else:
+        raise AssertionError("missing parent history passed")
+
     print("Accepted-main exact PR proof: positive and negative fixtures PASS")
 
 
@@ -252,13 +439,40 @@ def main() -> int:
     reuse = False
     if os.environ.get("GITHUB_EVENT_NAME") == "push" and os.environ.get("GITHUB_REF") == "refs/heads/main":
         token = os.environ.get("GITHUB_TOKEN")
+        main_sha = os.environ.get("GITHUB_SHA", "")
         if token:
             try:
-                candidate = prove(os.environ.get("GITHUB_SHA", ""), args.gate, api_reader(token))
+                api = api_reader(token)
+                candidate = prove(main_sha, args.gate, api)
                 print(f"Reuse verified PR test evidence from exact tree {candidate}")
                 reuse = True
             except (Unconfirmed, KeyError, ValueError, TypeError, urllib.error.URLError, OSError) as error:
-                print(f"No reusable evidence ({type(error).__name__}); run full main gate")
+                if args.gate == "camoufox":
+                    try:
+                        # The current PR may legitimately skip heavy browser tests
+                        # for an audited unrelated change. Require its exact-tree
+                        # merge + all 18 successful workflow receipts first.
+                        prove(main_sha, args.gate, api, require_steps=False)
+                        checked_out = subprocess.check_output(
+                            ["git", "rev-parse", "HEAD"], text=True
+                        ).strip()
+                        require(checked_out == main_sha, "local source/main identity drift")
+                        base_sha = subprocess.check_output(
+                            ["git", "rev-parse", f"{main_sha}^"], text=True
+                        ).strip()
+                        prior = prove_unchanged_prior_camoufox(
+                            main_sha, base_sha, api, git_first_parent,
+                            git_changed_paths, camoufox_unrelated,
+                        )
+                        print(f"Reuse previously executed exact Camoufox/Bridge proof at accepted main {prior};")
+                        print("all later source changes were mechanically proven runtime-unrelated")
+                        reuse = True
+                    except (Unconfirmed, KeyError, ValueError, TypeError,
+                            urllib.error.URLError, OSError, subprocess.SubprocessError,
+                            UnicodeError) as prior_error:
+                        print(f"No reusable Camoufox history ({type(prior_error).__name__}); full main test required")
+                else:
+                    print(f"No reusable evidence ({type(error).__name__}); run full main gate")
         else:
             print("No GitHub API authority; run full main gate")
     else:
