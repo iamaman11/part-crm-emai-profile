@@ -69,6 +69,7 @@ pub enum Cause {
     IntegrityFailed,
     LocalStateUncertain,
     BrowserUnavailable,
+    CoordinatorLeaseConflict,
     CoordinatorUncertain,
     CloudSaveFailed,
     OtherSafeFailure,
@@ -560,6 +561,33 @@ mod tests {
         ));
         fs::create_dir_all(root.join("state"))?;
         Ok(root)
+    }
+
+    #[test]
+    fn confirmed_launch_lease_conflict_is_typed_without_sensitive_details()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let serialized = serde_json::to_string(&Cause::CoordinatorLeaseConflict)?;
+        assert_eq!(serialized, "\"COORDINATOR_LEASE_CONFLICT\"");
+        assert_eq!(
+            serde_json::from_str::<Cause>(&serialized)?,
+            Cause::CoordinatorLeaseConflict
+        );
+
+        let root = test_root()?;
+        record_at(
+            &root,
+            Stage::OpenRequested,
+            Outcome::Failed,
+            Cloud::Unknown,
+            Cause::CoordinatorLeaseConflict,
+            1,
+        );
+        let report = report_at(&root);
+        assert!(report.contains("CoordinatorLeaseConflict"));
+        assert!(report.contains("LOCAL_OBSERVATIONS_ONLY"));
+        assert!(!report.contains(&root.to_string_lossy().to_string()));
+        fs::remove_dir_all(root)?;
+        Ok(())
     }
 
     #[test]
