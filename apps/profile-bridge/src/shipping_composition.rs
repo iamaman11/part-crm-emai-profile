@@ -677,10 +677,11 @@ mod windows {
         }
 
         let config = ShippingConfig::from_installation()?;
-        let active_delivery = ActiveWindowsDeliveryRuntime::resolve_current().map_err(|error| {
-            eprintln!("BRIDGE_DELIVERY_RUNTIME_FAILURE={error:?}");
-            ShippingCompositionError::DeliveryRecoveryRequired
-        })?;
+        let active_delivery =
+            ActiveWindowsDeliveryRuntime::resolve_for_browser_open().map_err(|error| {
+                eprintln!("BRIDGE_DELIVERY_RUNTIME_FAILURE={error:?}");
+                ShippingCompositionError::DeliveryRecoveryRequired
+            })?;
         let (release_sequence, runtime_id) = active_delivery.observed_release_identity();
         report::record_runtime_identity(release_sequence, runtime_id);
         let pending_health = active_delivery.pending_health_confirmation();
