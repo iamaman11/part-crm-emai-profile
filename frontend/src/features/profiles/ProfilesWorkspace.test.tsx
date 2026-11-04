@@ -222,4 +222,59 @@ describe('ProfilesWorkspace generation refresh (#802 F06)', () => {
     expect((screen.getByRole('button', { name: 'Open browser' }) as HTMLButtonElement).disabled).toBe(false);
   });
 
+  it('revalidates the same selected profile and the directory after returning from Camoufox', async () => {
+    let version = 7;
+    profileLookup.mockImplementation(async () => ({
+      profileId: 'profile_external_save', status: 'READY', version,
+      activeGenerationId: 'generation_current', linkedClientId: null,
+    }) as Awaited<ReturnType<typeof getProfile>>);
+    const cache = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const directoryKey = ['operator-query', 'tenant_test', 'profiles'];
+    cache.setQueryData(directoryKey, { profiles: [{ profileId: 'profile_external_save', version: 7 }] });
+    render(
+      <QueryClientProvider client={cache}>
+        <TenantProvider loadTenantContexts={async () => ({
+          tenants: [{ tenantId: 'tenant_test', displayName: 'Test tenant', actorId: 'actor_test', role: 'TENANT_OWNER' }],
+        })}>
+          <ProfilesWorkspace selectedProfileId="profile_external_save" onProfileSelected={() => undefined} />
+        </TenantProvider>
+      </QueryClientProvider>,
+    );
+    await screen.findByText('profile_external_save');
+    await waitFor(() => expect(profileLookup).toHaveBeenCalledTimes(1));
+    version = 8; // Bridge committed outside the tab; this is a server readback.
+    fireEvent.focus(window);
+    await waitFor(() => expect(profileLookup).toHaveBeenCalledTimes(2));
+    await waitFor(() => expect(screen.getByText('8')).toBeTruthy());
+    expect(cache.getQueryState(directoryKey)?.isInvalidated).toBe(true);
+  });
+
+  it('explains a quarantined generation and never submits its invalid activation', async () => {
+    profileLookup.mockResolvedValue({
+      profileId: 'profile_test', status: 'READY', version: 7, activeGenerationId: 'generation_current',
+      linkedClientId: null,
+    } as Awaited<ReturnType<typeof getProfile>>);
+    generationLookup.mockResolvedValue({
+      generationId: 'generation_old', status: 'QUARANTINED', version: 3,
+      verificationReference: null,
+    } as Awaited<ReturnType<typeof getGeneration>>);
+    const cache = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    render(
+      <QueryClientProvider client={cache}>
+        <TenantProvider loadTenantContexts={async () => ({
+          tenants: [{ tenantId: 'tenant_test', displayName: 'Test tenant', actorId: 'actor_test', role: 'TENANT_OWNER' }],
+        })}>
+          <ProfilesWorkspace selectedProfileId="profile_test" onProfileSelected={() => undefined} />
+        </TenantProvider>
+      </QueryClientProvider>,
+    );
+    await screen.findByRole('button', { name: 'Open browser' });
+    fireEvent.click(screen.getByText('Administration and diagnostics'));
+    fireEvent.change(screen.getAllByLabelText('Generation ID')[0]!, { target: { value: 'generation_old' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Lookup generation' }));
+    expect((await screen.findByRole('button', { name: 'activate generation' }) as HTMLButtonElement).disabled).toBe(true);
+    expect(screen.getByText(/quarantined and cannot be activated/i)).toBeTruthy();
+    expect(activation).not.toHaveBeenCalled();
+  });
+
 });
