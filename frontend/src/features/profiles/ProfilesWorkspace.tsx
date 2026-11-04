@@ -311,7 +311,7 @@ export function ProfilesWorkspace({
           </form>
         </div>
         <StatusMessage state={generationLookup.error ?? generationRegister.error ?? (generationRegister.data ? `${generationRegister.data.resultCode}: ${generationRegister.data.resourceId}` : null)} />
-        {generation && <GenerationActions generation={generation} profileVersion={profile?.version ?? 1} isActive={profile?.activeGenerationId === generation.generationId} busy={generationAction.isPending} onAction={(input) => generationAction.mutate({ ...input, target: { tenantId, profileId, generationId } })} onHighImpact={(input) => generationAction.mutateAsync({ ...input, target: { tenantId, profileId, generationId } }).then(() => undefined)} />}
+        {generation && <GenerationActions generation={generation} profileVersion={profile?.version ?? 1} busy={generationAction.isPending} onAction={(input) => generationAction.mutate({ ...input, target: { tenantId, profileId, generationId } })} onHighImpact={(input) => generationAction.mutateAsync({ ...input, target: { tenantId, profileId, generationId } }).then(() => undefined)} />}
         <StatusMessage state={actionBelongsToSelection
           ? (generationAction.error ?? (generationAction.data ? `${generationAction.data.resultCode}: ${generationAction.data.resourceId}` : null))
           : null} />
@@ -382,10 +382,9 @@ function ProfileGrantPanel({ disabled, defaultVersion, busy, onGrant, onRevoke }
   );
 }
 
-function GenerationActions({ generation, profileVersion, isActive, busy, onAction, onHighImpact }: {
+function GenerationActions({ generation, profileVersion, busy, onAction, onHighImpact }: {
   generation: GenerationProjection;
   profileVersion: number;
-  isActive: boolean;
   busy: boolean;
   onAction: (input: { kind: 'verify'; expectedVersion: number; reference: string } | { kind: 'activate' | 'deactivate' | 'quarantine'; expectedVersion: number }) => void;
   onHighImpact: (input: { kind: 'activate' | 'deactivate' | 'quarantine'; expectedVersion: number }) => Promise<void>;
@@ -402,8 +401,8 @@ function GenerationActions({ generation, profileVersion, isActive, busy, onActio
       <div className="action-row">
         <label>Verification reference<input value={reference} onChange={(e) => setReference(e.currentTarget.value)} /></label>
         <button type="button" disabled={busy || generation.status !== 'REGISTERED' || !reference} onClick={() => onAction({ kind: 'verify', expectedVersion: generation.version, reference })}>Verify</button>
-        <ConfirmAction label="activate generation" consequence="Activation changes the profile's active immutable generation. The Worker enforces verified status and optimistic versioning." disabled={busy || generation.status !== 'VERIFIED' || isActive} onConfirm={() => onHighImpact({ kind: 'activate', expectedVersion: profileVersion })} />
-        <ConfirmAction label="deactivate generation" consequence="Deactivation removes the active generation from the profile and can make it non-launchable." disabled={busy || !isActive} onConfirm={() => onHighImpact({ kind: 'deactivate', expectedVersion: profileVersion })} />
+        <ConfirmAction label="activate generation" consequence="Activation changes the profile's active immutable generation. The Worker enforces verified status and optimistic versioning." disabled={busy || generation.status !== 'VERIFIED'} onConfirm={() => onHighImpact({ kind: 'activate', expectedVersion: profileVersion })} />
+        <ConfirmAction label="deactivate generation" consequence="Deactivation removes the active generation from the profile and can make it non-launchable." disabled={busy || generation.status !== 'VERIFIED'} onConfirm={() => onHighImpact({ kind: 'deactivate', expectedVersion: profileVersion })} />
         <ConfirmAction label="quarantine generation" consequence="Quarantine is terminal for this generation and blocks future activation." disabled={busy || generation.status === 'QUARANTINED'} onConfirm={() => onHighImpact({ kind: 'quarantine', expectedVersion: generation.version })} />
       </div>
       {generation.status === 'QUARANTINED' && <p role="status">This generation is quarantined and cannot be activated. Select a verified generation instead.</p>}
