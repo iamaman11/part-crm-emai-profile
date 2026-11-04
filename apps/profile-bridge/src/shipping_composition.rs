@@ -684,6 +684,7 @@ mod windows {
             })?;
         let (release_sequence, runtime_id) = active_delivery.observed_release_identity();
         report::record_runtime_identity(release_sequence, runtime_id);
+        let owner_setup_started = std::time::Instant::now();
         let pending_health = active_delivery.pending_health_confirmation();
         let runtime_root = active_delivery.runtime_root().to_path_buf();
         let runtime_bundles = active_delivery.into_bundle_selection();
@@ -736,6 +737,7 @@ mod windows {
             process,
             camouhost,
         );
+        eprintln!("bridge_open_phase name=owner_setup elapsed_ms={}", owner_setup_started.elapsed().as_millis());
         let opened_at = now()?;
         let open_started = std::time::Instant::now();
         report::record_current(
@@ -748,6 +750,7 @@ mod windows {
         let mut pending_health = pending_health;
         let mut started_health = None;
         let mut prelaunch_keepalive = None;
+        let selection_started = std::time::Instant::now();
         let opening = operator
             .open_authoritative_with_runtime_health_and_pending_recovery(
                 claim,
@@ -935,6 +938,11 @@ mod windows {
                     recovered
                 },
             );
+        eprintln!(
+            "bridge_open_phase name=authoritative_open elapsed_ms={} completed={}",
+            selection_started.elapsed().as_millis(),
+            opening.is_ok(),
+        );
         // Always finish the heartbeat thread before observing its final
         // authority result. A slow or failed heartbeat cannot be ignored just
         // because the browser opened successfully in the foreground.
