@@ -198,9 +198,9 @@ fn diagnostic_cause(result: &Result<(), BridgeCliError>) -> Cause {
         Err(BridgeCliError::LaunchFailed(
             ShippingCompositionError::HeartbeatAuthorityUncertain,
         )) => Cause::CoordinatorUncertain,
-        Err(BridgeCliError::LaunchFailed(
-            ShippingCompositionError::CommittedRecoveryRequired,
-        )) => Cause::CloudSaveFailed,
+        Err(BridgeCliError::LaunchFailed(ShippingCompositionError::CommittedRecoveryRequired)) => {
+            Cause::CloudSaveFailed
+        }
         Err(BridgeCliError::LaunchFailed(ShippingCompositionError::Operator(
             profile_bridge::operator_flow::OperatorFlowError::EnrollmentConflict,
         ))) => Cause::CoordinatorLeaseConflict,
@@ -409,7 +409,6 @@ mod tests {
             Cause::CoordinatorUncertain
         );
     }
-
 
     #[test]
     fn valid_claim_crosses_only_the_cli_boundary() -> Result<(), Box<dyn std::error::Error>> {
