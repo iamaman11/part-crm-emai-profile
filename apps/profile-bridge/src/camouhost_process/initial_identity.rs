@@ -83,6 +83,7 @@ impl ManagedCamouhostConfig {
                     .map_err(|_| BridgePortError::InvalidResponse)?,
             )?;
         }
+        #[cfg(windows)]
         let initial_identity_started = Instant::now();
         let mut command = Command::new(&self.python_executable);
         command
@@ -139,6 +140,7 @@ impl ManagedCamouhostConfig {
                 None => thread::sleep(PROCESS_POLL_INTERVAL),
             }
         };
+        #[cfg(windows)]
         eprintln!(
             "bridge_initial_phase name=native_identity_materialization elapsed_ms={}",
             initial_identity_started.elapsed().as_millis()

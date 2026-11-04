@@ -212,10 +212,12 @@ where
         } if observed == generation_id && version == expected_profile_version => {}
         _ => return Err(InitialProfileError::Authorization),
     }
+    #[cfg(windows)]
     let initial_started = std::time::Instant::now();
     let bundle = bundles
         .select_bundle()
         .map_err(|_| InitialProfileError::RuntimeBundle)?;
+    #[cfg(windows)]
     eprintln!(
         "bridge_initial_phase name=runtime_integrity elapsed_ms={}",
         initial_started.elapsed().as_millis()
@@ -228,14 +230,17 @@ where
         .map_err(|_| InitialProfileError::Snapshot)?;
     let mut committed = false;
     let result = (|| {
+        #[cfg(windows)]
         let identity_started = std::time::Instant::now();
         let browser_identity = materialize(&workspace, &bundle)?;
+        #[cfg(windows)]
         eprintln!(
             "bridge_initial_phase name=browser_identity elapsed_ms={}",
             identity_started.elapsed().as_millis()
         );
         persist_browser_identity(&workspace, &browser_identity)
             .map_err(|_| InitialProfileError::Snapshot)?;
+        #[cfg(windows)]
         let sealing_started = std::time::Instant::now();
         let inventory = workspace
             .inventory()
@@ -296,10 +301,12 @@ where
             .collect::<String>();
         let container_bytes =
             u64::try_from(sealed.container().len()).map_err(|_| InitialProfileError::Encryption)?;
+        #[cfg(windows)]
         eprintln!(
             "bridge_initial_phase name=snapshot_and_seal elapsed_ms={}",
             sealing_started.elapsed().as_millis()
         );
+        #[cfg(windows)]
         let upload_started = std::time::Instant::now();
         let upload = Request::UploadCapability {
             generation_id: generation_id.clone(),
@@ -343,6 +350,7 @@ where
         {
             return Err(InitialProfileError::Commit);
         }
+        #[cfg(windows)]
         eprintln!(
             "bridge_initial_phase name=upload_verify_commit elapsed_ms={}",
             upload_started.elapsed().as_millis()

@@ -1047,6 +1047,7 @@ where
             return Err(OperatorFlowError::Busy);
         }
         self.last_terminal = None;
+        #[cfg(windows)]
         let admission_started = std::time::Instant::now();
 
         // Verify installed bytes before creating any short-lived authenticated launch intent.
@@ -1055,6 +1056,7 @@ where
             .runtime_bundles
             .select_bundle()
             .map_err(|_| OperatorFlowError::Stage(OperatorFailureStage::RuntimeBundle))?;
+        #[cfg(windows)]
         eprintln!(
             "bridge_open_phase name=runtime_integrity elapsed_ms={}",
             admission_started.elapsed().as_millis()
@@ -1099,6 +1101,7 @@ where
             return Err(self.fail_before_local_use(OperatorFailureStage::LeaseValidation, lease));
         }
 
+        #[cfg(windows)]
         eprintln!(
             "bridge_open_phase name=authenticated_claim elapsed_ms={}",
             admission_started.elapsed().as_millis()
@@ -1236,6 +1239,8 @@ where
             }
         }
 
+        #[cfg(windows)]
+
         let materialization_started = std::time::Instant::now();
         if !native_rescue_required
             && let Err(reason) = ensure_materialized(
@@ -1276,10 +1281,12 @@ where
             return Err(OperatorFlowError::AuthoritativeGeneration { reason, cleanup });
         }
 
+        #[cfg(windows)]
         eprintln!(
             "bridge_open_phase name=authoritative_materialization elapsed_ms={}",
             materialization_started.elapsed().as_millis()
         );
+        #[cfg(windows)]
         let native_admission_started = std::time::Instant::now();
         let workspace = match root.open_generation(
             enrollment.actor().tenant_scope().tenant_id(),
@@ -1394,10 +1401,12 @@ where
             ));
         }
 
+        #[cfg(windows)]
         eprintln!(
             "bridge_open_phase name=native_admission elapsed_ms={}",
             native_admission_started.elapsed().as_millis()
         );
+        #[cfg(windows)]
         let browser_started = std::time::Instant::now();
         if let Err(source) = RuntimeSessionOrchestrator::launch(
             &runtime_bundle,
@@ -1419,6 +1428,7 @@ where
             });
         }
 
+        #[cfg(windows)]
         eprintln!(
             "bridge_open_phase name=managed_browser_launch elapsed_ms={}",
             browser_started.elapsed().as_millis()
