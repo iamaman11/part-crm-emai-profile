@@ -1005,7 +1005,7 @@ fn safe_close_observation_witness(message: &str) -> bool {
         || (events.split(',').count() <= 8
             && events
                 .split(',')
-                .all(|event| matches!(event, "page" | "close" | "crash")))
+                .all(|event| matches!(event, "page" | "close" | "crash" | "load_after_crash" | "recovered")))
 }
 
 fn allowlisted_camouhost_diagnostic(line: &[u8]) -> Option<&str> {
@@ -1702,6 +1702,8 @@ mod tests {
                 "camouhost_close_witness exception=OSError line=1247 errno=13 winerror=32 tracked=1 closed=1 crashed=0 count=3 events=page,close,close"
             )
         );
+        let restored = b"camouhost_close_witness exception=RuntimeContractError line=1310 errno=none winerror=none tracked=1 closed=0 crashed=1 count=4 events=page,crash,load_after_crash,recovered\n";
+        assert!(allowlisted_camouhost_diagnostic(restored).is_some());
         for rejected in [
             b"camouhost_close_witness exception=OSError line=1247 errno=13 winerror=32 tracked=1 closed=1 crashed=0 count=3 events=page,private\n".as_slice(),
             b"camouhost_close_witness exception=OSError line=1247 errno=13 winerror=32 tracked=1 closed=1 crashed=0 count=3 events=page,close,close path=C:\\private\n",
