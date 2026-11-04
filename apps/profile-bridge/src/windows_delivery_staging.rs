@@ -1352,7 +1352,10 @@ mod tests {
             Err(DeliveryStagingError::CorruptStage)
         );
         fs::write(&manifest, b"manifest")?;
-        fs::write(staged.profile_bridge_root().join("profile-bridge.exe"), b"BRIDGE")?;
+        fs::write(
+            staged.profile_bridge_root().join("profile-bridge.exe"),
+            b"BRIDGE",
+        )?;
         assert_eq!(
             reopen_staged_delivery_before_runtime_selection(&root, &identity),
             Err(DeliveryStagingError::CorruptStage)
