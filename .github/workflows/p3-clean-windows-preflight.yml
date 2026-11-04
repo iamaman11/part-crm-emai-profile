@@ -1,0 +1,170 @@
+name: CRM P3 clean Windows preflight (ephemeral)
+
+# One explicitly bounded acceptance experiment. Never deploy or alter staging/Production.
+# This is NOT an independent device pairing, R2 decryption or browser WORKING proof.
+on:
+  push:
+    branches:
+      - test/p3-clean-windows-preflight-20261104
+
+permissions:
+  contents: read
+
+concurrency:
+  group: p3-clean-windows-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  clean-windows:
+    name: Exact ordinary installer and isolated real Camoufox preflight
+    runs-on: windows-2025
+    timeout-minutes: 100
+    env:
+      GH_TOKEN: ${{ github.token }}
+      P3_ACCEPTED_MAIN: 8050470b387b42615b563ee5b397db2f6107f3dc
+      P3_RELEASE: release-set-v3-sha256-7d26aa3c5214cc7d571dfa8b9ea86f7726cb16aaa366dffd8032f30d5ad252b0
+      P3_INSTALLER_SHA256: 34b1644f9cd870ef6081353a286017080c3ea4135b983904138b8d38455a9384
+      P3_BRIDGE_SHA256: 72f717ac228daffaacfb7456faf830e6b619a6fd2d3ff917da2a5c7b9b381866
+    steps:
+      - name: Prove isolated runner and no inherited user profile
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          if ($env:RUNNER_ENVIRONMENT -ne 'github-hosted') { throw 'P3_EXPECTED_EPHEMERAL_GITHUB_HOST' }
+          if (Test-Path -LiteralPath (Join-Path $env:LOCALAPPDATA 'Alegria/ProfileBridge')) { throw 'P3_NOT_CLEAN_APPLICATION_ROOT' }
+          if (Test-Path -LiteralPath 'HKCU:\Software\Classes\profilebridge') { throw 'P3_NOT_CLEAN_PROTOCOL_HANDLER' }
+          if (@(Get-Process -Name camoufox,profile-bridge -ErrorAction SilentlyContinue).Count -ne 0) { throw 'P3_UNEXPECTED_BROWSER_WRITER' }
+          Write-Output 'P3_CLEAN_APPLICATION_ROOT=PASS'
+          Write-Output 'P3_CLEAN_PROTOCOL_HANDLER=PASS'
+          Write-Output 'P3_SOURCE_USER_DATA_AND_CNG_TRANSFER=NONE'
+          Write-Output 'P3_SECOND_DEVICE_AUTHORIZATION=NOT_TESTED'
+          $disk = Get-PSDrive -Name C
+          Write-Output "P3_FREE_SPACE_GIB=$([math]::Round($disk.Free/1GB,1))"
+          if ($disk.Free -lt 8GB) { throw 'P3_HOST_INSUFFICIENT_FREE_SPACE' }
+
+      - name: Checkout exact test source without saved credentials
+        uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+
+      - name: Fetch immutable release and verify exact installer
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $PSNativeCommandUseErrorActionPreference = $true
+          $release = & gh release view $env:P3_RELEASE --repo iamaman11/part-crm-emai-profile --json targetCommitish | ConvertFrom-Json
+          if ($release.targetCommitish -cne $env:P3_ACCEPTED_MAIN) { throw 'P3_RELEASE_SOURCE_MISMATCH' }
+          $root = Join-Path $env:RUNNER_TEMP 'p3-official-release'
+          New-Item -ItemType Directory -Path $root -Force | Out-Null
+          & gh release download $env:P3_RELEASE --repo iamaman11/part-crm-emai-profile --pattern ProfileBridgeSetup.exe --dir $root
+          if ($LASTEXITCODE -ne 0) { throw 'P3_OFFICIAL_INSTALLER_DOWNLOAD_FAILED' }
+          $installer = Join-Path $root 'ProfileBridgeSetup.exe'
+          $hash = (Get-FileHash -LiteralPath $installer -Algorithm SHA256).Hash.ToLowerInvariant()
+          if ($hash -cne $env:P3_INSTALLER_SHA256) { throw 'P3_OFFICIAL_INSTALLER_SHA_MISMATCH' }
+          Write-Output 'P3_OFFICIAL_INSTALLER_PROVENANCE=PASS'
+
+      - name: Install exact ordinary per-user Inno distribution
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $installer = Join-Path $env:RUNNER_TEMP 'p3-official-release/ProfileBridgeSetup.exe'
+          $setupLog = Join-Path $env:RUNNER_TEMP 'p3-official-setup.log'
+          $p = Start-Process -FilePath $installer -ArgumentList @('/VERYSILENT','/SUPPRESSMSGBOXES','/NORESTART',"/LOG=$setupLog") -Wait -PassThru
+          if ($p.ExitCode -ne 0) { throw "P3_ORDINARY_INSTALL_FAILED_EXIT_$($p.ExitCode)" }
+          $handler = Get-Item -LiteralPath 'HKCU:\Software\Classes\profilebridge\shell\open\command' -ErrorAction Stop
+          $command = [string]$handler.GetValue('')
+          $match = [regex]::Match($command, '^"(?<exe>[^"]+\\profile-bridge\.exe)" "%1"$')
+          if (-not $match.Success) { throw 'P3_PROTOCOL_HANDLER_NOT_CANONICAL' }
+          $exe = $match.Groups['exe'].Value
+          if (-not (Test-Path -LiteralPath $exe -PathType Leaf)) { throw 'P3_INSTALLED_BRIDGE_MISSING' }
+          $sha = (Get-FileHash -LiteralPath $exe -Algorithm SHA256).Hash.ToLowerInvariant()
+          if ($sha -cne $env:P3_BRIDGE_SHA256) { throw 'P3_INSTALLED_BRIDGE_SHA_MISMATCH' }
+          $bridgeDir = Split-Path -Parent $exe
+          $releaseRoot = Split-Path -Parent $bridgeDir
+          $python = Join-Path $releaseRoot 'runtime/python/python.exe'
+          $camoufox = Join-Path $releaseRoot 'runtime/browser/camoufox.exe'
+          $camouhost = Join-Path $releaseRoot 'runtime/camouhost/real.py'
+          $runtimeLock = Join-Path $releaseRoot 'runtime/camouhost/runtime-lock.json'
+          $manifest = Join-Path $releaseRoot 'runtime/runtime-manifest.json'
+          foreach ($path in @($python, $camoufox, $camouhost, $runtimeLock, $manifest)) {
+            if (-not (Test-Path -LiteralPath $path -PathType Leaf)) { throw 'P3_OFFICIAL_RUNTIME_COMPONENT_MISSING' }
+          }
+          Write-Output 'P3_ORDINARY_USER_INSTALL=PASS'
+          Write-Output 'P3_HANDLER_AND_BRIDGE_IDENTITY=PASS'
+          Write-Output 'P3_OFFICIAL_RUNTIME_PRESENT=PASS'
+          $runtimePaths = @{ python=$python; camouhost=$camouhost; runtimeLock=$runtimeLock }
+          $runtimePaths | ConvertTo-Json | Set-Content -LiteralPath (Join-Path $env:RUNNER_TEMP 'p3-runtime-paths.json') -Encoding utf8
+
+      - name: Check anonymous staging egress and desktop capability
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $curl = Join-Path $env:SystemRoot 'System32/curl.exe'
+          $status = & $curl --silent --show-error --noproxy '*' --max-redirs 0 --connect-timeout 15 --max-time 30 --output NUL --write-out '%{http_code}' --url 'https://staging.alegria.by/'
+          if ($LASTEXITCODE -ne 0 -or $status -notmatch '^(200|302|403)$') { throw 'P3_STAGING_EGRESS_UNEXPECTED' }
+          Write-Output "P3_ANONYMOUS_STAGING_EGRESS_HTTP=$status"
+          Write-Output "P3_WINDOWS_USER_INTERACTIVE=$([Environment]::UserInteractive)"
+          Write-Output "P3_RUNNER_SESSION=$([Diagnostics.Process]::GetCurrentProcess().SessionId)"
+          try {
+            Add-Type -AssemblyName System.Windows.Forms
+            $form = New-Object System.Windows.Forms.Form
+            $form.Text = 'P3 disposable GUI probe'
+            $form.Show()
+            [System.Windows.Forms.Application]::DoEvents()
+            $visible = $form.IsHandleCreated -and $form.Visible
+            $form.Close()
+            Write-Output "P3_GUI_WINDOW_HANDLE_CREATED=$visible"
+          } catch {
+            Write-Output 'P3_GUI_WINDOW_HANDLE_CREATED=UNKNOWN'
+          }
+          Write-Output 'P3_GUI_OBSERVER=NO_INDEPENDENT_HUMAN_DESKTOP_OBSERVER'
+
+      - name: Launch installed official Camoufox using existing native real-browser fixture
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $p = Get-Content -Raw -LiteralPath (Join-Path $env:RUNNER_TEMP 'p3-runtime-paths.json') | ConvertFrom-Json
+          $PSNativeCommandUseErrorActionPreference = $false
+          $log = Join-Path $env:RUNNER_TEMP 'p3-native-browser-proof.log'
+          & $p.python scripts/test-ar10-real-camoufox-cleanup.py --native-restore-only --python $p.python --camouhost $p.camouhost --runtime-lock $p.runtimeLock --headless false *> $log
+          $code = $LASTEXITCODE
+          if ($code -eq 0) {
+            $evidence = Get-Content -Raw -LiteralPath $log
+            if ($evidence -match 'AR10_NATIVE_FIREFOX_SESSIONSTORE=PHYSICAL_PASS' -and $evidence -match 'native_restore_proof stage=passed') {
+              Write-Output 'P3_INSTALLED_RUNTIME_NATIVE_BROWSER=PASS'
+            } else {
+              Write-Output 'P3_INSTALLED_RUNTIME_NATIVE_BROWSER=UNKNOWN_MISSING_PROOF'
+            }
+          } else {
+            Write-Output "P3_INSTALLED_RUNTIME_NATIVE_BROWSER=UNKNOWN_EXIT_$code"
+          }
+          Write-Output 'P3_SECOND_DEVICE_PAIRING=BLOCKED_AUTHORITY'
+          Write-Output 'P3_REMOTE_R2_DECRYPT_AND_WORKING=NOT_TESTED'
+          Write-Output 'P3_FULL_ACCEPTANCE=NO_GO'
+
+      - name: Preserve proof classification without profile files or secrets
+        if: always()
+        shell: pwsh
+        run: |
+          $output = Join-Path $env:RUNNER_TEMP 'p3-preflight-disposition.txt'
+          @(
+            "P3_ACCEPTED_MAIN=$env:P3_ACCEPTED_MAIN",
+            "P3_RELEASE_ID=$env:P3_RELEASE",
+            'P3_SOURCE_USER_DATA_EXPORTED=NO',
+            'P3_SOURCE_CNG_PRIVATE_KEY_EXPORTED=NO',
+            'P3_SECOND_DEVICE_PAIRING=NOT_TESTED',
+            'P3_REMOTE_R2_DECRYPT_AND_WORKING=NOT_TESTED',
+            'P3_FULL_ACCEPTANCE=NO_GO',
+            'Evidence: job-step console classifications, not browser profile bytes.'
+          ) | Set-Content -LiteralPath $output -Encoding utf8
+          Write-Output 'P3_SANITIZED_EVIDENCE_WRITTEN=PASS'
+
+      - name: Upload nonsecret preflight disposition
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: p3-clean-windows-disposition-${{ github.sha }}
+          path: ${{ runner.temp }}/p3-preflight-disposition.txt
+          if-no-files-found: error
+          retention-days: 7
