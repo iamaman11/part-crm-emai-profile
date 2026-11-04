@@ -158,6 +158,7 @@ impl FilesystemRuntimeBundleSelection {
             eprintln!("RUNTIME_BUNDLE_VALIDATION=manifest_identity;error={error:?}");
         })?;
 
+        let verification_started = std::time::Instant::now();
         let mut expected_files = HashSet::new();
         expected_files.insert(SHIPPING_COMPONENT_MANIFEST.to_owned());
         let mut expected_directories = HashSet::new();
@@ -202,6 +203,12 @@ impl FilesystemRuntimeBundleSelection {
             .inspect_err(|error| {
                 eprintln!("RUNTIME_BUNDLE_VALIDATION=tree;error={error:?}");
             })?;
+        eprintln!(
+            "bridge_runtime_phase name=verify_files_and_tree elapsed_ms={} files={} bytes={}",
+            verification_started.elapsed().as_millis(),
+            runtime_files.len(),
+            total_bytes,
+        );
 
         // The v3 external file-set digest binds the producer's exact order (Windows paths
         // are case-insensitive). Normalize only the internal inventory after verification.
