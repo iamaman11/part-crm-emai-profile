@@ -75,7 +75,10 @@ impl ActiveWindowsDeliveryRuntime {
         }
         .map_err(|_| WindowsDeliveryRuntimeError::StagedDelivery)?;
         if runtime_hashes_deferred {
-            eprintln!("bridge_open_phase name=delivery_stage_readback elapsed_ms={}", stage_started.elapsed().as_millis());
+            eprintln!(
+                "bridge_open_phase name=delivery_stage_readback elapsed_ms={}",
+                stage_started.elapsed().as_millis()
+            );
         }
 
         let staged_release = fs::canonicalize(staged.path())
