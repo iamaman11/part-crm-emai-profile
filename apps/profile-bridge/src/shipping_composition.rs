@@ -737,7 +737,10 @@ mod windows {
             process,
             camouhost,
         );
-        eprintln!("bridge_open_phase name=owner_setup elapsed_ms={}", owner_setup_started.elapsed().as_millis());
+        eprintln!(
+            "bridge_open_phase name=owner_setup elapsed_ms={}",
+            owner_setup_started.elapsed().as_millis()
+        );
         let opened_at = now()?;
         let open_started = std::time::Instant::now();
         report::record_current(
