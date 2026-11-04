@@ -1047,6 +1047,7 @@ where
             return Err(OperatorFlowError::Busy);
         }
         self.last_terminal = None;
+        let admission_started = std::time::Instant::now();
 
         // Verify installed bytes before creating any short-lived authenticated launch intent.
         // Exact generation/runtime compatibility is still enforced by browser_preflight below.
@@ -1054,6 +1055,10 @@ where
             .runtime_bundles
             .select_bundle()
             .map_err(|_| OperatorFlowError::Stage(OperatorFailureStage::RuntimeBundle))?;
+        eprintln!(
+            "bridge_open_phase name=runtime_integrity elapsed_ms={}",
+            admission_started.elapsed().as_millis()
+        );
         let device_id = self
             .device_identity
             .device_id()
@@ -1094,6 +1099,10 @@ where
             return Err(self.fail_before_local_use(OperatorFailureStage::LeaseValidation, lease));
         }
 
+        eprintln!(
+            "bridge_open_phase name=authenticated_claim elapsed_ms={}",
+            admission_started.elapsed().as_millis()
+        );
         // One session-scoped keepalive also spans blocking local/cloud Open
         // materialization and real Camoufox startup, not only a pending Save.
         // It shares this exact verified cursor and is owned by composition.
@@ -1227,6 +1236,7 @@ where
             }
         }
 
+        let materialization_started = std::time::Instant::now();
         if !native_rescue_required
             && let Err(reason) = ensure_materialized(
                 &mut self.coordinator,
@@ -1266,6 +1276,11 @@ where
             return Err(OperatorFlowError::AuthoritativeGeneration { reason, cleanup });
         }
 
+        eprintln!(
+            "bridge_open_phase name=authoritative_materialization elapsed_ms={}",
+            materialization_started.elapsed().as_millis()
+        );
+        let native_admission_started = std::time::Instant::now();
         let workspace = match root.open_generation(
             enrollment.actor().tenant_scope().tenant_id(),
             enrollment.profile_id(),
@@ -1379,6 +1394,11 @@ where
             ));
         }
 
+        eprintln!(
+            "bridge_open_phase name=native_admission elapsed_ms={}",
+            native_admission_started.elapsed().as_millis()
+        );
+        let browser_started = std::time::Instant::now();
         if let Err(source) = RuntimeSessionOrchestrator::launch(
             &runtime_bundle,
             lease.session_id(),
@@ -1399,6 +1419,10 @@ where
             });
         }
 
+        eprintln!(
+            "bridge_open_phase name=managed_browser_launch elapsed_ms={}",
+            browser_started.elapsed().as_millis()
+        );
         self.active = Some(ActiveOperatorSession {
             lease,
             workspace_lock: Some(workspace_lock),
