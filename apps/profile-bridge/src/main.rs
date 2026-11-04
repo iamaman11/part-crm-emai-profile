@@ -380,6 +380,10 @@ impl std::error::Error for BridgeCliError {}
 mod tests {
     use super::FIRST_INSTALL_ARGUMENT;
     use super::{BridgeCliError, BridgeCommand, Cause, ShippingCompositionError, parse_command};
+    use profile_bridge::windows_delivery_handoff::{
+        HANDOFF_ACTIVATE_ARGUMENT, HANDOFF_ARRIVAL_ARGUMENT,
+    };
+
     #[test]
     fn native_lease_conflict_has_exact_safe_observation_cause() {
         use profile_bridge::operator_flow::OperatorFlowError;
@@ -406,10 +410,6 @@ mod tests {
         );
     }
 
-
-    use profile_bridge::windows_delivery_handoff::{
-        HANDOFF_ACTIVATE_ARGUMENT, HANDOFF_ARRIVAL_ARGUMENT,
-    };
 
     #[test]
     fn valid_claim_crosses_only_the_cli_boundary() -> Result<(), Box<dyn std::error::Error>> {
