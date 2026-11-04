@@ -166,6 +166,62 @@ def prove_controlled_close_dispatch_contract(runtime: ModuleType) -> None:
     context.next_observation = lambda: (crashed.fire("crash"), crashed.fire("close"))
     assert not runtime.observe_controlled_close(context, witness)
 
+    class RestoredPage(Page):
+        def __init__(self) -> None:
+            super().__init__()
+            self.url = "https://example.invalid/restore"
+            self.document_uri = "about:tabcrashed"
+
+        def is_closed(self) -> bool:
+            return False
+
+        def evaluate(self, script: str) -> dict[str, str]:
+            assert "document.documentURI" in script
+            return {"uri": self.document_uri, "ready": "complete"}
+
+    # Firefox's crash reporter is not a recovered document, even if a load
+    # event is reported. The page must be the exact original crashed page.
+    recoverable, unrelated = RestoredPage(), RestoredPage()
+    context = Context([recoverable, unrelated])
+    witness = runtime.install_controlled_close_observation(context)
+    context.next_observation = lambda: recoverable.fire("crash")
+    assert not runtime.observe_controlled_close(context, witness)
+    context.next_observation = lambda: unrelated.fire("load")
+    assert not runtime.observe_controlled_close(context, witness)
+    context.next_observation = lambda: recoverable.fire("load")
+    assert not runtime.observe_controlled_close(context, witness), (
+        "native crash reporter became a false recovery witness"
+    )
+    recoverable.document_uri = recoverable.url
+    context.next_observation = lambda: None
+    assert not runtime.observe_controlled_close(context, witness)
+    assert not witness["unresolved_crashes"], "same-page verified load did not clear crash"
+    assert witness["crashed"], "historical crash evidence was erased"
+    context.next_observation = lambda: (recoverable.fire("close"), unrelated.fire("close"))
+    assert runtime.observe_controlled_close(context, witness), (
+        "native restored tab and normal full-context close failed to save"
+    )
+
+    # An exited native browser with incomplete callbacks or an unresolved crash
+    # must not make Bridge heartbeat forever. It is a typed terminal failure.
+    class ExitedRoot:
+        def safely_exited(self) -> bool:
+            return False
+
+        def has_exited(self) -> bool:
+            return True
+
+    stopped = Page()
+    context = Context([stopped])
+    witness = runtime.install_controlled_close_observation(context)
+    witness["browser_exit"] = ExitedRoot()
+    try:
+        runtime.observe_controlled_close(context, witness)
+    except runtime.RuntimeContractError:
+        pass
+    else:
+        raise AssertionError("exited root without page close kept infinite heartbeat")
+
     unexpected = Page()
     context = Context([unexpected])
     witness = runtime.install_controlled_close_observation(context)
