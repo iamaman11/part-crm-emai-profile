@@ -1240,7 +1240,6 @@ where
         }
 
         #[cfg(windows)]
-
         let materialization_started = std::time::Instant::now();
         if !native_rescue_required
             && let Err(reason) = ensure_materialized(
