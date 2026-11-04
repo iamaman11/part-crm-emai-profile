@@ -5,7 +5,9 @@ use crate::runtime_bundle::{
     ApprovedRuntimeBundle, FilesystemRuntimeBundleSelection, RuntimeBundleSelectionError,
 };
 use crate::windows_delivery::{DeliveryActivationOutcome, DeliveryIdentity, DeliveryState};
-use crate::windows_delivery_staging::{DeliveryStagingRoot, reopen_staged_delivery};
+use crate::windows_delivery_staging::{
+    DeliveryStagingRoot, reopen_staged_delivery, reopen_staged_delivery_before_runtime_selection,
+};
 use crate::windows_delivery_store::{
     DeliveryHandoffKind, DeliveryHandoffOutcome, DeliveryStateStore,
 };
@@ -33,6 +35,18 @@ pub struct ActiveWindowsDeliveryRuntime {
 
 impl ActiveWindowsDeliveryRuntime {
     pub fn resolve_current() -> Result<Self, WindowsDeliveryRuntimeError> {
+        Self::resolve_current_with_stage_hashing(false)
+    }
+
+    /// Only normal browser Open defers runtime content hashes to the selector.
+    /// Installer and delivery recovery keep the complete preflight.
+    pub(crate) fn resolve_for_browser_open() -> Result<Self, WindowsDeliveryRuntimeError> {
+        Self::resolve_current_with_stage_hashing(true)
+    }
+
+    fn resolve_current_with_stage_hashing(
+        runtime_hashes_deferred: bool,
+    ) -> Result<Self, WindowsDeliveryRuntimeError> {
         let current_executable = std::env::current_exe()
             .map_err(|_| WindowsDeliveryRuntimeError::InvalidInstalledLayout)?;
         let current_executable = fs::canonicalize(current_executable)
@@ -53,8 +67,12 @@ impl ActiveWindowsDeliveryRuntime {
             .cloned()
             .ok_or(WindowsDeliveryRuntimeError::NoActiveDelivery)?;
         let pending_health = pending_health_confirmation(&state, &layout.state_root, &active)?;
-        let staged = reopen_staged_delivery(&staging, &active)
-            .map_err(|_| WindowsDeliveryRuntimeError::StagedDelivery)?;
+        let staged = if runtime_hashes_deferred {
+            reopen_staged_delivery_before_runtime_selection(&staging, &active)
+        } else {
+            reopen_staged_delivery(&staging, &active)
+        }
+        .map_err(|_| WindowsDeliveryRuntimeError::StagedDelivery)?;
 
         let staged_release = fs::canonicalize(staged.path())
             .map_err(|_| WindowsDeliveryRuntimeError::StagedDelivery)?;

@@ -329,6 +329,24 @@ pub fn reopen_staged_delivery(
     root: &DeliveryStagingRoot,
     identity: &DeliveryIdentity,
 ) -> Result<StagedDelivery, DeliveryStagingError> {
+    reopen_staged_delivery_with_mode(root, identity, false)
+}
+
+/// Browser Open only: full runtime SHA-256 is performed by the runtime selector
+/// before device authentication or claim redemption. This preflight still
+/// verifies every path/type/size plus Bridge and runtime-manifest file contents.
+pub(crate) fn reopen_staged_delivery_before_runtime_selection(
+    root: &DeliveryStagingRoot,
+    identity: &DeliveryIdentity,
+) -> Result<StagedDelivery, DeliveryStagingError> {
+    reopen_staged_delivery_with_mode(root, identity, true)
+}
+
+fn reopen_staged_delivery_with_mode(
+    root: &DeliveryStagingRoot,
+    identity: &DeliveryIdentity,
+    runtime_hashes_deferred: bool,
+) -> Result<StagedDelivery, DeliveryStagingError> {
     validate_directory_path(root.path())?;
     let directory_name = release_directory_name_for_identity(identity)?;
     let final_path = root.path().join(&directory_name);
@@ -371,7 +389,12 @@ pub fn reopen_staged_delivery(
         &marker.runtime_bundle,
         &identity.runtime_bundle_release_id,
     )?;
-    verify_materialized_stage(&final_path, &marker_bytes, [&bridge_plan, &runtime_plan])?;
+    verify_materialized_stage_with_mode(
+        &final_path,
+        &marker_bytes,
+        [&bridge_plan, &runtime_plan],
+        runtime_hashes_deferred,
+    )?;
     Ok(StagedDelivery {
         identity: identity.clone(),
         path: final_path,
@@ -606,6 +629,15 @@ fn verify_materialized_stage(
     marker_bytes: &[u8],
     plans: [&ComponentPlan; 2],
 ) -> Result<(), DeliveryStagingError> {
+    verify_materialized_stage_with_mode(stage_path, marker_bytes, plans, false)
+}
+
+fn verify_materialized_stage_with_mode(
+    stage_path: &Path,
+    marker_bytes: &[u8],
+    plans: [&ComponentPlan; 2],
+    runtime_hashes_deferred: bool,
+) -> Result<(), DeliveryStagingError> {
     validate_directory_path(stage_path)?;
     let marker_path = stage_path.join(MARKER_NAME);
     let marker_metadata =
@@ -648,6 +680,7 @@ fn verify_materialized_stage(
         &expected_files,
         &mut actual_files,
         &mut actual_directories,
+        runtime_hashes_deferred,
     )?;
     if actual_files.len() != expected_files.len()
         || actual_directories != expected_directories
@@ -666,6 +699,7 @@ fn collect_tree(
     expected_files: &HashMap<String, (u64, String)>,
     actual_files: &mut HashSet<String>,
     actual_directories: &mut HashSet<String>,
+    runtime_hashes_deferred: bool,
 ) -> Result<(), DeliveryStagingError> {
     for entry in fs::read_dir(current).map_err(|_| DeliveryStagingError::Io)? {
         let entry = entry.map_err(|_| DeliveryStagingError::Io)?;
@@ -683,12 +717,21 @@ fn collect_tree(
                 expected_files,
                 actual_files,
                 actual_directories,
+                runtime_hashes_deferred,
             )?;
         } else if metadata.is_file() {
             let Some((expected_size, expected_digest)) = expected_files.get(&relative) else {
                 return Err(DeliveryStagingError::CorruptStage);
             };
-            if metadata.len() != *expected_size || sha256_file(&path)? != *expected_digest {
+            // Preserve exact Bridge and runtime-manifest identity at the
+            // stage gate. The selector hashes every other runtime file
+            // once before any authenticated Open or launch claim.
+            let verify_digest = !runtime_hashes_deferred
+                || !relative.starts_with("runtime/")
+                || relative == "runtime/runtime-manifest.json";
+            if metadata.len() != *expected_size
+                || (verify_digest && sha256_file(&path)? != *expected_digest)
+            {
                 return Err(DeliveryStagingError::CorruptStage);
             }
             actual_files.insert(relative);
@@ -1240,6 +1283,78 @@ mod tests {
         fs::write(first.runtime_root().join("python/python.exe"), b"tampered")?;
         assert_eq!(
             reopen_staged_delivery(&root, &candidate.identity()),
+            Err(DeliveryStagingError::CorruptStage)
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn browser_open_preflight_defers_runtime_hash_but_not_bridge_or_manifest() -> TestResult {
+        let directory = TestDirectory::create("open-preflight")?;
+        let bridge_artifact = directory.0.join("bridge.zip");
+        let runtime_artifact = directory.0.join("runtime.zip");
+        let bridge_bytes = b"bridge-archive";
+        let runtime_bytes = b"runtime-archive";
+        artifact(&bridge_artifact, bridge_bytes)?;
+        artifact(&runtime_artifact, runtime_bytes)?;
+        let candidate = candidate(bridge_bytes, runtime_bytes, 19)?;
+        let root = DeliveryStagingRoot::open_or_create(directory.0.join("releases"))?;
+        let mut reader = FakeArchiveReader::default();
+        reader.insert_file(
+            DeliveryComponentKind::ProfileBridge,
+            "profile-bridge.exe",
+            b"bridge",
+        );
+        reader.insert_file(
+            DeliveryComponentKind::RuntimeBundle,
+            "runtime-manifest.json",
+            b"manifest",
+        );
+        reader.insert_file(
+            DeliveryComponentKind::RuntimeBundle,
+            "browser/camoufox.exe",
+            b"browser",
+        );
+        let staged = stage_verified_delivery(
+            &root,
+            &candidate,
+            &bridge_artifact,
+            &runtime_artifact,
+            &mut reader,
+        )?;
+        let identity = candidate.identity();
+        assert_eq!(
+            reopen_staged_delivery_before_runtime_selection(&root, &identity)?,
+            staged
+        );
+        let browser = staged.runtime_root().join("browser/camoufox.exe");
+        // No content acceptance is granted by this lightweight preflight:
+        // the existing runtime selector must reject same-size byte tampering.
+        fs::write(&browser, b"change!")?;
+        assert_eq!(
+            reopen_staged_delivery_before_runtime_selection(&root, &identity)?,
+            staged
+        );
+        assert_eq!(
+            reopen_staged_delivery(&root, &identity),
+            Err(DeliveryStagingError::CorruptStage)
+        );
+        fs::write(&browser, b"longer payload")?;
+        assert_eq!(
+            reopen_staged_delivery_before_runtime_selection(&root, &identity),
+            Err(DeliveryStagingError::CorruptStage)
+        );
+        fs::write(&browser, b"browser")?;
+        let manifest = staged.runtime_root().join("runtime-manifest.json");
+        fs::write(&manifest, b"manifesT")?;
+        assert_eq!(
+            reopen_staged_delivery_before_runtime_selection(&root, &identity),
+            Err(DeliveryStagingError::CorruptStage)
+        );
+        fs::write(&manifest, b"manifest")?;
+        fs::write(staged.profile_bridge_root().join("profile-bridge.exe"), b"BRIDGE")?;
+        assert_eq!(
+            reopen_staged_delivery_before_runtime_selection(&root, &identity),
             Err(DeliveryStagingError::CorruptStage)
         );
         Ok(())

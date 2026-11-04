@@ -677,7 +677,7 @@ mod windows {
         }
 
         let config = ShippingConfig::from_installation()?;
-        let active_delivery = ActiveWindowsDeliveryRuntime::resolve_current().map_err(|error| {
+        let active_delivery = ActiveWindowsDeliveryRuntime::resolve_for_browser_open().map_err(|error| {
             eprintln!("BRIDGE_DELIVERY_RUNTIME_FAILURE={error:?}");
             ShippingCompositionError::DeliveryRecoveryRequired
         })?;
