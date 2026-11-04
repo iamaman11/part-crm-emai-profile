@@ -31,13 +31,14 @@ describe('ProfilesWorkspace generation refresh (#802 F06)', () => {
   });
 
   it('refreshes authoritative profile and generation after deactivate/reactivate without reload', async () => {
-    const profile = { profileId: 'profile_test', status: 'READY', version: 11, linkedClientId: null };
+    const profile = { profileId: 'profile_test', status: 'READY', version: 11, linkedClientId: null, activeGenerationId: 'generation_test' as string | null };
     const generation = { generationId: 'generation_test', status: 'VERIFIED', version: 3, verificationReference: null };
     profileLookup.mockImplementation(async () => ({ ...profile }) as Awaited<ReturnType<typeof getProfile>>);
     generationLookup.mockImplementation(async () => ({ ...generation }) as Awaited<ReturnType<typeof getGeneration>>);
     activation.mockImplementation(async (_tenant, _profile, _generation, expectedVersion, activate) => {
       expect(expectedVersion).toBe(profile.version);
       profile.status = activate ? 'READY' : 'SUSPENDED';
+      profile.activeGenerationId = activate ? 'generation_test' : null;
       profile.version += 1;
       return { resultCode: 'SUCCEEDED', resourceId: profile.profileId } as Awaited<ReturnType<typeof changeGenerationActivation>>;
     });
@@ -98,6 +99,7 @@ describe('ProfilesWorkspace generation refresh (#802 F06)', () => {
     });
     profileLookup.mockImplementation(async (_tenant, id) => ({
       profileId: id, status: 'READY', version: 11, linkedClientId: null,
+      activeGenerationId: id === 'profile_old' ? 'generation_old' : null,
     }) as Awaited<ReturnType<typeof getProfile>>);
     generationLookup.mockResolvedValue({
       generationId: 'generation_old', status: 'VERIFIED', version: 3,
