@@ -19,7 +19,7 @@ use sha2::{Digest, Sha256};
 use std::env;
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
 const ENABLE_ENV: &str = "AR10_REAL_CAMOUFOX";
 const PYTHON_ENV: &str = "AR10_PYTHON";
@@ -388,7 +388,7 @@ impl profile_bridge::operator_flow::RuntimeBundleSelectionPort for InitialBundle
     }
 }
 
-fn run_managed_cold_launch_cycle() -> Result<(), Box<dyn std::error::Error>> {
+fn run_managed_cold_launch_cycle() -> Result<ApprovedRuntimeBundle, Box<dyn std::error::Error>> {
     let python = PathBuf::from(env::var(PYTHON_ENV)?).canonicalize()?;
     let runtime_root = PathBuf::from(env::var(RUNTIME_ROOT_ENV)?).canonicalize()?;
     let root_path = root_path()?;
@@ -404,7 +404,12 @@ fn run_managed_cold_launch_cycle() -> Result<(), Box<dyn std::error::Error>> {
         _ => return Err(format!("{HEADLESS_ENV} must be exactly false or virtual").into()),
     };
 
+    let runtime_selection_started = Instant::now();
     let bundle = approved_runtime(&runtime_root)?;
+    eprintln!(
+        "AR10_COLD_CYCLE_PHASE=runtime_selection;elapsed_ms={}",
+        runtime_selection_started.elapsed().as_millis()
+    );
     let config = ManagedCamouhostConfig::new(
         python.clone(),
         runtime_root.clone(),
@@ -421,6 +426,7 @@ fn run_managed_cold_launch_cycle() -> Result<(), Box<dyn std::error::Error>> {
         profile_platform_primitives::CorrelationId::parse("corr_01JAR10REAL")?,
     );
     let object = std::rc::Rc::new(std::cell::RefCell::new(InitialObject::default()));
+    let initial_generation_started = Instant::now();
     profile_bridge::generation_initialization::initialize(
         &intent,
         &actor,
@@ -438,6 +444,10 @@ fn run_managed_cold_launch_cycle() -> Result<(), Box<dyn std::error::Error>> {
         &mut InitialUpload(object.clone()),
     )
     .map_err(|error| format!("initial profile preparation failed at {error:?}"))?;
+    eprintln!(
+        "AR10_COLD_CYCLE_PHASE=initial_generation;elapsed_ms={}",
+        initial_generation_started.elapsed().as_millis()
+    );
     let evidence = object.borrow();
     if !evidence.committed || !evidence.verified {
         return Err("initial generation was not confirmed".into());
@@ -464,22 +474,30 @@ fn run_managed_cold_launch_cycle() -> Result<(), Box<dyn std::error::Error>> {
     assert!(cold_observer.observe_live().is_err());
     let mut camouhost = StageTracingCamouhost::new(camouhost);
     let session = SessionId::parse("session_01JAR10REAL")?;
+    let browser_launch_started = Instant::now();
     RuntimeSessionOrchestrator::launch(&bundle, &session, &mut process, &mut camouhost)?;
+    eprintln!(
+        "AR10_COLD_CYCLE_PHASE=native_launch;elapsed_ms={}",
+        browser_launch_started.elapsed().as_millis()
+    );
     // The candidate witness must be independent of the already authenticated
     // Launch/Ready exchange, with the SAME fingerprint and managed session.
     cold_observer.observe_live()?;
+    let browser_close_started = Instant::now();
     RuntimeSessionOrchestrator::close(&bundle, &session, &mut process, &mut camouhost)?;
+    eprintln!(
+        "AR10_COLD_CYCLE_PHASE=native_close;elapsed_ms={}",
+        browser_close_started.elapsed().as_millis()
+    );
     assert!(cold_observer.observe_live().is_err());
 
-    #[cfg(windows)]
-    assert_eq!(
-        approved_runtime(&PathBuf::from(env::var(RUNTIME_ROOT_ENV)?))?,
-        bundle
-    );
-
+    // The next cycle re-selects (and fully hashes) the exact runtime before
+    // admission; one final post-run check below guards the last cycle. This
+    // preserves detection of mutation between any two launches without two
+    // redundant multi-GiB hash passes after earlier cycles.
     lock.release()?;
     fs::remove_dir_all(&root_path)?;
-    Ok(())
+    Ok(bundle)
 }
 
 #[test]
@@ -489,8 +507,22 @@ fn bridge_preflight_launches_real_camoufox_through_managed_ipc()
         return Ok(());
     }
 
-    for _ in 0..MANAGED_COLD_LAUNCH_ATTEMPTS {
-        run_managed_cold_launch_cycle()?;
+    let mut last_bundle = None;
+    for attempt in 0..MANAGED_COLD_LAUNCH_ATTEMPTS {
+        let started = Instant::now();
+        last_bundle = Some(run_managed_cold_launch_cycle()?);
+        eprintln!(
+            "AR10_COLD_CYCLE_COMPLETED=PASS;ordinal={};elapsed_ms={}",
+            attempt + 1,
+            started.elapsed().as_millis()
+        );
     }
+    // Each next cycle already revalidated exact bytes before touching any
+    // browser state. Recheck after the final cycle for tampering on shutdown.
+    let last_bundle = last_bundle.ok_or("cold-launch attempt count must be nonzero")?;
+    assert_eq!(
+        approved_runtime(&PathBuf::from(env::var(RUNTIME_ROOT_ENV)?))?,
+        last_bundle
+    );
     Ok(())
 }
