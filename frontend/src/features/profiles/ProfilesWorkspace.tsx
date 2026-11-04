@@ -166,12 +166,24 @@ export function ProfilesWorkspace({
   }, [tenantId, selectedProfileId]);
 
   useEffect(() => {
+    // Bridge saves are performed outside this tab. On return, read the
+    // canonical projections through their existing query owners; a focus
+    // event is a revalidation signal, not a second realtime control plane.
     const refresh = () => {
-      if (tenantId && selectedProfileId) lookup.mutate({ tenantId, profileId: selectedProfileId });
+      if (!tenantId) return;
+      void cache.invalidateQueries({ queryKey: ['operator-query', tenantId, 'profiles'] });
+      if (selectedProfileId) lookup.mutate({ tenantId, profileId: selectedProfileId });
+    };
+    const onVisibility = () => {
+      if (globalThis.document.visibilityState === 'visible') refresh();
     };
     globalThis.addEventListener('focus', refresh);
-    return () => globalThis.removeEventListener('focus', refresh);
-  }, [tenantId, selectedProfileId]);
+    globalThis.document.addEventListener('visibilitychange', onVisibility);
+    return () => {
+      globalThis.removeEventListener('focus', refresh);
+      globalThis.document.removeEventListener('visibilitychange', onVisibility);
+    };
+  }, [tenantId, selectedProfileId, cache]);
 
   const enabled = tenantId.length > 0;
   const profileLoaded = enabled && profileId.length > 0 && profile !== null;
@@ -203,7 +215,13 @@ export function ProfilesWorkspace({
           <p>The selected profile is not visible to the active actor.</p>
         )}
         {profile && <>
-          <button type="button" disabled={launch.isPending || generationAction.isPending || generationRefreshUnconfirmed || !['DRAFT', 'READY'].includes(profile.status)} onClick={() => launch.mutate()}>{launch.isPending ? 'Opening…' : 'Open browser'}</button>
+          <div className="action-row">
+            <button type="button" disabled={launch.isPending || generationAction.isPending || generationRefreshUnconfirmed || !['DRAFT', 'READY'].includes(profile.status)} onClick={() => launch.mutate()}>{launch.isPending ? 'Opening…' : 'Open browser'}</button>
+            <button type="button" disabled={lookup.isPending} onClick={() => {
+              void cache.invalidateQueries({ queryKey: ['operator-query', tenantId, 'profiles'] });
+              lookup.mutate({ tenantId, profileId });
+            }}>Refresh status</button>
+          </div>
           <StatusMessage state={launch.error ?? (launch.isPending ? 'Preparing and opening your profile…' : null)} />
         </>}
         {profile && (
@@ -293,7 +311,7 @@ export function ProfilesWorkspace({
           </form>
         </div>
         <StatusMessage state={generationLookup.error ?? generationRegister.error ?? (generationRegister.data ? `${generationRegister.data.resultCode}: ${generationRegister.data.resourceId}` : null)} />
-        {generation && <GenerationActions generation={generation} profileVersion={profile?.version ?? 1} busy={generationAction.isPending} onAction={(input) => generationAction.mutate({ ...input, target: { tenantId, profileId, generationId } })} onHighImpact={(input) => generationAction.mutateAsync({ ...input, target: { tenantId, profileId, generationId } }).then(() => undefined)} />}
+        {generation && <GenerationActions generation={generation} profileVersion={profile?.version ?? 1} isActive={profile?.activeGenerationId === generation.generationId} busy={generationAction.isPending} onAction={(input) => generationAction.mutate({ ...input, target: { tenantId, profileId, generationId } })} onHighImpact={(input) => generationAction.mutateAsync({ ...input, target: { tenantId, profileId, generationId } }).then(() => undefined)} />}
         <StatusMessage state={actionBelongsToSelection
           ? (generationAction.error ?? (generationAction.data ? `${generationAction.data.resultCode}: ${generationAction.data.resourceId}` : null))
           : null} />
@@ -364,9 +382,10 @@ function ProfileGrantPanel({ disabled, defaultVersion, busy, onGrant, onRevoke }
   );
 }
 
-function GenerationActions({ generation, profileVersion, busy, onAction, onHighImpact }: {
+function GenerationActions({ generation, profileVersion, isActive, busy, onAction, onHighImpact }: {
   generation: GenerationProjection;
   profileVersion: number;
+  isActive: boolean;
   busy: boolean;
   onAction: (input: { kind: 'verify'; expectedVersion: number; reference: string } | { kind: 'activate' | 'deactivate' | 'quarantine'; expectedVersion: number }) => void;
   onHighImpact: (input: { kind: 'activate' | 'deactivate' | 'quarantine'; expectedVersion: number }) => Promise<void>;
@@ -382,11 +401,12 @@ function GenerationActions({ generation, profileVersion, busy, onAction, onHighI
       </dl>
       <div className="action-row">
         <label>Verification reference<input value={reference} onChange={(e) => setReference(e.currentTarget.value)} /></label>
-        <button type="button" disabled={busy || !reference} onClick={() => onAction({ kind: 'verify', expectedVersion: generation.version, reference })}>Verify</button>
-        <ConfirmAction label="activate generation" consequence="Activation changes the profile's active immutable generation. The Worker enforces verified status and optimistic versioning." disabled={busy} onConfirm={() => onHighImpact({ kind: 'activate', expectedVersion: profileVersion })} />
-        <ConfirmAction label="deactivate generation" consequence="Deactivation removes the active generation from the profile and can make it non-launchable." disabled={busy} onConfirm={() => onHighImpact({ kind: 'deactivate', expectedVersion: profileVersion })} />
-        <ConfirmAction label="quarantine generation" consequence="Quarantine is terminal for this generation and blocks future activation." disabled={busy} onConfirm={() => onHighImpact({ kind: 'quarantine', expectedVersion: generation.version })} />
+        <button type="button" disabled={busy || generation.status !== 'REGISTERED' || !reference} onClick={() => onAction({ kind: 'verify', expectedVersion: generation.version, reference })}>Verify</button>
+        <ConfirmAction label="activate generation" consequence="Activation changes the profile's active immutable generation. The Worker enforces verified status and optimistic versioning." disabled={busy || generation.status !== 'VERIFIED' || isActive} onConfirm={() => onHighImpact({ kind: 'activate', expectedVersion: profileVersion })} />
+        <ConfirmAction label="deactivate generation" consequence="Deactivation removes the active generation from the profile and can make it non-launchable." disabled={busy || !isActive} onConfirm={() => onHighImpact({ kind: 'deactivate', expectedVersion: profileVersion })} />
+        <ConfirmAction label="quarantine generation" consequence="Quarantine is terminal for this generation and blocks future activation." disabled={busy || generation.status === 'QUARANTINED'} onConfirm={() => onHighImpact({ kind: 'quarantine', expectedVersion: generation.version })} />
       </div>
+      {generation.status === 'QUARANTINED' && <p role="status">This generation is quarantined and cannot be activated. Select a verified generation instead.</p>}
     </div>
   );
 }
