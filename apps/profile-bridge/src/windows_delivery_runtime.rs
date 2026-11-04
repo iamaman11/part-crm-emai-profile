@@ -67,12 +67,16 @@ impl ActiveWindowsDeliveryRuntime {
             .cloned()
             .ok_or(WindowsDeliveryRuntimeError::NoActiveDelivery)?;
         let pending_health = pending_health_confirmation(&state, &layout.state_root, &active)?;
+        let stage_started = std::time::Instant::now();
         let staged = if runtime_hashes_deferred {
             reopen_staged_delivery_before_runtime_selection(&staging, &active)
         } else {
             reopen_staged_delivery(&staging, &active)
         }
         .map_err(|_| WindowsDeliveryRuntimeError::StagedDelivery)?;
+        if runtime_hashes_deferred {
+            eprintln!("bridge_open_phase name=delivery_stage_readback elapsed_ms={}", stage_started.elapsed().as_millis());
+        }
 
         let staged_release = fs::canonicalize(staged.path())
             .map_err(|_| WindowsDeliveryRuntimeError::StagedDelivery)?;
