@@ -151,6 +151,9 @@ def prove_controlled_close_dispatch_contract(runtime: ModuleType) -> None:
         def safely_exited(self) -> bool:
             return False
 
+        def has_exited(self) -> bool:
+            return False
+
     exited_without_normal_status = Page()
     context = Context([exited_without_normal_status])
     witness = runtime.install_controlled_close_observation(context)
