@@ -335,6 +335,7 @@ pub fn reopen_staged_delivery(
 /// Browser Open only: full runtime SHA-256 is performed by the runtime selector
 /// before device authentication or claim redemption. This preflight still
 /// verifies every path/type/size plus Bridge and runtime-manifest file contents.
+#[cfg(any(windows, test))]
 pub(crate) fn reopen_staged_delivery_before_runtime_selection(
     root: &DeliveryStagingRoot,
     identity: &DeliveryIdentity,
