@@ -1003,9 +1003,12 @@ fn safe_close_observation_witness(message: &str) -> bool {
     };
     events == "none"
         || (events.split(',').count() <= 8
-            && events
-                .split(',')
-                .all(|event| matches!(event, "page" | "close" | "crash" | "load_after_crash" | "recovered")))
+            && events.split(',').all(|event| {
+                matches!(
+                    event,
+                    "page" | "close" | "crash" | "load_after_crash" | "recovered"
+                )
+            }))
 }
 
 fn allowlisted_camouhost_diagnostic(line: &[u8]) -> Option<&str> {
