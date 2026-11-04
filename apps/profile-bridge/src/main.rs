@@ -159,18 +159,7 @@ where
         BridgeCommand::CopyDiagnostics => copy_diagnostics(),
     };
     if report_operation {
-        let cause = match &result {
-            Ok(()) => Cause::None,
-            Err(BridgeCliError::InstallationFailed(_)) => Cause::InstallBlocked,
-            Err(BridgeCliError::LaunchFailed(
-                ShippingCompositionError::HeartbeatAuthorityUncertain,
-            )) => Cause::CoordinatorUncertain,
-            Err(BridgeCliError::LaunchFailed(
-                ShippingCompositionError::CommittedRecoveryRequired,
-            )) => Cause::CloudSaveFailed,
-            Err(BridgeCliError::LaunchFailed(_)) => Cause::BrowserUnavailable,
-            Err(_) => Cause::OtherSafeFailure,
-        };
+        let cause = diagnostic_cause(&result);
         let elapsed = u64::try_from(start.elapsed().as_millis())
             .unwrap_or(u64::MAX)
             .min(86_400_000);
@@ -198,6 +187,26 @@ where
         }
     }
     result
+}
+
+// Preserve specific native owner outcomes in the bounded, non-authoritative
+// observation log. This does not authorize retries, profile Open or cloud Save.
+fn diagnostic_cause(result: &Result<(), BridgeCliError>) -> Cause {
+    match result {
+        Ok(()) => Cause::None,
+        Err(BridgeCliError::InstallationFailed(_)) => Cause::InstallBlocked,
+        Err(BridgeCliError::LaunchFailed(
+            ShippingCompositionError::HeartbeatAuthorityUncertain,
+        )) => Cause::CoordinatorUncertain,
+        Err(BridgeCliError::LaunchFailed(
+            ShippingCompositionError::CommittedRecoveryRequired,
+        )) => Cause::CloudSaveFailed,
+        Err(BridgeCliError::LaunchFailed(ShippingCompositionError::Operator(
+            profile_bridge::operator_flow::OperatorFlowError::EnrollmentConflict,
+        ))) => Cause::CoordinatorLeaseConflict,
+        Err(BridgeCliError::LaunchFailed(_)) => Cause::BrowserUnavailable,
+        Err(_) => Cause::OtherSafeFailure,
+    }
 }
 
 fn copy_diagnostics() -> Result<(), BridgeCliError> {
@@ -370,7 +379,34 @@ impl std::error::Error for BridgeCliError {}
 #[cfg(test)]
 mod tests {
     use super::FIRST_INSTALL_ARGUMENT;
-    use super::{BridgeCliError, BridgeCommand, parse_command};
+    use super::{BridgeCliError, BridgeCommand, Cause, ShippingCompositionError, parse_command};
+    #[test]
+    fn native_lease_conflict_has_exact_safe_observation_cause() {
+        use profile_bridge::operator_flow::OperatorFlowError;
+
+        let conflict = BridgeCliError::LaunchFailed(ShippingCompositionError::Operator(
+            OperatorFlowError::EnrollmentConflict,
+        ));
+        assert_eq!(
+            super::diagnostic_cause(&Err(conflict)),
+            Cause::CoordinatorLeaseConflict
+        );
+
+        // Do not mistake other launch failures for a verified lease conflict.
+        let generic = BridgeCliError::LaunchFailed(ShippingCompositionError::Configuration);
+        assert_eq!(
+            super::diagnostic_cause(&Err(generic)),
+            Cause::BrowserUnavailable
+        );
+        let uncertain =
+            BridgeCliError::LaunchFailed(ShippingCompositionError::HeartbeatAuthorityUncertain);
+        assert_eq!(
+            super::diagnostic_cause(&Err(uncertain)),
+            Cause::CoordinatorUncertain
+        );
+    }
+
+
     use profile_bridge::windows_delivery_handoff::{
         HANDOFF_ACTIVATE_ARGUMENT, HANDOFF_ARRIVAL_ARGUMENT,
     };
