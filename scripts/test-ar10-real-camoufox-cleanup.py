@@ -2017,8 +2017,21 @@ sys.exit(5)
             raise AssertionError("workspace cleanup replaced the original failure")
 
 
+def prove_shipping_agent_build_boundary() -> None:
+    """Release Bridge must never publish an implicit in-browser Python runner."""
+    source = (Path(__file__).resolve().parents[1]
+              / "apps/profile-bridge/src/camouhost_process.rs").read_text(encoding="utf-8")
+    assert 'let test_agent_enabled = cfg!(any(test, feature = "synthetic-test-bin", debug_assertions));' in source
+    assert 'test_agent_enabled.then_some(diagnostic_directory.as_path())' in source
+    assert 'state.agent_directory = test_agent_enabled.then_some(diagnostic_directory);' in source
+    assert 'if let Some(directory) = agent_directory {' in source
+    # This source check supplements compilation of the release path; it is not
+    # an authority to run scripts from any ordinary installed browser profile.
+
+
 def main() -> int:
     prove_failure_observation_contract()
+    prove_shipping_agent_build_boundary()
     if sys.argv[1:] == ["--self-test"]:
         print("Camouhost failure phase, primary outcome and bounded cleanup proof passed.")
         return 0
