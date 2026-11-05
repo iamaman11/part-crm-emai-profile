@@ -2029,9 +2029,26 @@ def prove_shipping_agent_build_boundary() -> None:
     # an authority to run scripts from any ordinary installed browser profile.
 
 
+def prove_disposable_managed_site_probe_contract() -> None:
+    """Optional VK compatibility check must remain an offline-testable fixture.
+
+    Browser launch and external public-site navigation are NOT run by CI.
+    The shipped Bridge must never import or execute this diagnostic script.
+    """
+    path = Path(__file__).resolve().with_name("probe-camoufox-managed-site.py")
+    spec = importlib.util.spec_from_file_location("crm_managed_site_probe", path)
+    assert spec is not None and spec.loader is not None
+    probe = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(probe)
+    probe.assert_self_test()
+    assert set(probe.URLS) == {"vk", "example"}
+    assert probe.main(["--self-test"]) == 0
+
+
 def main() -> int:
     prove_failure_observation_contract()
     prove_shipping_agent_build_boundary()
+    prove_disposable_managed_site_probe_contract()
     if sys.argv[1:] == ["--self-test"]:
         print("Camouhost failure phase, primary outcome and bounded cleanup proof passed.")
         return 0
