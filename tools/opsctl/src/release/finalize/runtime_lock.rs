@@ -75,6 +75,19 @@ struct RuntimeWindowsDistributionV1 {
     _browser: RuntimeWindowsBrowserDistributionV1,
     #[serde(rename = "python")]
     _python: RuntimeWindowsPythonDistributionV1,
+    #[serde(rename = "ublock_origin")]
+    _ublock_origin: RuntimeWindowsUboDistributionV1,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RuntimeWindowsUboDistributionV1 {
+    #[serde(rename = "artifact_sha256")]
+    _artifact_sha256: String,
+    #[serde(rename = "artifact_url")]
+    _artifact_url: String,
+    #[serde(rename = "version")]
+    _version: String,
 }
 
 #[derive(Debug, Deserialize)]
