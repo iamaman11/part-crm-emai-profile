@@ -399,10 +399,16 @@ def validate_windows_distribution(lock: dict[str, Any]) -> None:
         "version",
     }:
         raise RuntimeContractError("Windows UBO artifact lock shape is invalid")
+    # The single signed runtime lock selects the official addon release.
+    # Future version changes must not require changes to browser/Bridge code.
+    addon_url = ubo.get("artifact_url")
+    release = re.fullmatch(
+        r"https://addons\.mozilla\.org/firefox/downloads/file/[1-9][0-9]*/ublock_origin-([0-9]+\.[0-9]+\.[0-9]+)\.xpi",
+        addon_url,
+    ) if isinstance(addon_url, str) else None
     if (
-        ubo.get("version") != "1.75.4"
-        or ubo.get("artifact_url")
-        != "https://addons.mozilla.org/firefox/downloads/file/5203014/ublock_origin-1.75.4.xpi"
+        release is None
+        or ubo.get("version") != release.group(1)
         or not isinstance(ubo.get("artifact_sha256"), str)
         or not valid_sha256(ubo["artifact_sha256"])
     ):
