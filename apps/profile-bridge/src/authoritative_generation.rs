@@ -925,11 +925,28 @@ where
 {
     use AuthoritativeGenerationMaterializationError as Error;
     use AuthoritativeGenerationPreWriteError as PreWrite;
+    // Do not return an "absent local generation" clean-release witness when
+    // Firefox files already exist but the host-only materialization sidecar
+    // is missing. The ordinary Vec fallback already enforces this boundary.
+    let prewrite = |reason: PreWrite| {
+        if incomplete_local.is_none() {
+            Error::ReadBeforeLocalUse(reason)
+        } else {
+            match reason {
+                PreWrite::DescriptorMismatch => Error::DescriptorMismatch,
+                PreWrite::Download(error) => Error::Download(error),
+                PreWrite::MetadataMismatch => Error::MetadataMismatch,
+                PreWrite::OpeningControl(error) => Error::ControlPlane(error),
+                PreWrite::OpeningMaterialMismatch => Error::OpeningMaterialMismatch,
+                PreWrite::Decryption => Error::Decryption,
+            }
+        }
+    };
     let prelude = ciphertext
         .read_descriptor_verified_metadata_prelude()
-        .map_err(|_| Error::ReadBeforeLocalUse(PreWrite::MetadataMismatch))?;
+        .map_err(|_| prewrite(PreWrite::MetadataMismatch))?;
     let inspected = inspect_generation_metadata_prelude(&prelude)
-        .map_err(|_| Error::ReadBeforeLocalUse(PreWrite::MetadataMismatch))?;
+        .map_err(|_| prewrite(PreWrite::MetadataMismatch))?;
     let metadata = inspected.metadata();
     if metadata.tenant_id() != tenant_id
         || metadata.profile_id() != profile_id
@@ -938,13 +955,13 @@ where
             != canonical_generation_object_key(tenant_id, profile_id, generation_id)
         || inspected.metadata_digest().bytes() != capability.metadata_digest()
     {
-        return Err(Error::ReadBeforeLocalUse(PreWrite::MetadataMismatch));
+        return Err(prewrite(PreWrite::MetadataMismatch));
     }
     let key = control
         .opening_material(tenant_id, profile_id, &prelude)
-        .map_err(|reason| Error::ReadBeforeLocalUse(PreWrite::OpeningControl(reason.into())))?;
+        .map_err(|reason| prewrite(PreWrite::OpeningControl(reason.into())))?;
     if key.key_id() != metadata.key_id() {
-        return Err(Error::ReadBeforeLocalUse(PreWrite::OpeningMaterialMismatch));
+        return Err(prewrite(PreWrite::OpeningMaterialMismatch));
     }
     let plaintext_path = root.path().join(format!(
         ".pending-bpgw-{}",
@@ -957,20 +974,20 @@ where
         .open(&plaintext_path)
         .map_err(|_| Error::Local)?;
     let report = open_generation_streaming(ciphertext.reader(), &key, &mut plaintext)
-        .map_err(|_| Error::ReadBeforeLocalUse(PreWrite::Decryption))?;
+        .map_err(|_| prewrite(PreWrite::Decryption))?;
     if report.metadata() != metadata
         || report.metadata_digest().bytes() != capability.metadata_digest()
         || report.container_digest().bytes() != capability.container_digest()
         || report.container_bytes() != capability.container_bytes()
     {
-        return Err(Error::ReadBeforeLocalUse(PreWrite::Decryption));
+        return Err(prewrite(PreWrite::Decryption));
     }
     ciphertext
         .recheck_and_rewind()
-        .map_err(|_| Error::ReadBeforeLocalUse(PreWrite::Decryption))?;
+        .map_err(|_| prewrite(PreWrite::Decryption))?;
     plaintext.sync_all().map_err(|_| Error::Local)?;
     if plaintext.metadata().map_err(|_| Error::Local)?.len() != metadata.plaintext_bytes() {
-        return Err(Error::ReadBeforeLocalUse(PreWrite::Decryption));
+        return Err(prewrite(PreWrite::Decryption));
     }
     plaintext
         .seek(SeekFrom::Start(0))
@@ -1576,6 +1593,67 @@ mod tests {
             )
             .is_ok()
         );
+        assert_eq!(
+            fs::read(workspace.path().join("user_data/storage/state.bin"))?,
+            b"authoritative-state"
+        );
+        fixture.cleanup();
+        Ok(())
+    }
+
+    #[test]
+    fn streamed_binding_repair_refusal_never_claims_local_workspace_absence()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let fixture = Fixture::new()?;
+        let mut control = fixture.control();
+        let mut download = FakeStreamDownloader {
+            container: fixture.container.clone(),
+            calls: 0,
+        };
+        let device = DeviceId::parse("device_binding_repair_control_refusal")?;
+        ensure_authoritative_generation(
+            &fixture.root,
+            &fixture.tenant_id,
+            &fixture.profile_id,
+            &fixture.generation_id,
+            &device,
+            1,
+            &mut control,
+            &mut download,
+        )?;
+        let workspace = fixture.root.open_generation(
+            &fixture.tenant_id,
+            &fixture.profile_id,
+            &fixture.generation_id,
+        )?;
+        let sidecar = workspace
+            .path()
+            .parent()
+            .ok_or_else(|| std::io::Error::other("missing generation parent"))?
+            .join(format!(
+                ".{}.materialization",
+                fixture.generation_id.as_str()
+            ));
+        fs::remove_file(&sidecar)?;
+        control.opening_error = Some(GenerationReopenControlError::Transport);
+        let outcome = ensure_authoritative_generation(
+            &fixture.root,
+            &fixture.tenant_id,
+            &fixture.profile_id,
+            &fixture.generation_id,
+            &device,
+            2,
+            &mut control,
+            &mut download,
+        );
+        assert_eq!(
+            outcome,
+            Err(AuthoritativeGenerationMaterializationError::ControlPlane(
+                GenerationReopenControlError::Transport
+            ))
+        );
+        assert!(!outcome.unwrap_err().proves_no_local_write_and_absent_workspace());
+        assert!(!sidecar.exists());
         assert_eq!(
             fs::read(workspace.path().join("user_data/storage/state.bin"))?,
             b"authoritative-state"
