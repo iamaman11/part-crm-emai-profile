@@ -173,7 +173,7 @@ def main(args: list[str] | None = None) -> int:
             not config.exclude_ubo
             or not config.pinned_ubo_dir.is_absolute()
             or config.pinned_ubo_dir.is_symlink()
-            or version != "1.75.0"
+            or version not in {"1.75.0", "1.75.4"}
         ):
             print("CAMOUFOX_MANAGED_PROBE=INVALID_PINNED_UBO", flush=True)
             return 2
