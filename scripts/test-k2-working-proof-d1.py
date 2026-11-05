@@ -53,6 +53,24 @@ def rejected(conn: sqlite3.Connection, fx: dict, **changes: object) -> None:
 
 
 def main() -> int:
+    # Source regression: the shipping maintenance observer currently proves
+    # only managed Camoufox identity/readiness, NOT cookies/IDB/SessionStore.
+    # A successful launch must not call the durable WORKING/prune gate.
+    operator = (ROOT / "apps/profile-bridge/src/operator_flow.rs").read_text(
+        encoding="utf-8"
+    )
+    probe_start = operator.index("    pub fn probe_verified_predecessor_once<")
+    probe_end = operator.index("    // Test/synthetic entrypoint", probe_start)
+    identity_only = operator[probe_start:probe_end]
+    assert "cold_launch_verified_predecessor_once(" in identity_only
+    assert "close_verified_historical_probe(" in identity_only
+    assert "certify_verified_predecessor_working(" not in identity_only, (
+        "identity-only Camoufox probe must never authorize durable WORKING"
+    )
+    shipping = (ROOT / "apps/profile-bridge/src/shipping_composition.rs").read_text(
+        encoding="utf-8"
+    )
+    assert "WORKING_LKG_CERTIFICATE=0;R2_PRUNE_AUTHORITY=0" in shipping
     fx = runpy.run_path(str(FIXTURE))
     conn = fx["seed"]()
     try:
