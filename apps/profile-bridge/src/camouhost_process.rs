@@ -541,9 +541,8 @@ impl ProcessControlPort for ManagedCamouhostProcess {
         let stamp = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .map_or(0, |elapsed| elapsed.as_nanos());
-        let raw_diagnostics = Some(
-            diagnostic_directory.join(format!("camouhost-{}-{stamp}.stderr.log", child.id())),
-        );
+        let raw_diagnostics =
+            Some(diagnostic_directory.join(format!("camouhost-{}-{stamp}.stderr.log", child.id())));
         spawn_camouhost_diagnostic_reader(stderr, raw_diagnostics);
         state.stdin = Some(stdin);
         state.responses = Some(spawn_response_reader(stdout));
