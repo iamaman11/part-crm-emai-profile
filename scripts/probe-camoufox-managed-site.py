@@ -20,7 +20,7 @@ import argparse
 import pathlib
 import sys
 import tempfile
-from typing import Callable
+
 
 URLS = {
     "vk": "https://id.vk.ru/",
