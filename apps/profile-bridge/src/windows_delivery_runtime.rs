@@ -47,6 +47,8 @@ impl ActiveWindowsDeliveryRuntime {
     fn resolve_current_with_stage_hashing(
         runtime_hashes_deferred: bool,
     ) -> Result<Self, WindowsDeliveryRuntimeError> {
+        #[cfg(windows)]
+        let layout_started = std::time::Instant::now();
         let current_executable = std::env::current_exe()
             .map_err(|_| WindowsDeliveryRuntimeError::InvalidInstalledLayout)?;
         let current_executable = fs::canonicalize(current_executable)
@@ -67,6 +69,13 @@ impl ActiveWindowsDeliveryRuntime {
             .cloned()
             .ok_or(WindowsDeliveryRuntimeError::NoActiveDelivery)?;
         let pending_health = pending_health_confirmation(&state, &layout.state_root, &active)?;
+        #[cfg(windows)]
+        if runtime_hashes_deferred {
+            eprintln!(
+                "bridge_open_phase name=delivery_layout_state elapsed_ms={}",
+                layout_started.elapsed().as_millis()
+            );
+        }
         let stage_started = std::time::Instant::now();
         let staged = if runtime_hashes_deferred {
             reopen_staged_delivery_before_runtime_selection(&staging, &active)
@@ -97,11 +106,20 @@ impl ActiveWindowsDeliveryRuntime {
         }
 
         let runtime_root = staged.runtime_root();
+        #[cfg(windows)]
+        let bound_started = std::time::Instant::now();
         let bundles = DeliveryBoundRuntimeBundleSelection::open(
             runtime_root.clone(),
             active.runtime_bundle_release_id.clone(),
         )
         .map_err(|_| WindowsDeliveryRuntimeError::RuntimeIdentity)?;
+        #[cfg(windows)]
+        if runtime_hashes_deferred {
+            eprintln!(
+                "bridge_open_phase name=delivery_bound_selector elapsed_ms={}",
+                bound_started.elapsed().as_millis()
+            );
+        }
         Ok(Self {
             runtime_root,
             verified_sequence: active.sequence,
