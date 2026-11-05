@@ -456,6 +456,15 @@ def self_test() -> None:
                 pass
             else:
                 fail(f"unlocked UBO artifact unexpectedly accepted: {variant}")
+        # This is a SCHEMA-only check. No unverified future artifact is
+        # downloaded or accepted into a shipping inventory.
+        future = copy.deepcopy(fixture)
+        future["windows_distribution"]["ublock_origin"]["artifact_url"] = (
+            "https://addons.mozilla.org/firefox/downloads/file/5203999/ublock_origin-1.76.0.xpi"
+        )
+        future["windows_distribution"]["ublock_origin"]["version"] = "1.76.0"
+        path.write_bytes(canonical(future))
+        load_lock(path)
     with tempfile.TemporaryDirectory(prefix="camouhost-runtime-selftest-") as directory:
         root=Path(directory); archive=root/"safe.zip"
         with zipfile.ZipFile(archive,"w",compression=zipfile.ZIP_STORED) as z: z.writestr("alpha/file.txt",b"payload")
