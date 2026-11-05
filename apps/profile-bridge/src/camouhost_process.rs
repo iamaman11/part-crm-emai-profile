@@ -449,7 +449,7 @@ impl ManagedCamouhostProcess {
         &self,
         session_id: &SessionId,
         binding: &RuntimeLaunchBinding,
-        agent_directory: &Path,
+        agent_directory: Option<&Path>,
     ) -> Result<Child, BridgePortError> {
         let entrypoint = self.config.runtime_root.join(REAL_ENTRYPOINT);
         let runtime_lock = self.config.runtime_root.join(RUNTIME_LOCK_PATH);
@@ -502,9 +502,12 @@ impl ManagedCamouhostProcess {
             command.env("CAMOUHOST_PROXY_CONFIG_PATH", path);
         }
         inherit_runtime_environment(&mut command);
-        // Every installed browser profile is testable through its existing
-        // Camouhost owner. No toggle, extra writer, or extra browser process.
-        command.env("CAMOUHOST_AGENT_DIRECTORY", agent_directory);
+        // A release browser never receives an arbitrary local Python executor.
+        // Test/debug builds retain the same existing Camouhost-owned fixture
+        // capability; production still has read-only, bounded crash diagnostics.
+        if let Some(directory) = agent_directory {
+            command.env("CAMOUHOST_AGENT_DIRECTORY", directory);
+        }
         let child = command.spawn().map_err(|_| BridgePortError::Unavailable)?;
         if child.id() == 0 || session_id.as_str().is_empty() {
             return Err(BridgePortError::InvalidResponse);
@@ -523,25 +526,31 @@ impl ProcessControlPort for ManagedCamouhostProcess {
         if state.child.is_some() || state.active_session.is_some() {
             return Err(BridgePortError::Unavailable);
         }
-        // Create and validate the stable user-local agent inbox before spawning.
-        // A broken path fails closed without stranding a browser writer.
-        let agent_directory = local_agent_directory()?;
-        let mut child = self.launch_child(session_id, &binding, &agent_directory)?;
+        // The existing directory also stores raw redacted-at-UI native traces.
+        // Never grant executable diagnostic scripts in an ordinary release.
+        let diagnostic_directory = local_agent_directory()?;
+        let test_agent_enabled = cfg!(any(test, feature = "synthetic-test-bin", debug_assertions));
+        let mut child = self.launch_child(
+            session_id,
+            &binding,
+            test_agent_enabled.then_some(diagnostic_directory.as_path()),
+        )?;
         let stdin = child.stdin.take().ok_or(BridgePortError::Unavailable)?;
         let stdout = child.stdout.take().ok_or(BridgePortError::Unavailable)?;
         let stderr = child.stderr.take().ok_or(BridgePortError::Unavailable)?;
         let stamp = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .map_or(0, |elapsed| elapsed.as_nanos());
-        let raw_diagnostics =
-            Some(agent_directory.join(format!("camouhost-{}-{stamp}.stderr.log", child.id())));
+        let raw_diagnostics = Some(
+            diagnostic_directory.join(format!("camouhost-{}-{stamp}.stderr.log", child.id())),
+        );
         spawn_camouhost_diagnostic_reader(stderr, raw_diagnostics);
         state.stdin = Some(stdin);
         state.responses = Some(spawn_response_reader(stdout));
         state.active_session = Some(session_id.clone());
         state.profile_stable_identity = binding.profile_stable_identity;
         state.navigation_target = self.config.initial_url.clone();
-        state.agent_directory = Some(agent_directory);
+        state.agent_directory = test_agent_enabled.then_some(diagnostic_directory);
         state.child = Some(child);
         Ok(())
     }
