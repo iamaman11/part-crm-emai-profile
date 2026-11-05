@@ -2045,32 +2045,6 @@ def prove_disposable_managed_site_probe_contract() -> None:
     assert probe.main(["--self-test"]) == 0
 
 
-def prove_sealed_native_addon_supply(
-    camouhost: Path, runtime_lock: Path, runtime: ModuleType
-) -> None:
-    """Build-time signed UBO must exist, without changing shipping Open semantics."""
-    lock = json.loads(runtime_lock.read_text(encoding="utf-8"))
-    addon = lock["windows_distribution"]["ublock_origin"]
-    manifest = camouhost.parent.parent / "addons" / "UBO" / "manifest.json"
-    assert manifest.is_file() and not manifest.is_symlink(), (
-        "SHA-pinned official addon was not materialized into signed runtime"
-    )
-    native = json.loads(manifest.read_text(encoding="utf-8"))
-    assert native["version"] == addon["version"], (
-        "signed runtime addon manifest disagrees with canonical lock"
-    )
-    assert len(addon["artifact_sha256"]) == 64
-    assert addon["artifact_url"].startswith(
-        "https://addons.mozilla.org/firefox/downloads/file/"
-    )
-    from camoufox.addons import DefaultAddons
-
-    assert runtime.default_addon_exclusions() == [DefaultAddons.UBO], (
-        "native addon has not passed shipping admission; never fall back "
-        "to mutable latest.xpi download at profile Open"
-    )
-
-
 def main() -> int:
     prove_failure_observation_contract()
     prove_shipping_agent_build_boundary()
@@ -2083,7 +2057,6 @@ def main() -> int:
     camouhost = require_regular(args.camouhost, "Camouhost runtime")
     runtime_lock = require_regular(args.runtime_lock, "runtime lock")
     runtime = load_runtime(camouhost)
-    prove_sealed_native_addon_supply(camouhost, runtime_lock, runtime)
 
     # Reuse the shipping Python/Camoufox runtime already materialized by CI;
     # no second browser or duplicated fixture engine. The normal full proof

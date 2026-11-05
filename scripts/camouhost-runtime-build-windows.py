@@ -113,24 +113,11 @@ def load_lock(path: Path) -> dict[str, Any]:
     if not isinstance(components, dict) or set(components) != {"camoufox_python", "fpgen", "playwright"}:
         fail("runtime component lock shape is invalid")
     distribution = value.get("windows_distribution")
-    if not isinstance(distribution, dict) or set(distribution) != {"architecture", "browser", "python", "ublock_origin"} or distribution.get("architecture") != "x86_64":
+    if not isinstance(distribution, dict) or set(distribution) != {"architecture", "browser", "python"} or distribution.get("architecture") != "x86_64":
         fail("Windows distribution lock shape is invalid")
     browser = distribution.get("browser")
     if not isinstance(browser, dict) or browser.get("executable_path") != "browser/camoufox.exe":
         fail("Windows browser executable contract is unsupported")
-    ubo = distribution.get("ublock_origin")
-    if not isinstance(ubo, dict) or set(ubo) != {"artifact_sha256", "artifact_url", "version"}:
-        fail("Windows UBO distribution lock shape is invalid")
-    # A browser/addon update changes the one canonical runtime lock, not this
-    # builder or Rust. Never permit AMO's mutable "latest.xpi" endpoint.
-    filename = ubo.get("artifact_url")
-    version = ubo.get("version")
-    pattern = r"https://addons\.mozilla\.org/firefox/downloads/file/[1-9][0-9]*/ublock_origin-([0-9]+\.[0-9]+\.[0-9]+)\.xpi"
-    release = re.fullmatch(pattern, filename) if isinstance(filename, str) else None
-    if release is None or not isinstance(version, str) or version != release.group(1):
-        fail("Windows UBO release must use immutable official Mozilla AMO URL/version")
-    if not isinstance(ubo["artifact_sha256"], str) or SHA256_RE.fullmatch(ubo["artifact_sha256"]) is None:
-        fail("Windows UBO artifact digest is invalid")
     python = distribution.get("python")
     if not isinstance(python, dict) or set(python) != {"artifact_sha256", "artifact_url", "packages", "version"}:
         fail("Windows Python distribution lock shape is invalid")
@@ -320,18 +307,10 @@ def remove_python_caches(root: Path) -> None:
 
 
 def verify_runtime_tree(output: Path, lock: dict[str, Any], candidate_provenance: dict[str, Any]) -> dict[str, Any]:
-    required = [output/"python/python.exe", output/"browser/camoufox.exe", output/"camouhost/real.py", output/"camouhost/runtime-lock.json", output/"camouhost/browser-official-provenance.json", output/"addons/UBO/manifest.json"]
+    required = [output/"python/python.exe", output/"browser/camoufox.exe", output/"camouhost/real.py", output/"camouhost/runtime-lock.json", output/"camouhost/browser-official-provenance.json"]
     for path in required:
         if path.is_symlink() or not path.is_file() or path.stat().st_size == 0: fail(f"materialized runtime file missing/not regular: {path}")
     components = lock["components"]
-    # XPI's manifest need not be canonical; only the locked XPI bytes and
-    # extracted files belong to the signed runtime inventory.
-    try:
-        ubo = json.loads((output / "addons/UBO/manifest.json").read_text(encoding="utf-8"))
-    except (OSError, UnicodeDecodeError, json.JSONDecodeError) as error:
-        raise RuntimeBuildError("official UBO manifest is unreadable") from error
-    if not isinstance(ubo, dict) or ubo.get("version") != lock["windows_distribution"]["ublock_origin"]["version"]:
-        fail("official UBO manifest version mismatch")
     probe = "import importlib.metadata,json,sys;print(json.dumps({'python':'.'.join(map(str,sys.version_info[:3])),'camoufox':importlib.metadata.version('camoufox'),'fpgen':importlib.metadata.version('fpgen'),'playwright':importlib.metadata.version('playwright')},sort_keys=True,separators=(',',':')))"
     completed = subprocess.run([str(output/"python/python.exe"), "-I", "-c", probe], cwd=output, text=True, capture_output=True, check=False)
     expected = {"python":"3.12.10", "camoufox":components["camoufox_python"], "fpgen":components["fpgen"], "playwright":components["playwright"]}
@@ -382,10 +361,8 @@ def materialize(
         temp = Path(directory)
         python_archive = temp / "python.zip"
         browser_archive = temp / "official-camoufox.zip"
-        ubo_archive = temp / "official-ubo-1.75.4.xpi"
         python_lock = lock["windows_distribution"]["python"]
         browser_lock = lock["windows_distribution"]["browser"]
-        ubo_lock = lock["windows_distribution"]["ublock_origin"]
         download_exact(
             browser_lock["artifact_url"],
             browser_lock["artifact_sha256"],
@@ -393,14 +370,6 @@ def materialize(
             distribution_cache,
         )
         provenance = verify_official_archive(browser_archive, lock)
-        # Build-time immutable Mozilla-signed component, not a first-Open
-        # download, a mutable Camoufox latest.xpi lookup, or a second vendor fork.
-        download_exact(
-            ubo_lock["artifact_url"],
-            ubo_lock["artifact_sha256"],
-            ubo_archive,
-            distribution_cache,
-        )
         download_exact(
             python_lock["artifact_url"],
             python_lock["artifact_sha256"],
@@ -411,7 +380,6 @@ def materialize(
         try:
             extract_exact_zip(python_archive, output / "python")
             extract_exact_zip(browser_archive, output / "browser")
-            extract_exact_zip(ubo_archive, output / "addons/UBO")
             rewrite_embedded_python_path(output / "python")
             install_python_components(build_python, lock, output / "python", distribution_cache)
             pin_official_fpgen_model(output / "python")
@@ -430,41 +398,6 @@ def materialize(
 
 
 def self_test() -> None:
-    # The official AMO addon is a build-time component; never accept a mutable
-    # latest URL, a missing digest, or an accidental extra alternate source.
-    # Negative checks are offline and run in the normal CI runtime gate.
-    import copy
-
-    fixture = load_lock(DEFAULT_LOCK)
-    with tempfile.TemporaryDirectory(prefix="camouhost-ubo-lock-test-") as directory:
-        path = Path(directory) / "runtime-lock.json"
-        for variant in ("missing", "mutable", "bad_digest", "wrong_version"):
-            candidate = copy.deepcopy(fixture)
-            addon = candidate["windows_distribution"]["ublock_origin"]
-            if variant == "missing":
-                del candidate["windows_distribution"]["ublock_origin"]
-            elif variant == "mutable":
-                addon["artifact_url"] = "https://addons.mozilla.org/firefox/downloads/latest/ublock-origin/latest.xpi"
-            elif variant == "bad_digest":
-                addon["artifact_sha256"] = "not-a-digest"
-            else:
-                addon["version"] = "latest"
-            path.write_bytes(canonical(candidate))
-            try:
-                load_lock(path)
-            except RuntimeBuildError:
-                pass
-            else:
-                fail(f"unlocked UBO artifact unexpectedly accepted: {variant}")
-        # This is a SCHEMA-only check. No unverified future artifact is
-        # downloaded or accepted into a shipping inventory.
-        future = copy.deepcopy(fixture)
-        future["windows_distribution"]["ublock_origin"]["artifact_url"] = (
-            "https://addons.mozilla.org/firefox/downloads/file/5203999/ublock_origin-1.76.0.xpi"
-        )
-        future["windows_distribution"]["ublock_origin"]["version"] = "1.76.0"
-        path.write_bytes(canonical(future))
-        load_lock(path)
     with tempfile.TemporaryDirectory(prefix="camouhost-runtime-selftest-") as directory:
         root=Path(directory); archive=root/"safe.zip"
         with zipfile.ZipFile(archive,"w",compression=zipfile.ZIP_STORED) as z: z.writestr("alpha/file.txt",b"payload")
