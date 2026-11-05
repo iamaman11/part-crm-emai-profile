@@ -52,12 +52,15 @@ def assert_self_test() -> None:
     assert set(URLS) == {"vk", "example"}
     assert parse_args(["--skip-worker-check"]).skip_worker_check
     assert not parse_args([]).skip_worker_check
+    assert parse_args(["--exclude-ubo"]).exclude_ubo
+    assert not parse_args([]).exclude_ubo
 
 
 def single_trial(
     browser: pathlib.Path, target: str, disable_workers: bool,
     disable_javascript: bool, block_webgl: bool,
     profile_root: pathlib.Path, check_worker_constructor: bool,
+    exclude_ubo: bool,
 ) -> tuple[str, str]:
     # Import is delayed so --self-test can run offline on any CI OS.
     from camoufox.sync_api import Camoufox
@@ -88,6 +91,12 @@ def single_trial(
         kwargs["firefox_user_prefs"] = prefs
     if block_webgl:
         kwargs["block_webgl"] = True
+    if exclude_ubo:
+        # Shipping real.py explicitly excludes the bundled UBO; unlike the
+        # earlier successful fixture run, this reproduces that exact owner
+        # difference without touching any user's Firefox configuration.
+        from camoufox.addons import DefaultAddons
+        kwargs["exclude_addons"] = [DefaultAddons.UBO]
 
     try:
         with Camoufox(**kwargs) as context:
@@ -126,6 +135,8 @@ def parse_args(args: list[str]) -> argparse.Namespace:
     parser.add_argument("--disable-workers", action="store_true")
     parser.add_argument("--disable-javascript", action="store_true")
     parser.add_argument("--block-webgl", action="store_true")
+    parser.add_argument("--exclude-ubo", action="store_true",
+                        help="match the current shipping Camouhost addon exclusions")
     parser.add_argument("--skip-worker-check", action="store_true",
                         help="navigate without pre-navigation Playwright evaluate")
     return parser.parse_args(args)
@@ -151,6 +162,8 @@ def main(args: list[str] | None = None) -> int:
         variant += "_webgl_blocked"
     if config.skip_worker_check:
         variant += "_no_precheck"
+    if config.exclude_ubo:
+        variant += "_ubo_excluded"
     failed = False
     for trial in range(1, config.repeats + 1):
         # Temp root is a new private profile for every attempt; the context
@@ -163,6 +176,7 @@ def main(args: list[str] | None = None) -> int:
                     config.disable_workers, config.disable_javascript,
                     config.block_webgl, pathlib.Path(temp) / "user_data",
                     not config.skip_worker_check,
+                    config.exclude_ubo,
                 )
         except OSError:
             print("CAMOUFOX_MANAGED_PROBE_CLEANUP=INCOMPLETE", flush=True)
