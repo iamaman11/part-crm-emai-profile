@@ -121,8 +121,14 @@ def load_lock(path: Path) -> dict[str, Any]:
     ubo = distribution.get("ublock_origin")
     if not isinstance(ubo, dict) or set(ubo) != {"artifact_sha256", "artifact_url", "version"}:
         fail("Windows UBO distribution lock shape is invalid")
-    if ubo["version"] != "1.75.4" or ubo["artifact_url"] != "https://addons.mozilla.org/firefox/downloads/file/5203014/ublock_origin-1.75.4.xpi":
-        fail("Windows UBO release must be an immutable official Mozilla AMO artifact")
+    # A browser/addon update changes the one canonical runtime lock, not this
+    # builder or Rust. Never permit AMO's mutable "latest.xpi" endpoint.
+    filename = ubo.get("artifact_url")
+    version = ubo.get("version")
+    pattern = r"https://addons\.mozilla\.org/firefox/downloads/file/[1-9][0-9]*/ublock_origin-([0-9]+\.[0-9]+\.[0-9]+)\.xpi"
+    release = re.fullmatch(pattern, filename) if isinstance(filename, str) else None
+    if release is None or not isinstance(version, str) or version != release.group(1):
+        fail("Windows UBO release must use immutable official Mozilla AMO URL/version")
     if not isinstance(ubo["artifact_sha256"], str) or SHA256_RE.fullmatch(ubo["artifact_sha256"]) is None:
         fail("Windows UBO artifact digest is invalid")
     python = distribution.get("python")
