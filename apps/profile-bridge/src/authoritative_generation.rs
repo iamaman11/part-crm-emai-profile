@@ -148,6 +148,8 @@ where
     D: GenerationObjectDownloadPort,
     D::Error: Into<GenerationObjectDownloadError>,
 {
+    #[cfg(windows)]
+    let local_evidence_started = std::time::Instant::now();
     let incomplete_local = match root.open_generation(tenant_id, profile_id, generation_id) {
         Ok(workspace) => {
             match load_materialization_binding(&workspace, tenant_id, profile_id, generation_id) {
@@ -161,6 +163,11 @@ where
                             AuthoritativeGenerationMaterializationError::InvalidLocalEvidence,
                         );
                     }
+                    #[cfg(windows)]
+                    eprintln!(
+                        "bridge_open_subphase name=ready_local_reuse elapsed_ms={}",
+                        local_evidence_started.elapsed().as_millis()
+                    );
                     return Ok(());
                 }
                 Err(BrowserLaunchBlocker::LocalProfile(LocalProfileError::Io(
@@ -183,6 +190,11 @@ where
         Err(_) => return Err(AuthoritativeGenerationMaterializationError::Local),
     };
 
+    #[cfg(windows)]
+    eprintln!(
+        "bridge_open_subphase name=cloud_materialization_needed elapsed_ms={}",
+        local_evidence_started.elapsed().as_millis()
+    );
     let capability = control
         .download_capability(tenant_id, profile_id)
         .map_err(|error| {

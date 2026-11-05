@@ -211,17 +211,23 @@ pub struct WorkerCryptoNonceSource;
 #[cfg(target_arch = "wasm32")]
 impl ContactNonceSource for WorkerCryptoNonceSource {
     fn fill_nonce(&self, nonce: &mut [u8; NONCE_LENGTH]) -> Result<(), ContactCryptoError> {
-        use worker::wasm_bindgen::JsCast;
+        use worker::js_sys::{Function, Reflect, Uint8Array};
+        use worker::wasm_bindgen::{JsCast, JsValue};
 
-        let scope = worker::js_sys::global()
-            .dyn_into::<web_sys::WorkerGlobalScope>()
+        // Cloudflare offers the standard Web Crypto API on globalThis, but
+        // need not implement the browser WorkerGlobalScope prototype.
+        // Do not fall back to an insecure PRNG if native crypto is unavailable.
+        let global = worker::js_sys::global();
+        let crypto = Reflect::get(&global, &JsValue::from_str("crypto"))
             .map_err(|_| ContactCryptoError::RandomnessUnavailable)?;
-        let crypto = scope
-            .crypto()
+        let fill = Reflect::get(&crypto, &JsValue::from_str("getRandomValues"))
+            .map_err(|_| ContactCryptoError::RandomnessUnavailable)?
+            .dyn_into::<Function>()
             .map_err(|_| ContactCryptoError::RandomnessUnavailable)?;
-        crypto
-            .get_random_values_with_u8_array(nonce)
+        let bytes = Uint8Array::new_with_length(NONCE_LENGTH as u32);
+        fill.call1(&crypto, &bytes)
             .map_err(|_| ContactCryptoError::RandomnessUnavailable)?;
+        bytes.copy_to(nonce);
         Ok(())
     }
 }

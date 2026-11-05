@@ -1061,6 +1061,8 @@ where
             "bridge_open_phase name=runtime_integrity elapsed_ms={}",
             admission_started.elapsed().as_millis()
         );
+        #[cfg(windows)]
+        let device_key_started = std::time::Instant::now();
         let device_id = self
             .device_identity
             .device_id()
@@ -1069,9 +1071,23 @@ where
             .device_keys
             .ensure_key_handle(&device_id)
             .map_err(|_| OperatorFlowError::Stage(OperatorFailureStage::DeviceKey))?;
+        #[cfg(windows)]
+        eprintln!(
+            "bridge_open_subphase name=device_key elapsed_ms={}",
+            device_key_started.elapsed().as_millis()
+        );
+        #[cfg(windows)]
+        let device_auth_started = std::time::Instant::now();
         self.device_authentication
             .authenticate(&device_id, &key_handle)
             .map_err(|_| OperatorFlowError::Stage(OperatorFailureStage::DeviceAuthentication))?;
+        #[cfg(windows)]
+        eprintln!(
+            "bridge_open_subphase name=device_authentication elapsed_ms={}",
+            device_auth_started.elapsed().as_millis()
+        );
+        #[cfg(windows)]
+        let enrollment_started = std::time::Instant::now();
         let enrollment = self
             .enrollment
             .redeem_claim(claim, &device_id, now)
@@ -1084,6 +1100,13 @@ where
                     OperatorFlowError::Stage(OperatorFailureStage::Enrollment)
                 }
             })?;
+        #[cfg(windows)]
+        eprintln!(
+            "bridge_open_subphase name=enrollment_claim elapsed_ms={}",
+            enrollment_started.elapsed().as_millis()
+        );
+        #[cfg(windows)]
+        let coordinator_started = std::time::Instant::now();
         let lease = self
             .coordinator
             .claim_launch_intent(
@@ -1101,6 +1124,11 @@ where
             return Err(self.fail_before_local_use(OperatorFailureStage::LeaseValidation, lease));
         }
 
+        #[cfg(windows)]
+        eprintln!(
+            "bridge_open_subphase name=coordinator_claim elapsed_ms={}",
+            coordinator_started.elapsed().as_millis()
+        );
         #[cfg(windows)]
         eprintln!(
             "bridge_open_phase name=authenticated_claim elapsed_ms={}",
@@ -1333,6 +1361,8 @@ where
                 return Err(self.fail_before_local_use(OperatorFailureStage::LocalWorkspace, lease));
             }
         };
+        #[cfg(windows)]
+        let preflight_started = std::time::Instant::now();
         if let Err(error) = self.browser_preflight.evaluate_before_launch(
             &workspace,
             &device_id,
@@ -1347,6 +1377,11 @@ where
                 &workspace,
             ));
         }
+        #[cfg(windows)]
+        eprintln!(
+            "bridge_open_subphase name=browser_preflight elapsed_ms={}",
+            preflight_started.elapsed().as_millis()
+        );
         if native_rescue_required {
             #[cfg(any(windows, test))]
             if begin_native_rescue_edit(root, &workspace, &lease).is_err() {
@@ -1365,6 +1400,8 @@ where
                 &workspace,
             ));
         }
+        #[cfg(windows)]
+        let inventory_started = std::time::Instant::now();
         let inventory = match workspace.inventory() {
             Ok(value) => value,
             Err(_) => {
@@ -1376,6 +1413,11 @@ where
                 ));
             }
         };
+        #[cfg(windows)]
+        eprintln!(
+            "bridge_open_subphase name=workspace_inventory elapsed_ms={}",
+            inventory_started.elapsed().as_millis()
+        );
         // Only this exact boundary may consume pending delivery health. The runtime has
         // not been spawned or allowed to mutate the workspace at this point.
         if before_runtime_start().is_err() {
