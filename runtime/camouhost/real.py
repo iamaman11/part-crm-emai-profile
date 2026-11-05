@@ -385,12 +385,28 @@ def validate_windows_distribution(lock: dict[str, Any]) -> None:
         "architecture",
         "browser",
         "python",
+        "ublock_origin",
     }:
         raise RuntimeContractError("Windows distribution lock shape is invalid")
     if distribution.get("architecture") != "x86_64":
         raise RuntimeContractError("Windows runtime architecture is unsupported")
     browser = distribution.get("browser")
     python = distribution.get("python")
+    ubo = distribution.get("ublock_origin")
+    if not isinstance(ubo, dict) or set(ubo) != {
+        "artifact_sha256",
+        "artifact_url",
+        "version",
+    }:
+        raise RuntimeContractError("Windows UBO artifact lock shape is invalid")
+    if (
+        ubo.get("version") != "1.75.4"
+        or ubo.get("artifact_url")
+        != "https://addons.mozilla.org/firefox/downloads/file/5203014/ublock_origin-1.75.4.xpi"
+        or not isinstance(ubo.get("artifact_sha256"), str)
+        or not valid_sha256(ubo["artifact_sha256"])
+    ):
+        raise RuntimeContractError("Windows UBO immutable release identity is invalid")
     if not isinstance(browser, dict) or set(browser) != {
         "artifact_sha256",
         "artifact_url",
