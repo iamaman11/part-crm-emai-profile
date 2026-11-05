@@ -50,12 +50,14 @@ def assert_self_test() -> None:
     assert classify_events(["finished_no_crash"], None) == "INCOMPLETE"
     assert classify_events(["dom_loaded", "content_crashed", "finished_no_crash"], None) == "TAB_CRASH"
     assert set(URLS) == {"vk", "example"}
+    assert parse_args(["--skip-worker-check"]).skip_worker_check
+    assert not parse_args([]).skip_worker_check
 
 
 def single_trial(
     browser: pathlib.Path, target: str, disable_workers: bool,
     disable_javascript: bool, block_webgl: bool,
-    profile_root: pathlib.Path,
+    profile_root: pathlib.Path, check_worker_constructor: bool,
 ) -> tuple[str, str]:
     # Import is delayed so --self-test can run offline on any CI OS.
     from camoufox.sync_api import Camoufox
@@ -93,12 +95,16 @@ def single_trial(
             page.on("crash", callback)
             # A constructor check is diagnostic, NOT a privileged Firefox
             # about:config/pref readback and not proof that workers are disabled.
-            try:
-                observed_workers = "present" if page.evaluate(
-                    "() => typeof Worker === 'function'"
-                ) else "absent"
-            except Exception:
-                observed_workers = "unknown"
+            if check_worker_constructor:
+                try:
+                    observed_workers = "present" if page.evaluate(
+                        "() => typeof Worker === 'function'"
+                    ) else "absent"
+                except Exception:
+                    observed_workers = "unknown"
+            # The opt-in no-precheck variant tests a possible Juggler
+            # navigation/readiness race without adding sleeps or implicit
+            # navigation to the real browser owner.
             page.goto(URLS[target], wait_until="domcontentloaded", timeout=25000)
             stage("dom_loaded")
             page.wait_for_timeout(3500)
@@ -120,6 +126,8 @@ def parse_args(args: list[str]) -> argparse.Namespace:
     parser.add_argument("--disable-workers", action="store_true")
     parser.add_argument("--disable-javascript", action="store_true")
     parser.add_argument("--block-webgl", action="store_true")
+    parser.add_argument("--skip-worker-check", action="store_true",
+                        help="navigate without pre-navigation Playwright evaluate")
     return parser.parse_args(args)
 
 
@@ -141,6 +149,8 @@ def main(args: list[str] | None = None) -> int:
         variant += "_javascript_off"
     if config.block_webgl:
         variant += "_webgl_blocked"
+    if config.skip_worker_check:
+        variant += "_no_precheck"
     failed = False
     for trial in range(1, config.repeats + 1):
         # Temp root is a new private profile for every attempt; the context
@@ -152,6 +162,7 @@ def main(args: list[str] | None = None) -> int:
                     config.browser, config.target,
                     config.disable_workers, config.disable_javascript,
                     config.block_webgl, pathlib.Path(temp) / "user_data",
+                    not config.skip_worker_check,
                 )
         except OSError:
             print("CAMOUFOX_MANAGED_PROBE_CLEANUP=INCOMPLETE", flush=True)
