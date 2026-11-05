@@ -1652,7 +1652,11 @@ mod tests {
                 GenerationReopenControlError::Transport
             ))
         );
-        assert!(!outcome.unwrap_err().proves_no_local_write_and_absent_workspace());
+        assert!(
+            !outcome
+                .unwrap_err()
+                .proves_no_local_write_and_absent_workspace()
+        );
         assert!(!sidecar.exists());
         assert_eq!(
             fs::read(workspace.path().join("user_data/storage/state.bin"))?,
