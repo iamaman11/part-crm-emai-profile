@@ -812,11 +812,23 @@ async fn dispatch_successor_retry_decision(
     Ok(response)
 }
 
-/// The only write admission for a historical real-browser WORKING receipt.
-/// Bridge invokes it after successful managed Camoufox observation, clean
-/// browser stop, unchanged local bytes and post-launch old-key reproof.
-/// Server independently resolves CURRENT/journal/R2 and rederives the old root.
-/// The D1 receipt is durable evidence, NOT a standalone R2 prune permit.
+/// Durable WORKING must require server-verifiable evidence of a native
+/// Firefox data readback, bound to expected pre-Save user-data state and the
+/// exact restored historical generation. The present request only contains
+/// caller-supplied metadata, runtime digest and coordinator witness; even a
+/// genuine device can claim these without opening a usable browser.
+///
+/// Fail closed at the SERVER until a separate reviewed, authenticated browser
+/// data-proof contract is implemented end to end. There is no staging-canary
+/// exception: a false WORKING receipt can reach R2 retention logic.
+fn historical_browser_content_certification_implemented() -> bool {
+    false
+}
+
+/// Historical WORKING route. Identity, R2, key and fence checks below are
+/// necessary but NOT sufficient evidence that native cookies, tabs and
+/// IndexedDB were actually restored. Never persist D1 WORKING merely from
+/// this metadata-only request, even when a client calls the endpoint directly.
 async fn dispatch_working_proof(
     request: &mut Request,
     env: &Env,
@@ -825,6 +837,12 @@ async fn dispatch_working_proof(
     device_id: &DeviceId,
     role: identity_access_domain::MembershipRole,
 ) -> Result<Response> {
+    // Client-side disabled calls do not protect this public machine route.
+    // This gate is checked before parsing claims or writing any WORKING D1
+    // receipt; no explicit canary or runtime allowlist may override it.
+    if !historical_browser_content_certification_implemented() {
+        return verification_conflict(actor.correlation_id().as_str());
+    }
     let body = match request.json::<BridgeGenerationWorkingProofRequest>().await {
         Ok(value) => value,
         Err(_) => return invalid_request(actor.correlation_id().as_str()),
@@ -2017,6 +2035,14 @@ mod tests {
             &ordinary,
         ));
         Ok(())
+    }
+
+    #[test]
+    fn metadata_only_working_certification_is_disabled_at_server_boundary() {
+        // Signed machine identity, a pinned runtime and valid R2 metadata
+        // cannot demonstrate the user's restored Firefox browser content.
+        // This protection must also apply to direct /certify API callers.
+        assert!(!super::historical_browser_content_certification_implemented());
     }
 
     #[test]
