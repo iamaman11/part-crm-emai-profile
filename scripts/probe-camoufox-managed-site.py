@@ -54,6 +54,7 @@ def assert_self_test() -> None:
     assert not parse_args([]).skip_worker_check
     assert parse_args(["--exclude-ubo"]).exclude_ubo
     assert not parse_args([]).exclude_ubo
+    assert parse_args(["--pinned-ubo-dir", "/fixture"]).pinned_ubo_dir is not None
 
 
 def single_trial(
@@ -61,6 +62,7 @@ def single_trial(
     disable_javascript: bool, block_webgl: bool,
     profile_root: pathlib.Path, check_worker_constructor: bool,
     exclude_ubo: bool,
+    pinned_ubo_dir: pathlib.Path | None,
 ) -> tuple[str, str]:
     # Import is delayed so --self-test can run offline on any CI OS.
     from camoufox.sync_api import Camoufox
@@ -92,11 +94,12 @@ def single_trial(
     if block_webgl:
         kwargs["block_webgl"] = True
     if exclude_ubo:
-        # Shipping real.py explicitly excludes the bundled UBO; unlike the
-        # earlier successful fixture run, this reproduces that exact owner
-        # difference without touching any user's Firefox configuration.
+        # Avoid Camoufox's mutable default-addon download while testing the
+        # shipping release path. Add an exact pre-extracted addon separately.
         from camoufox.addons import DefaultAddons
         kwargs["exclude_addons"] = [DefaultAddons.UBO]
+    if pinned_ubo_dir is not None:
+        kwargs["addons"] = [str(pinned_ubo_dir)]
 
     try:
         with Camoufox(**kwargs) as context:
@@ -137,6 +140,8 @@ def parse_args(args: list[str]) -> argparse.Namespace:
     parser.add_argument("--block-webgl", action="store_true")
     parser.add_argument("--exclude-ubo", action="store_true",
                         help="match the current shipping Camouhost addon exclusions")
+    parser.add_argument("--pinned-ubo-dir", type=pathlib.Path,
+                        help="opt-in absolute pre-extracted verified UBO dir; no download")
     parser.add_argument("--skip-worker-check", action="store_true",
                         help="navigate without pre-navigation Playwright evaluate")
     return parser.parse_args(args)
@@ -154,6 +159,24 @@ def main(args: list[str] | None = None) -> int:
     if config.browser.name.lower() != "camoufox.exe" or sys.platform != "win32":
         print("CAMOUFOX_MANAGED_PROBE=WINDOWS_PINNED_CAMOUFOX_REQUIRED", flush=True)
         return 2
+    if config.pinned_ubo_dir is not None:
+        # Test-only source directory is created by the operator from a
+        # separately SHA-256 verified official XPI, not from a runtime URL.
+        manifest = config.pinned_ubo_dir / "manifest.json"
+        try:
+            version = __import__("json").loads(
+                manifest.read_text(encoding="utf-8")
+            ).get("version")
+        except (OSError, ValueError, AttributeError):
+            version = None
+        if (
+            not config.exclude_ubo
+            or not config.pinned_ubo_dir.is_absolute()
+            or config.pinned_ubo_dir.is_symlink()
+            or version != "1.75.0"
+        ):
+            print("CAMOUFOX_MANAGED_PROBE=INVALID_PINNED_UBO", flush=True)
+            return 2
 
     variant = ("workers_off" if config.disable_workers else "workers_default")
     if config.disable_javascript:
@@ -164,6 +187,8 @@ def main(args: list[str] | None = None) -> int:
         variant += "_no_precheck"
     if config.exclude_ubo:
         variant += "_ubo_excluded"
+    if config.pinned_ubo_dir is not None:
+        variant += "_pinned_ubo"
     failed = False
     for trial in range(1, config.repeats + 1):
         # Temp root is a new private profile for every attempt; the context
@@ -177,6 +202,7 @@ def main(args: list[str] | None = None) -> int:
                     config.block_webgl, pathlib.Path(temp) / "user_data",
                     not config.skip_worker_check,
                     config.exclude_ubo,
+                    config.pinned_ubo_dir,
                 )
         except OSError:
             print("CAMOUFOX_MANAGED_PROBE_CLEANUP=INCOMPLETE", flush=True)
