@@ -71,6 +71,30 @@ def main() -> int:
         encoding="utf-8"
     )
     assert "WORKING_LKG_CERTIFICATE=0;R2_PRUNE_AUTHORITY=0" in shipping
+    # The server is a separate trust boundary. A direct machine API caller
+    # bypasses the Rust maintenance client entirely. Until an independently
+    # verifiable native browser-data witness exists, even the staging canary
+    # MUST be rejected before any D1 insert or R2 retention effect.
+    worker = (
+        ROOT / "apps/control-plane-worker/src/profile_generation_successor_ingress.rs"
+    ).read_text(encoding="utf-8")
+    route_start = worker.index("async fn dispatch_working_proof(")
+    route_end = worker.index("async fn retire_one_old_generation(", route_start)
+    handler = worker[route_start:route_end]
+    gate = handler.index(
+        "if !historical_browser_content_certification_implemented()"
+    )
+    body = handler.index("let body = match request.json::<BridgeGenerationWorkingProofRequest>()")
+    d1_write = handler.index(".record_historical_working_proof(")
+    canary_retire = handler.index("retire_one_old_generation(")
+    assert gate < body < d1_write < canary_retire, (
+        "WORKING route must reject metadata-only callers before parsing, "
+        "writing D1, or permitting staging R2 deletion"
+    )
+    assert "return verification_conflict(actor.correlation_id().as_str())" in handler[
+        gate:body
+    ]
+    assert "fn historical_browser_content_certification_implemented() -> bool {\n    false\n}" in worker
     fx = runpy.run_path(str(FIXTURE))
     conn = fx["seed"]()
     try:
