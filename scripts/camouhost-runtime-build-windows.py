@@ -424,6 +424,32 @@ def materialize(
 
 
 def self_test() -> None:
+    # The official AMO addon is a build-time component; never accept a mutable
+    # latest URL, a missing digest, or an accidental extra alternate source.
+    # Negative checks are offline and run in the normal CI runtime gate.
+    import copy
+
+    fixture = load_lock(DEFAULT_LOCK)
+    with tempfile.TemporaryDirectory(prefix="camouhost-ubo-lock-test-") as directory:
+        path = Path(directory) / "runtime-lock.json"
+        for variant in ("missing", "mutable", "bad_digest", "wrong_version"):
+            candidate = copy.deepcopy(fixture)
+            addon = candidate["windows_distribution"]["ublock_origin"]
+            if variant == "missing":
+                del candidate["windows_distribution"]["ublock_origin"]
+            elif variant == "mutable":
+                addon["artifact_url"] = "https://addons.mozilla.org/firefox/downloads/latest/ublock-origin/latest.xpi"
+            elif variant == "bad_digest":
+                addon["artifact_sha256"] = "not-a-digest"
+            else:
+                addon["version"] = "latest"
+            path.write_bytes(canonical(candidate))
+            try:
+                load_lock(path)
+            except RuntimeBuildError:
+                pass
+            else:
+                fail(f"unlocked UBO artifact unexpectedly accepted: {variant}")
     with tempfile.TemporaryDirectory(prefix="camouhost-runtime-selftest-") as directory:
         root=Path(directory); archive=root/"safe.zip"
         with zipfile.ZipFile(archive,"w",compression=zipfile.ZIP_STORED) as z: z.writestr("alpha/file.txt",b"payload")
