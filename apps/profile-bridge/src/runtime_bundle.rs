@@ -162,7 +162,6 @@ impl FilesystemRuntimeBundleSelection {
         let mut expected_files = HashSet::new();
         expected_files.insert(SHIPPING_COMPONENT_MANIFEST.to_owned());
         let mut expected_directories = HashSet::new();
-        let mut runtime_files = Vec::with_capacity(packaged.files.files.len());
         let mut total_bytes = 0_u64;
         for expected in &packaged.files.files {
             validate_runtime_file_identity(expected)?;
@@ -172,19 +171,13 @@ impl FilesystemRuntimeBundleSelection {
             if total_bytes > MAX_RUNTIME_BYTES {
                 return Err(RuntimeBundleSelectionError::InvalidRuntime);
             }
-            let runtime_file = read_expected_runtime_file(&self.runtime_root, expected)
-                .inspect_err(|error| {
-                    eprintln!(
-                        "RUNTIME_BUNDLE_VALIDATION=file;component_path={:?};error={error:?}",
-                        expected.path
-                    );
-                })?;
             add_expected_directories(&expected.path, &mut expected_directories)?;
             if !expected_files.insert(expected.path.clone()) {
                 return Err(RuntimeBundleSelectionError::InvalidRuntime);
             }
-            runtime_files.push(runtime_file);
         }
+        let mut runtime_files =
+            verify_runtime_files(&self.runtime_root, &packaged.files.files, total_bytes)?;
         if runtime_files.is_empty() || runtime_files.len() > MAX_RUNTIME_FILES {
             return Err(RuntimeBundleSelectionError::InvalidRuntime);
         }
@@ -229,6 +222,80 @@ impl FilesystemRuntimeBundleSelection {
         ApprovedRuntimeBundle::validate(manifest, inventory, &calculated_inventory_sha256)
             .map_err(|_| RuntimeBundleSelectionError::InvalidRuntime)
     }
+}
+
+// Hash all bytes of each immutable file against the signed runtime manifest.
+// Four bounded, short-lived workers reduce CPU-bound cold Open on older Windows
+// hosts. No content cache, background daemon or weaker trust boundary is added.
+// Every worker is joined, including failures/panics, before launch can proceed.
+fn verify_runtime_files(
+    root: &Path,
+    expected: &[PackagedFileIdentity],
+    total_bytes: u64,
+) -> Result<Vec<RuntimeFile>, RuntimeBundleSelectionError> {
+    let workers = if total_bytes >= 128 * 1024 * 1024 {
+        std::thread::available_parallelism()
+            .map_or(1, std::num::NonZeroUsize::get)
+            .min(4)
+            .min(expected.len())
+    } else {
+        1
+    };
+    verify_runtime_files_with_workers(root, expected, workers)
+}
+
+fn verify_runtime_files_with_workers(
+    root: &Path,
+    expected: &[PackagedFileIdentity],
+    workers: usize,
+) -> Result<Vec<RuntimeFile>, RuntimeBundleSelectionError> {
+    if workers == 0 || workers > 4 {
+        return Err(RuntimeBundleSelectionError::InvalidRuntime);
+    }
+    let verify_one = |entry: &PackagedFileIdentity| {
+        read_expected_runtime_file(root, entry).inspect_err(|error| {
+            eprintln!(
+                "RUNTIME_BUNDLE_VALIDATION=file;component_path={:?};error={error:?}",
+                entry.path
+            );
+        })
+    };
+    if workers == 1 {
+        return expected.iter().map(verify_one).collect();
+    }
+    std::thread::scope(|scope| {
+        let mut handles = Vec::with_capacity(workers);
+        for lane in 0..workers {
+            let verify_one = &verify_one;
+            handles.push(scope.spawn(move || {
+                expected
+                    .iter()
+                    .skip(lane)
+                    .step_by(workers)
+                    .map(verify_one)
+                    .collect::<Result<Vec<_>, RuntimeBundleSelectionError>>()
+            }));
+        }
+        let mut verified = Vec::with_capacity(expected.len());
+        let mut failure = None;
+        for handle in handles {
+            match handle.join() {
+                Ok(Ok(entries)) => verified.extend(entries),
+                Ok(Err(error)) => {
+                    failure.get_or_insert(error);
+                }
+                Err(_) => {
+                    // A panic is never evidence of verified installed bytes.
+                    failure.get_or_insert(RuntimeBundleSelectionError::InvalidRuntime);
+                }
+            }
+        }
+        if let Some(error) = failure {
+            Err(error)
+        } else {
+            Ok(verified)
+        }
+    })
 }
 
 impl RuntimeBundleSelectionPort for FilesystemRuntimeBundleSelection {
@@ -766,6 +833,7 @@ mod tests {
         SHIPPING_COMPONENT_PLATFORM, SHIPPING_COMPONENT_RELEASE_PREFIX,
         SHIPPING_COMPONENT_SCHEMA_VERSION, SHIPPING_ENTRYPOINT, SHIPPING_PYTHON_EXECUTABLE,
         SHIPPING_RESOLVED_RUNTIME, SHIPPING_RUNTIME_LOCK, sha256_hex, sha256_regular_file,
+        verify_runtime_files_with_workers,
     };
     use crate::operator_flow::RuntimeBundleSelectionPort;
     use crate::{FakeCamouhost, FakeProcessControl, ProcessAction};
@@ -930,6 +998,40 @@ mod tests {
                 .load_bundle()
                 .is_ok()
         );
+        fs::remove_dir_all(root)?;
+        Ok(())
+    }
+
+    #[test]
+    fn parallel_runtime_hashing_rejects_same_size_tamper_and_missing_files()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let root = runtime_root("four-bounded-hash-workers")?;
+        fs::create_dir_all(&root)?;
+        let mut expected = Vec::new();
+        for index in 0..8 {
+            let name = format!("verified-{index}.bin");
+            let contents = format!("exact-data-{index}");
+            fs::write(root.join(&name), contents.as_bytes())?;
+            expected.push(PackagedFileIdentity {
+                path: name,
+                sha256: sha256_hex(contents.as_bytes()),
+                size_bytes: u64::try_from(contents.len())?,
+            });
+        }
+        let verified = verify_runtime_files_with_workers(&root, &expected, 4)?;
+        assert_eq!(verified.len(), expected.len());
+        let target = root.join("verified-3.bin");
+        fs::write(&target, b"exact-dota-3")?;
+        assert!(matches!(
+            verify_runtime_files_with_workers(&root, &expected, 4),
+            Err(RuntimeBundleSelectionError::InvalidRuntime)
+        ));
+        fs::write(&target, b"exact-data-3")?;
+        fs::remove_file(&target)?;
+        assert!(matches!(
+            verify_runtime_files_with_workers(&root, &expected, 4),
+            Err(RuntimeBundleSelectionError::MissingRuntimeFile)
+        ));
         fs::remove_dir_all(root)?;
         Ok(())
     }
