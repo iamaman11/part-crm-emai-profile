@@ -1162,6 +1162,18 @@ def record_close_callback(state: dict[str, Any], event: str) -> None:
     events.append(event)
     if len(events) > 64:
         del events[:-64]
+    if event in ("crash", "recovered"):
+        # Emit immediately while the original managed IPC is still alive:
+        # later Close can fail without a useful exception/receipt. Only
+        # bounded counters and a fixed event kind, never URL, credential,
+        # fingerprint, session, path, cookie or page content.
+        print(
+            "camouhost_page_event "
+            f"kind={event} tracked={len(state['tracked_pages'])} "
+            f"unresolved={len(state['unresolved_crashes'])}",
+            file=sys.stderr,
+            flush=True,
+        )
 
 
 def install_controlled_close_observation(context: Any, owner_pid: int | None = None) -> dict[str, Any]:
