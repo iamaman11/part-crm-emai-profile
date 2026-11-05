@@ -715,18 +715,20 @@ mod p3_fixture {
                 2,
                 "old root must remain derivable after the real historical Camoufox closes"
             );
+            // The genuine cold Firefox observation above proves this fixture's
+            // seeded browser state, R2 ciphertext and old-key readback. It does
+            // NOT produce a reusable authenticated, server-verifiable witness
+            // for arbitrary historical profiles. Never confuse the historical
+            // identity probe with a D1 WORKING certificate.
             assert_eq!(
                 events
                     .iter()
                     .filter(|e| e.starts_with("historical-working-proof:"))
                     .count(),
-                1,
-                "D1 receipt may be requested only after verified real browser stop"
+                0,
+                "identity-only historical probe must not request D1 WORKING"
             );
-            assert_eq!(
-                state_ref.historical_working_proof.as_deref(),
-                Some(successor.as_str())
-            );
+            assert_eq!(state_ref.historical_working_proof, None);
             assert!(!events.iter().any(|e| e.contains("historical-commit")));
             assert!(
                 events.iter().any(|e| e == "coordinator:release:Clean"),
