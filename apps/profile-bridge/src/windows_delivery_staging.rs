@@ -332,9 +332,11 @@ pub fn reopen_staged_delivery(
     reopen_staged_delivery_with_mode(root, identity, false)
 }
 
-/// Browser Open only: full runtime SHA-256 is performed by the runtime selector
-/// before device authentication or claim redemption. This preflight still
-/// verifies every path/type/size plus Bridge and runtime-manifest file contents.
+/// Browser Open only: the runtime selector verifies the *entire* runtime
+/// file-set (path/type/size/SHA-256 and the absence of unexpected files) before
+/// device authentication or claim redemption. The delivery owner verifies its
+/// own staged Bridge tree, signed stage marker and exact runtime manifest here.
+/// Do not traverse the same multi-GiB runtime tree twice on every Open.
 #[cfg(any(windows, test))]
 pub(crate) fn reopen_staged_delivery_before_runtime_selection(
     root: &DeliveryStagingRoot,
@@ -661,6 +663,15 @@ fn verify_materialized_stage_with_mode(
         let prefix = plan.kind.directory();
         expected_directories.insert(prefix.to_owned());
         for file in &plan.files {
+            // The immediately-following, delivery-bound runtime selector owns
+            // the full runtime traversal. Preserve the stage owner's exact
+            // runtime-manifest check, not a second 5,000-file directory walk.
+            if runtime_hashes_deferred
+                && prefix == "runtime"
+                && file.relative_path != "runtime-manifest.json"
+            {
+                continue;
+            }
             let path = format!("{prefix}/{}", file.relative_path);
             expected_files.insert(path.clone(), (file.size_bytes, file.sha256.clone()));
             let mut current = prefix.to_owned();
@@ -711,15 +722,38 @@ fn collect_tree(
         }
         let relative = normalized_descendant(root, &path)?;
         if metadata.is_dir() {
-            actual_directories.insert(relative);
-            collect_tree(
-                root,
-                &path,
-                expected_files,
-                actual_files,
-                actual_directories,
-                runtime_hashes_deferred,
-            )?;
+            if runtime_hashes_deferred && relative == "runtime" {
+                // This is NOT acceptance of the runtime subtree. Its only
+                // legitimate consumer is the bound selector, whose complete
+                // SHA-256/tree verification must pass before a launch claim.
+                // The manifest is still bound here to the signed stage marker.
+                let manifest_path = path.join("runtime-manifest.json");
+                let manifest_relative = "runtime/runtime-manifest.json";
+                let (expected_size, expected_digest) = expected_files
+                    .get(manifest_relative)
+                    .ok_or(DeliveryStagingError::CorruptStage)?;
+                let manifest_metadata = fs::symlink_metadata(&manifest_path)
+                    .map_err(|_| DeliveryStagingError::CorruptStage)?;
+                if metadata_is_link_or_reparse(&manifest_metadata)
+                    || !manifest_metadata.is_file()
+                    || manifest_metadata.len() != *expected_size
+                    || sha256_file(&manifest_path)? != *expected_digest
+                {
+                    return Err(DeliveryStagingError::CorruptStage);
+                }
+                actual_files.insert(manifest_relative.to_owned());
+                actual_directories.insert(relative);
+            } else {
+                actual_directories.insert(relative);
+                collect_tree(
+                    root,
+                    &path,
+                    expected_files,
+                    actual_files,
+                    actual_directories,
+                    runtime_hashes_deferred,
+                )?;
+            }
         } else if metadata.is_file() {
             let Some((expected_size, expected_digest)) = expected_files.get(&relative) else {
                 return Err(DeliveryStagingError::CorruptStage);
@@ -1329,8 +1363,8 @@ mod tests {
             staged
         );
         let browser = staged.runtime_root().join("browser/camoufox.exe");
-        // No content acceptance is granted by this lightweight preflight:
-        // the existing runtime selector must reject same-size byte tampering.
+        // No runtime content acceptance is granted by this stage preflight:
+        // the bound selector MUST still reject same-size byte tampering.
         fs::write(&browser, b"change!")?;
         assert_eq!(
             reopen_staged_delivery_before_runtime_selection(&root, &identity)?,
@@ -1340,10 +1374,17 @@ mod tests {
             reopen_staged_delivery(&root, &identity),
             Err(DeliveryStagingError::CorruptStage)
         );
+        // Both unexpected size and a missing child are deferred to the
+        // mandatory exact selector, not silently accepted as launch authority.
         fs::write(&browser, b"longer payload")?;
         assert_eq!(
-            reopen_staged_delivery_before_runtime_selection(&root, &identity),
-            Err(DeliveryStagingError::CorruptStage)
+            reopen_staged_delivery_before_runtime_selection(&root, &identity)?,
+            staged
+        );
+        fs::remove_file(&browser)?;
+        assert_eq!(
+            reopen_staged_delivery_before_runtime_selection(&root, &identity)?,
+            staged
         );
         fs::write(&browser, b"browser")?;
         let manifest = staged.runtime_root().join("runtime-manifest.json");
@@ -1353,6 +1394,16 @@ mod tests {
             Err(DeliveryStagingError::CorruptStage)
         );
         fs::write(&manifest, b"manifest")?;
+        // A missing or junction-substituted *runtime root* cannot defer
+        // verification to a different physical runtime path.
+        let runtime_root = staged.runtime_root();
+        let moved_runtime = directory.0.join("runtime-temporarily-outside-stage");
+        fs::rename(&runtime_root, &moved_runtime)?;
+        assert_eq!(
+            reopen_staged_delivery_before_runtime_selection(&root, &identity),
+            Err(DeliveryStagingError::CorruptStage)
+        );
+        fs::rename(&moved_runtime, &runtime_root)?;
         fs::write(
             staged.profile_bridge_root().join("profile-bridge.exe"),
             b"BRIDGE",
