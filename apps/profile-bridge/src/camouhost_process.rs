@@ -969,9 +969,7 @@ fn safe_page_event_witness(message: &str) -> bool {
         return false;
     };
     let fields: Vec<_> = rest.split(' ').collect();
-    if fields.len() != 3
-        || !matches!(fields[0], "kind=crash" | "kind=recovered")
-    {
+    if fields.len() != 3 || !matches!(fields[0], "kind=crash" | "kind=recovered") {
         return false;
     }
     let Some(tracked) = fields[1]
