@@ -188,7 +188,12 @@ def prove_controlled_close_dispatch_contract(runtime: ModuleType) -> None:
     context = Context([recoverable, unrelated])
     witness = runtime.install_controlled_close_observation(context)
     context.next_observation = lambda: recoverable.fire("crash")
-    assert not runtime.observe_controlled_close(context, witness)
+    observed_crash = io.StringIO()
+    with contextlib.redirect_stderr(observed_crash):
+        assert not runtime.observe_controlled_close(context, witness)
+    assert observed_crash.getvalue() == (
+        "camouhost_page_event kind=crash tracked=2 unresolved=1\n"
+    ), "browser crash callback did not emit a safe immediate witness"
     context.next_observation = lambda: unrelated.fire("load")
     assert not runtime.observe_controlled_close(context, witness)
     context.next_observation = lambda: recoverable.fire("load")
@@ -197,7 +202,12 @@ def prove_controlled_close_dispatch_contract(runtime: ModuleType) -> None:
     )
     recoverable.document_uri = recoverable.url
     context.next_observation = lambda: None
-    assert not runtime.observe_controlled_close(context, witness)
+    observed_recovery = io.StringIO()
+    with contextlib.redirect_stderr(observed_recovery):
+        assert not runtime.observe_controlled_close(context, witness)
+    assert observed_recovery.getvalue() == (
+        "camouhost_page_event kind=recovered tracked=2 unresolved=0\n"
+    ), "same-page verified restore did not emit a safe recovery witness"
     assert not witness["unresolved_crashes"], "same-page verified load did not clear crash"
     assert witness["crashed"], "historical crash evidence was erased"
     context.next_observation = lambda: (recoverable.fire("close"), unrelated.fire("close"))
