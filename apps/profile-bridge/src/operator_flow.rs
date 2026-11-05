@@ -949,23 +949,16 @@ where
             &mut self.camouhost,
             observe_browser_state,
         );
-        // The original Coordinator/Bridge keep the same live fence until
-        // the D1 owner has durably acknowledged the real-browser proof.
-        // If unknown/rejected, release Uncertain and never claim WORKING.
-        let observed = match observed {
-            Ok(observation) => match self.coordinator.certify_verified_predecessor_working(
-                observation.tenant_id(),
-                observation.profile_id(),
-                observation.current_generation_id(),
-                observation.predecessor_generation_id(),
-                observation.opening_prelude(),
-                observation.runtime_inventory_sha256(),
-            ) {
-                Ok(true) => Ok(observation),
-                _ => Err(HistoricalColdProbeError::PostLaunchAuthorityUnconfirmed),
-            },
-            Err(error) => Err(error),
-        };
+        // This maintenance observer proves browser identity/readiness only;
+        // it does NOT independently verify cookies, IndexedDB, SessionStore,
+        // user page content or the old key's future recoverability. Calling
+        // the server WORKING certification here would turn an identity-only
+        // readback into a durable pruning authority. Never do that.
+        //
+        // Keep the exact CURRENT fence through the clean browser stop and
+        // post-launch R2/key reauthorization already proved by the probe.
+        // A fully authenticated, separately evidenced browser-data acceptance
+        // flow must own any future certify_verified_predecessor_working call.
         let release_failed = if observed.is_ok() {
             self.coordinator
                 .close_verified_historical_probe(&lease)
