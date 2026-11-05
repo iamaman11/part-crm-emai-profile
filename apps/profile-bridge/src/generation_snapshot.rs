@@ -451,7 +451,9 @@ pub(crate) fn verify_workspace_matches_streamed_snapshot(
     if expected.plaintext_bytes > MAX_STREAM_WORKSPACE_SNAPSHOT_BYTES {
         return Err(GenerationSnapshotError::SnapshotTooLarge);
     }
-    let inventory = workspace.inventory().map_err(GenerationSnapshotError::Local)?;
+    let inventory = workspace
+        .inventory()
+        .map_err(GenerationSnapshotError::Local)?;
     let mut canonical = WorkspaceSnapshotReader::new(workspace, &inventory)?;
     if canonical.expected_bytes() != expected.plaintext_bytes {
         return Err(GenerationSnapshotError::SourceChanged);
@@ -462,16 +464,26 @@ pub(crate) fn verify_workspace_matches_streamed_snapshot(
     let mut digest = Sha256::new();
     while remaining != 0 {
         let count = remaining.min(actual.len() as u64) as usize;
-        remote.read_exact(&mut actual[..count]).map_err(LocalProfileError::from)?;
-        canonical.read_exact(&mut local[..count]).map_err(LocalProfileError::from)?;
+        remote
+            .read_exact(&mut actual[..count])
+            .map_err(LocalProfileError::from)?;
+        canonical
+            .read_exact(&mut local[..count])
+            .map_err(LocalProfileError::from)?;
         if actual[..count] != local[..count] {
             return Err(GenerationSnapshotError::SourceChanged);
         }
         digest.update(&actual[..count]);
         remaining -= count as u64;
     }
-    if remote.read(&mut actual[..1]).map_err(LocalProfileError::from)? != 0
-        || canonical.read(&mut local[..1]).map_err(LocalProfileError::from)? != 0
+    if remote
+        .read(&mut actual[..1])
+        .map_err(LocalProfileError::from)?
+        != 0
+        || canonical
+            .read(&mut local[..1])
+            .map_err(LocalProfileError::from)?
+            != 0
         || <[u8; 32]>::from(digest.finalize()) != expected.plaintext_digest
     {
         return Err(GenerationSnapshotError::SourceChanged);
