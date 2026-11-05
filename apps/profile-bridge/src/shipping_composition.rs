@@ -672,11 +672,24 @@ mod windows {
     }
 
     pub fn run(claim: &ClaimUri) -> Result<(), ShippingCompositionError> {
+        #[cfg(windows)]
+        let preparation_started = std::time::Instant::now();
         if recover_delivery_before_claim()? {
             return Ok(());
         }
-
+        #[cfg(windows)]
+        eprintln!(
+            "bridge_open_phase name=delivery_recovery_readback elapsed_ms={}",
+            preparation_started.elapsed().as_millis()
+        );
+        #[cfg(windows)]
+        let config_started = std::time::Instant::now();
         let config = ShippingConfig::from_installation()?;
+        #[cfg(windows)]
+        eprintln!(
+            "bridge_open_phase name=installation_config elapsed_ms={}",
+            config_started.elapsed().as_millis()
+        );
         let active_delivery =
             ActiveWindowsDeliveryRuntime::resolve_for_browser_open().map_err(|error| {
                 eprintln!("BRIDGE_DELIVERY_RUNTIME_FAILURE={error:?}");
