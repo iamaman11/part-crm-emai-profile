@@ -440,6 +440,45 @@ struct StreamedSnapshotFile {
     digest: [u8; 32],
 }
 
+/// Byte-exact read-only verification of a decrypted canonical BPGW against
+/// an existing native workspace. Never overwrite Firefox data to repair a
+/// missing host-only binding; this uses bounded 64 KiB reads even above 64 MiB.
+pub(crate) fn verify_workspace_matches_streamed_snapshot(
+    workspace: &GenerationWorkspace,
+    remote: &mut impl Read,
+    expected: StreamedWorkspaceSnapshot,
+) -> Result<(), GenerationSnapshotError> {
+    if expected.plaintext_bytes > MAX_STREAM_WORKSPACE_SNAPSHOT_BYTES {
+        return Err(GenerationSnapshotError::SnapshotTooLarge);
+    }
+    let inventory = workspace.inventory().map_err(GenerationSnapshotError::Local)?;
+    let mut canonical = WorkspaceSnapshotReader::new(workspace, &inventory)?;
+    if canonical.expected_bytes() != expected.plaintext_bytes {
+        return Err(GenerationSnapshotError::SourceChanged);
+    }
+    let mut actual = [0_u8; 65_536];
+    let mut local = [0_u8; 65_536];
+    let mut remaining = expected.plaintext_bytes;
+    let mut digest = Sha256::new();
+    while remaining != 0 {
+        let count = remaining.min(actual.len() as u64) as usize;
+        remote.read_exact(&mut actual[..count]).map_err(LocalProfileError::from)?;
+        canonical.read_exact(&mut local[..count]).map_err(LocalProfileError::from)?;
+        if actual[..count] != local[..count] {
+            return Err(GenerationSnapshotError::SourceChanged);
+        }
+        digest.update(&actual[..count]);
+        remaining -= count as u64;
+    }
+    if remote.read(&mut actual[..1]).map_err(LocalProfileError::from)? != 0
+        || canonical.read(&mut local[..1]).map_err(LocalProfileError::from)? != 0
+        || <[u8; 32]>::from(digest.finalize()) != expected.plaintext_digest
+    {
+        return Err(GenerationSnapshotError::SourceChanged);
+    }
+    Ok(())
+}
+
 /// Reopen BPGW0001 from a VERIFIED DECRYPTED spool (never directly from an
 /// unauthenticated R2 stream). The caller passes the digest/length established
 /// by the authenticated BPGC0001 metadata. No generation path is made visible
