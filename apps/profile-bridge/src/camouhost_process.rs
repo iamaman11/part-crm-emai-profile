@@ -962,6 +962,36 @@ fn exchange_frame_shared(
     receive_response(responses, timeout)
 }
 
+fn safe_page_event_witness(message: &str) -> bool {
+    // Source sends the event before any failed Close/IPC transition. Never
+    // import raw Python stderr, page URLs, credentials or session identifiers.
+    let Some(rest) = message.strip_prefix("camouhost_page_event ") else {
+        return false;
+    };
+    let fields: Vec<_> = rest.split(' ').collect();
+    if fields.len() != 3
+        || !matches!(fields[0], "kind=crash" | "kind=recovered")
+    {
+        return false;
+    }
+    let Some(tracked) = fields[1]
+        .strip_prefix("tracked=")
+        .and_then(|value| value.parse::<u16>().ok())
+    else {
+        return false;
+    };
+    let Some(unresolved) = fields[2]
+        .strip_prefix("unresolved=")
+        .and_then(|value| value.parse::<u16>().ok())
+    else {
+        return false;
+    };
+    tracked > 0
+        && tracked <= 512
+        && unresolved <= tracked
+        && (fields[0] != "kind=crash" || unresolved > 0)
+}
+
 fn safe_close_observation_witness(message: &str) -> bool {
     // Only typed, bounded, local failure facts are admitted from child stderr.
     // The full original traceback remains in the local raw test artifact.
@@ -1055,7 +1085,11 @@ fn allowlisted_camouhost_diagnostic(line: &[u8]) -> Option<&str> {
         .strip_prefix("camouhost_pages count=")
         .and_then(|count| count.parse::<u16>().ok())
         .is_some_and(|count| count <= 512);
-    if allowed_failure || allowed_stage || allowed_pages || safe_close_observation_witness(message)
+    if allowed_failure
+        || allowed_stage
+        || allowed_pages
+        || safe_close_observation_witness(message)
+        || safe_page_event_witness(message)
     {
         return Some(message);
     }
@@ -1715,6 +1749,34 @@ mod tests {
             b"camouhost_close_witness exception=OSError line=1247 errno=13 winerror=-1 tracked=1 closed=1 crashed=0 count=3 events=page\n",
         ] {
             assert_eq!(allowlisted_camouhost_diagnostic(rejected), None);
+        }
+    }
+
+    #[test]
+    fn original_page_crash_and_recovery_emit_only_bounded_witnesses() {
+        assert_eq!(
+            allowlisted_camouhost_diagnostic(
+                b"camouhost_page_event kind=crash tracked=2 unresolved=1\n"
+            ),
+            Some("camouhost_page_event kind=crash tracked=2 unresolved=1")
+        );
+        assert_eq!(
+            allowlisted_camouhost_diagnostic(
+                b"camouhost_page_event kind=recovered tracked=2 unresolved=0\r\n"
+            ),
+            Some("camouhost_page_event kind=recovered tracked=2 unresolved=0")
+        );
+        for value in [
+            b"camouhost_page_event kind=crash tracked=1 unresolved=0\n".as_slice(),
+            b"camouhost_page_event kind=crash tracked=1 unresolved=2\n",
+            b"camouhost_page_event kind=crash tracked=0 unresolved=0\n",
+            b"camouhost_page_event kind=recovered tracked=513 unresolved=0\n",
+            b"camouhost_page_event kind=closed tracked=2 unresolved=0\n",
+            b"camouhost_page_event kind=crash tracked=2 unresolved=1 url=https://private\n",
+            b"camouhost_page_event kind=crash tracked=2 unresolved=1 cookie=secret\n",
+            b"camouhost_page_event kind=crash tracked=-1 unresolved=1\n",
+        ] {
+            assert_eq!(allowlisted_camouhost_diagnostic(value), None);
         }
     }
 
