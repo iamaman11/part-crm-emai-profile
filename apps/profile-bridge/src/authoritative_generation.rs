@@ -13,7 +13,9 @@ use crate::generation_snapshot::{
     materialize_workspace_snapshot_with_pre_publish, verify_workspace_matches_snapshot,
     verify_workspace_matches_streamed_snapshot,
 };
-use crate::local_profile::{BridgeWorkspaceLock, GenerationWorkspace, LocalProfileError, MaterializationRoot};
+use crate::local_profile::{
+    BridgeWorkspaceLock, GenerationWorkspace, LocalProfileError, MaterializationRoot,
+};
 use encrypted_generation_domain::{
     canonical_generation_object_key, inspect_generation_metadata_prelude, open_generation_expected,
     open_generation_streaming,
@@ -993,7 +995,11 @@ where
             )
             .map_err(|_| Error::IncompleteLocalEvidence)?;
             restore_materialization_binding_after_authoritative_open(
-                &workspace, tenant_id, profile_id, generation_id, &digest,
+                &workspace,
+                tenant_id,
+                profile_id,
+                generation_id,
+                &digest,
             )
             .map_err(|_| Error::InvalidLocalEvidence)?;
             Ok(())
@@ -1014,7 +1020,11 @@ where
             },
             |workspace| {
                 restore_materialization_binding_after_authoritative_open(
-                    workspace, tenant_id, profile_id, generation_id, &digest,
+                    workspace,
+                    tenant_id,
+                    profile_id,
+                    generation_id,
+                    &digest,
                 )
                 .map(|_| ())
                 .map_err(|_| GenerationSnapshotError::PrePublish)
@@ -1517,29 +1527,59 @@ mod tests {
     -> Result<(), Box<dyn std::error::Error>> {
         let fixture = Fixture::new()?;
         let mut control = fixture.control();
-        let mut download = FakeStreamDownloader { container: fixture.container.clone(), calls: 0 };
+        let mut download = FakeStreamDownloader {
+            container: fixture.container.clone(),
+            calls: 0,
+        };
         let device = DeviceId::parse("device_binding_repair_stream")?;
         ensure_authoritative_generation(
-            &fixture.root, &fixture.tenant_id, &fixture.profile_id,
-            &fixture.generation_id, &device, 1, &mut control, &mut download,
+            &fixture.root,
+            &fixture.tenant_id,
+            &fixture.profile_id,
+            &fixture.generation_id,
+            &device,
+            1,
+            &mut control,
+            &mut download,
         )?;
         let workspace = fixture.root.open_generation(
-            &fixture.tenant_id, &fixture.profile_id, &fixture.generation_id,
+            &fixture.tenant_id,
+            &fixture.profile_id,
+            &fixture.generation_id,
         )?;
-        let sidecar = workspace.path().parent()
+        let sidecar = workspace
+            .path()
+            .parent()
             .ok_or_else(|| std::io::Error::other("missing generation parent"))?
-            .join(format!(".{}.materialization", fixture.generation_id.as_str()));
+            .join(format!(
+                ".{}.materialization",
+                fixture.generation_id.as_str()
+            ));
         fs::remove_file(&sidecar)?;
         ensure_authoritative_generation(
-            &fixture.root, &fixture.tenant_id, &fixture.profile_id,
-            &fixture.generation_id, &device, 2, &mut control, &mut download,
+            &fixture.root,
+            &fixture.tenant_id,
+            &fixture.profile_id,
+            &fixture.generation_id,
+            &device,
+            2,
+            &mut control,
+            &mut download,
         )?;
         assert_eq!(download.calls, 2);
-        assert!(load_materialization_binding(
-            &workspace, &fixture.tenant_id, &fixture.profile_id, &fixture.generation_id
-        ).is_ok());
-        assert_eq!(fs::read(workspace.path().join("user_data/storage/state.bin"))?,
-                   b"authoritative-state");
+        assert!(
+            load_materialization_binding(
+                &workspace,
+                &fixture.tenant_id,
+                &fixture.profile_id,
+                &fixture.generation_id
+            )
+            .is_ok()
+        );
+        assert_eq!(
+            fs::read(workspace.path().join("user_data/storage/state.bin"))?,
+            b"authoritative-state"
+        );
         fixture.cleanup();
         Ok(())
     }
@@ -1549,26 +1589,57 @@ mod tests {
     -> Result<(), Box<dyn std::error::Error>> {
         let fixture = Fixture::new()?;
         let mut control = fixture.control();
-        let mut download = FakeStreamDownloader { container: fixture.container.clone(), calls: 0 };
+        let mut download = FakeStreamDownloader {
+            container: fixture.container.clone(),
+            calls: 0,
+        };
         let device = DeviceId::parse("device_binding_repair_negative")?;
         ensure_authoritative_generation(
-            &fixture.root, &fixture.tenant_id, &fixture.profile_id,
-            &fixture.generation_id, &device, 1, &mut control, &mut download,
+            &fixture.root,
+            &fixture.tenant_id,
+            &fixture.profile_id,
+            &fixture.generation_id,
+            &device,
+            1,
+            &mut control,
+            &mut download,
         )?;
         let workspace = fixture.root.open_generation(
-            &fixture.tenant_id, &fixture.profile_id, &fixture.generation_id,
+            &fixture.tenant_id,
+            &fixture.profile_id,
+            &fixture.generation_id,
         )?;
-        let sidecar = workspace.path().parent()
+        let sidecar = workspace
+            .path()
+            .parent()
             .ok_or_else(|| std::io::Error::other("missing generation parent"))?
-            .join(format!(".{}.materialization", fixture.generation_id.as_str()));
+            .join(format!(
+                ".{}.materialization",
+                fixture.generation_id.as_str()
+            ));
         fs::remove_file(&sidecar)?;
-        fs::write(workspace.path().join("user_data/storage/state.bin"), b"changed")?;
-        assert_eq!(ensure_authoritative_generation(
-            &fixture.root, &fixture.tenant_id, &fixture.profile_id,
-            &fixture.generation_id, &device, 2, &mut control, &mut download,
-        ), Err(AuthoritativeGenerationMaterializationError::IncompleteLocalEvidence));
+        fs::write(
+            workspace.path().join("user_data/storage/state.bin"),
+            b"changed",
+        )?;
+        assert_eq!(
+            ensure_authoritative_generation(
+                &fixture.root,
+                &fixture.tenant_id,
+                &fixture.profile_id,
+                &fixture.generation_id,
+                &device,
+                2,
+                &mut control,
+                &mut download,
+            ),
+            Err(AuthoritativeGenerationMaterializationError::IncompleteLocalEvidence)
+        );
         assert!(!sidecar.exists());
-        assert_eq!(fs::read(workspace.path().join("user_data/storage/state.bin"))?, b"changed");
+        assert_eq!(
+            fs::read(workspace.path().join("user_data/storage/state.bin"))?,
+            b"changed"
+        );
         fixture.cleanup();
         Ok(())
     }
