@@ -1207,18 +1207,28 @@ mod tests {
     fn first_open_diagnostics_preserve_exact_owner_outcome_without_claiming_saved() {
         use crate::generation_initialization::InitialProfileError as Initial;
         let cases = [
-            (Initial::Authorization, "BRIDGE_FIRST_OPEN_AUTHORIZATION_FAILED"),
+            (
+                Initial::Authorization,
+                "BRIDGE_FIRST_OPEN_AUTHORIZATION_FAILED",
+            ),
             (Initial::RuntimeBundle, "BRIDGE_RUNTIME_BUNDLE_INVALID"),
             (Initial::Runtime, "BRIDGE_FIRST_OPEN_RUNTIME_FAILED"),
             (Initial::Snapshot, "BRIDGE_FIRST_OPEN_SNAPSHOT_FAILED"),
             (Initial::Encryption, "BRIDGE_FIRST_OPEN_ENCRYPTION_FAILED"),
             (Initial::Upload, "BRIDGE_FIRST_SAVE_UPLOAD_FAILED"),
-            (Initial::Verification, "BRIDGE_FIRST_SAVE_VERIFICATION_FAILED"),
+            (
+                Initial::Verification,
+                "BRIDGE_FIRST_SAVE_VERIFICATION_FAILED",
+            ),
             (Initial::Commit, "BRIDGE_FIRST_SAVE_COMMIT_UNCONFIRMED"),
-            (Initial::SavedRecovery, "BRIDGE_SAVED_LOCAL_RECOVERY_REQUIRED"),
+            (
+                Initial::SavedRecovery,
+                "BRIDGE_SAVED_LOCAL_RECOVERY_REQUIRED",
+            ),
         ];
         for (error, expected_code) in cases {
-            let diagnostic = UserDiagnostic::Launch(ShippingCompositionError::Initialization(error));
+            let diagnostic =
+                UserDiagnostic::Launch(ShippingCompositionError::Initialization(error));
             assert_eq!(diagnostic.code(), expected_code);
             let message = diagnostic.message();
             assert!(!message.is_empty());
@@ -1227,9 +1237,8 @@ mod tests {
             assert!(!message.contains("tenant_id="));
             assert!(!message.contains("Saved successfully"));
         }
-        let uncertain = UserDiagnostic::Launch(ShippingCompositionError::Initialization(
-            Initial::Commit,
-        ));
+        let uncertain =
+            UserDiagnostic::Launch(ShippingCompositionError::Initialization(Initial::Commit));
         assert!(uncertain.message().contains("uncertain"));
         assert!(uncertain.message().contains("Preserve"));
     }
