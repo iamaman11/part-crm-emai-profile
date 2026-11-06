@@ -152,12 +152,11 @@ def single_trial(
         kwargs["addons"] = [str(pinned_ubo_dir)]
 
     shipping_adapter = None
-    if shipping_camouhost is not None:
-        kwargs, shipping_adapter = shipping_launch_options(
-            shipping_camouhost, browser, profile_root,
-        )
-
     try:
+        if shipping_camouhost is not None:
+            kwargs, shipping_adapter = shipping_launch_options(
+                shipping_camouhost, browser, profile_root,
+            )
         with Camoufox(**kwargs) as context:
             if shipping_adapter is None:
                 page = context.new_page()
