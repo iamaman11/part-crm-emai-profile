@@ -80,6 +80,7 @@ class NativeCamoufoxProcess:
     workspace: Path
     writer_active: Callable[[Path], bool]
     observed_native_writer: bool = False
+    browser_exit_witness: Any | None = None
 
     def exit_state(self) -> str:
         """A zero-exit launcher is NEVER proof that native Firefox has closed.
@@ -101,10 +102,14 @@ class NativeCamoufoxProcess:
             return "STARTING_OR_QUIESCING"
         if status != 0:
             return "ABNORMAL_EXIT_PRESERVE_LOCAL"
-        if not self.observed_native_writer:
-            # On Windows a GUI launcher may return zero but its Firefox
-            # descendant could still be running, or its profile may not
-            # have been selected. A clean save needs a native OS witness.
+        if not self.observed_native_writer or self.browser_exit_witness is None:
+            # Windows GUI bootstrap may exit 0 while Firefox descendants
+            # continue. A retained *native browser* OS handle is mandatory.
+            return "UNKNOWN_PRESERVE_LOCAL"
+        try:
+            if not self.browser_exit_witness.safely_exited():
+                return "RUNNING_OR_ABNORMAL_PRESERVE_LOCAL"
+        except (OSError, RuntimeError):
             return "UNKNOWN_PRESERVE_LOCAL"
         return "CLOSED_AND_UNLOCKED"
 
@@ -117,6 +122,7 @@ def launch_native_camoufox(
     inherited: Mapping[str, str],
     writer_active: Callable[[Path], bool],
     admission_granted: bool,
+    witness_factory: Callable[[], Any] | None = None,
 ) -> NativeCamoufoxProcess:
     """Start exactly one stock browser without Playwright after owner admission.
 
@@ -153,7 +159,19 @@ def launch_native_camoufox(
         )
     except OSError as error:
         raise NativeLaunchError("native Camoufox process launch failed") from error
-    return NativeCamoufoxProcess(process, workspace, writer_active)
+    # The caller may supply a WindowsBrowserExitWitness rooted in this exact
+    # already-authorized process instance; its held OS handle defeats PID reuse.
+    # Failure to capture the witness cannot produce a positive Save. Never
+    # terminate a possibly-running user browser merely to recover bookkeeping.
+    witness = None
+    if witness_factory is not None:
+        try:
+            witness = witness_factory()
+        except (OSError, RuntimeError):
+            pass
+    return NativeCamoufoxProcess(
+        process, workspace, writer_active, browser_exit_witness=witness
+    )
 
 
 __all__ = [
