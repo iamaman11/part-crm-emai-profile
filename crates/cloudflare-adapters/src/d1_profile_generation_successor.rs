@@ -77,6 +77,11 @@ WHERE profile.tenant_id = ?
   AND proof.metadata_digest = reserve.metadata_digest
   AND proof.container_digest = reserve.container_digest
   AND proof.runtime_inventory_sha256 = ?
+  -- Migration 0040 rejects all legacy metadata-only WORKING receipts.
+  -- Version 1 is future-only until a genuine native browser-data proof
+  -- and its server-verifiable admission become available together.
+  AND proof.browser_data_proof_version = 1
+  AND proof.browser_data_proof_digest IS NOT NULL
   AND NOT EXISTS (
       SELECT 1 FROM profile_generation_retirement_intents AS retired
       WHERE retired.tenant_id = reserve.tenant_id
@@ -124,6 +129,9 @@ WITH protected AS (
       AND proof.metadata_digest = reserved.metadata_digest
       AND proof.container_digest = reserved.container_digest
       AND proof.runtime_inventory_sha256 = ?
+      -- No old metadata-only WORKING claim may authorize R2 retirement.
+      AND proof.browser_data_proof_version = 1
+      AND proof.browser_data_proof_digest IS NOT NULL
       AND NOT EXISTS (
           SELECT 1 FROM profile_generation_retirement_intents AS retired
           WHERE retired.tenant_id = reserved.tenant_id
@@ -1363,6 +1371,8 @@ mod tests {
         assert!(query.contains("profile.status = 'READY'"));
         assert!(query.contains("profile.active_generation_id = ?"));
         assert!(query.contains("proof.runtime_inventory_sha256 = ?"));
+        assert!(query.contains("proof.browser_data_proof_version = 1"));
+        assert!(query.contains("proof.browser_data_proof_digest IS NOT NULL"));
         assert!(query.contains("proof.metadata_digest = reserved.metadata_digest"));
         assert!(query.contains("proof.container_digest = reserved.container_digest"));
         assert!(query.contains("old.generation_id <> protected.active_generation_id"));
@@ -1383,6 +1393,8 @@ mod tests {
         assert!(query.contains("proof.metadata_digest = reserve.metadata_digest"));
         assert!(query.contains("proof.container_digest = reserve.container_digest"));
         assert!(query.contains("proof.runtime_inventory_sha256 = ?"));
+        assert!(query.contains("proof.browser_data_proof_version = 1"));
+        assert!(query.contains("proof.browser_data_proof_digest IS NOT NULL"));
         assert!(query.contains("profile.active_generation_id = ?"));
         assert!(query.contains("reserve.status = 'VERIFIED'"));
         assert!(query.contains("reserve.generation_id <> current.generation_id"));

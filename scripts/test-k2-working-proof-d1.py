@@ -2,7 +2,8 @@
 """#802 K2: executable guarded D1 historical WORKING proof receipt.
 
 The caller-side real Camoufox, old-root and runtime proofs are separate.
-This SQL accepts only their scoped immutable metadata and grants NO prune.
+The historical metadata-only SQL receipt remains append-only but is NOT a
+browser-data-certified LKG and NEVER grants R2 retirement.
 """
 from __future__ import annotations
 
@@ -15,6 +16,7 @@ FIXTURE = ROOT / "scripts/test-device-generation-commit-d1.py"
 STREAM = ROOT / "migrations/d1-successor-v2/0037_generation_streaming_container_limit.sql"
 WORKING = ROOT / "migrations/d1-successor-v2/0038_profile_generation_working_proof.sql"
 RETIREMENT = ROOT / "migrations/d1-successor-v2/0039_profile_generation_retirement_guard.sql"
+NATIVE_FENCE = ROOT / "migrations/d1-successor-v2/0040_native_browser_data_proof_fence.sql"
 
 
 def insert(conn: sqlite3.Connection, fx: dict, **changes: object) -> None:
@@ -101,6 +103,7 @@ def main() -> int:
         conn.executescript(STREAM.read_text(encoding="utf-8"))
         conn.executescript(WORKING.read_text(encoding="utf-8"))
         conn.executescript(RETIREMENT.read_text(encoding="utf-8"))
+        conn.executescript(NATIVE_FENCE.read_text(encoding="utf-8"))
         assert not conn.execute("SELECT 1 FROM profile_generation_working_proofs").fetchone()
         rejected(conn, fx)  # no committed CURRENT N+1 yet
         fx["insert_device_commit"](conn, fx["command_values"]())
@@ -113,10 +116,19 @@ def main() -> int:
         rejected(conn, fx, tenant_id="tenant_foreign_history")
         rejected(conn, fx, observed_by_device_id="device_foreign_history")
         rejected(conn, fx, root_key_id="unsafe/root/key")
+        # No caller, even one writing directly to D1, can claim a native
+        # v1 browser-data witness before a verified producer exists.
+        rejected(conn, fx, browser_data_proof_version=1, browser_data_proof_digest="a" * 64)
+        rejected(conn, fx, browser_data_proof_digest="a" * 64)
         assert fx["catalog_snapshot"](conn) == baseline
         insert(conn, fx)
         conn.commit()
         assert conn.execute("SELECT COUNT(*) FROM profile_generation_working_proofs").fetchone()[0] == 1
+        legacy = conn.execute(
+            "SELECT browser_data_proof_version, browser_data_proof_digest "
+            "FROM profile_generation_working_proofs"
+        ).fetchone()
+        assert tuple(legacy) == (0, None), "metadata-only receipt must stay explicitly legacy"
         # Execute the exact Rust D1 loader SQL against the real governed
         # fixture, never a test-only restatement or an age/N-1 heuristic.
         import re
@@ -133,7 +145,7 @@ def main() -> int:
                 working_query, (fx["TENANT"], fx["PROFILE"], current, pinned_runtime)
             ).fetchone()
         saved = working(fx["CANDIDATE"])
-        assert saved is not None and saved["generation_id"] == fx["BASE"]
+        assert saved is None, "metadata-only historical receipt became browser-proven WORKING"
         assert working(fx["CANDIDATE"], "f" * 64) is None, "foreign runtime must never select WORKING"
         assert working(fx["CANDIDATE"], "E" * 64) is None, "case mismatch must not bypass runtime pin"
         assert fx["catalog_snapshot"](conn) == baseline
@@ -157,10 +169,10 @@ def main() -> int:
         conn.commit()
         assert conn.execute("SELECT generation_id FROM profile_generation_working_proofs").fetchone()[0] == fx["BASE"]
         # The CURRENT pointer now names an independently governed generation,
-        # yet the last browser-proven reserve remains N-k without inventing
-        # another cold-browser proof or changing existing catalog bytes.
+        # but a historical metadata-only receipt never becomes a protected
+        # browser-data-certified LKG, including after another CURRENT advances.
         selected = working(fx["WINNER"])
-        assert selected is not None and selected["generation_id"] == fx["BASE"]
+        assert selected is None, "old metadata-only proof was silently promoted"
         assert working(fx["WINNER"], "f" * 64) is None, "N-k still needs the exact retained runtime"
 
         # Prune review is deliberately read-only. It refuses any candidate
@@ -183,8 +195,7 @@ def main() -> int:
             conn.execute("SELECT COUNT(*) FROM profile_generation_successor_commands").fetchone()[0],
         )
         candidate = review(fx["WINNER"])
-        assert candidate is not None and candidate["generation_id"] == fx["CANDIDATE"]
-        assert candidate["generation_id"] not in (fx["WINNER"], fx["BASE"])
+        assert candidate is None, "legacy metadata row granted R2 prune authority"
         assert review(fx["CANDIDATE"]) is None, "stale CURRENT cannot authorize review"
         assert review(fx["WINNER"], "f" * 64) is None, "unapproved runtime blocks review"
         assert review(fx["WINNER"], "E" * 64) is None
@@ -194,7 +205,7 @@ def main() -> int:
             conn.execute("SELECT COUNT(*) FROM profile_generation_successor_commands").fetchone()[0],
         ) == before_review, "prune review must never mutate D1"
         assert conn.execute("PRAGMA foreign_key_check").fetchall() == []
-        print("K2 governed, append-only historical proof persists across CURRENT changes; no prune PASS")
+        print("K2 legacy metadata-only WORKING never selects LKG or prune PASS")
     finally:
         conn.close()
     return 0
