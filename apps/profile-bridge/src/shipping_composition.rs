@@ -578,7 +578,11 @@ mod windows {
             None,
             None,
         )
-        .map_err(|_| ShippingCompositionError::Configuration)?;
+        .map_err(|_| ShippingCompositionError::Configuration)?
+        .for_isolated_historical_probe();
+        // The historical R2 restore lives in its own protected slot. It is
+        // the ONLY Windows shipping path that may run official Playwright.
+        // Normal user Open below uses the unchanged native Firefox owner.
         let (process, camouhost) = ManagedCamouhostProcess::pair(config, slot);
         let mut witness = camouhost.cold_probe_observer();
         let mut operator = ProfileBridgeOperator::new(
