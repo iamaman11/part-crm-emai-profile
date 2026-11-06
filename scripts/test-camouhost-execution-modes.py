@@ -75,6 +75,20 @@ def main() -> int:
     run({runtime.EXECUTION_MODE_ENV: runtime.AUTOMATION_PLAYWRIGHT_MODE,
          runtime.AGENT_DIRECTORY_ENV: "/tmp/authorized-test-inbox"},
         18, ["automation"])
+    # C09 runs the official SDK on an isolated, exclusively owned R2
+    # historical restore; no generic scripts or user-browser attachment.
+    run({runtime.EXECUTION_MODE_ENV: runtime.ISOLATED_COLD_PROBE_MODE},
+        18, ["automation"])
+    for env in (
+        {runtime.EXECUTION_MODE_ENV: runtime.ISOLATED_COLD_PROBE_MODE,
+         runtime.AGENT_DIRECTORY_ENV: "/tmp/never-execute"},
+        {runtime.EXECUTION_MODE_ENV: runtime.ISOLATED_COLD_PROBE_MODE,
+         runtime.HEADLESS_MODE_ENV: "true"},
+        {runtime.EXECUTION_MODE_ENV: runtime.ISOLATED_COLD_PROBE_MODE,
+         runtime.HEADLESS_MODE_ENV: "virtual"},
+    ):
+        assert run(env, 2, []), "cold probe must not accept scripts or unverified display mode"
+
     for headless, expected in (("false", False), ("true", True),
                                ("virtual", "virtual")):
         with patch.dict(os.environ, {runtime.HEADLESS_MODE_ENV: headless}, clear=True):
@@ -91,8 +105,17 @@ def main() -> int:
     # This is source wiring coverage, not a substitute for a Rust build.
     rust = SOURCE.parents[2] / "apps/profile-bridge/src/camouhost_process.rs"
     shipping = rust.read_text(encoding="utf-8")
-    assert 'command.env("CAMOUHOST_EXECUTION_MODE", "user-native")' in shipping
+    assert 'RuntimeExecutionOwner::NativeUser => "user-native"' in shipping
+    assert 'RuntimeExecutionOwner::IsolatedHistoricalProbe => "isolated-cold-probe"' in shipping
     assert "CAMOUHOST_NATIVE_PROFILE" not in shipping
+    assert 'launch_with_browser_visible_admission(' in shipping
+    assert "&& self.config.execution_owner != RuntimeExecutionOwner::IsolatedHistoricalProbe" in shipping
+    composition = (SOURCE.parents[2] /
+                   "apps/profile-bridge/src/shipping_composition.rs").read_text(encoding="utf-8")
+    assert composition.count(".for_isolated_historical_probe()") == 1
+    assert composition.index(".for_isolated_historical_probe()") < composition.index(
+        "pub fn run(claim:"
+    ), "ordinary user Open must never request Playwright"
 
     print("CAMOUHOST_EXECUTION_MODES=PASS")
     return 0
