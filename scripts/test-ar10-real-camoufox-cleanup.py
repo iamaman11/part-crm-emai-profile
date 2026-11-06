@@ -257,6 +257,7 @@ def runtime_env(runtime_lock: Path, headless: str) -> dict[str, str]:
         {
             "CAMOUHOST_RUNTIME_LOCK": str(runtime_lock),
             "CAMOUHOST_HEADLESS_MODE": headless,
+            "CAMOUHOST_EXECUTION_MODE": "isolated-cold-probe",
             "PYTHONUNBUFFERED": "1",
         }
     )
@@ -331,10 +332,16 @@ def start_runtime(
     # Firefox grandchildren can retain stderr across Camouhost teardown.
     # A file prevents both pipe backpressure and an unbounded stderr.read().
     diagnostics = tempfile.TemporaryFile(mode="w+t", encoding="utf-8")
+    # This is a disposable CI-only context. A test requesting unrestricted
+    # local Playwright fixtures must select the explicit agent mode; the C09
+    # historical mode rejects executable script inboxes.
+    dispatch_env = dict(env)
+    if dispatch_env.get("CAMOUHOST_AGENT_DIRECTORY"):
+        dispatch_env["CAMOUHOST_EXECUTION_MODE"] = "automation-playwright"
     try:
         process = subprocess.Popen(
             [str(python), str(camouhost)],
-            env=env,
+            env=dispatch_env,
             stdin=subprocess.PIPE,
             stdout=subprocess.PIPE,
             stderr=diagnostics,
