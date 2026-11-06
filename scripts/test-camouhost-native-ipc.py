@@ -45,7 +45,7 @@ def main():
         return NativeSession()
     native.launch_native_camoufox = launch_native_camoufox
     old = {
-        "load_runtime_lock": lambda: ({}, "x" * 64),
+        "load_runtime_lock": lambda: ({"browser": {"version":"158.0.1-beta.41"}}, "x" * 64),
         "verify_python_components": lambda _: None,
         "resolve_profile_root": lambda require_bridge_lock: pathlib.Path("/tmp/test-root"),
         "load_generation_config": lambda root: ({"test": True}, "a" * 64),
@@ -73,6 +73,7 @@ def main():
     ], lines
     assert len(called) == 1 and called[0]["admission_granted"] is True
     assert called[0]["identity"] == {"test": True}
+    assert called[0]["ff_version"] == 158
 
     # A missing native writer must NEVER be classified as closed/Saved.
     class MissingWriter:
