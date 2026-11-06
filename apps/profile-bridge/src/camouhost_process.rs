@@ -508,6 +508,11 @@ impl ManagedCamouhostProcess {
             command.env("CAMOUHOST_PROXY_CONFIG_PATH", path);
         }
         inherit_runtime_environment(&mut command);
+        // On Windows the shipping adapter launches official Camoufox natively
+        // after the existing signed bundle/config/lease preflight. The adapter
+        // no longer opens or controls Playwright pages or browser network state.
+        #[cfg(windows)]
+        command.env("CAMOUHOST_NATIVE_PROFILE", "1");
         // A release browser never receives an arbitrary local Python executor.
         // Test/debug builds retain the same existing Camouhost-owned fixture
         // capability; production still has read-only, bounded crash diagnostics.
@@ -645,7 +650,26 @@ impl CamouhostPort for ManagedCamouhostIpc {
     ) -> Result<CamouhostMessage, BridgePortError> {
         match message {
             CamouhostMessage::Launch { session_id } => {
-                launch_with_browser_visible_admission(&self.shared, self.display_mode, session_id)
+                #[cfg(windows)]
+                {
+                    // The authoritative Rust preflight has already sealed the
+                    // exact local generation and writer claim before spawn.
+                    // Never run browser-visible JS or send a navigation command.
+                    // Native Camouhost Ready requires actual Firefox profile
+                    // lock acquisition; it is NOT a fingerprint-content proof.
+                    if self.shared.lock().map_err(|_| BridgePortError::Unavailable)?
+                        .navigation_target.is_some()
+                    {
+                        return Err(BridgePortError::InvalidResponse);
+                    }
+                    exchange_shared(&self.shared, message)
+                }
+                #[cfg(not(windows))]
+                {
+                    launch_with_browser_visible_admission(
+                        &self.shared, self.display_mode, session_id
+                    )
+                }
             }
             _ => exchange_shared(&self.shared, message),
         }
