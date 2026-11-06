@@ -554,10 +554,11 @@ impl ManagedCamouhostProcess {
                 RuntimeExecutionOwner::IsolatedHistoricalProbe => "isolated-cold-probe",
             },
         );
-        // Non-Windows managed automation remains explicit for compatibility
-        // with existing development fixtures; Windows user Open is native.
+        // The Linux developer-only managed fixture remains an isolated
+        // Playwright probe, not a remote mailbox-agent executor. Windows
+        // shipping user Open stays native.
         #[cfg(not(windows))]
-        command.env("CAMOUHOST_EXECUTION_MODE", "automation-playwright");
+        command.env("CAMOUHOST_EXECUTION_MODE", "isolated-cold-probe");
         // A release browser never receives an arbitrary local Python executor.
         // Test/debug builds retain the same existing Camouhost-owned fixture
         // capability; production still has read-only, bounded crash diagnostics.
