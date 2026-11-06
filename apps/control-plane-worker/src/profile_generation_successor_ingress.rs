@@ -828,8 +828,14 @@ fn historical_browser_content_certification_implemented(
     role: identity_access_domain::MembershipRole,
 ) -> bool {
     let environment = env.var("CANONICAL_ENVIRONMENT").ok().map(|v| v.to_string());
-    let tenant = env.var(PROFILE_GENERATION_R2_PRUNE_CANARY_TENANT_VAR).ok().map(|v| v.to_string());
-    let profile = env.var(PROFILE_GENERATION_R2_PRUNE_CANARY_PROFILE_VAR).ok().map(|v| v.to_string());
+    let tenant = env
+        .var(PROFILE_GENERATION_R2_PRUNE_CANARY_TENANT_VAR)
+        .ok()
+        .map(|v| v.to_string());
+    let profile = env
+        .var(PROFILE_GENERATION_R2_PRUNE_CANARY_PROFILE_VAR)
+        .ok()
+        .map(|v| v.to_string());
     role == identity_access_domain::MembershipRole::TenantOwner
         && staging_r2_prune_canary_scope(
             environment.as_deref(),
@@ -939,8 +945,12 @@ async fn dispatch_working_proof(
     let meta = inspected.metadata();
     // Rust sealed this SHA over the complete native Firefox snapshot before
     // R2 PUT. The independently cold restored snapshot must match this value.
-    let original_snapshot = meta.plaintext_digest().bytes()
-        .iter().map(|byte| format!("{byte:02x}")).collect::<String>();
+    let original_snapshot = meta
+        .plaintext_digest()
+        .bytes()
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect::<String>();
     if body.native_snapshot_sha256() != original_snapshot
         || !lower_sha256(body.native_browser_witness_sha256())
     {
@@ -2071,8 +2081,11 @@ mod tests {
         // Positive receipts are enabled only for an exact explicitly
         // selected disposable staging canary; production is excluded.
         assert!(!staging_r2_prune_canary_scope(
-            Some("production"), Some("tenant_01"), Some("k2_canary_01"),
-            "tenant_01", &ProfileId::parse("k2_canary_01").unwrap()
+            Some("production"),
+            Some("tenant_01"),
+            Some("k2_canary_01"),
+            "tenant_01",
+            &ProfileId::parse("k2_canary_01").unwrap()
         ));
     }
 

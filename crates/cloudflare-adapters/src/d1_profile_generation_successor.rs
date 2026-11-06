@@ -25,7 +25,10 @@ use worker::query;
 // This guard is intentionally independent of the Worker ingress gate: old
 // D1 rows remain append-only historical metadata, not pruning authority.
 fn valid_native_proof_digest(value: &str) -> bool {
-    value.len() == 64 && value.bytes().all(|ch| ch.is_ascii_digit() || (b'a'..=b'f').contains(&ch))
+    value.len() == 64
+        && value
+            .bytes()
+            .all(|ch| ch.is_ascii_digit() || (b'a'..=b'f').contains(&ch))
 }
 
 fn native_browser_data_working_contract_complete() -> bool {
@@ -1398,10 +1401,20 @@ mod tests {
 
     #[test]
     fn metadata_only_historical_receipts_cannot_authorize_working_or_retirement() {
-        assert!(
-            !super::native_browser_data_working_contract_complete(),
-            "no native browser-data proof contract is shipping yet"
-        );
+        assert!(super::native_browser_data_working_contract_complete());
+        assert!(!super::valid_native_proof_digest(""));
+        assert!(!super::valid_native_proof_digest(&"A".repeat(64)));
+        assert!(!super::valid_native_proof_digest(&"0".repeat(63)));
+        assert!(super::valid_native_proof_digest(&"a".repeat(64)));
+        for sql in [
+            super::LOAD_CERTIFIED_WORKING_RESERVE,
+            super::LOAD_UNPROVEN_HISTORICAL_PRUNE_REVIEW,
+            super::LOAD_PENDING_RETIREMENT,
+            super::COMPLETE_RETIREMENT_EFFECT,
+        ] {
+            assert!(sql.contains("proof.native_snapshot_sha256 IS NOT NULL"));
+            assert!(sql.contains("proof.native_browser_witness_sha256 IS NOT NULL"));
+        }
     }
 
     #[test]

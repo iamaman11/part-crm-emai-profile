@@ -889,7 +889,13 @@ where
         V: FnMut() -> Result<(), ()>,
     {
         self.probe_verified_predecessor_inner(
-            claim, primary, isolated, downloader, now, observe_browser_state, None,
+            claim,
+            primary,
+            isolated,
+            downloader,
+            now,
+            observe_browser_state,
+            None,
         )
     }
 
@@ -913,7 +919,13 @@ where
         V: FnMut() -> Result<(), ()>,
     {
         self.probe_verified_predecessor_inner(
-            claim, primary, isolated, downloader, now, observe_browser_state, Some(native_witness),
+            claim,
+            primary,
+            isolated,
+            downloader,
+            now,
+            observe_browser_state,
+            Some(native_witness),
         )
     }
 
@@ -1006,25 +1018,32 @@ where
             let witness = slot.borrow().clone();
             let inspected = encrypted_generation_domain::inspect_generation_metadata_prelude(
                 observation.opening_prelude(),
-            ).ok();
+            )
+            .ok();
             match (witness, inspected) {
                 (Some(witness), Some(metadata))
                     if witness.len() == 64
-                        && witness.bytes().all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b)) =>
+                        && witness
+                            .bytes()
+                            .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b)) =>
                 {
                     let snapshot = metadata.metadata().plaintext_digest().bytes();
-                    let snapshot_hex = snapshot.iter()
-                        .map(|byte| format!("{byte:02x}")).collect::<String>();
-                    self.coordinator.certify_verified_predecessor_working(
-                        observation.tenant_id(),
-                        observation.profile_id(),
-                        observation.current_generation_id(),
-                        observation.predecessor_generation_id(),
-                        observation.opening_prelude(),
-                        observation.runtime_inventory_sha256(),
-                        &snapshot_hex,
-                        &witness,
-                    ).unwrap_or(false)
+                    let snapshot_hex = snapshot
+                        .iter()
+                        .map(|byte| format!("{byte:02x}"))
+                        .collect::<String>();
+                    self.coordinator
+                        .certify_verified_predecessor_working(
+                            observation.tenant_id(),
+                            observation.profile_id(),
+                            observation.current_generation_id(),
+                            observation.predecessor_generation_id(),
+                            observation.opening_prelude(),
+                            observation.runtime_inventory_sha256(),
+                            &snapshot_hex,
+                            &witness,
+                        )
+                        .unwrap_or(false)
                 }
                 _ => false,
             }
