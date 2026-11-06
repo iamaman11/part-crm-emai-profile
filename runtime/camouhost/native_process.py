@@ -79,20 +79,32 @@ class NativeCamoufoxProcess:
     process: subprocess.Popen[bytes]
     workspace: Path
     writer_active: Callable[[Path], bool]
+    observed_native_writer: bool = False
 
     def exit_state(self) -> str:
-        """False Saved on crash is forbidden; we never touch the browser UI."""
+        """A zero-exit launcher is NEVER proof that native Firefox has closed.
+
+        GUI launchers can exit successfully after delegating to a browser
+        process which remains alive. Require independent native profile lock
+        activity observed during this exact session before a clean close can
+        become a candidate for Save. No URL, tab or DOM event is consulted.
+        """
+        try:
+            active = self.writer_active(self.workspace)
+        except (OSError, RuntimeError):
+            return "UNKNOWN_PRESERVE_LOCAL"
+        if active:
+            self.observed_native_writer = True
+            return "RUNNING"
         status = self.process.poll()
         if status is None:
-            return "RUNNING"
-        # The browser may exit before all Firefox filesystem handles release.
-        # A successful process exit alone does not permit cloud Save.
+            return "STARTING_OR_QUIESCING"
         if status != 0:
             return "ABNORMAL_EXIT_PRESERVE_LOCAL"
-        try:
-            if self.writer_active(self.workspace):
-                return "QUIESCING"
-        except (OSError, RuntimeError):
+        if not self.observed_native_writer:
+            # On Windows a GUI launcher may return zero but its Firefox
+            # descendant could still be running, or its profile may not
+            # have been selected. A clean save needs a native OS witness.
             return "UNKNOWN_PRESERVE_LOCAL"
         return "CLOSED_AND_UNLOCKED"
 
