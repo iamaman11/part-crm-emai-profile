@@ -44,6 +44,7 @@ HEADLESS_MODE_ENV = "CAMOUHOST_HEADLESS_MODE"
 EXECUTION_MODE_ENV = "CAMOUHOST_EXECUTION_MODE"
 USER_NATIVE_MODE = "user-native"
 AUTOMATION_PLAYWRIGHT_MODE = "automation-playwright"
+ISOLATED_COLD_PROBE_MODE = "isolated-cold-probe"
 PROXY_CONFIG_ENV = "CAMOUHOST_PROXY_CONFIG_PATH"
 AGENT_DIRECTORY_ENV = "CAMOUHOST_AGENT_DIRECTORY"
 # Distinguishable only app-owned Firefox bootstrap, never a generic user about:blank tab.
@@ -2055,6 +2056,18 @@ def main() -> int:
             print("native user browser requires headful mode", file=sys.stderr)
             return 2
         return run_native_ipc()
+    if mode == ISOLATED_COLD_PROBE_MODE:
+        # The Rust operator redeems a fresh one-time claim, materializes the
+        # historical object into an exclusive disposable C09 slot, and holds
+        # both CURRENT and historical locks. This Playwright context is NOT
+        # the user's native browser. Do not expose arbitrary Python job inbox.
+        if os.environ.get(AGENT_DIRECTORY_ENV):
+            print("isolated cold probe rejects executable agent directory", file=sys.stderr)
+            return 2
+        if os.environ.get(HEADLESS_MODE_ENV, "false") != "false":
+            print("isolated cold probe requires pinned headful browser", file=sys.stderr)
+            return 2
+        return run_ipc()
     if mode == AUTOMATION_PLAYWRIGHT_MODE:
         # No empty managed browser session: an explicit local automation
         # job inbox must be bound by the caller. This is a necessary guard,
