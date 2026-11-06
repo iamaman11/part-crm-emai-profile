@@ -211,12 +211,15 @@ def main() -> int:
         # permanently ineligible even when CURRENT, object digests and ACL pass.
         legacy = fx["seed"]()
         try:
-            for migration_file in (STREAM, WORKING, RETIREMENT, NATIVE):
+            for migration_file in (STREAM, WORKING, RETIREMENT):
                 legacy.executescript(migration_file.read_text(encoding="utf-8"))
             fx["insert_device_commit"](legacy, fx["command_values"]())
             legacy.commit()
-            insert(legacy, fx)  # Original schema0038 shaped metadata-only row
+            insert(legacy, fx)  # Genuine original metadata-only row from schema0038
             legacy.commit()
+            # Migration must retain old receipts without making them prune permits.
+            # New writes require exact native-byte proof; old rows stay NULL.
+            legacy.executescript(NATIVE.read_text(encoding="utf-8"))
             assert legacy.execute(
                 working_query,
                 (fx["TENANT"], fx["PROFILE"], fx["CANDIDATE"], "e" * 64),
