@@ -98,6 +98,17 @@ def main() -> int:
             proc.writer_active = lambda _: False
             assert proc.exit_state() == "ABNORMAL_EXIT_PRESERVE_LOCAL"
             proc.process.returncode = 0
+            assert proc.exit_state() == "UNKNOWN_PRESERVE_LOCAL", (
+                "a held native Firefox process witness is mandatory even after a lock was seen"
+            )
+            class ActualNativeProcess:
+                exit_zero = False
+                def safely_exited(self):
+                    return self.exit_zero
+            native_root = ActualNativeProcess()
+            proc.browser_exit_witness = native_root
+            assert proc.exit_state() == "RUNNING_OR_ABNORMAL_PRESERVE_LOCAL"
+            native_root.exit_zero = True
             assert proc.exit_state() == "CLOSED_AND_UNLOCKED"
             proc.writer_active = lambda _: True
             assert proc.exit_state() == "RUNNING", (
