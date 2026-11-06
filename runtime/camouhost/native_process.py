@@ -73,45 +73,31 @@ def prepare_native_environment(
 
 
 @dataclass
-class NativeCamoufoxProcess:
-    """Read-only operating-system lifecycle witness for the native browser."""
+class NativeProfileSession:
+    """Observe only Firefox's native profile lock, never its processes or UI.
 
-    process: subprocess.Popen[bytes]
+    Lock release is merely permission to attempt an independently validated
+    consistent file snapshot, NOT a successful Save or a clean-exit claim.
+    """
+
     workspace: Path
     writer_active: Callable[[Path], bool]
     observed_native_writer: bool = False
-    browser_exit_witness: Any | None = None
 
-    def exit_state(self) -> str:
-        """A zero-exit launcher is NEVER proof that native Firefox has closed.
-
-        GUI launchers can exit successfully after delegating to a browser
-        process which remains alive. Require independent native profile lock
-        activity observed during this exact session before a clean close can
-        become a candidate for Save. No URL, tab or DOM event is consulted.
-        """
+    def profile_state(self) -> str:
         try:
             active = self.writer_active(self.workspace)
         except (OSError, RuntimeError):
             return "UNKNOWN_PRESERVE_LOCAL"
         if active:
             self.observed_native_writer = True
-            return "RUNNING"
-        status = self.process.poll()
-        if status is None:
-            return "STARTING_OR_QUIESCING"
-        if status != 0:
-            return "ABNORMAL_EXIT_PRESERVE_LOCAL"
-        if not self.observed_native_writer or self.browser_exit_witness is None:
-            # Windows GUI bootstrap may exit 0 while Firefox descendants
-            # continue. A retained *native browser* OS handle is mandatory.
-            return "UNKNOWN_PRESERVE_LOCAL"
-        try:
-            if not self.browser_exit_witness.safely_exited():
-                return "RUNNING_OR_ABNORMAL_PRESERVE_LOCAL"
-        except (OSError, RuntimeError):
-            return "UNKNOWN_PRESERVE_LOCAL"
-        return "CLOSED_AND_UNLOCKED"
+            return "PROFILE_BUSY"
+        if not self.observed_native_writer:
+            # Cannot infer successful native launch from the absence of a lock.
+            return "WRITER_NOT_OBSERVED"
+        # A crash may also release the lock. The Save owner must separately
+        # validate the exact native files and make a durable checkpoint.
+        return "QUIESCENT_REQUIRES_FILE_VALIDATION"
 
 
 def launch_native_camoufox(
@@ -122,8 +108,7 @@ def launch_native_camoufox(
     inherited: Mapping[str, str],
     writer_active: Callable[[Path], bool],
     admission_granted: bool,
-    witness_factory: Callable[[], Any] | None = None,
-) -> NativeCamoufoxProcess:
+) -> NativeProfileSession:
     """Start exactly one stock browser without Playwright after owner admission.
 
     Caller owns the exclusive Bridge workspace lock and native Firefox writer
@@ -148,7 +133,7 @@ def launch_native_camoufox(
     # -no-remote prohibits joining an unrelated running Firefox. -profile
     # binds the already-authorized generation. No URL or page command is passed.
     try:
-        process = subprocess.Popen(
+        subprocess.Popen(
             [str(browser), "-no-remote", "-profile", str(user_data_dir)],
             cwd=str(browser.parent),
             env=env,
@@ -159,24 +144,14 @@ def launch_native_camoufox(
         )
     except OSError as error:
         raise NativeLaunchError("native Camoufox process launch failed") from error
-    # The caller may supply a WindowsBrowserExitWitness rooted in this exact
-    # already-authorized process instance; its held OS handle defeats PID reuse.
-    # Failure to capture the witness cannot produce a positive Save. Never
-    # terminate a possibly-running user browser merely to recover bookkeeping.
-    witness = None
-    if witness_factory is not None:
-        try:
-            witness = witness_factory()
-        except (OSError, RuntimeError):
-            pass
-    return NativeCamoufoxProcess(
-        process, workspace, writer_active, browser_exit_witness=witness
-    )
+    # No process polling, process tree, browser hooks or PID-based Save proof.
+    # Only the native Firefox profile lock is observed after this launch.
+    return NativeProfileSession(workspace, writer_active)
 
 
 __all__ = [
     "NativeLaunchError",
-    "NativeCamoufoxProcess",
+    "NativeProfileSession",
     "prepare_native_environment",
     "launch_native_camoufox",
 ]
