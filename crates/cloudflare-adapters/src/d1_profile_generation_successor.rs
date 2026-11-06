@@ -28,7 +28,7 @@ fn native_browser_data_working_contract_complete() -> bool {
     false
 }
 
-// Strictly one journal-linked immediate predecessor. This is an immutable
+/// Strictly one journal-linked immediate predecessor. This is an immutable
 /// candidate descriptor, not a browser WORKING certificate or deletion grant.
 /// The only D1 write path for the browser-proven historical LKG receipt.
 /// A receipt is immutable metadata and NEVER an R2 delete permission.
@@ -825,6 +825,11 @@ impl D1ProfileGenerationSuccessorCommitJournal {
         current: &GenerationId,
         working: &GenerationId,
     ) -> Result<Option<GenerationObjectCatalogReference>, GenerationPortError> {
+        // Even a retained pre-existing retirement intent cannot authorize a
+        // replayed R2 DELETE before a real browser-data WORKING contract exists.
+        if !native_browser_data_working_contract_complete() {
+            return Ok(None);
+        }
         let row = query!(
             &self.database,
             LOAD_PENDING_RETIREMENT,
@@ -847,6 +852,11 @@ impl D1ProfileGenerationSuccessorCommitJournal {
         candidate: &GenerationObjectCatalogReference,
         at: profile_platform_primitives::UnixMillis,
     ) -> Result<(), GenerationPortError> {
+        // Fail closed even if an older caller reaches completion directly.
+        // No metadata-only lineage may settle an R2 removal as validated.
+        if !native_browser_data_working_contract_complete() {
+            return Err(historical_integrity_failure());
+        }
         let stamp = i64::try_from(at.value()).map_err(|_| historical_integrity_failure())?;
         let fields = (
             scope.tenant_id().as_str(),

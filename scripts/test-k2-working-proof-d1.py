@@ -107,6 +107,8 @@ def main() -> int:
         ("load_certified_working_reserve", "return Ok(None);"),
         ("load_unproven_prune_review_candidate", "return Ok(None);"),
         ("record_guarded_retirement_intent", "return Err(historical_integrity_failure());"),
+        ("load_pending_retirement", "return Ok(None);"),
+        ("complete_retirement_effect", "return Err(historical_integrity_failure());"),
     ):
         start = d1.index("    pub async fn " + method + "(")
         next_method = d1.find("    pub async fn ", start + 10)
