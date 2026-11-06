@@ -136,6 +136,10 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw 'official runtime materializer self-test failed' }
           python scripts/camouhost-runtime-package.py self-test
           if ($LASTEXITCODE -ne 0) { throw 'compressed runtime packager self-test failed' }
+          # C09 test-only proof: reject forged/replayed browser data before
+          # costly official Camoufox packaging. Never grants D1 WORKING/R2 prune.
+          python scripts/test-s0-portable-browser-state.py --self-test
+          if ($LASTEXITCODE -ne 0) { throw 'C09 browser-state digest/replay contract failed' }
 
       - name: Materialize official browser and verified offline fpgen model
         if: needs.scope.outputs.heavy == 'true'
