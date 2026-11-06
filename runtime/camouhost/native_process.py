@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Native Camoufox process owner; no Playwright, tabs, DOM, or browser commands.
+"""Native Camoufox profile launcher; no Playwright, tabs, DOM, or browser commands.
 
 This is the next-generation launch primitive. The Bridge's Rust control-plane
 owner MUST prove and redeem the device/profile/tenant lease and immutable
@@ -11,7 +11,6 @@ Firefox owns SessionStore, navigation, window/tab closure, and network state.
 from __future__ import annotations
 
 import copy
-import os
 import subprocess
 from dataclasses import dataclass
 from pathlib import Path
@@ -27,12 +26,13 @@ def prepare_native_environment(
     browser: Path,
     identity: Mapping[str, Any],
     inherited: Mapping[str, str],
+    ff_version: int = 158,
     firefox_prefs: Mapping[str, Any] | None = None,
 ) -> dict[str, str]:
-    """Serialize the already-persisted fingerprint through official Camoufox.
+    """Generate startup environment using the official Camoufox SDK only.
 
-    Never redraw identity, navigate, set offline mode, inspect DOM, or call
-    Playwright. Only the upstream launch API may add its stock addons.
+    Same upstream config, preference, extension and cache policy as ordinary
+    Camoufox launch, without creating a Playwright context or touching pages.
     """
     if not browser.is_absolute() or browser.is_symlink() or not browser.is_file():
         raise NativeLaunchError("approved browser executable missing")
@@ -40,36 +40,40 @@ def prepare_native_environment(
         raise NativeLaunchError("immutable browser fingerprint missing")
     if any(not isinstance(k, str) for k in identity):
         raise NativeLaunchError("invalid fingerprint keys")
-
-    from camoufox.addons import add_default_addons, confirm_paths
-    from camoufox.utils import get_env_vars, get_pref_env_vars
-
-    config = copy.deepcopy(dict(identity))
-    # Camoufox 0.5.7's normal launch_options() invokes this same upstream
-    # addon routine, but we do not ask Playwright to start or own Firefox.
-    # A failed official addon resolution is an explicit launch error.
-    addons: list[str] = []
-    add_default_addons(addons)
-    if addons:
-        confirm_paths(addons)
-        config["addons"] = addons
-
-    try:
-        upstream = {
-            **get_env_vars(config, "win", path=browser),
-            **get_pref_env_vars(dict(firefox_prefs or {})),
-        }
-    except (OSError, ValueError, TypeError) as error:
-        raise NativeLaunchError("upstream browser configuration unavailable") from error
-    # Deliberately accept ONLY prevalidated Windows OS variables from the
-    # caller: no ambient secrets or arbitrary CAMOU_CONFIG overrides.
+    if type(ff_version) is not int or not 100 <= ff_version <= 999:
+        raise NativeLaunchError("locked Firefox major invalid")
     if any(not isinstance(k, str) or not isinstance(v, str) for k, v in inherited.items()):
         raise NativeLaunchError("inherited environment contains invalid values")
+    # The source must not be able to override the signed Camoufox identity.
     inherited_clean = {
         k: v for k, v in inherited.items()
         if not k.startswith(("CAMOU_CONFIG_", "CAMOU_PREFS_"))
     }
-    return {**inherited_clean, **{key: str(value) for key, value in upstream.items()}}
+    from camoufox.utils import launch_options
+
+    try:
+        launch = launch_options(
+            executable_path=browser,
+            config=copy.deepcopy(dict(identity)),
+            enable_cache=True,
+            env=inherited_clean,
+            exclude_addons=[],
+            ff_version=ff_version,
+            firefox_user_prefs=dict(firefox_prefs or {}),
+            headless=False,
+            i_know_what_im_doing=True,
+            os="windows",
+        )
+    except (OSError, ValueError, TypeError) as error:
+        raise NativeLaunchError("official Camoufox startup configuration rejected") from error
+    official_env = launch.get("env")
+    if not isinstance(official_env, dict) or not any(
+        isinstance(key, str) and key.startswith("CAMOU_CONFIG_") for key in official_env
+    ):
+        raise NativeLaunchError("upstream startup fingerprint missing")
+    if any(not isinstance(key, str) for key in official_env):
+        raise NativeLaunchError("upstream startup environment invalid")
+    return {key: str(value) for key, value in official_env.items()}
 
 
 @dataclass
@@ -108,6 +112,7 @@ def launch_native_camoufox(
     inherited: Mapping[str, str],
     writer_active: Callable[[Path], bool],
     admission_granted: bool,
+    ff_version: int = 158,
 ) -> NativeProfileSession:
     """Start exactly one stock browser without Playwright after owner admission.
 
@@ -128,7 +133,12 @@ def launch_native_camoufox(
         browser=browser,
         identity=identity,
         inherited=inherited,
-        firefox_prefs={"browser.startup.page": 3},
+        ff_version=ff_version,
+        firefox_prefs={
+            "browser.startup.page": 3,
+            "privacy.baselineFingerprintingProtection": False,
+            "accessibility.force_disabled": 0,
+        },
     )
     # -no-remote prohibits joining an unrelated running Firefox. -profile
     # binds the already-authorized generation. No URL or page command is passed.
