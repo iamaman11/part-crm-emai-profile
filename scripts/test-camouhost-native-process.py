@@ -25,19 +25,22 @@ def load():
 
 def main() -> int:
     module = load()
-    addon = types.ModuleType("camoufox.addons")
     util = types.ModuleType("camoufox.utils")
     root = types.ModuleType("camoufox")
-    def default_addons(paths):
-        paths.append("vendor/default-addon")
-    addon.add_default_addons = default_addons
-    addon.confirm_paths = lambda paths: None
-    util.get_env_vars = lambda config, target, path: {
-        "CAMOU_CONFIG_1": "pinned" if config["sentinel"] == "pinned" and target == "win" else "unexpected",
-    }
-    util.get_pref_env_vars = lambda prefs: {
-        "CAMOU_PREFS_1": "native" if prefs.get("browser.startup.page") == 3 else "unexpected"
-    }
+    observed_launch_options = []
+
+    def official_options(**kwargs):
+        observed_launch_options.append(kwargs)
+        assert kwargs["ff_version"] == 158
+        assert kwargs["os"] == "windows"
+        assert kwargs["env"].get("CAMOU_CONFIG_1") is None
+        assert kwargs["firefox_user_prefs"]["browser.startup.page"] == 3
+        assert kwargs["firefox_user_prefs"]["privacy.baselineFingerprintingProtection"] is False
+        assert kwargs["config"] == {"sentinel": "pinned"}
+        assert kwargs["exclude_addons"] == []
+        return {"env": {**kwargs["env"], "CAMOU_CONFIG_1": "pinned",
+                        "CAMOU_PREFS_1": "native"}}
+    util.launch_options = official_options
 
     with tempfile.TemporaryDirectory() as temp:
         workspace = pathlib.Path(temp) / "generation"
@@ -51,7 +54,6 @@ def main() -> int:
             return None
         modules = {
             "camoufox": root,
-            "camoufox.addons": addon,
             "camoufox.utils": util,
         }
         with patch.dict(sys.modules, modules), patch.object(subprocess, "Popen", side_effect=spawn):
@@ -79,6 +81,7 @@ def main() -> int:
             assert args == [str(browser), "-no-remote", "-profile", str(userdata)]
             assert kwargs["env"]["CAMOU_CONFIG_1"] == "pinned"
             assert kwargs["env"]["CAMOU_PREFS_1"] == "native"
+            assert len(observed_launch_options) == 1
             assert "playwright" not in str(args).lower()
             assert proc.profile_state() == "WRITER_NOT_OBSERVED"
             assert not hasattr(proc, "process"), "Bridge must not supervise native processes"
