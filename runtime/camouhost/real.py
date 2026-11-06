@@ -1919,6 +1919,107 @@ def run_ipc() -> int:
                 report_runtime_failure("cleanup", error)
 
 
+def run_native_ipc() -> int:
+    """Production runtime IPC: launch official Firefox, never inspect its pages.
+
+    Rust has already verified the signed browser/runtime/config identities,
+    acquired the exact tenant/device/profile writer lease, and issued this
+    sidecar a single-use capability. This adapter only releases native Firefox
+    with the bound on-disk identity and observes its own profile lock.
+    """
+    from native_process import NativeLaunchError, launch_native_camoufox
+
+    report_runtime_stage("startup", "begin")
+    try:
+        lock, _ = load_runtime_lock()
+        verify_python_components(lock)
+        root = resolve_profile_root(require_bridge_lock=True)
+        config, _ = load_generation_config(root)
+        expected = os.environ.get(EXPECTED_PROBE_SHA256_ENV)
+        if not valid_sha256(expected) or firefox_writer_active(root):
+            raise RuntimeContractError("native runtime identity unavailable")
+        if resolve_proxy() is not None:
+            # Do not silently ignore configured proxy routing when no
+            # native Firefox proxy policy has been proven.
+            raise RuntimeContractError("native proxy cannot be applied safely")
+        browser = packaged_windows_browser(lock)
+    except BaseException as error:
+        report_runtime_failure("startup", error)
+        emit("error|identity")
+        return 4
+
+    report_runtime_stage("startup", "ready")
+    negotiated = False
+    active_session: str | None = None
+    native_session: Any | None = None
+    while True:
+        raw = sys.stdin.readline()
+        if not raw:
+            # Never kill Firefox because the control pipe disappeared.
+            return 3 if negotiated or active_session is not None else 0
+        if not valid_frame(raw):
+            emit("error|protocol")
+            return 2
+        parts = raw[:-1].split("|")
+        if parts == ["hello", IPC_VERSION] and not negotiated:
+            negotiated = True
+            emit(f"hello_ack|{IPC_VERSION}")
+            continue
+        if (len(parts) == 2 and parts[0] == "launch" and negotiated
+            and active_session is None and SESSION_PATTERN.fullmatch(parts[1]) is not None):
+            try:
+                # Browser startup is admitted *before* spawning; no network
+                # mode toggles, new tabs, page code or mutation after spawn.
+                report_runtime_stage("launch", "before_browser_enter")
+                native_session = launch_native_camoufox(
+                    workspace=root, browser=browser, identity=config,
+                    inherited=browser_environment(),
+                    writer_active=firefox_writer_active,
+                    admission_granted=True,
+                )
+                report_runtime_stage("launch", "browser_entered")
+                # Observe only Firefox's own OS lock. This is not browser
+                # control, nor a fixed delay: return as soon as native writer
+                # evidence appears. A bounded startup failure prevents a dead
+                # launcher from being reported as Browser Ready.
+                deadline = time.monotonic() + 30.0
+                while native_session.profile_state() != "PROFILE_BUSY":
+                    if time.monotonic() >= deadline:
+                        raise RuntimeContractError("native Firefox never acquired profile")
+                    time.sleep(0.05)
+            except BaseException as error:
+                report_runtime_failure("launch", error)
+                emit("error|runtime")
+                return 5
+            active_session = parts[1]
+            report_runtime_stage("launch", "ready")
+            emit(f"ready|{active_session}")
+            continue
+        if (len(parts) == 2 and parts[0] == "observe_close"
+            and active_session is not None and parts[1] == active_session
+            and native_session is not None):
+            status = native_session.profile_state()
+            # A released native lock is permission to validate the real files,
+            # not evidence for Saved. Rust owns exact WAL, sealed checkpoint,
+            # signed R2 commit and verified local retirement.
+            emit(f"close_observed|{active_session}|"
+                 f"{'true' if status == 'QUIESCENT_REQUIRES_FILE_VALIDATION' else 'false'}")
+            continue
+        if (len(parts) == 2 and parts[0] == "close"
+            and active_session is not None and parts[1] == active_session
+            and native_session is not None):
+            status = native_session.profile_state()
+            if status != "QUIESCENT_REQUIRES_FILE_VALIDATION":
+                emit(f"closed|{active_session}|false")
+                return 6
+            # This closes only our IPC sidecar. It does not send any command
+            # to Firefox. Actual CLOUD_SAVED is decided by Rust/D1/R2 only.
+            emit(f"closed|{active_session}|true")
+            return 0
+        emit("error|protocol")
+        return 2
+
+
 def main() -> int:
     if len(sys.argv) == 3 and sys.argv[1] == "--materialize-identity":
         try:
@@ -1939,6 +2040,8 @@ def main() -> int:
     if len(sys.argv) != 1:
         print("unsupported Camouhost invocation", file=sys.stderr)
         return 2
+    if os.environ.get("CAMOUHOST_NATIVE_PROFILE") == "1":
+        return run_native_ipc()
     return run_ipc()
 
 
