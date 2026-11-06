@@ -779,10 +779,13 @@ where
                     Err(Error::CleanupUncertain)
                 };
             }
-            // A successful Ready only proves the managed browser launched.
-            // Give the existing acceptance observer a live page to inspect
-            // cookies, localStorage and IndexedDB *before* closing Camoufox.
-            // The observer never grants a writer or changes CURRENT.
+            // Only this isolated, automation-owned historical restore uses
+            // official Camoufox SDK/Playwright. Ready plus browser-visible
+            // evidence proves an actual cold launch, NOT cookie/IndexedDB
+            // content equivalence. The independent full restored-native-byte
+            // SHA against the original sealed R2 metadata above proves that.
+            // User Open remains a separate native process without page probes.
+            // Closing this disposable SDK context never closes user Firefox.
             let observed = observe_browser_state().map_err(|_| Error::BrowserStateNotVerified);
             if crate::runtime_bundle::RuntimeSessionOrchestrator::close(
                 runtime_bundle,
