@@ -670,56 +670,22 @@ def retire_managed_bootstrap_tabs(context: Any) -> None:
 
 
 def admit_navigation(context: Any, target: str | None) -> None:
-    if target is not None:
-        context.set_offline(False)
-        page = context.pages[0] if context.pages else context.new_page()
-        page.goto(target, wait_until="domcontentloaded", timeout=90_000)
-        retire_managed_bootstrap_tabs(context)
-        return
+    """Release the already-authorized launch gate without operating Firefox tabs.
 
-    # The Rust owner has admitted the persisted identity. Firefox alone owns
-    # SessionStore, the request method, and native resubmission confirmation.
-    # Do not synthesize URLs, force reloads, or install a second network router.
+    Firefox alone owns SessionStore, tab retry, navigation and error-page UI.
+    Opening a saved CRM profile must not click buttons, poll page URLs, create
+    or close tabs, or navigate on the user's behalf.
+    """
+    if target is not None:
+        raise RuntimeContractError("Profile launch cannot navigate the browser")
+    # This is the existing pre-admission network isolation boundary. Removing
+    # the gate requires migrating authorization ahead of native process spawn;
+    # that separate change must preserve the tenant/lease fail-closed contract.
     context.set_offline(False)
-    retried: set[int] = set()
-    failed = 0
-    retries = 0
-    # SessionStore publishes restored tabs asynchronously on cold Windows
-    # startup. Poll briefly, without delaying Open indefinitely.
-    for attempt in range(12):
-        for page in list(context.pages):
-            if id(page) in retried or not page.url.startswith(("http://", "https://")):
-                continue
-            try:
-                document_uri = page.evaluate("document.documentURI")
-                if not isinstance(document_uri, str) or not document_uri.startswith(
-                    "about:neterror?e=netOffline&"
-                ):
-                    continue
-                retried.add(id(page))
-                # Firefox's own error-page retry. Its native session/history
-                # semantics (including any POST confirmation) remain upstream.
-                page.locator("#main-button").click(timeout=5_000)
-                retries += 1
-            except Exception as error:
-                # A dead tab or offline remote origin must not lose the native
-                # workspace or turn an unsuccessful navigation into Saved.
-                failed += 1
-                print(
-                    "camouhost_session_restore retry_failed "
-                    f"category={runtime_failure_category(error)}",
-                    file=sys.stderr, flush=True,
-                )
-        if attempt != 11:
-            if context.pages:
-                context.pages[0].wait_for_timeout(250)
-            else:
-                time.sleep(0.25)
-    retire_managed_bootstrap_tabs(context)
     print(
-        f"camouhost_session_restore native_retry_attempts={retries} "
-        f"failures={failed}",
-        file=sys.stderr, flush=True,
+        "camouhost_session_restore native_retry_attempts=0 failures=0",
+        file=sys.stderr,
+        flush=True,
     )
 
 def extract_camoufox_config(options: dict[str, Any]) -> dict[str, Any]:
@@ -790,10 +756,8 @@ def camoufox_browser_selector(lock: dict[str, Any]) -> dict[str, str | Path]:
 
 
 def default_addon_exclusions() -> list[Any]:
-    """Disable Camoufox mutable default-addon acquisition on every shipping launch path."""
-    from camoufox.addons import DefaultAddons
-
-    return [DefaultAddons.UBO]
+    """Leave official Camoufox extensions under the upstream browser's control."""
+    return []
 
 
 def accessibility_preferences(platform_name: str) -> dict[str, int]:
