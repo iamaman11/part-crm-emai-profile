@@ -10,6 +10,7 @@ the authoritative reopened visit. Stdout contains only bounded booleans/visit me
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import secrets
 import threading
@@ -21,6 +22,7 @@ MAX_REPORT_BYTES = 1024
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser()
     parser.add_argument("--port", type=int, default=0)
+    parser.add_argument("--self-test", action="store_true")
     return parser.parse_args()
 
 
@@ -137,6 +139,7 @@ class StateServer(ThreadingHTTPServer):
     def __init__(self, port: int) -> None:
         self._visit_lock = threading.Lock()
         self._visits = 0
+        self._reported_visits: set[int] = set()
         self.proof_nonce = secrets.token_hex(16)
         super().__init__(("127.0.0.1", port), Handler)
 
@@ -144,6 +147,41 @@ class StateServer(ThreadingHTTPServer):
         with self._visit_lock:
             self._visits += 1
             return self._visits
+
+    def authenticate_readback(self, observed: dict[str, object]) -> bool:
+        # A client-supplied digest is NOT acceptance evidence by itself.
+        # Recompute the known non-secret disposable-origin marker values here,
+        # reject same-phase replay, and accept only reports for served visits.
+        origin = f"http://127.0.0.1:{self.server_address[1]}"
+        expected_state = [
+            self.proof_nonce, origin, "v1",
+            "profile-generation-portable-v1", "profile-generation-portable-v1",
+        ]
+        expected_digest = hashlib.sha256(
+            json.dumps(
+                expected_state, ensure_ascii=False, separators=(",", ":"),
+            ).encode("utf-8")
+        ).hexdigest()
+        visit = observed["visit"]
+        if not isinstance(visit, int) or isinstance(visit, bool):
+            return False
+        with self._visit_lock:
+            if visit > self._visits or visit in self._reported_visits:
+                return False
+            if observed["phase"] == "seed" and visit != 1:
+                return False
+            if observed["phase"] == "verify" and visit <= 1:
+                return False
+            if observed["phase"] != "error" and (
+                observed["state_digest"] != expected_digest
+                or any(
+                    observed[name] is not True
+                    for name in ("cookie", "local_storage", "indexed_db")
+                )
+            ):
+                return False
+            self._reported_visits.add(visit)
+        return True
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -209,6 +247,10 @@ class Handler(BaseHTTPRequestHandler):
             self.send_response(400)
             self.end_headers()
             return
+        if not self.server.authenticate_readback(value):
+            self.send_response(409)
+            self.end_headers()
+            return
         print(
             json.dumps(value, sort_keys=True, separators=(",", ":")),
             flush=True,
@@ -217,8 +259,49 @@ class Handler(BaseHTTPRequestHandler):
         self.end_headers()
 
 
+def test_c09_disposable_native_data_proof_replay_rejected() -> None:
+    # Local fixture contract test: cannot turn metadata-only booleans or a
+    # copied digest into positive browser-state evidence. Production WORKING
+    # admission requires an independent reviewed and server-bound protocol.
+    server = StateServer(0)
+    try:
+        visit = server.next_visit()
+        observed: dict[str, object] = {
+            "phase": "seed",
+            "visit": visit,
+            "cookie": True,
+            "local_storage": True,
+            "indexed_db": True,
+            "state_digest": "0" * 64,
+        }
+        assert not server.authenticate_readback(observed)
+        origin = f"http://127.0.0.1:{server.server_address[1]}"
+        encoded = json.dumps(
+            [server.proof_nonce, origin, "v1",
+             "profile-generation-portable-v1", "profile-generation-portable-v1"],
+            ensure_ascii=False, separators=(",", ":"),
+        ).encode("utf-8")
+        observed["state_digest"] = hashlib.sha256(encoded).hexdigest()
+        assert server.authenticate_readback(observed)
+        assert not server.authenticate_readback(observed)
+        second = server.next_visit()
+        assert not server.authenticate_readback({**observed, "visit": second})
+        assert server.authenticate_readback({
+            **observed, "visit": second, "phase": "verify",
+        })
+        assert not server.authenticate_readback({
+            **observed, "visit": second + 1, "phase": "verify",
+        })
+    finally:
+        server.server_close()
+
+
 def main() -> int:
     args = parse_args()
+    if args.self_test:
+        test_c09_disposable_native_data_proof_replay_rejected()
+        print("C09_DISPOSABLE_PROOF_REPLAY=PASS", flush=True)
+        return 0
     if not 0 <= args.port <= 65535:
         raise SystemExit("portable browser-state port is out of range")
     server = StateServer(args.port)
