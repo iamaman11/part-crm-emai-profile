@@ -17,6 +17,8 @@ Opt-in isolation only (not a proposed production workaround):
 from __future__ import annotations
 
 import argparse
+import contextlib
+import importlib.util
 import pathlib
 import sys
 import tempfile
@@ -55,6 +57,53 @@ def assert_self_test() -> None:
     assert parse_args(["--exclude-ubo"]).exclude_ubo
     assert not parse_args([]).exclude_ubo
     assert parse_args(["--pinned-ubo-dir", "/fixture"]).pinned_ubo_dir is not None
+    assert parse_args(["--shipping-camouhost", "/fixture"]).shipping_camouhost is not None
+    assert parse_args([]).shipping_camouhost is None
+
+
+def shipping_launch_options(
+    camouhost_file: pathlib.Path,
+    browser: pathlib.Path,
+    profile_root: pathlib.Path,
+) -> tuple[dict[str, object], object]:
+    """Mirror the *installed* Camouhost's launch options in a fresh TEMP profile.
+
+    This deliberately calls the installed adapter's existing builder instead of
+    copying or second-guessing Firefox preferences, bootstrap, UBO policy or
+    BrowserForge config. It neither calls the production IPC nor reads any CRM
+    profile. The returned config is only needed for the two ordinary adapter
+    browser-visible observations. Never write it to a persistent profile.
+    """
+    spec = importlib.util.spec_from_file_location("c02_pinned_native_adapter", camouhost_file)
+    if spec is None or spec.loader is None:
+        raise ValueError("invalid installed Camouhost module")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    from camoufox.fingerprints import generate_fingerprint
+    from camoufox.utils import get_screen_cons, launch_options
+
+    lock, _ = module.load_runtime_lock()
+    executable = module.packaged_windows_browser(lock)
+    if executable.resolve(strict=True) != browser.resolve(strict=True):
+        raise ValueError("installed Camouhost and browser runtime identity differ")
+    environment = module.browser_environment()
+    with contextlib.redirect_stdout(sys.stderr):
+        fingerprint = generate_fingerprint(
+            screen=get_screen_cons("DISPLAY" in environment), os="windows",
+        )
+        launch = launch_options(
+            **module.camoufox_browser_selector(lock),
+            enable_cache=True,
+            env=environment,
+            exclude_addons=module.default_addon_exclusions(),
+            ff_version=module.locked_firefox_major(lock),
+            fingerprint=fingerprint,
+            headless=False,
+            i_know_what_im_doing=True,
+            os="windows",
+        )
+    config = module.extract_camoufox_config(launch)
+    return module.camoufox_kwargs(lock, profile_root.parent, config), (module, config)
 
 
 def single_trial(
@@ -63,6 +112,7 @@ def single_trial(
     profile_root: pathlib.Path, check_worker_constructor: bool,
     exclude_ubo: bool,
     pinned_ubo_dir: pathlib.Path | None,
+    shipping_camouhost: pathlib.Path | None = None,
 ) -> tuple[str, str]:
     # Import is delayed so --self-test can run offline on any CI OS.
     from camoufox.sync_api import Camoufox
@@ -101,9 +151,25 @@ def single_trial(
     if pinned_ubo_dir is not None:
         kwargs["addons"] = [str(pinned_ubo_dir)]
 
+    shipping_adapter = None
+    if shipping_camouhost is not None:
+        kwargs, shipping_adapter = shipping_launch_options(
+            shipping_camouhost, browser, profile_root,
+        )
+
     try:
         with Camoufox(**kwargs) as context:
-            page = context.new_page()
+            if shipping_adapter is None:
+                page = context.new_page()
+            else:
+                module, config = shipping_adapter
+                page = context.pages[0] if context.pages else context.new_page()
+                context.set_offline(True)
+                # Identical ordinary Camouhost pre-admission browser observations.
+                module.stable_probe_digest(page)
+                module.browser_visible_observation(page, config)
+                module.admit_navigation(context, None)
+                page = context.pages[0] if context.pages else context.new_page()
             page.on("crash", callback)
             # A constructor check is diagnostic, NOT a privileged Firefox
             # about:config/pref readback and not proof that workers are disabled.
@@ -144,6 +210,8 @@ def parse_args(args: list[str]) -> argparse.Namespace:
                         help="opt-in absolute pre-extracted verified UBO dir; no download")
     parser.add_argument("--skip-worker-check", action="store_true",
                         help="navigate without pre-navigation Playwright evaluate")
+    parser.add_argument("--shipping-camouhost", type=pathlib.Path,
+                        help="opt-in exact installed real.py; mirror its native launch/admission")
     return parser.parse_args(args)
 
 
@@ -159,6 +227,19 @@ def main(args: list[str] | None = None) -> int:
     if config.browser.name.lower() != "camoufox.exe" or sys.platform != "win32":
         print("CAMOUFOX_MANAGED_PROBE=WINDOWS_PINNED_CAMOUFOX_REQUIRED", flush=True)
         return 2
+    if config.shipping_camouhost is not None:
+        # A faithful full native adapter comparator cannot combine with
+        # temporary prefs, extra addons or overrides not used by shipping.
+        if (
+            not config.shipping_camouhost.is_absolute()
+            or not config.shipping_camouhost.is_file()
+            or config.shipping_camouhost.name != "real.py"
+            or not config.exclude_ubo
+            or config.disable_workers or config.disable_javascript
+            or config.block_webgl or config.pinned_ubo_dir is not None
+        ):
+            print("CAMOUFOX_MANAGED_PROBE=INVALID_SHIPPING_COMPARATOR", flush=True)
+            return 2
     if config.pinned_ubo_dir is not None:
         # Test-only source directory is created by the operator from a
         # separately SHA-256 verified official XPI, not from a runtime URL.
@@ -189,6 +270,8 @@ def main(args: list[str] | None = None) -> int:
         variant += "_ubo_excluded"
     if config.pinned_ubo_dir is not None:
         variant += "_pinned_ubo"
+    if config.shipping_camouhost is not None:
+        variant += "_installed_camouhost"
     failed = False
     for trial in range(1, config.repeats + 1):
         # Temp root is a new private profile for every attempt; the context
@@ -203,6 +286,7 @@ def main(args: list[str] | None = None) -> int:
                     not config.skip_worker_check,
                     config.exclude_ubo,
                     config.pinned_ubo_dir,
+                    config.shipping_camouhost,
                 )
         except OSError:
             print("CAMOUFOX_MANAGED_PROBE_CLEANUP=INCOMPLETE", flush=True)
