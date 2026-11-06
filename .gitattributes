@@ -10,6 +10,7 @@
 /runtime/camouhost/camoufox-patches/0001-webgl-checked-arrays.patch text eol=lf
 /runtime/camouhost/main.py text eol=lf
 /runtime/camouhost/real.py text eol=lf
+/runtime/camouhost/native_process.py text eol=lf
 /runtime/camouhost/runtime-lock.json text eol=lf
 /scripts/camouhost-runtime-build-windows.py text eol=lf
 /scripts/camouhost-runtime-package.py text eol=lf
