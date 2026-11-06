@@ -60,7 +60,7 @@ async function loadRelatedMailboxes(
   }
 
   const cloudMailboxes = mailboxes.filter(
-    (mailbox) => mailbox.provider === 'GMAIL_API' || mailbox.provider === 'IMAP',
+    (mailbox) => mailbox.provider === 'GMAIL_API' || mailbox.provider === 'IMAP' || mailbox.provider === 'MICROSOFT_GRAPH',
   );
   const related = await Promise.all(
     cloudMailboxes.map(async (mailbox) => {
@@ -145,7 +145,7 @@ export function ClientMailPanel({ clientId, outboundMailEnabled }: Props) {
 
       {!mailboxQuery.isPending && composerMailboxes.length === 0 && (
         <p className="muted">
-          No active Gmail API or IMAP mailbox is executable for this client. Browser-fallback mailbox execution remains device/Bridge-owned rather than being impersonated by this web operator surface.
+          No active Gmail API, IMAP, or Microsoft Graph mailbox is executable for this client. Browser-fallback mailbox execution remains device/Bridge-owned rather than being impersonated by this web operator surface.
         </p>
       )}
 
