@@ -41,11 +41,13 @@ def main() -> int:
     def run(env, expected, called):
         invoked.clear()
         error = io.StringIO()
-        with patch.dict(os.environ, env, clear=True), \\
-             patch.object(sys, "argv", ["real.py"]), \\
-             patch.object(runtime, "run_native_ipc", side_effect=native), \\
-             patch.object(runtime, "run_ipc", side_effect=automation), \\
-             contextlib.redirect_stderr(error):
+        with (
+            patch.dict(os.environ, env, clear=True),
+            patch.object(sys, "argv", ["real.py"]),
+            patch.object(runtime, "run_native_ipc", side_effect=native),
+            patch.object(runtime, "run_ipc", side_effect=automation),
+            contextlib.redirect_stderr(error),
+        ):
             outcome = runtime.main()
         assert outcome == expected, (env, outcome, expected)
         assert invoked == called, (env, invoked, called)
