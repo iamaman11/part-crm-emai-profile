@@ -728,6 +728,9 @@ def prove_wm_close_exit_timing_requires_native_success() -> None:
             "tracked_pages": {1},
             "closed_pages": {1} if closed else set(),
             "crashed": crashed,
+            "unresolved_crashes": {1} if crashed else set(),
+            "recovery_candidates": set(),
+            "page_objects": {},
             "browser_exit": witness,
         }
 
