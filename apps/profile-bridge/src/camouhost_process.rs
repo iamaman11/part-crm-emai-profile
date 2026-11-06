@@ -389,6 +389,12 @@ impl ManagedCamouhostIpc {
 
 impl ManagedCamouhostColdProbeObserver {
     pub fn observe_live(&mut self) -> Result<(), BridgePortError> {
+        self.observe_live_with_digest().map(|_| ())
+    }
+
+    /// C09 witness reuses the existing validated Firefox-visible payload,
+    /// without transmitting cookies, tab URLs or private storage.
+    pub fn observe_live_with_digest(&mut self) -> Result<String, BridgePortError> {
         let session = {
             let state = self
                 .shared
@@ -449,7 +455,7 @@ impl ManagedCamouhostProcess {
         &self,
         session_id: &SessionId,
         binding: &RuntimeLaunchBinding,
-        agent_directory: &Path,
+        agent_directory: Option<&Path>,
     ) -> Result<Child, BridgePortError> {
         let entrypoint = self.config.runtime_root.join(REAL_ENTRYPOINT);
         let runtime_lock = self.config.runtime_root.join(RUNTIME_LOCK_PATH);
@@ -502,9 +508,12 @@ impl ManagedCamouhostProcess {
             command.env("CAMOUHOST_PROXY_CONFIG_PATH", path);
         }
         inherit_runtime_environment(&mut command);
-        // Every installed browser profile is testable through its existing
-        // Camouhost owner. No toggle, extra writer, or extra browser process.
-        command.env("CAMOUHOST_AGENT_DIRECTORY", agent_directory);
+        // A release browser never receives an arbitrary local Python executor.
+        // Test/debug builds retain the same existing Camouhost-owned fixture
+        // capability; production still has read-only, bounded crash diagnostics.
+        if let Some(directory) = agent_directory {
+            command.env("CAMOUHOST_AGENT_DIRECTORY", directory);
+        }
         let child = command.spawn().map_err(|_| BridgePortError::Unavailable)?;
         if child.id() == 0 || session_id.as_str().is_empty() {
             return Err(BridgePortError::InvalidResponse);
@@ -523,10 +532,15 @@ impl ProcessControlPort for ManagedCamouhostProcess {
         if state.child.is_some() || state.active_session.is_some() {
             return Err(BridgePortError::Unavailable);
         }
-        // Create and validate the stable user-local agent inbox before spawning.
-        // A broken path fails closed without stranding a browser writer.
-        let agent_directory = local_agent_directory()?;
-        let mut child = self.launch_child(session_id, &binding, &agent_directory)?;
+        // The existing directory also stores raw redacted-at-UI native traces.
+        // Never grant executable diagnostic scripts in an ordinary release.
+        let diagnostic_directory = local_agent_directory()?;
+        let test_agent_enabled = cfg!(any(test, feature = "synthetic-test-bin", debug_assertions));
+        let mut child = self.launch_child(
+            session_id,
+            &binding,
+            test_agent_enabled.then_some(diagnostic_directory.as_path()),
+        )?;
         let stdin = child.stdin.take().ok_or(BridgePortError::Unavailable)?;
         let stdout = child.stdout.take().ok_or(BridgePortError::Unavailable)?;
         let stderr = child.stderr.take().ok_or(BridgePortError::Unavailable)?;
@@ -534,14 +548,14 @@ impl ProcessControlPort for ManagedCamouhostProcess {
             .duration_since(UNIX_EPOCH)
             .map_or(0, |elapsed| elapsed.as_nanos());
         let raw_diagnostics =
-            Some(agent_directory.join(format!("camouhost-{}-{stamp}.stderr.log", child.id())));
+            Some(diagnostic_directory.join(format!("camouhost-{}-{stamp}.stderr.log", child.id())));
         spawn_camouhost_diagnostic_reader(stderr, raw_diagnostics);
         state.stdin = Some(stdin);
         state.responses = Some(spawn_response_reader(stdout));
         state.active_session = Some(session_id.clone());
         state.profile_stable_identity = binding.profile_stable_identity;
         state.navigation_target = self.config.initial_url.clone();
-        state.agent_directory = Some(agent_directory);
+        state.agent_directory = test_agent_enabled.then_some(diagnostic_directory);
         state.child = Some(child);
         Ok(())
     }
@@ -642,7 +656,7 @@ fn verify_managed_browser_visible_identity(
     shared: &Arc<Mutex<ProcessState>>,
     display_mode: RuntimeDisplayMode,
     session_id: &SessionId,
-) -> Result<(), BridgePortError> {
+) -> Result<String, BridgePortError> {
     let observation = exchange_shared(
         shared,
         &CamouhostMessage::ObserveBrowserVisible {
@@ -674,7 +688,10 @@ fn verify_managed_browser_visible_identity(
     .map_err(|_| BridgePortError::InvalidResponse)?;
     verify_host_compatibility(display_mode, host_runtime_evidence)?;
 
-    Ok(())
+    Ok(Sha256::digest(&payload)
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect())
 }
 
 fn launch_with_browser_visible_admission(
@@ -962,6 +979,34 @@ fn exchange_frame_shared(
     receive_response(responses, timeout)
 }
 
+fn safe_page_event_witness(message: &str) -> bool {
+    // Source sends the event before any failed Close/IPC transition. Never
+    // import raw Python stderr, page URLs, credentials or session identifiers.
+    let Some(rest) = message.strip_prefix("camouhost_page_event ") else {
+        return false;
+    };
+    let fields: Vec<_> = rest.split(' ').collect();
+    if fields.len() != 3 || !matches!(fields[0], "kind=crash" | "kind=recovered") {
+        return false;
+    }
+    let Some(tracked) = fields[1]
+        .strip_prefix("tracked=")
+        .and_then(|value| value.parse::<u16>().ok())
+    else {
+        return false;
+    };
+    let Some(unresolved) = fields[2]
+        .strip_prefix("unresolved=")
+        .and_then(|value| value.parse::<u16>().ok())
+    else {
+        return false;
+    };
+    tracked > 0
+        && tracked <= 512
+        && unresolved <= tracked
+        && (fields[0] != "kind=crash" || unresolved > 0)
+}
+
 fn safe_close_observation_witness(message: &str) -> bool {
     // Only typed, bounded, local failure facts are admitted from child stderr.
     // The full original traceback remains in the local raw test artifact.
@@ -1003,9 +1048,12 @@ fn safe_close_observation_witness(message: &str) -> bool {
     };
     events == "none"
         || (events.split(',').count() <= 8
-            && events
-                .split(',')
-                .all(|event| matches!(event, "page" | "close" | "crash")))
+            && events.split(',').all(|event| {
+                matches!(
+                    event,
+                    "page" | "close" | "crash" | "load_after_crash" | "recovered"
+                )
+            }))
 }
 
 fn allowlisted_camouhost_diagnostic(line: &[u8]) -> Option<&str> {
@@ -1052,7 +1100,11 @@ fn allowlisted_camouhost_diagnostic(line: &[u8]) -> Option<&str> {
         .strip_prefix("camouhost_pages count=")
         .and_then(|count| count.parse::<u16>().ok())
         .is_some_and(|count| count <= 512);
-    if allowed_failure || allowed_stage || allowed_pages || safe_close_observation_witness(message)
+    if allowed_failure
+        || allowed_stage
+        || allowed_pages
+        || safe_close_observation_witness(message)
+        || safe_page_event_witness(message)
     {
         return Some(message);
     }
@@ -1702,6 +1754,8 @@ mod tests {
                 "camouhost_close_witness exception=OSError line=1247 errno=13 winerror=32 tracked=1 closed=1 crashed=0 count=3 events=page,close,close"
             )
         );
+        let restored = b"camouhost_close_witness exception=RuntimeContractError line=1310 errno=none winerror=none tracked=1 closed=0 crashed=1 count=4 events=page,crash,load_after_crash,recovered\n";
+        assert!(allowlisted_camouhost_diagnostic(restored).is_some());
         for rejected in [
             b"camouhost_close_witness exception=OSError line=1247 errno=13 winerror=32 tracked=1 closed=1 crashed=0 count=3 events=page,private\n".as_slice(),
             b"camouhost_close_witness exception=OSError line=1247 errno=13 winerror=32 tracked=1 closed=1 crashed=0 count=3 events=page,close,close path=C:\\private\n",
@@ -1710,6 +1764,34 @@ mod tests {
             b"camouhost_close_witness exception=OSError line=1247 errno=13 winerror=-1 tracked=1 closed=1 crashed=0 count=3 events=page\n",
         ] {
             assert_eq!(allowlisted_camouhost_diagnostic(rejected), None);
+        }
+    }
+
+    #[test]
+    fn original_page_crash_and_recovery_emit_only_bounded_witnesses() {
+        assert_eq!(
+            allowlisted_camouhost_diagnostic(
+                b"camouhost_page_event kind=crash tracked=2 unresolved=1\n"
+            ),
+            Some("camouhost_page_event kind=crash tracked=2 unresolved=1")
+        );
+        assert_eq!(
+            allowlisted_camouhost_diagnostic(
+                b"camouhost_page_event kind=recovered tracked=2 unresolved=0\r\n"
+            ),
+            Some("camouhost_page_event kind=recovered tracked=2 unresolved=0")
+        );
+        for value in [
+            b"camouhost_page_event kind=crash tracked=1 unresolved=0\n".as_slice(),
+            b"camouhost_page_event kind=crash tracked=1 unresolved=2\n",
+            b"camouhost_page_event kind=crash tracked=0 unresolved=0\n",
+            b"camouhost_page_event kind=recovered tracked=513 unresolved=0\n",
+            b"camouhost_page_event kind=closed tracked=2 unresolved=0\n",
+            b"camouhost_page_event kind=crash tracked=2 unresolved=1 url=https://private\n",
+            b"camouhost_page_event kind=crash tracked=2 unresolved=1 cookie=secret\n",
+            b"camouhost_page_event kind=crash tracked=-1 unresolved=1\n",
+        ] {
+            assert_eq!(allowlisted_camouhost_diagnostic(value), None);
         }
     }
 

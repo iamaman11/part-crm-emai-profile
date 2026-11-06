@@ -1145,6 +1145,10 @@ class WindowsBrowserExitWitness:
                 return False
         return bool(self.handles)
 
+    def has_exited(self) -> bool:
+        """Independently witness native browser death; never infer clean Save."""
+        return bool(self.handles) and all(self.wait(handle, 0) == 0 for handle in self.handles)
+
     def close(self) -> None:
         for handle in getattr(self, "handles", []):
             self.close_handle(handle)
@@ -1158,19 +1162,34 @@ def record_close_callback(state: dict[str, Any], event: str) -> None:
     events.append(event)
     if len(events) > 64:
         del events[:-64]
+    if event in ("crash", "recovered"):
+        # Emit immediately while the original managed IPC is still alive:
+        # later Close can fail without a useful exception/receipt. Only
+        # bounded counters and a fixed event kind, never URL, credential,
+        # fingerprint, session, path, cookie or page content.
+        print(
+            "camouhost_page_event "
+            f"kind={event} tracked={len(state['tracked_pages'])} "
+            f"unresolved={len(state['unresolved_crashes'])}",
+            file=sys.stderr,
+            flush=True,
+        )
 
 
 def install_controlled_close_observation(context: Any, owner_pid: int | None = None) -> dict[str, Any]:
     """Observe user page/window closure without mutating browser lifecycle.
 
-    A candidate is publishable only when every page observed by this live context emitted its
-    normal close event and no page emitted a crash event. Process loss, IPC EOF/disconnect and
-    unobserved context teardown therefore cannot manufacture a controlled-close witness.
+    A candidate is publishable only when every tracked page closes normally and
+    any crashed page has independently completed a usable same-page document reload.
+    Process loss and IPC EOF cannot manufacture a controlled-close witness.
     """
     state: dict[str, Any] = {
         "tracked_pages": set(),
         "closed_pages": set(),
-        "crashed": False,
+        "crashed": False,  # Historical fact, never silently erased.
+        "unresolved_crashes": set(),
+        "recovery_candidates": set(),
+        "page_objects": {},
         # Ordered callback names only: no URL, cookie, profile data or process secrets.
         "callback_events": [],
         "callback_event_count": 0,
@@ -1184,15 +1203,25 @@ def install_controlled_close_observation(context: Any, owner_pid: int | None = N
     def track_page(page: Any) -> None:
         token = id(page)
         state["tracked_pages"].add(token)
+        state["page_objects"][token] = page
         record_close_callback(state, "page")
         def on_close(_page: Any, page_token: int = token) -> None:
             state["closed_pages"].add(page_token)
             record_close_callback(state, "close")
-        def on_crash(_page: Any) -> None:
+        def on_crash(_page: Any, page_token: int = token) -> None:
             state["crashed"] = True
+            state["unresolved_crashes"].add(page_token)
+            state["recovery_candidates"].discard(page_token)
             record_close_callback(state, "crash")
+        def on_load(_page: Any, page_token: int = token) -> None:
+            # Firefox owns Restore This Tab. This callback is only a candidate:
+            # the observer must verify the live same-page document separately.
+            if page_token in state["unresolved_crashes"]:
+                state["recovery_candidates"].add(page_token)
+                record_close_callback(state, "load_after_crash")
         page.on("close", on_close)
         page.on("crash", on_crash)
+        page.on("load", on_load)
 
     for page in context.pages:
         track_page(page)
@@ -1200,10 +1229,38 @@ def install_controlled_close_observation(context: Any, owner_pid: int | None = N
     return state
 
 
+def confirm_native_tab_recoveries(state: dict[str, Any]) -> None:
+    """Only the original, still-live page may clear its own crash after reload.
+
+    An unrelated new tab, focus event or elapsed time is never recovery proof.
+    Do not run Playwright calls from its synchronous event callback.
+    """
+    for token in tuple(state["recovery_candidates"]):
+        page = state["page_objects"].get(token)
+        if page is None or token in state["closed_pages"]:
+            continue
+        try:
+            if page.is_closed() or not page.url.startswith(("http://", "https://")):
+                continue
+            document = page.evaluate("({uri: document.documentURI, ready: document.readyState})")
+            if (not isinstance(document, dict)
+                or document.get("ready") != "complete"
+                or not isinstance(document.get("uri"), str)
+                or not document["uri"].startswith(("http://", "https://"))):
+                continue
+        except Exception:
+            # A closed/unresponsive tab, browser crash reporter or lost IPC can
+            # never turn an unresolved crash into a successful Cloud Save.
+            continue
+        state["unresolved_crashes"].discard(token)
+        state["recovery_candidates"].discard(token)
+        record_close_callback(state, "recovered")
+
+
 def controlled_close_candidate(
     state: dict[str, Any] | None, *, exit_wait_millis: int = 0
 ) -> bool:
-    if state is None or state["crashed"]:
+    if state is None or state.get("unresolved_crashes", state["crashed"]):
         return False
     tracked = state["tracked_pages"]
     if not tracked or tracked != state["closed_pages"]:
@@ -1281,6 +1338,7 @@ def observe_controlled_close(context: Any, state: dict[str, Any] | None) -> bool
     try:
         context.wait_for_event("page", timeout=100)
     except Exception as error:
+        confirm_native_tab_recoveries(state)
         # A timer expiry is normal when no new window opened. An expected browser close
         # can reject the pending wait after delivering page-close callbacks. All other
         # failures may be ignored ONLY if the positive non-crashed witness already exists;
@@ -1292,7 +1350,15 @@ def observe_controlled_close(context: Any, state: dict[str, Any] | None) -> bool
             # required. Crashes, nonzero exit, missing callback and unknown
             # Windows process state preserve the original exception.
             raise
-    return controlled_close_candidate(state)
+    confirm_native_tab_recoveries(state)
+    controlled = controlled_close_candidate(state)
+    native_exit = state.get("browser_exit")
+    if not controlled and native_exit is not None and native_exit.has_exited():
+        # The exact held native browser handle has exited, yet normal Close
+        # (or recovery from a crash) was not proved. Stop heartbeating forever:
+        # Bridge must retain unsaved Firefox files and report a terminal error.
+        raise RuntimeContractError("Native Camoufox exited without verified close")
+    return controlled
 
 
 def materialize_candidate_identity(root: Path) -> dict[str, str]:

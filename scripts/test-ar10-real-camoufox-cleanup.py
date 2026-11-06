@@ -151,6 +151,9 @@ def prove_controlled_close_dispatch_contract(runtime: ModuleType) -> None:
         def safely_exited(self) -> bool:
             return False
 
+        def has_exited(self) -> bool:
+            return False
+
     exited_without_normal_status = Page()
     context = Context([exited_without_normal_status])
     witness = runtime.install_controlled_close_observation(context)
@@ -165,6 +168,72 @@ def prove_controlled_close_dispatch_contract(runtime: ModuleType) -> None:
     witness = runtime.install_controlled_close_observation(context)
     context.next_observation = lambda: (crashed.fire("crash"), crashed.fire("close"))
     assert not runtime.observe_controlled_close(context, witness)
+
+    class RestoredPage(Page):
+        def __init__(self) -> None:
+            super().__init__()
+            self.url = "https://example.invalid/restore"
+            self.document_uri = "about:tabcrashed"
+
+        def is_closed(self) -> bool:
+            return False
+
+        def evaluate(self, script: str) -> dict[str, str]:
+            assert "document.documentURI" in script
+            return {"uri": self.document_uri, "ready": "complete"}
+
+    # Firefox's crash reporter is not a recovered document, even if a load
+    # event is reported. The page must be the exact original crashed page.
+    recoverable, unrelated = RestoredPage(), RestoredPage()
+    context = Context([recoverable, unrelated])
+    witness = runtime.install_controlled_close_observation(context)
+    context.next_observation = lambda: recoverable.fire("crash")
+    observed_crash = io.StringIO()
+    with contextlib.redirect_stderr(observed_crash):
+        assert not runtime.observe_controlled_close(context, witness)
+    assert observed_crash.getvalue() == (
+        "camouhost_page_event kind=crash tracked=2 unresolved=1\n"
+    ), "browser crash callback did not emit a safe immediate witness"
+    context.next_observation = lambda: unrelated.fire("load")
+    assert not runtime.observe_controlled_close(context, witness)
+    context.next_observation = lambda: recoverable.fire("load")
+    assert not runtime.observe_controlled_close(context, witness), (
+        "native crash reporter became a false recovery witness"
+    )
+    recoverable.document_uri = recoverable.url
+    context.next_observation = lambda: None
+    observed_recovery = io.StringIO()
+    with contextlib.redirect_stderr(observed_recovery):
+        assert not runtime.observe_controlled_close(context, witness)
+    assert observed_recovery.getvalue() == (
+        "camouhost_page_event kind=recovered tracked=2 unresolved=0\n"
+    ), "same-page verified restore did not emit a safe recovery witness"
+    assert not witness["unresolved_crashes"], "same-page verified load did not clear crash"
+    assert witness["crashed"], "historical crash evidence was erased"
+    context.next_observation = lambda: (recoverable.fire("close"), unrelated.fire("close"))
+    assert runtime.observe_controlled_close(context, witness), (
+        "native restored tab and normal full-context close failed to save"
+    )
+
+    # An exited native browser with incomplete callbacks or an unresolved crash
+    # must not make Bridge heartbeat forever. It is a typed terminal failure.
+    class ExitedRoot:
+        def safely_exited(self) -> bool:
+            return False
+
+        def has_exited(self) -> bool:
+            return True
+
+    stopped = Page()
+    context = Context([stopped])
+    witness = runtime.install_controlled_close_observation(context)
+    witness["browser_exit"] = ExitedRoot()
+    try:
+        runtime.observe_controlled_close(context, witness)
+    except runtime.RuntimeContractError:
+        pass
+    else:
+        raise AssertionError("exited root without page close kept infinite heartbeat")
 
     unexpected = Page()
     context = Context([unexpected])
@@ -605,6 +674,27 @@ try:
         item["name"]: item["value"] for item in context.cookies([origin])
         if item["name"] in expected_cookies
     }
+    # Native Firefox must retain not only the values but also each cookie's
+    # absolute site-compatible expiry. A session-only cookie with the same
+    # value is not an equivalent recovered authenticated session.
+    cookie_metadata_before = {
+        item["name"]: {
+            "expires": item["expires"],
+            "sameSite": item["sameSite"],
+            "secure": item["secure"],
+            "httpOnly": item["httpOnly"],
+        }
+        for item in context.cookies([origin])
+        if item["name"] in expected_cookies
+    }
+    assert set(cookie_metadata_before) == set(expected_cookies)
+    assert all(
+        item["expires"] >= time.time() + 3000
+        and item["sameSite"] == "Lax"
+        and not item["secure"]
+        and not item["httpOnly"]
+        for item in cookie_metadata_before.values()
+    ), "native initial cookie attributes or persistent expiry are missing"
     visible_before = first.evaluate("document.cookie")
     assert actual_before == expected_cookies, (
         "same-context context.add_cookies failed immediate cookie readback: "
@@ -629,6 +719,20 @@ try:
     assert reopened_cookies == expected_cookies, (
         "packaged native full-process reopen did not retain valid cookies: "
         f"initial_urls={initial_urls!r}, retained_names={sorted(reopened_cookies)}"
+    )
+    reopened_metadata = {
+        item["name"]: {
+            "expires": item["expires"],
+            "sameSite": item["sameSite"],
+            "secure": item["secure"],
+            "httpOnly": item["httpOnly"],
+        }
+        for item in context.cookies([origin])
+        if item["name"] in expected_cookies
+    }
+    assert reopened_metadata == cookie_metadata_before, (
+        "native Firefox changed cookie expiration or attributes on cold reopen: "
+        f"names={sorted(reopened_metadata)}"
     )
     # Firefox SessionStore restores windows asynchronously on Windows. Wait
     # for the existing native pages; never synthesize pages on the second launch.
@@ -721,11 +825,24 @@ try:
     assert cookies_after_selective_close == expected_cookies, (
         "closing a window/tab unexpectedly removed persistent origin cookies"
     )
+    final_metadata = {
+        item["name"]: {
+            "expires": item["expires"],
+            "sameSite": item["sameSite"],
+            "secure": item["secure"],
+            "httpOnly": item["httpOnly"],
+        }
+        for item in context.cookies([origin])
+        if item["name"] in expected_cookies
+    }
+    assert final_metadata == cookie_metadata_before, (
+        "native Firefox changed cookie expiry or attributes after a selective tab close"
+    )
 finally:
     runtime.close_context(manager, context, root)
 print(
     "two previous tabs restored; intentionally closed tab remains closed; "
-    "persistent same-origin storage and cookies retained", flush=True
+    "persistent same-origin storage, cookie expiry and attributes retained", flush=True
 )
 """
     try:
@@ -753,7 +870,7 @@ print(
             diagnostics.seek(0, os.SEEK_END)
             diagnostics.seek(max(0, diagnostics.tell() - 2400))
             tail = diagnostics.read()
-            if result != 0 or "persistent same-origin storage and cookies retained" not in output.read():
+            if result != 0 or "persistent same-origin storage, cookie expiry and attributes retained" not in output.read():
                 raise AssertionError(
                     "real native Firefox tab restoration not proven: "
                     f"rc={result} diagnostic_tail={tail!r}"
@@ -1948,8 +2065,38 @@ sys.exit(5)
             raise AssertionError("workspace cleanup replaced the original failure")
 
 
+def prove_shipping_agent_build_boundary() -> None:
+    """Release Bridge must never publish an implicit in-browser Python runner."""
+    source = (Path(__file__).resolve().parents[1]
+              / "apps/profile-bridge/src/camouhost_process.rs").read_text(encoding="utf-8")
+    assert 'let test_agent_enabled = cfg!(any(test, feature = "synthetic-test-bin", debug_assertions));' in source
+    assert 'test_agent_enabled.then_some(diagnostic_directory.as_path())' in source
+    assert 'state.agent_directory = test_agent_enabled.then_some(diagnostic_directory);' in source
+    assert 'if let Some(directory) = agent_directory {' in source
+    # This source check supplements compilation of the release path; it is not
+    # an authority to run scripts from any ordinary installed browser profile.
+
+
+def prove_disposable_managed_site_probe_contract() -> None:
+    """Optional VK compatibility check must remain an offline-testable fixture.
+
+    Browser launch and external public-site navigation are NOT run by CI.
+    The shipped Bridge must never import or execute this diagnostic script.
+    """
+    path = Path(__file__).resolve().with_name("probe-camoufox-managed-site.py")
+    spec = importlib.util.spec_from_file_location("crm_managed_site_probe", path)
+    assert spec is not None and spec.loader is not None
+    probe = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(probe)
+    probe.assert_self_test()
+    assert set(probe.URLS) == {"vk", "example"}
+    assert probe.main(["--self-test"]) == 0
+
+
 def main() -> int:
     prove_failure_observation_contract()
+    prove_shipping_agent_build_boundary()
+    prove_disposable_managed_site_probe_contract()
     if sys.argv[1:] == ["--self-test"]:
         print("Camouhost failure phase, primary outcome and bounded cleanup proof passed.")
         return 0

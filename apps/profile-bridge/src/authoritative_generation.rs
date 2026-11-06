@@ -8,18 +8,22 @@ use crate::generation_reopen::{
     GenerationReopenControlPort,
 };
 use crate::generation_snapshot::{
-    GenerationSnapshotError, StreamedWorkspaceSnapshot,
+    GenerationSnapshotError, StreamedWorkspaceSnapshot, WorkspaceSnapshotReader,
     materialize_workspace_snapshot_streaming_with_pre_publish,
     materialize_workspace_snapshot_with_pre_publish, verify_workspace_matches_snapshot,
+    verify_workspace_matches_streamed_snapshot,
 };
-use crate::local_profile::{BridgeWorkspaceLock, LocalProfileError, MaterializationRoot};
+use crate::local_profile::{
+    BridgeWorkspaceLock, GenerationWorkspace, LocalProfileError, MaterializationRoot,
+};
 use encrypted_generation_domain::{
     canonical_generation_object_key, inspect_generation_metadata_prelude, open_generation_expected,
     open_generation_streaming,
 };
 use profile_platform_primitives::{DeviceId, GenerationId, ProfileId, TenantId};
+use sha2::{Digest, Sha256};
 use std::fs::{self, OpenOptions};
-use std::io::{Seek, SeekFrom};
+use std::io::{Read, Seek, SeekFrom};
 
 const LOWER_HEX: &[u8; 16] = b"0123456789abcdef";
 
@@ -148,6 +152,8 @@ where
     D: GenerationObjectDownloadPort,
     D::Error: Into<GenerationObjectDownloadError>,
 {
+    #[cfg(windows)]
+    let local_evidence_started = std::time::Instant::now();
     let incomplete_local = match root.open_generation(tenant_id, profile_id, generation_id) {
         Ok(workspace) => {
             match load_materialization_binding(&workspace, tenant_id, profile_id, generation_id) {
@@ -161,6 +167,11 @@ where
                             AuthoritativeGenerationMaterializationError::InvalidLocalEvidence,
                         );
                     }
+                    #[cfg(windows)]
+                    eprintln!(
+                        "bridge_open_subphase name=ready_local_reuse elapsed_ms={}",
+                        local_evidence_started.elapsed().as_millis()
+                    );
                     return Ok(());
                 }
                 Err(BrowserLaunchBlocker::LocalProfile(LocalProfileError::Io(
@@ -183,6 +194,11 @@ where
         Err(_) => return Err(AuthoritativeGenerationMaterializationError::Local),
     };
 
+    #[cfg(windows)]
+    eprintln!(
+        "bridge_open_subphase name=cloud_materialization_needed elapsed_ms={}",
+        local_evidence_started.elapsed().as_millis()
+    );
     let capability = control
         .download_capability(tenant_id, profile_id)
         .map_err(|error| {
@@ -245,25 +261,26 @@ where
         ".pending-r2-{}",
         encode_sha256(capability.container_digest())
     ));
-    let stream = if incomplete_local.is_none() {
-        downloader
-            .download_generation_object_to_new_pending_file(&capability, &staged_ciphertext_path)
-    } else {
-        Ok(None)
-    }
-    .map_err(|error| {
-        prewrite_refusal(AuthoritativeGenerationPreWriteError::Download(error.into()))
-    })?;
+    // Stream the exact ciphertext also when the existing local workspace lacks
+    // only its host-local binding. Legacy Vec is reserved for non-stream ports.
+    let stream = downloader
+        .download_generation_object_to_new_pending_file(&capability, &staged_ciphertext_path)
+        .map_err(|error| {
+            prewrite_refusal(AuthoritativeGenerationPreWriteError::Download(error.into()))
+        })?;
     if let Some(ciphertext) = stream {
         return materialize_streamed_authoritative_generation(
             root,
             tenant_id,
             profile_id,
             generation_id,
+            device_id,
+            workspace_epoch,
             control,
             &capability,
             ciphertext,
             &staged_ciphertext_path,
+            incomplete_local,
         );
     }
 
@@ -551,6 +568,9 @@ pub struct HistoricalColdProbeObservation {
     source_container_sha256: String,
     runtime_inventory_sha256: String,
     materialized_inventory_digest: u64,
+    /// Independent SHA-256 of the exact native Firefox BPGW files read back
+    /// from the cold-restored workspace BEFORE Camoufox can mutate them.
+    native_cold_snapshot_sha256: String,
     /// Bounded original metadata, not a DEK or reusable bearer.
     opening_prelude: Vec<u8>,
 }
@@ -565,6 +585,7 @@ impl core::fmt::Debug for HistoricalColdProbeObservation {
             .field("container_digest", &"[REDACTED]")
             .field("runtime_digest", &"[REDACTED]")
             .field("materialized_inventory_digest", &"[REDACTED]")
+            .field("native_cold_snapshot_sha256", &"[REDACTED]")
             .field("authorization", &"NONE")
             .finish()
     }
@@ -610,6 +631,48 @@ impl HistoricalColdProbeObservation {
     pub fn opening_prelude(&self) -> &[u8] {
         &self.opening_prelude
     }
+
+    #[must_use]
+    pub fn native_cold_snapshot_sha256(&self) -> &str {
+        &self.native_cold_snapshot_sha256
+    }
+}
+
+/// Re-read actual restored Firefox files, not a fingerprint/ready diagnostic.
+/// The original immutable encrypted BPGC metadata was sealed before Save;
+/// this independent 64-KiB bounded readback proves every native byte, including
+/// SessionStore, cookie expiry, SQLite WAL, localStorage and IndexedDB, survived
+/// R2 recovery without creating a second browser data serializer.
+fn verified_native_cold_snapshot_sha256(
+    restored: &GenerationWorkspace,
+    original_prelude: &[u8],
+) -> Result<String, HistoricalColdProbeError> {
+    let inspected = inspect_generation_metadata_prelude(original_prelude)
+        .map_err(|_| HistoricalColdProbeError::BrowserStateNotVerified)?;
+    if inspected.prelude_bytes() != original_prelude.len() {
+        return Err(HistoricalColdProbeError::BrowserStateNotVerified);
+    }
+    let inventory = restored
+        .inventory()
+        .map_err(|_| HistoricalColdProbeError::BrowserStateNotVerified)?;
+    let mut reader = WorkspaceSnapshotReader::new(restored, &inventory)
+        .map_err(|_| HistoricalColdProbeError::BrowserStateNotVerified)?;
+    let mut sha = Sha256::new();
+    let mut block = [0_u8; 65_536];
+    loop {
+        let size = reader
+            .read(&mut block)
+            .map_err(|_| HistoricalColdProbeError::BrowserStateNotVerified)?;
+        if size == 0 {
+            break;
+        }
+        sha.update(&block[..size]);
+    }
+    let actual: [u8; 32] = sha.finalize().into();
+    if actual != inspected.metadata().plaintext_digest().bytes() {
+        return Err(HistoricalColdProbeError::BrowserStateNotVerified);
+    }
+    Ok(actual.iter().map(|byte| format!("{byte:02x}")).collect())
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -689,6 +752,11 @@ where
             BridgeWorkspaceLock::acquire(&historical, lease.device_id(), lease.epoch())
                 .map_err(|_| Error::WorkspaceLock)?;
         let outcome = (|| {
+            // The sole source of a positive content witness is a fresh,
+            // independent full native-byte readback under the historical lock.
+            // Ordinary profile Open does not perform this extra pass.
+            let native_cold_snapshot_sha256 =
+                verified_native_cold_snapshot_sha256(&historical, &historical_opening_prelude)?;
             preflight
                 .evaluate_before_launch(
                     &historical,
@@ -815,6 +883,7 @@ where
                 current_generation_id: current_id.clone(),
                 predecessor_generation_id: historical_id,
                 source_container_sha256: binding.source_container_sha256().to_owned(),
+                native_cold_snapshot_sha256,
                 runtime_inventory_sha256: runtime_bundle
                     .manifest()
                     .inventory_sha256()
@@ -895,10 +964,13 @@ fn materialize_streamed_authoritative_generation<C>(
     tenant_id: &TenantId,
     profile_id: &ProfileId,
     generation_id: &GenerationId,
+    device_id: &DeviceId,
+    workspace_epoch: u64,
     control: &mut C,
     capability: &crate::generation_reopen::GenerationDownloadCapability,
     mut ciphertext: VerifiedGenerationObjectFile,
     ciphertext_path: &std::path::Path,
+    incomplete_local: Option<GenerationWorkspace>,
 ) -> Result<(), AuthoritativeGenerationMaterializationError>
 where
     C: GenerationReopenControlPort,
@@ -906,11 +978,28 @@ where
 {
     use AuthoritativeGenerationMaterializationError as Error;
     use AuthoritativeGenerationPreWriteError as PreWrite;
+    // Do not return an "absent local generation" clean-release witness when
+    // Firefox files already exist but the host-only materialization sidecar
+    // is missing. The ordinary Vec fallback already enforces this boundary.
+    let prewrite = |reason: PreWrite| {
+        if incomplete_local.is_none() {
+            Error::ReadBeforeLocalUse(reason)
+        } else {
+            match reason {
+                PreWrite::DescriptorMismatch => Error::DescriptorMismatch,
+                PreWrite::Download(error) => Error::Download(error),
+                PreWrite::MetadataMismatch => Error::MetadataMismatch,
+                PreWrite::OpeningControl(error) => Error::ControlPlane(error),
+                PreWrite::OpeningMaterialMismatch => Error::OpeningMaterialMismatch,
+                PreWrite::Decryption => Error::Decryption,
+            }
+        }
+    };
     let prelude = ciphertext
         .read_descriptor_verified_metadata_prelude()
-        .map_err(|_| Error::ReadBeforeLocalUse(PreWrite::MetadataMismatch))?;
+        .map_err(|_| prewrite(PreWrite::MetadataMismatch))?;
     let inspected = inspect_generation_metadata_prelude(&prelude)
-        .map_err(|_| Error::ReadBeforeLocalUse(PreWrite::MetadataMismatch))?;
+        .map_err(|_| prewrite(PreWrite::MetadataMismatch))?;
     let metadata = inspected.metadata();
     if metadata.tenant_id() != tenant_id
         || metadata.profile_id() != profile_id
@@ -919,13 +1008,13 @@ where
             != canonical_generation_object_key(tenant_id, profile_id, generation_id)
         || inspected.metadata_digest().bytes() != capability.metadata_digest()
     {
-        return Err(Error::ReadBeforeLocalUse(PreWrite::MetadataMismatch));
+        return Err(prewrite(PreWrite::MetadataMismatch));
     }
     let key = control
         .opening_material(tenant_id, profile_id, &prelude)
-        .map_err(|reason| Error::ReadBeforeLocalUse(PreWrite::OpeningControl(reason.into())))?;
+        .map_err(|reason| prewrite(PreWrite::OpeningControl(reason.into())))?;
     if key.key_id() != metadata.key_id() {
-        return Err(Error::ReadBeforeLocalUse(PreWrite::OpeningMaterialMismatch));
+        return Err(prewrite(PreWrite::OpeningMaterialMismatch));
     }
     let plaintext_path = root.path().join(format!(
         ".pending-bpgw-{}",
@@ -938,53 +1027,85 @@ where
         .open(&plaintext_path)
         .map_err(|_| Error::Local)?;
     let report = open_generation_streaming(ciphertext.reader(), &key, &mut plaintext)
-        .map_err(|_| Error::ReadBeforeLocalUse(PreWrite::Decryption))?;
+        .map_err(|_| prewrite(PreWrite::Decryption))?;
     if report.metadata() != metadata
         || report.metadata_digest().bytes() != capability.metadata_digest()
         || report.container_digest().bytes() != capability.container_digest()
         || report.container_bytes() != capability.container_bytes()
     {
-        return Err(Error::ReadBeforeLocalUse(PreWrite::Decryption));
+        return Err(prewrite(PreWrite::Decryption));
     }
     ciphertext
         .recheck_and_rewind()
-        .map_err(|_| Error::ReadBeforeLocalUse(PreWrite::Decryption))?;
+        .map_err(|_| prewrite(PreWrite::Decryption))?;
     plaintext.sync_all().map_err(|_| Error::Local)?;
     if plaintext.metadata().map_err(|_| Error::Local)?.len() != metadata.plaintext_bytes() {
-        return Err(Error::ReadBeforeLocalUse(PreWrite::Decryption));
+        return Err(prewrite(PreWrite::Decryption));
     }
     plaintext
         .seek(SeekFrom::Start(0))
         .map_err(|_| Error::Local)?;
     let digest = encode_sha256(capability.container_digest());
-    let outcome = materialize_workspace_snapshot_streaming_with_pre_publish(
-        root,
-        tenant_id,
-        profile_id,
-        generation_id,
-        &mut plaintext,
-        StreamedWorkspaceSnapshot {
-            plaintext_bytes: metadata.plaintext_bytes(),
-            plaintext_digest: metadata.plaintext_digest().bytes(),
-        },
-        |workspace| {
+    if let Some(workspace) = incomplete_local {
+        // No original native bytes may be replaced. Recover just the sidecar
+        // after exact decrypted BPGW equality under the existing OS writer lock.
+        let lock = BridgeWorkspaceLock::acquire(&workspace, device_id, workspace_epoch)
+            .map_err(|_| Error::IncompleteLocalEvidence)?;
+        let verified = (|| {
+            if !matches!(browser_writer_locks_absent(&workspace), Ok(true)) {
+                return Err(Error::IncompleteLocalEvidence);
+            }
+            verify_workspace_matches_streamed_snapshot(
+                &workspace,
+                &mut plaintext,
+                StreamedWorkspaceSnapshot {
+                    plaintext_bytes: metadata.plaintext_bytes(),
+                    plaintext_digest: metadata.plaintext_digest().bytes(),
+                },
+            )
+            .map_err(|_| Error::IncompleteLocalEvidence)?;
             restore_materialization_binding_after_authoritative_open(
-                workspace,
+                &workspace,
                 tenant_id,
                 profile_id,
                 generation_id,
                 &digest,
             )
-            .map(|_| ())
-            .map_err(|_| GenerationSnapshotError::PrePublish)
-        },
-    )
-    .map_err(|error| match error {
-        GenerationSnapshotError::Local(_) => Error::Local,
-        GenerationSnapshotError::PrePublish => Error::BrowserIdentity,
-        _ => Error::Snapshot,
-    });
-    outcome?;
+            .map_err(|_| Error::InvalidLocalEvidence)?;
+            Ok(())
+        })();
+        let released = lock.release().map_err(|_| Error::InvalidLocalEvidence);
+        verified?;
+        released?;
+    } else {
+        materialize_workspace_snapshot_streaming_with_pre_publish(
+            root,
+            tenant_id,
+            profile_id,
+            generation_id,
+            &mut plaintext,
+            StreamedWorkspaceSnapshot {
+                plaintext_bytes: metadata.plaintext_bytes(),
+                plaintext_digest: metadata.plaintext_digest().bytes(),
+            },
+            |workspace| {
+                restore_materialization_binding_after_authoritative_open(
+                    workspace,
+                    tenant_id,
+                    profile_id,
+                    generation_id,
+                    &digest,
+                )
+                .map(|_| ())
+                .map_err(|_| GenerationSnapshotError::PrePublish)
+            },
+        )
+        .map_err(|error| match error {
+            GenerationSnapshotError::Local(_) => Error::Local,
+            GenerationSnapshotError::PrePublish => Error::BrowserIdentity,
+            _ => Error::Snapshot,
+        })?;
+    }
     // Only after the full AEAD tag + BPGW + browser binding are verified and
     // the canonical workspace is published may the two owned scratch files
     // be retired. Failure to remove one prevents a false Clean terminal.
@@ -1468,6 +1589,192 @@ mod tests {
         );
         fixture.cleanup();
         crate::test_support::remove_test_root(&path)?;
+        Ok(())
+    }
+
+    #[test]
+    fn streamed_binding_repair_preserves_exact_native_files_without_vec()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let fixture = Fixture::new()?;
+        let mut control = fixture.control();
+        let mut download = FakeStreamDownloader {
+            container: fixture.container.clone(),
+            calls: 0,
+        };
+        let device = DeviceId::parse("device_binding_repair_stream")?;
+        ensure_authoritative_generation(
+            &fixture.root,
+            &fixture.tenant_id,
+            &fixture.profile_id,
+            &fixture.generation_id,
+            &device,
+            1,
+            &mut control,
+            &mut download,
+        )?;
+        let workspace = fixture.root.open_generation(
+            &fixture.tenant_id,
+            &fixture.profile_id,
+            &fixture.generation_id,
+        )?;
+        let sidecar = workspace
+            .path()
+            .parent()
+            .ok_or_else(|| std::io::Error::other("missing generation parent"))?
+            .join(format!(
+                ".{}.materialization",
+                fixture.generation_id.as_str()
+            ));
+        fs::remove_file(&sidecar)?;
+        ensure_authoritative_generation(
+            &fixture.root,
+            &fixture.tenant_id,
+            &fixture.profile_id,
+            &fixture.generation_id,
+            &device,
+            2,
+            &mut control,
+            &mut download,
+        )?;
+        assert_eq!(download.calls, 2);
+        assert!(
+            load_materialization_binding(
+                &workspace,
+                &fixture.tenant_id,
+                &fixture.profile_id,
+                &fixture.generation_id
+            )
+            .is_ok()
+        );
+        assert_eq!(
+            fs::read(workspace.path().join("user_data/storage/state.bin"))?,
+            b"authoritative-state"
+        );
+        fixture.cleanup();
+        Ok(())
+    }
+
+    #[test]
+    fn streamed_binding_repair_refusal_never_claims_local_workspace_absence()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let fixture = Fixture::new()?;
+        let mut control = fixture.control();
+        let mut download = FakeStreamDownloader {
+            container: fixture.container.clone(),
+            calls: 0,
+        };
+        let device = DeviceId::parse("device_binding_repair_control_refusal")?;
+        ensure_authoritative_generation(
+            &fixture.root,
+            &fixture.tenant_id,
+            &fixture.profile_id,
+            &fixture.generation_id,
+            &device,
+            1,
+            &mut control,
+            &mut download,
+        )?;
+        let workspace = fixture.root.open_generation(
+            &fixture.tenant_id,
+            &fixture.profile_id,
+            &fixture.generation_id,
+        )?;
+        let sidecar = workspace
+            .path()
+            .parent()
+            .ok_or_else(|| std::io::Error::other("missing generation parent"))?
+            .join(format!(
+                ".{}.materialization",
+                fixture.generation_id.as_str()
+            ));
+        fs::remove_file(&sidecar)?;
+        control.opening_error = Some(GenerationReopenControlError::Transport);
+        let outcome = ensure_authoritative_generation(
+            &fixture.root,
+            &fixture.tenant_id,
+            &fixture.profile_id,
+            &fixture.generation_id,
+            &device,
+            2,
+            &mut control,
+            &mut download,
+        );
+        assert_eq!(
+            outcome,
+            Err(AuthoritativeGenerationMaterializationError::ControlPlane(
+                GenerationReopenControlError::Transport
+            ))
+        );
+        assert!(matches!(
+            outcome,
+            Err(reason) if !reason.proves_no_local_write_and_absent_workspace()
+        ));
+        assert!(!sidecar.exists());
+        assert_eq!(
+            fs::read(workspace.path().join("user_data/storage/state.bin"))?,
+            b"authoritative-state"
+        );
+        fixture.cleanup();
+        Ok(())
+    }
+
+    #[test]
+    fn streamed_binding_repair_rejects_changed_native_bytes_without_sidecar()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let fixture = Fixture::new()?;
+        let mut control = fixture.control();
+        let mut download = FakeStreamDownloader {
+            container: fixture.container.clone(),
+            calls: 0,
+        };
+        let device = DeviceId::parse("device_binding_repair_negative")?;
+        ensure_authoritative_generation(
+            &fixture.root,
+            &fixture.tenant_id,
+            &fixture.profile_id,
+            &fixture.generation_id,
+            &device,
+            1,
+            &mut control,
+            &mut download,
+        )?;
+        let workspace = fixture.root.open_generation(
+            &fixture.tenant_id,
+            &fixture.profile_id,
+            &fixture.generation_id,
+        )?;
+        let sidecar = workspace
+            .path()
+            .parent()
+            .ok_or_else(|| std::io::Error::other("missing generation parent"))?
+            .join(format!(
+                ".{}.materialization",
+                fixture.generation_id.as_str()
+            ));
+        fs::remove_file(&sidecar)?;
+        fs::write(
+            workspace.path().join("user_data/storage/state.bin"),
+            b"changed",
+        )?;
+        assert_eq!(
+            ensure_authoritative_generation(
+                &fixture.root,
+                &fixture.tenant_id,
+                &fixture.profile_id,
+                &fixture.generation_id,
+                &device,
+                2,
+                &mut control,
+                &mut download,
+            ),
+            Err(AuthoritativeGenerationMaterializationError::IncompleteLocalEvidence)
+        );
+        assert!(!sidecar.exists());
+        assert_eq!(
+            fs::read(workspace.path().join("user_data/storage/state.bin"))?,
+            b"changed"
+        );
+        fixture.cleanup();
         Ok(())
     }
 

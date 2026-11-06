@@ -153,6 +153,7 @@ pub trait GenerationReopenControlPort {
 
     /// The server may persist a receipt ONLY for a completed real-browser
     /// historical probe. Default mocks reject it; a hash is never authority.
+    #[allow(clippy::too_many_arguments)]
     fn certify_verified_predecessor_working(
         &mut self,
         _tenant_id: &TenantId,
@@ -161,6 +162,8 @@ pub trait GenerationReopenControlPort {
         _historical: &GenerationId,
         _opening_prelude: &[u8],
         _runtime_inventory_sha256: &str,
+        _native_snapshot_sha256: &str,
+        _native_browser_witness_sha256: &str,
     ) -> Result<bool, Self::Error> {
         Ok(false)
     }

@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
-"""#802 K2: executable guarded D1 historical WORKING proof receipt.
+"""#802 K2: immutable historical metadata receipts and safe runtime gate.
 
-The caller-side real Camoufox, old-root and runtime proofs are separate.
-This SQL accepts only their scoped immutable metadata and grants NO prune.
+The synthetic D1 SQL fixture exercises schema integrity and historical
+selection semantics. Production cannot select these metadata-only records
+as LKG or R2 pruning authority until a reviewed native data proof exists.
 """
 from __future__ import annotations
 
@@ -15,6 +16,7 @@ FIXTURE = ROOT / "scripts/test-device-generation-commit-d1.py"
 STREAM = ROOT / "migrations/d1-successor-v2/0037_generation_streaming_container_limit.sql"
 WORKING = ROOT / "migrations/d1-successor-v2/0038_profile_generation_working_proof.sql"
 RETIREMENT = ROOT / "migrations/d1-successor-v2/0039_profile_generation_retirement_guard.sql"
+NATIVE = ROOT / "migrations/d1-successor-v2/0040_native_browser_recovery_proof.sql"
 
 
 def insert(conn: sqlite3.Connection, fx: dict, **changes: object) -> None:
@@ -53,12 +55,62 @@ def rejected(conn: sqlite3.Connection, fx: dict, **changes: object) -> None:
 
 
 def main() -> int:
+    # Existing identity-only probe must never certify. Only the explicitly
+    # selected staging cold-probe path may present an original encrypted
+    # native snapshot SHA plus the validated real-browser witness.
+    operator = (ROOT / "apps/profile-bridge/src/operator_flow.rs").read_text(
+        encoding="utf-8"
+    )
+    assert "pub fn probe_and_certify_verified_predecessor_once" in operator
+    assert "certify_verified_predecessor_working(" in operator
+    assert "observation.native_cold_snapshot_sha256()" in operator
+    native = (ROOT / "apps/profile-bridge/src/authoritative_generation.rs").read_text(encoding="utf-8")
+    assert "verified_native_cold_snapshot_sha256" in native
+    assert "WorkspaceSnapshotReader::new(restored, &inventory)" in native
+    assert "actual != inspected.metadata().plaintext_digest().bytes()" in native
+    shipping = (ROOT / "apps/profile-bridge/src/shipping_composition.rs").read_text(
+        encoding="utf-8"
+    )
+    assert "R2_PRUNE_AUTHORITY=PROVED_NATIVE_CONTENT" in shipping
+    worker = (
+        ROOT / "apps/control-plane-worker/src/profile_generation_successor_ingress.rs"
+    ).read_text(encoding="utf-8")
+    assert "exact_restored_native_digest(" in worker
+    assert "exact_restored_native_digest(" in worker
+    assert "body.native_browser_witness_sha256()," in worker
+    route_start = worker.index("async fn dispatch_working_proof(")
+    route_end = worker.index("async fn retire_one_old_generation(", route_start)
+    handler = worker[route_start:route_end]
+    assert handler.index("historical_browser_content_certification_implemented") < handler.index(
+        "request.json::<BridgeGenerationWorkingProofRequest>()"
+    )
+    assert handler.index("exact_restored_native_digest(") < handler.index(
+        ".record_historical_working_proof("
+    )
+    d1 = (
+        ROOT / "crates/cloudflare-adapters/src/d1_profile_generation_successor.rs"
+    ).read_text(encoding="utf-8")
+    assert "native_snapshot_sha256 IS NOT NULL" in d1
+    assert "native_browser_witness_sha256 IS NOT NULL" in d1
+    assert "valid_native_proof_digest(native_snapshot_sha256)" in d1
+    assert "valid_native_proof_digest(native_browser_witness_sha256)" in d1
+    assert "native_snapshot_sha256 != native_browser_witness_sha256" in d1
+    assert "JOIN profile_generation_working_proofs AS proof" in d1
+    # Schema0040 old rows must be NULL, always excluded from reserve/prune.
+    migration = NATIVE.read_text(encoding="utf-8")
+    assert "retirement_requires_native_cold_recovery_proof" in migration
+    assert "native_snapshot_sha256 IS NULL" in migration
+    assert "working_requires_exact_restored_native_bytes" in migration
+
+    # The SQL fixture below tests historical schema integrity only. A direct
+    # synthetic insert is NOT a working-browser certificate or pruning permit.
     fx = runpy.run_path(str(FIXTURE))
     conn = fx["seed"]()
     try:
         conn.executescript(STREAM.read_text(encoding="utf-8"))
         conn.executescript(WORKING.read_text(encoding="utf-8"))
         conn.executescript(RETIREMENT.read_text(encoding="utf-8"))
+        conn.executescript(NATIVE.read_text(encoding="utf-8"))
         assert not conn.execute("SELECT 1 FROM profile_generation_working_proofs").fetchone()
         rejected(conn, fx)  # no committed CURRENT N+1 yet
         fx["insert_device_commit"](conn, fx["command_values"]())
@@ -72,7 +124,10 @@ def main() -> int:
         rejected(conn, fx, observed_by_device_id="device_foreign_history")
         rejected(conn, fx, root_key_id="unsafe/root/key")
         assert fx["catalog_snapshot"](conn) == baseline
-        insert(conn, fx)
+        rejected(conn, fx, native_snapshot_sha256="BAD", native_browser_witness_sha256="b" * 64)
+        rejected(conn, fx, native_snapshot_sha256="a" * 64, native_browser_witness_sha256="UPPER" * 13)
+        rejected(conn, fx, native_snapshot_sha256="a" * 64, native_browser_witness_sha256="b" * 64)
+        insert(conn, fx, native_snapshot_sha256="a" * 64, native_browser_witness_sha256="a" * 64)
         conn.commit()
         assert conn.execute("SELECT COUNT(*) FROM profile_generation_working_proofs").fetchone()[0] == 1
         # Execute the exact Rust D1 loader SQL against the real governed
@@ -152,7 +207,26 @@ def main() -> int:
             conn.execute("SELECT COUNT(*) FROM profile_generation_successor_commands").fetchone()[0],
         ) == before_review, "prune review must never mutate D1"
         assert conn.execute("PRAGMA foreign_key_check").fetchall() == []
-        print("K2 governed, append-only historical proof persists across CURRENT changes; no prune PASS")
+        # A metadata-only schema0038 receipt in a fresh fixture must remain
+        # permanently ineligible even when CURRENT, object digests and ACL pass.
+        legacy = fx["seed"]()
+        try:
+            for migration_file in (STREAM, WORKING, RETIREMENT):
+                legacy.executescript(migration_file.read_text(encoding="utf-8"))
+            fx["insert_device_commit"](legacy, fx["command_values"]())
+            legacy.commit()
+            insert(legacy, fx)  # Genuine original metadata-only row from schema0038
+            legacy.commit()
+            # Migration must retain old receipts without making them prune permits.
+            # New writes require exact native-byte proof; old rows stay NULL.
+            legacy.executescript(NATIVE.read_text(encoding="utf-8"))
+            assert legacy.execute(
+                working_query,
+                (fx["TENANT"], fx["PROFILE"], fx["CANDIDATE"], "e" * 64),
+            ).fetchone() is None
+        finally:
+            legacy.close()
+        print("K2 native C09 proof excludes legacy metadata-only receipts; no unsafe prune PASS")
     finally:
         conn.close()
     return 0

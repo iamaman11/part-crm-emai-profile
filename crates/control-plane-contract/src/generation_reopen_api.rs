@@ -24,6 +24,8 @@ pub struct BridgeGenerationWorkingProofRequest {
     predecessor_generation_id: String,
     metadata_prelude_hex: String,
     runtime_inventory_sha256: String,
+    native_snapshot_sha256: String,
+    native_browser_witness_sha256: String,
     coordinator_session_id: String,
     coordinator_fencing_token: String,
     coordinator_epoch: u64,
@@ -37,6 +39,8 @@ impl BridgeGenerationWorkingProofRequest {
         predecessor_generation_id: impl Into<String>,
         metadata_prelude_hex: impl Into<String>,
         runtime_inventory_sha256: impl Into<String>,
+        native_snapshot_sha256: impl Into<String>,
+        native_browser_witness_sha256: impl Into<String>,
         coordinator_session_id: impl Into<String>,
         coordinator_fencing_token: impl Into<String>,
         coordinator_epoch: u64,
@@ -46,6 +50,8 @@ impl BridgeGenerationWorkingProofRequest {
             predecessor_generation_id: predecessor_generation_id.into(),
             metadata_prelude_hex: metadata_prelude_hex.into(),
             runtime_inventory_sha256: runtime_inventory_sha256.into(),
+            native_snapshot_sha256: native_snapshot_sha256.into(),
+            native_browser_witness_sha256: native_browser_witness_sha256.into(),
             coordinator_session_id: coordinator_session_id.into(),
             coordinator_fencing_token: coordinator_fencing_token.into(),
             coordinator_epoch,
@@ -67,6 +73,14 @@ impl BridgeGenerationWorkingProofRequest {
     #[must_use]
     pub fn runtime_inventory_sha256(&self) -> &str {
         &self.runtime_inventory_sha256
+    }
+    #[must_use]
+    pub fn native_snapshot_sha256(&self) -> &str {
+        &self.native_snapshot_sha256
+    }
+    #[must_use]
+    pub fn native_browser_witness_sha256(&self) -> &str {
+        &self.native_browser_witness_sha256
     }
     #[must_use]
     pub fn coordinator_session_id(&self) -> &str {

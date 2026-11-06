@@ -868,12 +868,16 @@ where
         historical: &GenerationId,
         opening_prelude: &[u8],
         runtime_inventory_sha256: &str,
+        native_snapshot_sha256: &str,
+        native_browser_witness_sha256: &str,
     ) -> Result<bool, Self::Error> {
         let cursor = self.exact_reopen_cursor(tenant_id, profile_id)?;
         if current == historical
             || opening_prelude.is_empty()
             || opening_prelude.len() > MAX_GENERATION_METADATA_PRELUDE_BYTES
             || !is_lower_sha256(runtime_inventory_sha256)
+            || !is_lower_sha256(native_snapshot_sha256)
+            || !is_lower_sha256(native_browser_witness_sha256)
         {
             return Err(ShippingControlPlaneError::InvalidResponse);
         }
@@ -891,6 +895,8 @@ where
             historical.as_str(),
             encode_lower_hex(opening_prelude),
             runtime_inventory_sha256,
+            native_snapshot_sha256,
+            native_browser_witness_sha256,
             cursor.session_id.as_str(),
             cursor.fencing_token.as_str(),
             cursor.epoch,
@@ -1106,6 +1112,8 @@ impl<T: MachineHttpPort> GenerationReopenControlPort for SharedControlPlaneCoord
         historical: &GenerationId,
         opening_prelude: &[u8],
         runtime_inventory_sha256: &str,
+        native_snapshot_sha256: &str,
+        native_browser_witness_sha256: &str,
     ) -> Result<bool, Self::Error> {
         self.inner
             .lock()
@@ -1117,6 +1125,8 @@ impl<T: MachineHttpPort> GenerationReopenControlPort for SharedControlPlaneCoord
                 historical,
                 opening_prelude,
                 runtime_inventory_sha256,
+                native_snapshot_sha256,
+                native_browser_witness_sha256,
             )
     }
 }

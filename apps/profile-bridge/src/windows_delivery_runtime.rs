@@ -38,8 +38,8 @@ impl ActiveWindowsDeliveryRuntime {
         Self::resolve_current_with_stage_hashing(false)
     }
 
-    /// Only normal browser Open defers runtime content hashes to the selector.
-    /// Installer and delivery recovery keep the complete preflight.
+    /// Normal Open uses the identity of the already verified signed installation,
+    /// NOT a fresh 2.8 GiB SHA pass. Install/activation still fully verify bytes.
     pub(crate) fn resolve_for_browser_open() -> Result<Self, WindowsDeliveryRuntimeError> {
         Self::resolve_current_with_stage_hashing(true)
     }
@@ -47,6 +47,8 @@ impl ActiveWindowsDeliveryRuntime {
     fn resolve_current_with_stage_hashing(
         runtime_hashes_deferred: bool,
     ) -> Result<Self, WindowsDeliveryRuntimeError> {
+        #[cfg(windows)]
+        let layout_started = std::time::Instant::now();
         let current_executable = std::env::current_exe()
             .map_err(|_| WindowsDeliveryRuntimeError::InvalidInstalledLayout)?;
         let current_executable = fs::canonicalize(current_executable)
@@ -67,12 +69,26 @@ impl ActiveWindowsDeliveryRuntime {
             .cloned()
             .ok_or(WindowsDeliveryRuntimeError::NoActiveDelivery)?;
         let pending_health = pending_health_confirmation(&state, &layout.state_root, &active)?;
+        #[cfg(windows)]
+        if runtime_hashes_deferred {
+            eprintln!(
+                "bridge_open_phase name=delivery_layout_state elapsed_ms={}",
+                layout_started.elapsed().as_millis()
+            );
+        }
+        let stage_started = std::time::Instant::now();
         let staged = if runtime_hashes_deferred {
             reopen_staged_delivery_before_runtime_selection(&staging, &active)
         } else {
             reopen_staged_delivery(&staging, &active)
         }
         .map_err(|_| WindowsDeliveryRuntimeError::StagedDelivery)?;
+        if runtime_hashes_deferred {
+            eprintln!(
+                "bridge_open_phase name=delivery_stage_readback elapsed_ms={}",
+                stage_started.elapsed().as_millis()
+            );
+        }
 
         let staged_release = fs::canonicalize(staged.path())
             .map_err(|_| WindowsDeliveryRuntimeError::StagedDelivery)?;
@@ -90,11 +106,21 @@ impl ActiveWindowsDeliveryRuntime {
         }
 
         let runtime_root = staged.runtime_root();
+        #[cfg(windows)]
+        let bound_started = std::time::Instant::now();
         let bundles = DeliveryBoundRuntimeBundleSelection::open(
             runtime_root.clone(),
             active.runtime_bundle_release_id.clone(),
+            runtime_hashes_deferred,
         )
         .map_err(|_| WindowsDeliveryRuntimeError::RuntimeIdentity)?;
+        #[cfg(windows)]
+        if runtime_hashes_deferred {
+            eprintln!(
+                "bridge_open_phase name=delivery_bound_selector elapsed_ms={}",
+                bound_started.elapsed().as_millis()
+            );
+        }
         Ok(Self {
             runtime_root,
             verified_sequence: active.sequence,
@@ -324,12 +350,14 @@ fn exact_health_state(
 pub struct DeliveryBoundRuntimeBundleSelection {
     inner: FilesystemRuntimeBundleSelection,
     expected_release_id: String,
+    installed_fast_open: bool,
 }
 
 impl DeliveryBoundRuntimeBundleSelection {
     fn open(
         runtime_root: impl Into<PathBuf>,
         expected_release_id: String,
+        installed_fast_open: bool,
     ) -> Result<Self, RuntimeBundleSelectionError> {
         if !valid_runtime_release_id(&expected_release_id) {
             return Err(RuntimeBundleSelectionError::InvalidRuntime);
@@ -339,6 +367,7 @@ impl DeliveryBoundRuntimeBundleSelection {
         Ok(Self {
             inner,
             expected_release_id,
+            installed_fast_open,
         })
     }
 }
@@ -348,7 +377,11 @@ impl RuntimeBundleSelectionPort for DeliveryBoundRuntimeBundleSelection {
 
     fn select_bundle(&mut self) -> Result<ApprovedRuntimeBundle, Self::Error> {
         verify_embedded_release_id(self.inner.runtime_root(), &self.expected_release_id)?;
-        let bundle = self.inner.select_bundle()?;
+        let bundle = if self.installed_fast_open {
+            self.inner.load_installed_bundle()?
+        } else {
+            self.inner.select_bundle()?
+        };
         verify_embedded_release_id(self.inner.runtime_root(), &self.expected_release_id)?;
         Ok(bundle)
     }

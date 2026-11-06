@@ -77,3 +77,21 @@ all = "deny"
 expect_used = "deny"
 panic = "deny"
 unwrap_used = "deny"
+
+# CI's real multi-GiB runtime gate must hash and decompress *all* bytes.
+# Only accelerate the test profile's existing cryptographic/compression
+# primitives; production profiles and verification requirements are unchanged.
+[profile.test.package.sha2]
+opt-level = 3
+
+[profile.test.package.flate2]
+opt-level = 3
+
+[profile.test.package.miniz_oxide]
+opt-level = 3
+
+[profile.test.package.adler2]
+opt-level = 3
+
+[profile.test.package.crc32fast]
+opt-level = 3

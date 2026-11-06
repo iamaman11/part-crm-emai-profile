@@ -606,7 +606,7 @@ mod windows {
                 return Err(ShippingCompositionError::Configuration);
             }
         };
-        let result = operator.probe_verified_predecessor_once(
+        let result = operator.probe_and_certify_verified_predecessor_once(
             claim,
             &primary,
             &isolated,
@@ -666,17 +666,30 @@ mod windows {
             },
         )?;
         eprintln!(
-            "HISTORICAL_COLD_PROBE=BROWSER_IDENTITY_VERIFIED;WORKING_LKG_CERTIFICATE=0;R2_PRUNE_AUTHORITY=0"
+            "HISTORICAL_COLD_PROBE=VERIFIED_RESTORE;WORKING_LKG_CERTIFICATE=1;R2_PRUNE_AUTHORITY=PROVED_NATIVE_CONTENT"
         );
         Ok(())
     }
 
     pub fn run(claim: &ClaimUri) -> Result<(), ShippingCompositionError> {
+        #[cfg(windows)]
+        let preparation_started = std::time::Instant::now();
         if recover_delivery_before_claim()? {
             return Ok(());
         }
-
+        #[cfg(windows)]
+        eprintln!(
+            "bridge_open_phase name=delivery_recovery_readback elapsed_ms={}",
+            preparation_started.elapsed().as_millis()
+        );
+        #[cfg(windows)]
+        let config_started = std::time::Instant::now();
         let config = ShippingConfig::from_installation()?;
+        #[cfg(windows)]
+        eprintln!(
+            "bridge_open_phase name=installation_config elapsed_ms={}",
+            config_started.elapsed().as_millis()
+        );
         let active_delivery =
             ActiveWindowsDeliveryRuntime::resolve_for_browser_open().map_err(|error| {
                 eprintln!("BRIDGE_DELIVERY_RUNTIME_FAILURE={error:?}");
@@ -684,6 +697,7 @@ mod windows {
             })?;
         let (release_sequence, runtime_id) = active_delivery.observed_release_identity();
         report::record_runtime_identity(release_sequence, runtime_id);
+        let owner_setup_started = std::time::Instant::now();
         let pending_health = active_delivery.pending_health_confirmation();
         let runtime_root = active_delivery.runtime_root().to_path_buf();
         let runtime_bundles = active_delivery.into_bundle_selection();
@@ -736,6 +750,10 @@ mod windows {
             process,
             camouhost,
         );
+        eprintln!(
+            "bridge_open_phase name=owner_setup elapsed_ms={}",
+            owner_setup_started.elapsed().as_millis()
+        );
         let opened_at = now()?;
         let open_started = std::time::Instant::now();
         report::record_current(
@@ -748,6 +766,7 @@ mod windows {
         let mut pending_health = pending_health;
         let mut started_health = None;
         let mut prelaunch_keepalive = None;
+        let selection_started = std::time::Instant::now();
         let opening = operator
             .open_authoritative_with_runtime_health_and_pending_recovery(
                 claim,
@@ -935,6 +954,11 @@ mod windows {
                     recovered
                 },
             );
+        eprintln!(
+            "bridge_open_phase name=authoritative_open elapsed_ms={} completed={}",
+            selection_started.elapsed().as_millis(),
+            opening.is_ok(),
+        );
         // Always finish the heartbeat thread before observing its final
         // authority result. A slow or failed heartbeat cannot be ignored just
         // because the browser opened successfully in the foreground.

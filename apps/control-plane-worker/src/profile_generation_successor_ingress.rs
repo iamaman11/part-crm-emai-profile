@@ -65,27 +65,6 @@ const UPLOAD_CAPABILITY_EXPIRES_SECONDS: u32 = 300;
 const PROFILE_GENERATION_APPROVED_RUNTIME_INVENTORIES_VAR: &str =
     "PROFILE_GENERATION_APPROVED_RUNTIME_INVENTORIES";
 
-/// Temporary K2 staging fence: automatic R2 retirement may run only for one
-/// explicitly selected disposable canary profile. Omitted in normal release
-/// configuration; never grants a Production DELETE.
-const PROFILE_GENERATION_R2_PRUNE_CANARY_PROFILE_VAR: &str =
-    "PROFILE_GENERATION_R2_PRUNE_CANARY_PROFILE";
-const PROFILE_GENERATION_R2_PRUNE_CANARY_TENANT_VAR: &str =
-    "PROFILE_GENERATION_R2_PRUNE_CANARY_TENANT";
-
-fn staging_r2_prune_canary_scope(
-    environment: Option<&str>,
-    canary_tenant: Option<&str>,
-    canary_profile: Option<&str>,
-    actual_tenant: &str,
-    profile_id: &ProfileId,
-) -> bool {
-    environment == Some("staging")
-        && profile_id.as_str().starts_with("k2_canary_")
-        && canary_tenant == Some(actual_tenant)
-        && canary_profile == Some(profile_id.as_str())
-}
-
 /// No best-effort prefix matching, unknown versions, arbitrary lists or
 /// whitespace: the deployment's exact approved runtime artifacts are the
 /// source of truth, not the untrusted client-supplied certificate digest.
@@ -812,11 +791,30 @@ async fn dispatch_successor_retry_decision(
     Ok(response)
 }
 
-/// The only write admission for a historical real-browser WORKING receipt.
-/// Bridge invokes it after successful managed Camoufox observation, clean
-/// browser stop, unchanged local bytes and post-launch old-key reproof.
-/// Server independently resolves CURRENT/journal/R2 and rederives the old root.
-/// The D1 receipt is durable evidence, NOT a standalone R2 prune permit.
+/// Production code path for all tenant-owned profiles. Environment and
+/// actor admission are still checked; no filename, prefix or disposable
+/// canary determines whether a verified historical browser may be certified.
+fn historical_browser_content_certification_implemented(
+    env: &Env,
+    _actor: &ActorContext,
+    _profile_id: &ProfileId,
+    role: identity_access_domain::MembershipRole,
+) -> bool {
+    let environment = env.var("CANONICAL_ENVIRONMENT").ok().map(|v| v.to_string());
+    role == identity_access_domain::MembershipRole::TenantOwner
+        && matches!(environment.as_deref(), Some("staging" | "production"))
+}
+
+/// The restored-byte digest must be freshly observed by the official Bridge
+/// under native locks. A standalone fingerprint/ready hash is not authority.
+fn exact_restored_native_digest(original: &str, before: &str, restored: &str) -> bool {
+    lower_sha256(original) && before == original && restored == original
+}
+
+/// Historical WORKING route. Identity, R2, key and fence checks below are
+/// necessary but NOT sufficient evidence that native cookies, tabs and
+/// IndexedDB were actually restored. Never persist D1 WORKING merely from
+/// this metadata-only request, even when a client calls the endpoint directly.
 async fn dispatch_working_proof(
     request: &mut Request,
     env: &Env,
@@ -825,6 +823,12 @@ async fn dispatch_working_proof(
     device_id: &DeviceId,
     role: identity_access_domain::MembershipRole,
 ) -> Result<Response> {
+    // Client-side disabled calls do not protect this public machine route.
+    // This gate is checked before parsing claims or writing any WORKING D1
+    // receipt; no explicit canary or runtime allowlist may override it.
+    if !historical_browser_content_certification_implemented(env, actor, profile_id, role) {
+        return verification_conflict(actor.correlation_id().as_str());
+    }
     let body = match request.json::<BridgeGenerationWorkingProofRequest>().await {
         Ok(value) => value,
         Err(_) => return invalid_request(actor.correlation_id().as_str()),
@@ -904,6 +908,21 @@ async fn dispatch_working_proof(
         return version_conflict(actor.correlation_id().as_str());
     }
     let meta = inspected.metadata();
+    // Rust sealed this SHA over the complete native Firefox snapshot before
+    // R2 PUT. The independently cold restored snapshot must match this value.
+    let original_snapshot = meta
+        .plaintext_digest()
+        .bytes()
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect::<String>();
+    if !exact_restored_native_digest(
+        &original_snapshot,
+        body.native_snapshot_sha256(),
+        body.native_browser_witness_sha256(),
+    ) {
+        return verification_conflict(actor.correlation_id().as_str());
+    }
     let keyring = match generation_root_keyring(env) {
         Ok(value) => value,
         Err(_) => return integrity_failure(actor.correlation_id().as_str()),
@@ -932,6 +951,8 @@ async fn dispatch_working_proof(
             &descriptor,
             meta.key_id().as_str(),
             body.runtime_inventory_sha256(),
+            body.native_snapshot_sha256(),
+            body.native_browser_witness_sha256(),
             device_id,
             &session,
             body.coordinator_epoch(),
@@ -941,39 +962,21 @@ async fn dispatch_working_proof(
     {
         return object_verify_failure(actor.correlation_id().as_str(), error.class());
     }
-    // An existing signed R2 GET may still be in flight after its D1 grant
-    // is revoked. Until concurrent GET/DELETE is accepted, leave every real
-    // staging recovery copy untouched. Only an explicit disposable profile
-    // can exercise the existing D1 -> R2 canary path; Production is excluded.
-    let environment = env.var("CANONICAL_ENVIRONMENT").ok().map(|v| v.to_string());
-    let canary_profile = env
-        .var(PROFILE_GENERATION_R2_PRUNE_CANARY_PROFILE_VAR)
-        .ok()
-        .map(|v| v.to_string());
-    let canary_tenant = env
-        .var(PROFILE_GENERATION_R2_PRUNE_CANARY_TENANT_VAR)
-        .ok()
-        .map(|v| v.to_string());
-    if role == identity_access_domain::MembershipRole::TenantOwner
-        && staging_r2_prune_canary_scope(
-            environment.as_deref(),
-            canary_tenant.as_deref(),
-            canary_profile.as_deref(),
-            actor.tenant_scope().tenant_id().as_str(),
-            profile_id,
-        )
-        && retire_one_old_generation(
-            env,
-            actor,
-            profile_id,
-            device_id,
-            &current,
-            body.runtime_inventory_sha256(),
-            &session,
-            body.coordinator_epoch(),
-        )
-        .await
-        .is_err()
+    // The same signed device owner, CURRENT fence and exact certified native
+    // bytes govern both durable LKG and the single guarded R2 retirement.
+    // Failed/uncertain retirement retains its existing D1 intent for replay.
+    if retire_one_old_generation(
+        env,
+        actor,
+        profile_id,
+        device_id,
+        &current,
+        body.runtime_inventory_sha256(),
+        &session,
+        body.coordinator_epoch(),
+    )
+    .await
+    .is_err()
     {
         worker::console_warn!("K2_PRUNE_PENDING: cloud recovery copies retained");
     }
@@ -1844,8 +1847,8 @@ fn dependency(correlation_id: &str) -> Result<Response> {
 mod tests {
     use super::{
         BridgeGenerationMachineOperation, decode_bounded_lower_hex, decode_lower_sha256,
-        descriptor_shape_is_canonical, is_approved_working_runtime, operation,
-        staging_r2_prune_canary_scope, valid_stream_container_bytes,
+        descriptor_shape_is_canonical, exact_restored_native_digest, is_approved_working_runtime,
+        operation, valid_stream_container_bytes,
     };
     use encrypted_generation_domain::canonical_generation_object_key;
     use profile_platform_primitives::{
@@ -1968,55 +1971,31 @@ mod tests {
     }
 
     #[test]
-    fn automatic_r2_prune_is_limited_to_explicit_disposable_staging_profile()
-    -> Result<(), Box<dyn std::error::Error>> {
-        let selected = ProfileId::parse("k2_canary_01".to_owned())?;
-        let args = |environment, tenant, profile| {
-            staging_r2_prune_canary_scope(
-                environment,
-                tenant,
-                profile,
-                "tenant_canary_01",
-                &selected,
-            )
-        };
-        assert!(!args(None, None, None));
-        assert!(!args(Some("staging"), None, Some("k2_canary_01")));
-        assert!(!args(Some("staging"), Some("tenant_canary_01"), None));
-        assert!(!args(
-            Some("production"),
-            Some("tenant_canary_01"),
-            Some("k2_canary_01")
+    fn working_requires_same_immutable_before_and_cold_restored_native_bytes() {
+        let original = "a".repeat(64);
+        assert!(exact_restored_native_digest(
+            &original, &original, &original
         ));
-        assert!(!args(
-            Some("staging"),
-            Some("tenant_other"),
-            Some("k2_canary_01")
+        assert!(!exact_restored_native_digest(
+            &original,
+            &"b".repeat(64),
+            &original
         ));
-        assert!(!args(
-            Some("staging"),
-            Some("tenant_canary_01"),
-            Some("profile_other")
+        assert!(!exact_restored_native_digest(
+            &original,
+            &original,
+            &"b".repeat(64)
         ));
-        assert!(!args(
-            Some("staging"),
-            Some("tenant_canary_01"),
-            Some("k2_canary_01 ")
+        assert!(!exact_restored_native_digest(
+            &original,
+            &original,
+            &"A".repeat(64)
         ));
-        assert!(args(
-            Some("staging"),
-            Some("tenant_canary_01"),
-            Some("k2_canary_01")
+        assert!(!exact_restored_native_digest(
+            "not-sha256",
+            &original,
+            &original
         ));
-        let ordinary = ProfileId::parse("profile_ordinary_01".to_owned())?;
-        assert!(!staging_r2_prune_canary_scope(
-            Some("staging"),
-            Some("tenant_canary_01"),
-            Some("profile_ordinary_01"),
-            "tenant_canary_01",
-            &ordinary,
-        ));
-        Ok(())
     }
 
     #[test]

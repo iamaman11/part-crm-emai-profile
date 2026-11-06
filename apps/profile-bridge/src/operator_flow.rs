@@ -888,6 +888,65 @@ where
         Dl::Error: Into<GenerationObjectDownloadError>,
         V: FnMut() -> Result<(), ()>,
     {
+        self.probe_verified_predecessor_inner(
+            claim,
+            primary,
+            isolated,
+            downloader,
+            now,
+            observe_browser_state,
+            false,
+        )
+    }
+
+    /// C09 production proof using the existing cold restore and native Firefox
+    /// owner; no extra browser process or serialization path is introduced.
+    #[allow(clippy::too_many_arguments)]
+    pub fn probe_and_certify_verified_predecessor_once<Dl, V>(
+        &mut self,
+        claim: &ClaimUri,
+        primary: &MaterializationRoot,
+        isolated: &MaterializationRoot,
+        downloader: &mut Dl,
+        now: UnixMillis,
+        observe_browser_state: &mut V,
+    ) -> Result<HistoricalColdProbeObservation, OperatorFlowError>
+    where
+        C: GenerationReopenControlPort,
+        <C as GenerationReopenControlPort>::Error: Into<GenerationReopenControlError>,
+        Dl: GenerationObjectDownloadPort,
+        Dl::Error: Into<GenerationObjectDownloadError>,
+        V: FnMut() -> Result<(), ()>,
+    {
+        self.probe_verified_predecessor_inner(
+            claim,
+            primary,
+            isolated,
+            downloader,
+            now,
+            observe_browser_state,
+            true,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn probe_verified_predecessor_inner<Dl, V>(
+        &mut self,
+        claim: &ClaimUri,
+        primary: &MaterializationRoot,
+        isolated: &MaterializationRoot,
+        downloader: &mut Dl,
+        now: UnixMillis,
+        observe_browser_state: &mut V,
+        certify_working: bool,
+    ) -> Result<HistoricalColdProbeObservation, OperatorFlowError>
+    where
+        C: GenerationReopenControlPort,
+        <C as GenerationReopenControlPort>::Error: Into<GenerationReopenControlError>,
+        Dl: GenerationObjectDownloadPort,
+        Dl::Error: Into<GenerationObjectDownloadError>,
+        V: FnMut() -> Result<(), ()>,
+    {
         if self.cleanup_blocked {
             return Err(OperatorFlowError::CleanupRequired);
         }
@@ -949,22 +1008,52 @@ where
             &mut self.camouhost,
             observe_browser_state,
         );
-        // The original Coordinator/Bridge keep the same live fence until
-        // the D1 owner has durably acknowledged the real-browser proof.
-        // If unknown/rejected, release Uncertain and never claim WORKING.
-        let observed = match observed {
-            Ok(observation) => match self.coordinator.certify_verified_predecessor_working(
-                observation.tenant_id(),
-                observation.profile_id(),
-                observation.current_generation_id(),
-                observation.predecessor_generation_id(),
-                observation.opening_prelude(),
-                observation.runtime_inventory_sha256(),
-            ) {
-                Ok(true) => Ok(observation),
-                _ => Err(HistoricalColdProbeError::PostLaunchAuthorityUnconfirmed),
-            },
-            Err(error) => Err(error),
+        // The original native user_data snapshot SHA was sealed into the
+        // immutable encrypted generation BEFORE R2 PUT. Cold recovery already
+        // verified the same SHA/AEAD, real Camoufox ran and closed cleanly,
+        // and the original CURRENT fence/old key were reauthorized.
+        // An identity-only probe NEVER certifies: the explicit stage proof
+        // additionally requires the observed managed Firefox IPC witness.
+        let certified = if let Ok(observation) = &observed {
+            if !certify_working {
+                true // Non-certifying maintenance checks never write D1 WORKING.
+            } else {
+                let inspected = encrypted_generation_domain::inspect_generation_metadata_prelude(
+                    observation.opening_prelude(),
+                );
+                if let Ok(metadata) = inspected {
+                    let original = metadata
+                        .metadata()
+                        .plaintext_digest()
+                        .bytes()
+                        .iter()
+                        .map(|byte| format!("{byte:02x}"))
+                        .collect::<String>();
+                    // Actual restored native bytes (not the SHA of Firefox
+                    // fingerprint diagnostics) must match immutable pre-Save
+                    // BPGC metadata before any WORKING/DELETE admission.
+                    if observation.native_cold_snapshot_sha256() != original {
+                        false
+                    } else {
+                        self.coordinator
+                            .certify_verified_predecessor_working(
+                                observation.tenant_id(),
+                                observation.profile_id(),
+                                observation.current_generation_id(),
+                                observation.predecessor_generation_id(),
+                                observation.opening_prelude(),
+                                observation.runtime_inventory_sha256(),
+                                &original,
+                                observation.native_cold_snapshot_sha256(),
+                            )
+                            .unwrap_or(false)
+                    }
+                } else {
+                    false
+                }
+            }
+        } else {
+            false
         };
         let release_failed = if observed.is_ok() {
             self.coordinator
@@ -983,7 +1072,11 @@ where
             self.cleanup_blocked = true;
         }
         match observed {
-            Ok(observation) if !release_failed => Ok(observation),
+            Ok(observation) if !release_failed && certified => Ok(observation),
+            Ok(_) if !release_failed => Err(OperatorFlowError::HistoricalProbe {
+                reason: HistoricalColdProbeError::PostLaunchAuthorityUnconfirmed,
+                cleanup,
+            }),
             Ok(_) => Err(OperatorFlowError::CleanupRequired),
             Err(reason) => Err(OperatorFlowError::HistoricalProbe { reason, cleanup }),
         }
@@ -1047,13 +1140,24 @@ where
             return Err(OperatorFlowError::Busy);
         }
         self.last_terminal = None;
+        #[cfg(windows)]
+        let admission_started = std::time::Instant::now();
 
-        // Verify installed bytes before creating any short-lived authenticated launch intent.
-        // Exact generation/runtime compatibility is still enforced by browser_preflight below.
+        // Read the exact verified installed Release Set before any authenticated
+        // claim. Ordinary Open checks layout and critical launch bytes, without
+        // rehashing every official Firefox font; a full audit remains at install.
+        // Generation/runtime compatibility remains the browser_preflight owner.
         let runtime_bundle = self
             .runtime_bundles
             .select_bundle()
             .map_err(|_| OperatorFlowError::Stage(OperatorFailureStage::RuntimeBundle))?;
+        #[cfg(windows)]
+        eprintln!(
+            "bridge_open_phase name=runtime_integrity elapsed_ms={}",
+            admission_started.elapsed().as_millis()
+        );
+        #[cfg(windows)]
+        let device_key_started = std::time::Instant::now();
         let device_id = self
             .device_identity
             .device_id()
@@ -1062,9 +1166,23 @@ where
             .device_keys
             .ensure_key_handle(&device_id)
             .map_err(|_| OperatorFlowError::Stage(OperatorFailureStage::DeviceKey))?;
+        #[cfg(windows)]
+        eprintln!(
+            "bridge_open_subphase name=device_key elapsed_ms={}",
+            device_key_started.elapsed().as_millis()
+        );
+        #[cfg(windows)]
+        let device_auth_started = std::time::Instant::now();
         self.device_authentication
             .authenticate(&device_id, &key_handle)
             .map_err(|_| OperatorFlowError::Stage(OperatorFailureStage::DeviceAuthentication))?;
+        #[cfg(windows)]
+        eprintln!(
+            "bridge_open_subphase name=device_authentication elapsed_ms={}",
+            device_auth_started.elapsed().as_millis()
+        );
+        #[cfg(windows)]
+        let enrollment_started = std::time::Instant::now();
         let enrollment = self
             .enrollment
             .redeem_claim(claim, &device_id, now)
@@ -1077,6 +1195,13 @@ where
                     OperatorFlowError::Stage(OperatorFailureStage::Enrollment)
                 }
             })?;
+        #[cfg(windows)]
+        eprintln!(
+            "bridge_open_subphase name=enrollment_claim elapsed_ms={}",
+            enrollment_started.elapsed().as_millis()
+        );
+        #[cfg(windows)]
+        let coordinator_started = std::time::Instant::now();
         let lease = self
             .coordinator
             .claim_launch_intent(
@@ -1094,6 +1219,16 @@ where
             return Err(self.fail_before_local_use(OperatorFailureStage::LeaseValidation, lease));
         }
 
+        #[cfg(windows)]
+        eprintln!(
+            "bridge_open_subphase name=coordinator_claim elapsed_ms={}",
+            coordinator_started.elapsed().as_millis()
+        );
+        #[cfg(windows)]
+        eprintln!(
+            "bridge_open_phase name=authenticated_claim elapsed_ms={}",
+            admission_started.elapsed().as_millis()
+        );
         // One session-scoped keepalive also spans blocking local/cloud Open
         // materialization and real Camoufox startup, not only a pending Save.
         // It shares this exact verified cursor and is owned by composition.
@@ -1227,6 +1362,8 @@ where
             }
         }
 
+        #[cfg(windows)]
+        let materialization_started = std::time::Instant::now();
         if !native_rescue_required
             && let Err(reason) = ensure_materialized(
                 &mut self.coordinator,
@@ -1266,6 +1403,13 @@ where
             return Err(OperatorFlowError::AuthoritativeGeneration { reason, cleanup });
         }
 
+        #[cfg(windows)]
+        eprintln!(
+            "bridge_open_phase name=authoritative_materialization elapsed_ms={}",
+            materialization_started.elapsed().as_millis()
+        );
+        #[cfg(windows)]
+        let native_admission_started = std::time::Instant::now();
         let workspace = match root.open_generation(
             enrollment.actor().tenant_scope().tenant_id(),
             enrollment.profile_id(),
@@ -1312,6 +1456,8 @@ where
                 return Err(self.fail_before_local_use(OperatorFailureStage::LocalWorkspace, lease));
             }
         };
+        #[cfg(windows)]
+        let preflight_started = std::time::Instant::now();
         if let Err(error) = self.browser_preflight.evaluate_before_launch(
             &workspace,
             &device_id,
@@ -1326,6 +1472,11 @@ where
                 &workspace,
             ));
         }
+        #[cfg(windows)]
+        eprintln!(
+            "bridge_open_subphase name=browser_preflight elapsed_ms={}",
+            preflight_started.elapsed().as_millis()
+        );
         if native_rescue_required {
             #[cfg(any(windows, test))]
             if begin_native_rescue_edit(root, &workspace, &lease).is_err() {
@@ -1344,6 +1495,8 @@ where
                 &workspace,
             ));
         }
+        #[cfg(windows)]
+        let inventory_started = std::time::Instant::now();
         let inventory = match workspace.inventory() {
             Ok(value) => value,
             Err(_) => {
@@ -1355,6 +1508,11 @@ where
                 ));
             }
         };
+        #[cfg(windows)]
+        eprintln!(
+            "bridge_open_subphase name=workspace_inventory elapsed_ms={}",
+            inventory_started.elapsed().as_millis()
+        );
         // Only this exact boundary may consume pending delivery health. The runtime has
         // not been spawned or allowed to mutate the workspace at this point.
         if before_runtime_start().is_err() {
@@ -1379,6 +1537,13 @@ where
             ));
         }
 
+        #[cfg(windows)]
+        eprintln!(
+            "bridge_open_phase name=native_admission elapsed_ms={}",
+            native_admission_started.elapsed().as_millis()
+        );
+        #[cfg(windows)]
+        let browser_started = std::time::Instant::now();
         if let Err(source) = RuntimeSessionOrchestrator::launch(
             &runtime_bundle,
             lease.session_id(),
@@ -1399,6 +1564,11 @@ where
             });
         }
 
+        #[cfg(windows)]
+        eprintln!(
+            "bridge_open_phase name=managed_browser_launch elapsed_ms={}",
+            browser_started.elapsed().as_millis()
+        );
         self.active = Some(ActiveOperatorSession {
             lease,
             workspace_lock: Some(workspace_lock),

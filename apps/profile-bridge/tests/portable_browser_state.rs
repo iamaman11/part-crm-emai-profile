@@ -54,6 +54,7 @@ mod p3_fixture {
         cookie: bool,
         local_storage: bool,
         indexed_db: bool,
+        state_digest: String,
     }
 
     struct PortableStateOrigin {
@@ -126,7 +127,7 @@ mod p3_fixture {
             &self,
             expected_phase: &str,
             expected_visit: u32,
-        ) -> Result<(), Box<dyn std::error::Error>> {
+        ) -> Result<String, Box<dyn std::error::Error>> {
             let line = self
                 .reports
                 .recv_timeout(std::time::Duration::from_secs(30))
@@ -141,6 +142,12 @@ mod p3_fixture {
                 || !observed.cookie
                 || !observed.local_storage
                 || !observed.indexed_db
+                || observed.state_digest.len() != 64
+                || !observed
+                    .state_digest
+                    .bytes()
+                    .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
+                || observed.state_digest.bytes().all(|b| b == b'0')
             {
                 return Err(format!(
                     "portable browser-state observation failed: phase={} visit={} cookie={} local_storage={} indexed_db={}",
@@ -152,7 +159,7 @@ mod p3_fixture {
                 )
                 .into());
             }
-            Ok(())
+            Ok(observed.state_digest)
         }
     }
 
@@ -440,7 +447,7 @@ mod p3_fixture {
         let first_claim =
             ClaimUri::parse("profilebridge://claim/claim_s0_browser_state_first_000001")?;
         operator.open_authoritative(&first_claim, &root, &mut downloader, UnixMillis::new(10))?;
-        origin.expect("seed", 1)?;
+        let expected_native_state_digest = origin.expect("seed", 1)?;
         assert_eq!(
             operator.active_local_state(),
             Some(LocalGenerationState::InUse)
@@ -495,7 +502,11 @@ mod p3_fixture {
         let second_claim =
             ClaimUri::parse("profilebridge://claim/claim_s0_browser_state_second_000002")?;
         operator.open_authoritative(&second_claim, &root, &mut downloader, UnixMillis::new(40))?;
-        origin.expect("verify", 2)?;
+        assert_eq!(
+            origin.expect("verify", 2)?,
+            expected_native_state_digest,
+            "native cookie/LS/IndexedDB values changed across encrypted Save and R2 restore"
+        );
         let reopened = root.open_generation(&tenant_id, &profile_id, &successor)?;
         let restored_binding = crate::browser_execution::load_materialization_binding(
             &reopened,
@@ -634,7 +645,13 @@ mod p3_fixture {
             &historical_root,
             &mut historical_download,
             UnixMillis::new(70),
-            &mut || origin.expect("verify", 3).map_err(|_| ()),
+            &mut || {
+                let observed = origin.expect("verify", 3).map_err(|_| ())?;
+                if observed != expected_native_state_digest {
+                    return Err(());
+                }
+                Ok(())
+            },
         )?;
         assert_eq!(restored.predecessor_generation_id(), &successor);
         assert_eq!(restored.current_generation_id(), &current);
@@ -715,18 +732,23 @@ mod p3_fixture {
                 2,
                 "old root must remain derivable after the real historical Camoufox closes"
             );
+            // The exact native cookie/LS/IndexedDB value digest captured
+            // before Save also matched the independently cold N-1 Firefox
+            // readback. The signed R2 bytes, old key, generation identity
+            // and CURRENT fence were checked at their existing owners.
+            // This is ONLY disposable same-origin acceptance evidence; it does
+            // NOT produce a reusable authenticated, server-verifiable witness
+            // for arbitrary historical profiles. Never confuse the historical
+            // identity probe with a D1 WORKING certificate.
             assert_eq!(
                 events
                     .iter()
                     .filter(|e| e.starts_with("historical-working-proof:"))
                     .count(),
-                1,
-                "D1 receipt may be requested only after verified real browser stop"
+                0,
+                "identity-only historical probe must not request D1 WORKING"
             );
-            assert_eq!(
-                state_ref.historical_working_proof.as_deref(),
-                Some(successor.as_str())
-            );
+            assert_eq!(state_ref.historical_working_proof, None);
             assert!(!events.iter().any(|e| e.contains("historical-commit")));
             assert!(
                 events.iter().any(|e| e == "coordinator:release:Clean"),
@@ -793,7 +815,13 @@ mod p3_fixture {
             &mut stale_preflight,
             &mut stale_process,
             &mut stale_camouhost,
-            &mut || origin.expect("verify", 4).map_err(|_| ()),
+            &mut || {
+                let observed = origin.expect("verify", 4).map_err(|_| ())?;
+                if observed != expected_native_state_digest {
+                    return Err(());
+                }
+                Ok(())
+            },
         );
         assert!(matches!(
             stale,
@@ -848,7 +876,10 @@ mod p3_fixture {
             &mut lost_process,
             &mut lost_camouhost,
             &mut || {
-                origin.expect("verify", 5).map_err(|_| ())?;
+                let observed = origin.expect("verify", 5).map_err(|_| ())?;
+                if observed != expected_native_state_digest {
+                    return Err(());
+                }
                 state.borrow_mut().historical_root_available = false;
                 Ok(())
             },

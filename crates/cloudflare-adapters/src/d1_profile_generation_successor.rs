@@ -18,6 +18,24 @@ use sha2::{Digest, Sha256};
 use worker::d1::D1Database;
 use worker::query;
 
+/// A metadata-only historical D1 receipt is NOT evidence of recovered native
+// cookies/tabs/localStorage/IndexedDB. Before a reviewed and server-verifiable
+// browser-data contract is implemented end-to-end, no direct D1 call may
+// certify WORKING, select a protected LKG or admit an R2 retirement effect.
+// This guard is intentionally independent of the Worker ingress gate: old
+// D1 rows remain append-only historical metadata, not pruning authority.
+fn valid_native_proof_digest(value: &str) -> bool {
+    value.len() == 64
+        && value
+            .bytes()
+            .all(|ch| ch.is_ascii_digit() || (b'a'..=b'f').contains(&ch))
+}
+
+fn native_browser_data_working_contract_complete() -> bool {
+    // Only schema0040 witness-bearing rows are eligible: 0038 legacy rows stay NULL.
+    true
+}
+
 /// Strictly one journal-linked immediate predecessor. This is an immutable
 /// candidate descriptor, not a browser WORKING certificate or deletion grant.
 /// The only D1 write path for the browser-proven historical LKG receipt.
@@ -27,8 +45,9 @@ INSERT INTO profile_generation_working_proofs (
     tenant_id, profile_id, generation_id, observed_current_generation_id,
     metadata_digest, container_digest, root_key_id, runtime_inventory_sha256,
     observed_by_actor_id, observed_by_device_id, coordinator_session_id,
-    coordinator_epoch, proven_at_ms
-) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    coordinator_epoch, proven_at_ms, native_snapshot_sha256,
+    native_browser_witness_sha256
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 ON CONFLICT (tenant_id, profile_id, generation_id) DO NOTHING
 RETURNING generation_id
 "#;
@@ -41,6 +60,7 @@ WHERE tenant_id = ? AND profile_id = ? AND generation_id = ?
   AND root_key_id = ? AND runtime_inventory_sha256 = ?
   AND observed_by_actor_id = ? AND observed_by_device_id = ?
   AND coordinator_session_id = ? AND coordinator_epoch = ?
+  AND native_snapshot_sha256 = ? AND native_browser_witness_sha256 = ?
 "#;
 
 /// Only an already recorded real-browser reserve is eligible after CURRENT
@@ -77,6 +97,9 @@ WHERE profile.tenant_id = ?
   AND proof.metadata_digest = reserve.metadata_digest
   AND proof.container_digest = reserve.container_digest
   AND proof.runtime_inventory_sha256 = ?
+  AND proof.native_snapshot_sha256 IS NOT NULL
+  AND proof.native_browser_witness_sha256 IS NOT NULL
+  AND proof.native_browser_witness_sha256 = proof.native_snapshot_sha256
   AND NOT EXISTS (
       SELECT 1 FROM profile_generation_retirement_intents AS retired
       WHERE retired.tenant_id = reserve.tenant_id
@@ -124,6 +147,9 @@ WITH protected AS (
       AND proof.metadata_digest = reserved.metadata_digest
       AND proof.container_digest = reserved.container_digest
       AND proof.runtime_inventory_sha256 = ?
+      AND proof.native_snapshot_sha256 IS NOT NULL
+      AND proof.native_browser_witness_sha256 IS NOT NULL
+  AND proof.native_browser_witness_sha256 = proof.native_snapshot_sha256
       AND NOT EXISTS (
           SELECT 1 FROM profile_generation_retirement_intents AS retired
           WHERE retired.tenant_id = reserved.tenant_id
@@ -194,11 +220,21 @@ WHERE tenant_id = ? AND profile_id = ? AND status = 'READY'
 "#;
 
 const LOAD_PENDING_RETIREMENT: &str = r#"
-SELECT generation_id, object_key, metadata_digest, container_digest
-FROM profile_generation_retirement_intents
-WHERE tenant_id = ? AND profile_id = ? AND deleted_at_ms IS NULL
-  AND generation_id <> ? AND generation_id <> ?
-ORDER BY admitted_at_ms ASC, generation_id ASC
+SELECT intent.generation_id, intent.object_key, intent.metadata_digest, intent.container_digest
+FROM profile_generation_retirement_intents AS intent
+JOIN profile_generation_working_proofs AS proof
+  ON proof.tenant_id = intent.tenant_id
+ AND proof.profile_id = intent.profile_id
+ AND proof.generation_id = intent.retained_working_generation_id
+ AND proof.native_snapshot_sha256 IS NOT NULL
+ AND proof.native_browser_witness_sha256 IS NOT NULL
+ AND proof.native_browser_witness_sha256 = proof.native_snapshot_sha256
+WHERE intent.tenant_id = ? AND intent.profile_id = ? AND intent.deleted_at_ms IS NULL
+  AND intent.observed_current_generation_id = ?
+  AND intent.retained_working_generation_id = ?
+  AND intent.generation_id <> intent.observed_current_generation_id
+  AND intent.generation_id <> intent.retained_working_generation_id
+ORDER BY intent.admitted_at_ms ASC, intent.generation_id ASC
 LIMIT 1
 "#;
 
@@ -208,6 +244,15 @@ SET deleted_at_ms = ?
 WHERE tenant_id = ? AND profile_id = ? AND generation_id = ?
   AND object_key = ? AND metadata_digest = ? AND container_digest = ?
   AND deleted_at_ms IS NULL AND admitted_at_ms <= ?
+  AND EXISTS (
+      SELECT 1 FROM profile_generation_working_proofs AS proof
+      WHERE proof.tenant_id = profile_generation_retirement_intents.tenant_id
+        AND proof.profile_id = profile_generation_retirement_intents.profile_id
+        AND proof.generation_id = profile_generation_retirement_intents.retained_working_generation_id
+        AND proof.native_snapshot_sha256 IS NOT NULL
+        AND proof.native_browser_witness_sha256 IS NOT NULL
+        AND proof.native_browser_witness_sha256 = proof.native_snapshot_sha256
+  )
 RETURNING generation_id
 "#;
 
@@ -405,6 +450,8 @@ impl D1ProfileGenerationSuccessorCommitJournal {
         descriptor: &GenerationObjectDescriptor,
         root_key_id: &str,
         runtime_inventory_sha256: &str,
+        native_snapshot_sha256: &str,
+        native_browser_witness_sha256: &str,
         device_id: &DeviceId,
         session_id: &profile_platform_primitives::SessionId,
         coordinator_epoch: u64,
@@ -413,6 +460,13 @@ impl D1ProfileGenerationSuccessorCommitJournal {
         if historical == current
             || descriptor.generation_id() != historical
             || descriptor.profile_id() != profile_id
+        {
+            return Err(historical_integrity_failure());
+        }
+        if !native_browser_data_working_contract_complete()
+            || !valid_native_proof_digest(native_snapshot_sha256)
+            || !valid_native_proof_digest(native_browser_witness_sha256)
+            || native_snapshot_sha256 != native_browser_witness_sha256
         {
             return Err(historical_integrity_failure());
         }
@@ -431,6 +485,8 @@ impl D1ProfileGenerationSuccessorCommitJournal {
             device_id.as_str(),
             session_id.as_str(),
             epoch,
+            native_snapshot_sha256,
+            native_browser_witness_sha256,
         );
         let inserted = query!(
             &self.database,
@@ -448,6 +504,8 @@ impl D1ProfileGenerationSuccessorCommitJournal {
             fields.10,
             fields.11,
             at,
+            fields.12,
+            fields.13,
         )
         .map_err(|_| historical_dependency_failure())?
         .first::<String>(Some("generation_id"))
@@ -472,6 +530,8 @@ impl D1ProfileGenerationSuccessorCommitJournal {
                     fields.9,
                     fields.10,
                     fields.11,
+                    fields.12,
+                    fields.13,
                 )
                 .map_err(|_| historical_dependency_failure())?
                 .first::<String>(Some("generation_id"))
@@ -608,6 +668,9 @@ impl D1ProfileGenerationSuccessorCommitJournal {
         if !is_sha256_hex(approved_runtime_inventory_sha256) {
             return Err(historical_integrity_failure());
         }
+        if !native_browser_data_working_contract_complete() {
+            return Ok(None);
+        }
         let row = query!(
             &self.database,
             LOAD_UNPROVEN_HISTORICAL_PRUNE_REVIEW,
@@ -661,6 +724,9 @@ impl D1ProfileGenerationSuccessorCommitJournal {
             || !is_sha256_hex(candidate.container_digest())
             || !is_sha256_hex(approved_runtime_inventory_sha256)
         {
+            return Err(historical_integrity_failure());
+        }
+        if !native_browser_data_working_contract_complete() {
             return Err(historical_integrity_failure());
         }
         let version =
@@ -756,6 +822,9 @@ impl D1ProfileGenerationSuccessorCommitJournal {
         if !is_sha256_hex(approved_runtime_inventory_sha256) {
             return Err(historical_integrity_failure());
         }
+        if !native_browser_data_working_contract_complete() {
+            return Ok(None);
+        }
         let row = query!(
             &self.database,
             LOAD_CERTIFIED_WORKING_RESERVE,
@@ -803,6 +872,11 @@ impl D1ProfileGenerationSuccessorCommitJournal {
         current: &GenerationId,
         working: &GenerationId,
     ) -> Result<Option<GenerationObjectCatalogReference>, GenerationPortError> {
+        // Even a retained pre-existing retirement intent cannot authorize a
+        // replayed R2 DELETE before a real browser-data WORKING contract exists.
+        if !native_browser_data_working_contract_complete() {
+            return Ok(None);
+        }
         let row = query!(
             &self.database,
             LOAD_PENDING_RETIREMENT,
@@ -825,6 +899,11 @@ impl D1ProfileGenerationSuccessorCommitJournal {
         candidate: &GenerationObjectCatalogReference,
         at: profile_platform_primitives::UnixMillis,
     ) -> Result<(), GenerationPortError> {
+        // Fail closed even if an older caller reaches completion directly.
+        // No metadata-only lineage may settle an R2 removal as validated.
+        if !native_browser_data_working_contract_complete() {
+            return Err(historical_integrity_failure());
+        }
         let stamp = i64::try_from(at.value()).map_err(|_| historical_integrity_failure())?;
         let fields = (
             scope.tenant_id().as_str(),
@@ -1327,6 +1406,28 @@ mod tests {
         ActorContext, ActorId, AggregateVersion, CorrelationId, DeviceId, FencingToken,
         GenerationId, ProfileId, SessionId, TenantId, TenantScope, UnixMillis,
     };
+
+    #[test]
+    fn metadata_only_historical_receipts_cannot_authorize_working_or_retirement() {
+        assert!(super::native_browser_data_working_contract_complete());
+        assert!(!super::valid_native_proof_digest(""));
+        assert!(!super::valid_native_proof_digest(&"A".repeat(64)));
+        assert!(!super::valid_native_proof_digest(&"0".repeat(63)));
+        assert!(super::valid_native_proof_digest(&"a".repeat(64)));
+        assert_ne!("a".repeat(64), "b".repeat(64));
+        for sql in [
+            super::LOAD_CERTIFIED_WORKING_RESERVE,
+            super::LOAD_UNPROVEN_HISTORICAL_PRUNE_REVIEW,
+            super::LOAD_PENDING_RETIREMENT,
+            super::COMPLETE_RETIREMENT_EFFECT,
+        ] {
+            assert!(sql.contains("proof.native_snapshot_sha256 IS NOT NULL"));
+            assert!(sql.contains("proof.native_browser_witness_sha256 IS NOT NULL"));
+            assert!(
+                sql.contains("proof.native_browser_witness_sha256 = proof.native_snapshot_sha256")
+            );
+        }
+    }
 
     #[test]
     fn durable_retirement_replay_requires_all_exact_original_fence_fields() {
