@@ -266,11 +266,20 @@ pub enum RuntimeDisplayMode {
     VirtualHeadful,
 }
 
+/// Normal Open and independent historical probe are distinct launch owners.
+/// Only the probe is allowed to use Playwright; user Open stays native.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum RuntimeExecutionOwner {
+    NativeUser,
+    IsolatedHistoricalProbe,
+}
+
 #[derive(Clone)]
 pub struct ManagedCamouhostConfig {
     python_executable: PathBuf,
     runtime_root: PathBuf,
     display_mode: RuntimeDisplayMode,
+    execution_owner: RuntimeExecutionOwner,
     initial_url: Option<String>,
     proxy_config_path: Option<PathBuf>,
 }
@@ -310,9 +319,19 @@ impl ManagedCamouhostConfig {
             python_executable,
             runtime_root,
             display_mode,
+            execution_owner: RuntimeExecutionOwner::NativeUser,
             initial_url,
             proxy_config_path,
         })
+    }
+
+    /// The only Playwright-enabled Windows maintenance operation uses a
+    /// separately materialized historical generation, never a live user one.
+    /// The caller still must supply the original one-time coordinator claim.
+    #[must_use]
+    pub fn for_isolated_historical_probe(mut self) -> Self {
+        self.execution_owner = RuntimeExecutionOwner::IsolatedHistoricalProbe;
+        self
     }
 }
 
@@ -359,6 +378,7 @@ pub struct ManagedCamouhostProcess {
 pub struct ManagedCamouhostIpc {
     shared: Arc<Mutex<ProcessState>>,
     display_mode: RuntimeDisplayMode,
+    execution_owner: RuntimeExecutionOwner,
 }
 
 #[derive(Clone)]
@@ -447,6 +467,7 @@ impl ManagedCamouhostProcess {
     ) -> (Self, ManagedCamouhostIpc) {
         let shared = Arc::new(Mutex::new(ProcessState::new()));
         let display_mode = config.display_mode;
+        let execution_owner = config.execution_owner;
         (
             Self {
                 shared: Arc::clone(&shared),
@@ -456,6 +477,7 @@ impl ManagedCamouhostProcess {
             ManagedCamouhostIpc {
                 shared,
                 display_mode,
+                execution_owner,
             },
         )
     }
@@ -526,7 +548,13 @@ impl ManagedCamouhostProcess {
         // after the existing signed bundle/config/lease preflight. The adapter
         // no longer opens or controls Playwright pages or browser network state.
         #[cfg(windows)]
-        command.env("CAMOUHOST_EXECUTION_MODE", "user-native");
+        command.env(
+            "CAMOUHOST_EXECUTION_MODE",
+            match self.config.execution_owner {
+                RuntimeExecutionOwner::NativeUser => "user-native",
+                RuntimeExecutionOwner::IsolatedHistoricalProbe => "isolated-cold-probe",
+            },
+        );
         // Non-Windows managed automation remains explicit for compatibility
         // with existing development fixtures; Windows user Open is native.
         #[cfg(not(windows))]
@@ -669,12 +697,9 @@ impl CamouhostPort for ManagedCamouhostIpc {
         match message {
             CamouhostMessage::Launch { session_id } => {
                 #[cfg(windows)]
-                {
-                    // The authoritative Rust preflight has already sealed the
-                    // exact local generation and writer claim before spawn.
-                    // Never run browser-visible JS or send a navigation command.
-                    // Native Camouhost Ready requires actual Firefox profile
-                    // lock acquisition; it is NOT a fingerprint-content proof.
+                if self.execution_owner == RuntimeExecutionOwner::NativeUser {
+                    // User Open is never attached to Playwright, does not inspect
+                    // a page and cannot be turned into an automation job.
                     let state = self.shared.lock()
                         .map_err(|_| BridgePortError::Unavailable)?;
                     if state.active_session.as_ref() != Some(session_id)
@@ -683,14 +708,13 @@ impl CamouhostPort for ManagedCamouhostIpc {
                         return Err(BridgePortError::InvalidResponse);
                     }
                     drop(state);
-                    exchange_shared(&self.shared, message)
+                    return exchange_shared(&self.shared, message);
                 }
-                #[cfg(not(windows))]
-                {
-                    launch_with_browser_visible_admission(
-                        &self.shared, self.display_mode, session_id
-                    )
-                }
+                // A one-time C09 probe is a distinct, isolated automation-owned
+                // browser context. Only that context may use SDK/Playwright.
+                launch_with_browser_visible_admission(
+                    &self.shared, self.display_mode, session_id
+                )
             }
             _ => exchange_shared(&self.shared, message),
         }
@@ -739,7 +763,6 @@ fn verify_managed_browser_visible_identity(
         .collect())
 }
 
-#[cfg(not(windows))]
 fn launch_with_browser_visible_admission(
     shared: &Arc<Mutex<ProcessState>>,
     display_mode: RuntimeDisplayMode,
