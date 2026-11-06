@@ -263,15 +263,18 @@ fn verify_runtime_files_with_workers(
     if workers == 1 {
         return expected.iter().map(verify_one).collect();
     }
+    // The signed runtime contains a few very large official font files and
+    // thousands of small files. Round-robin by manifest index leaves one
+    // worker doing disproportionately more full-file reads on every Open.
+    // Schedule the SAME full-byte verification by descending file size:
+    // no trust cache, skipped file, checksum change or background service.
+    let lanes = size_balanced_hash_lanes(expected, workers);
     std::thread::scope(|scope| {
         let mut handles = Vec::with_capacity(workers);
-        for lane in 0..workers {
+        for lane in lanes {
             let verify_one = &verify_one;
             handles.push(scope.spawn(move || {
-                expected
-                    .iter()
-                    .skip(lane)
-                    .step_by(workers)
+                lane.into_iter()
                     .map(verify_one)
                     .collect::<Result<Vec<_>, RuntimeBundleSelectionError>>()
             }));
@@ -296,6 +299,32 @@ fn verify_runtime_files_with_workers(
             Ok(verified)
         }
     })
+}
+
+// Plan only the order of work. The verifier below still reads and hashes every
+// exact file using the already approved immutable manifest. Keep scheduling
+// deterministic so one large font does not dominate a round-robin lane.
+fn size_balanced_hash_lanes(
+    expected: &[PackagedFileIdentity],
+    workers: usize,
+) -> Vec<Vec<&PackagedFileIdentity>> {
+    let mut largest_first: Vec<_> = expected.iter().collect();
+    largest_first.sort_unstable_by(|left, right| {
+        right
+            .size_bytes
+            .cmp(&left.size_bytes)
+            .then_with(|| left.path.cmp(&right.path))
+    });
+    let mut lanes = vec![Vec::new(); workers];
+    let mut loads = vec![0_u64; workers];
+    for file in largest_first {
+        let lane = (0..workers)
+            .min_by_key(|&index| loads[index])
+            .expect("worker count is checked before scheduling");
+        loads[lane] = loads[lane].saturating_add(file.size_bytes);
+        lanes[lane].push(file);
+    }
+    lanes
 }
 
 impl RuntimeBundleSelectionPort for FilesystemRuntimeBundleSelection {
@@ -500,7 +529,9 @@ fn sha256_regular_file(
         fs::File::open(path).map_err(|_| RuntimeBundleSelectionError::MissingRuntimeFile)?;
     let mut digest = Sha256::new();
     // Verification also runs on the Windows executable's 1 MiB main-thread stack.
-    let mut buffer = vec![0_u8; 64 * 1024];
+    // Heap buffer (not stack): fewer reads for the 2.8 GiB official runtime,
+    // still bounded to 1 MiB per worker and within the Windows 1 MiB PE stack.
+    let mut buffer = vec![0_u8; 1024 * 1024];
     let mut observed = 0_u64;
     loop {
         let read = file
@@ -833,7 +864,7 @@ mod tests {
         SHIPPING_COMPONENT_PLATFORM, SHIPPING_COMPONENT_RELEASE_PREFIX,
         SHIPPING_COMPONENT_SCHEMA_VERSION, SHIPPING_ENTRYPOINT, SHIPPING_PYTHON_EXECUTABLE,
         SHIPPING_RESOLVED_RUNTIME, SHIPPING_RUNTIME_LOCK, sha256_hex, sha256_regular_file,
-        verify_runtime_files_with_workers,
+        size_balanced_hash_lanes, verify_runtime_files_with_workers,
     };
     use crate::operator_flow::RuntimeBundleSelectionPort;
     use crate::{FakeCamouhost, FakeProcessControl, ProcessAction};
@@ -1000,6 +1031,50 @@ mod tests {
         );
         fs::remove_dir_all(root)?;
         Ok(())
+    }
+
+    #[test]
+    fn official_large_file_hash_scheduling_is_balanced_without_skipping_bytes() {
+        // Intentionally uneven manifest order, resembling large Firefox font
+        // packages among thousands of tiny files. This is NOT a substitute
+        // for testing signed SHA-256 content below.
+        let sizes = [400_u64, 350, 300, 250, 200, 190, 180, 170];
+        let expected: Vec<_> = sizes
+            .iter()
+            .enumerate()
+            .map(|(index, &size_bytes)| PackagedFileIdentity {
+                path: format!("runtime-{index:02}.bin"),
+                sha256: "a".repeat(64),
+                size_bytes,
+            })
+            .collect();
+        let lanes = size_balanced_hash_lanes(&expected, 4);
+        let loads: Vec<u64> = lanes
+            .iter()
+            .map(|lane| lane.iter().map(|file| file.size_bytes).sum())
+            .collect();
+        let mut striped = [0_u64; 4];
+        for (index, file) in expected.iter().enumerate() {
+            striped[index % 4] += file.size_bytes;
+        }
+        assert!(loads.iter().max() < striped.iter().max());
+        let mut visited: Vec<_> = lanes
+            .into_iter()
+            .flat_map(|lane| lane.into_iter().map(|file| file.path.clone()))
+            .collect();
+        visited.sort();
+        let mut original: Vec<_> = expected.iter().map(|file| file.path.clone()).collect();
+        original.sort();
+        assert_eq!(visited, original, "every official file must be verified once");
+        for workers in 1..=4 {
+            let assigned = size_balanced_hash_lanes(&expected, workers);
+            assert_eq!(assigned.len(), workers);
+            assert_eq!(
+                assigned.iter().map(Vec::len).sum::<usize>(),
+                expected.len(),
+                "worker count must never change covered runtime files"
+            );
+        }
     }
 
     #[test]
