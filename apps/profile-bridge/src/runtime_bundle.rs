@@ -151,6 +151,22 @@ impl FilesystemRuntimeBundleSelection {
     }
 
     fn load_bundle(&self) -> Result<ApprovedRuntimeBundle, RuntimeBundleSelectionError> {
+        self.load_bundle_with_mode(false)
+    }
+
+    // Used ONLY after the active signed Release Set, its stage marker and
+    // runtime-manifest SHA have been verified by Windows delivery. Installation
+    // and repair still use load_bundle() to hash the complete official runtime.
+    // The normal Open trusts the already installed file contents, while checking
+    // the exact installed tree and the five critical launch files on every run.
+    pub(crate) fn load_installed_bundle(&self) -> Result<ApprovedRuntimeBundle, RuntimeBundleSelectionError> {
+        self.load_bundle_with_mode(true)
+    }
+
+    fn load_bundle_with_mode(
+        &self,
+        installed_release: bool,
+    ) -> Result<ApprovedRuntimeBundle, RuntimeBundleSelectionError> {
         let packaged = read_packaged_manifest(&self.runtime_root).inspect_err(|error| {
             eprintln!("RUNTIME_BUNDLE_VALIDATION=manifest_read;error={error:?}");
         })?;
@@ -176,8 +192,11 @@ impl FilesystemRuntimeBundleSelection {
                 return Err(RuntimeBundleSelectionError::InvalidRuntime);
             }
         }
-        let mut runtime_files =
-            verify_runtime_files(&self.runtime_root, &packaged.files.files, total_bytes)?;
+        let mut runtime_files = if installed_release {
+            check_installed_runtime_files(&self.runtime_root, &packaged.files.files)?
+        } else {
+            verify_runtime_files(&self.runtime_root, &packaged.files.files, total_bytes)?
+        };
         if runtime_files.is_empty() || runtime_files.len() > MAX_RUNTIME_FILES {
             return Err(RuntimeBundleSelectionError::InvalidRuntime);
         }
@@ -197,7 +216,8 @@ impl FilesystemRuntimeBundleSelection {
                 eprintln!("RUNTIME_BUNDLE_VALIDATION=tree;error={error:?}");
             })?;
         eprintln!(
-            "bridge_runtime_phase name=verify_files_and_tree elapsed_ms={} files={} bytes={}",
+            "bridge_runtime_phase name={} elapsed_ms={} files={} bytes={}",
+            if installed_release { "installed_release_readback" } else { "verify_files_and_tree" },
             verification_started.elapsed().as_millis(),
             runtime_files.len(),
             total_bytes,
@@ -222,6 +242,48 @@ impl FilesystemRuntimeBundleSelection {
         ApprovedRuntimeBundle::validate(manifest, inventory, &calculated_inventory_sha256)
             .map_err(|_| RuntimeBundleSelectionError::InvalidRuntime)
     }
+}
+
+// An installed Release Set has already passed full SHA/CMS verification
+// at installation/activation. Do not read 2.8 GiB again for every profile Open.
+// The stage owner authenticates the manifest on EVERY Open before this call;
+// file metadata and exact critical launch bytes are checked again here. This
+// does NOT claim that an arbitrary same-size edit to an installed font/module
+// can be discovered without explicit full repair verification.
+fn check_installed_runtime_files(
+    root: &Path,
+    expected: &[PackagedFileIdentity],
+) -> Result<Vec<RuntimeFile>, RuntimeBundleSelectionError> {
+    expected.iter().map(|entry| {
+        let relative = BundleRelativePath::parse(&entry.path)
+            .map_err(|_| RuntimeBundleSelectionError::InvalidRuntime)?;
+        let path = root.join(path_from_bundle_relative(&relative));
+        let metadata = fs::symlink_metadata(&path)
+            .map_err(|_| RuntimeBundleSelectionError::MissingRuntimeFile)?;
+        if metadata_is_link_or_reparse(&metadata)
+            || !metadata.is_file()
+            || metadata.len() != entry.size_bytes
+        {
+            return Err(RuntimeBundleSelectionError::InvalidRuntime);
+        }
+        if matches!(
+            entry.path.as_str(),
+            SHIPPING_ENTRYPOINT
+                | SHIPPING_RUNTIME_LOCK
+                | SHIPPING_BROWSER_EXECUTABLE
+                | SHIPPING_PYTHON_EXECUTABLE
+                | SHIPPING_RESOLVED_RUNTIME
+        ) && sha256_regular_file(&path, entry.size_bytes)? != entry.sha256
+        {
+            return Err(RuntimeBundleSelectionError::InvalidRuntime);
+        }
+        Ok(RuntimeFile {
+            path: relative,
+            length: entry.size_bytes,
+            sha256: Sha256Digest::parse(entry.sha256.clone())
+                .map_err(|_| RuntimeBundleSelectionError::InvalidRuntime)?,
+        })
+    }).collect()
 }
 
 // Hash all bytes of each immutable file against the signed runtime manifest.
@@ -1140,6 +1202,65 @@ mod tests {
                 }
             })?;
         assert!(verification.join().is_ok());
+        fs::remove_dir_all(root)?;
+        Ok(())
+    }
+
+    #[test]
+    fn installed_release_open_checks_layout_and_critical_files_without_rehashing_fonts()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let root = runtime_root("installed-fast-open")?;
+        fs::create_dir_all(&root)?;
+        write_packaged_runtime(&root)?;
+        let selector = FilesystemRuntimeBundleSelection::open(&root)?;
+        let exact = selector.load_bundle()?;
+        let installed = selector.load_installed_bundle()?;
+        assert_eq!(installed, exact);
+
+        // Installed content is trusted from signed setup; don't reread a
+        // 2.8 GiB font tree on Open. The explicit full verifier still catches
+        // same-size after-install corruption during repair/diagnostics.
+        let font = root.join("browser/fonts/alpha.ttf");
+        fs::write(&font, b"FONt-a")?;
+        assert!(selector.load_installed_bundle().is_ok());
+        assert!(matches!(
+            selector.load_bundle(),
+            Err(RuntimeBundleSelectionError::InvalidRuntime)
+        ));
+        fs::write(&font, b"font-a")?;
+
+        for critical in [
+            SHIPPING_ENTRYPOINT, SHIPPING_RUNTIME_LOCK,
+            SHIPPING_BROWSER_EXECUTABLE, SHIPPING_PYTHON_EXECUTABLE,
+            SHIPPING_RESOLVED_RUNTIME,
+        ] {
+            let path = root.join(critical);
+            let original = fs::read(&path)?;
+            let mut altered = original.clone();
+            altered[0] ^= 0x01;
+            fs::write(&path, &altered)?;
+            assert_eq!(
+                selector.load_installed_bundle(),
+                Err(RuntimeBundleSelectionError::InvalidRuntime),
+                "critical executable/identity file tamper must block Open"
+            );
+            fs::write(&path, original)?;
+        }
+        let missing = root.join("browser/fonts/Zeta, Regular.ttf");
+        fs::remove_file(&missing)?;
+        assert_eq!(
+            selector.load_installed_bundle(),
+            Err(RuntimeBundleSelectionError::MissingRuntimeFile)
+        );
+        fs::write(&missing, b"font-z")?;
+        let extra = root.join("browser/fonts/unexpected.ttf");
+        fs::write(&extra, b"unexpected")?;
+        assert_eq!(
+            selector.load_installed_bundle(),
+            Err(RuntimeBundleSelectionError::InvalidRuntime)
+        );
+        fs::remove_file(&extra)?;
+        assert_eq!(selector.load_installed_bundle(), Ok(exact));
         fs::remove_dir_all(root)?;
         Ok(())
     }

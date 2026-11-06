@@ -38,8 +38,8 @@ impl ActiveWindowsDeliveryRuntime {
         Self::resolve_current_with_stage_hashing(false)
     }
 
-    /// Only normal browser Open defers runtime content hashes to the selector.
-    /// Installer and delivery recovery keep the complete preflight.
+    /// Normal Open uses the identity of the already verified signed installation,
+    /// NOT a fresh 2.8 GiB SHA pass. Install/activation still fully verify bytes.
     pub(crate) fn resolve_for_browser_open() -> Result<Self, WindowsDeliveryRuntimeError> {
         Self::resolve_current_with_stage_hashing(true)
     }
@@ -111,6 +111,7 @@ impl ActiveWindowsDeliveryRuntime {
         let bundles = DeliveryBoundRuntimeBundleSelection::open(
             runtime_root.clone(),
             active.runtime_bundle_release_id.clone(),
+            runtime_hashes_deferred,
         )
         .map_err(|_| WindowsDeliveryRuntimeError::RuntimeIdentity)?;
         #[cfg(windows)]
@@ -349,12 +350,14 @@ fn exact_health_state(
 pub struct DeliveryBoundRuntimeBundleSelection {
     inner: FilesystemRuntimeBundleSelection,
     expected_release_id: String,
+    installed_fast_open: bool,
 }
 
 impl DeliveryBoundRuntimeBundleSelection {
     fn open(
         runtime_root: impl Into<PathBuf>,
         expected_release_id: String,
+        installed_fast_open: bool,
     ) -> Result<Self, RuntimeBundleSelectionError> {
         if !valid_runtime_release_id(&expected_release_id) {
             return Err(RuntimeBundleSelectionError::InvalidRuntime);
@@ -364,6 +367,7 @@ impl DeliveryBoundRuntimeBundleSelection {
         Ok(Self {
             inner,
             expected_release_id,
+            installed_fast_open,
         })
     }
 }
@@ -373,7 +377,11 @@ impl RuntimeBundleSelectionPort for DeliveryBoundRuntimeBundleSelection {
 
     fn select_bundle(&mut self) -> Result<ApprovedRuntimeBundle, Self::Error> {
         verify_embedded_release_id(self.inner.runtime_root(), &self.expected_release_id)?;
-        let bundle = self.inner.select_bundle()?;
+        let bundle = if self.installed_fast_open {
+            self.inner.load_installed_bundle()?
+        } else {
+            self.inner.select_bundle()?
+        };
         verify_embedded_release_id(self.inner.runtime_root(), &self.expected_release_id)?;
         Ok(bundle)
     }

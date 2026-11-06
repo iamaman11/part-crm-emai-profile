@@ -1043,8 +1043,10 @@ where
         #[cfg(windows)]
         let admission_started = std::time::Instant::now();
 
-        // Verify installed bytes before creating any short-lived authenticated launch intent.
-        // Exact generation/runtime compatibility is still enforced by browser_preflight below.
+        // Read the exact verified installed Release Set before any authenticated
+        // claim. Ordinary Open checks layout and critical launch bytes, without
+        // rehashing every official Firefox font; a full audit remains at install.
+        // Generation/runtime compatibility remains the browser_preflight owner.
         let runtime_bundle = self
             .runtime_bundles
             .select_bundle()

@@ -332,11 +332,11 @@ pub fn reopen_staged_delivery(
     reopen_staged_delivery_with_mode(root, identity, false)
 }
 
-/// Browser Open only: the runtime selector verifies the *entire* runtime
-/// file-set (path/type/size/SHA-256 and the absence of unexpected files) before
-/// device authentication or claim redemption. The delivery owner verifies its
-/// own staged Bridge tree, signed stage marker and exact runtime manifest here.
-/// Do not traverse the same multi-GiB runtime tree twice on every Open.
+/// Browser Open only: accepted Release Set bytes were fully verified at
+/// installation. Here the delivery owner binds the active Bridge executable,
+/// stage marker and exact runtime manifest to that installed identity. The
+/// subsequent selector checks installed paths/types/sizes, unexpected files
+/// and the critical launch-file SHA values, not another 2.8 GiB content pass.
 #[cfg(any(windows, test))]
 pub(crate) fn reopen_staged_delivery_before_runtime_selection(
     root: &DeliveryStagingRoot,
@@ -663,9 +663,9 @@ fn verify_materialized_stage_with_mode(
         let prefix = plan.kind.directory();
         expected_directories.insert(prefix.to_owned());
         for file in &plan.files {
-            // The immediately-following, delivery-bound runtime selector owns
-            // the full runtime traversal. Preserve the stage owner's exact
-            // runtime-manifest check, not a second 5,000-file directory walk.
+            // The following delivery-bound installed selector verifies the
+            // exact runtime layout/critical files; full-byte audit belongs to
+            // installer/repair, not every ordinary profile Open.
             if runtime_hashes_deferred
                 && prefix == "runtime"
                 && file.relative_path != "runtime-manifest.json"
@@ -723,10 +723,9 @@ fn collect_tree(
         let relative = normalized_descendant(root, &path)?;
         if metadata.is_dir() {
             if runtime_hashes_deferred && relative == "runtime" {
-                // This is NOT acceptance of the runtime subtree. Its only
-                // legitimate consumer is the bound selector, whose complete
-                // SHA-256/tree verification must pass before a launch claim.
-                // The manifest is still bound here to the signed stage marker.
+                // This is NOT a new install acceptance. Signed installation
+                // already proved full runtime bytes. Bind its immutable manifest
+                // to the active stage before the fast installed selector runs.
                 let manifest_path = path.join("runtime-manifest.json");
                 let manifest_relative = "runtime/runtime-manifest.json";
                 let (expected_size, expected_digest) = expected_files
@@ -759,8 +758,8 @@ fn collect_tree(
                 return Err(DeliveryStagingError::CorruptStage);
             };
             // Preserve exact Bridge and runtime-manifest identity at the
-            // stage gate. The selector hashes every other runtime file
-            // once before any authenticated Open or launch claim.
+            // stage gate. Full runtime SHA belongs to installation/repair;
+            // fast Open checks file layout and critical launch file digests.
             let verify_digest = !runtime_hashes_deferred
                 || !relative.starts_with("runtime/")
                 || relative == "runtime/runtime-manifest.json";
