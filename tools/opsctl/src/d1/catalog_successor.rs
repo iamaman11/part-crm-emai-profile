@@ -839,10 +839,9 @@ fn repository_identity_from_components(components: &[Value]) -> Result<String, D
 mod tests {
     use super::{
         BRIDGE_ENROLLMENT_REVISION, CURRENT_SUCCESSOR_ROOT, DEVICE_APPLICATION_AUTHORITY_REVISION,
-        NATIVE_BROWSER_RECOVERY_REVISION, PREDECESSOR_SUCCESSOR_ROOT,
-        PUBLIC_KEY_BINDING_REVISION, RETIREMENT_GUARD_REVISION, STREAMING_GENERATION_REVISION,
-        SUCCESSOR_CONTRACT_REVISION, WORKING_PROOF_REVISION,
-        component_authority, release_contract, repository_projection,
+        NATIVE_BROWSER_RECOVERY_REVISION, PREDECESSOR_SUCCESSOR_ROOT, PUBLIC_KEY_BINDING_REVISION,
+        RETIREMENT_GUARD_REVISION, STREAMING_GENERATION_REVISION, SUCCESSOR_CONTRACT_REVISION,
+        WORKING_PROOF_REVISION, component_authority, release_contract, repository_projection,
     };
     use serde_json::Value;
     use std::error::Error;
@@ -878,8 +877,14 @@ mod tests {
             contract["target_schema_revision"],
             NATIVE_BROWSER_RECOVERY_REVISION
         );
-        assert_eq!(contract["supported_schema_min"], NATIVE_BROWSER_RECOVERY_REVISION);
-        assert_eq!(contract["supported_schema_max"], NATIVE_BROWSER_RECOVERY_REVISION);
+        assert_eq!(
+            contract["supported_schema_min"],
+            NATIVE_BROWSER_RECOVERY_REVISION
+        );
+        assert_eq!(
+            contract["supported_schema_max"],
+            NATIVE_BROWSER_RECOVERY_REVISION
+        );
         Ok(())
     }
 
@@ -930,7 +935,10 @@ mod tests {
         assert_eq!(sources[37]["source_root"], CURRENT_SUCCESSOR_ROOT);
         assert_eq!(sources[38]["migration_file"], RETIREMENT_GUARD_REVISION);
         assert_eq!(sources[38]["source_root"], CURRENT_SUCCESSOR_ROOT);
-        assert_eq!(sources[39]["migration_file"], NATIVE_BROWSER_RECOVERY_REVISION);
+        assert_eq!(
+            sources[39]["migration_file"],
+            NATIVE_BROWSER_RECOVERY_REVISION
+        );
         assert_eq!(sources[39]["source_root"], CURRENT_SUCCESSOR_ROOT);
         assert_eq!(
             projection["executable_schema_authority"],

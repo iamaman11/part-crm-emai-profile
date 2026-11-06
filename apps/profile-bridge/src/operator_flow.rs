@@ -901,6 +901,7 @@ where
 
     /// Explicit stage-only C09 positive proof. The normal Open and all
     /// browser-independent tests continue to use identity-only cold probing.
+    #[allow(clippy::too_many_arguments)]
     pub fn probe_and_certify_verified_predecessor_once<Dl, V>(
         &mut self,
         claim: &ClaimUri,
