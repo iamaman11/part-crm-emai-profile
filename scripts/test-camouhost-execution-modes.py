@@ -70,7 +70,10 @@ def main() -> int:
 
     # The old managed SDK remains reachable *only* through the explicit
     # automation execution mode. It is not wired to shipping Windows Open.
-    run({runtime.EXECUTION_MODE_ENV: runtime.AUTOMATION_PLAYWRIGHT_MODE},
+    assert run({runtime.EXECUTION_MODE_ENV: runtime.AUTOMATION_PLAYWRIGHT_MODE},
+               2, []), "automation must not open a managed context without a job"
+    run({runtime.EXECUTION_MODE_ENV: runtime.AUTOMATION_PLAYWRIGHT_MODE,
+         runtime.AGENT_DIRECTORY_ENV: "/tmp/authorized-test-inbox"},
         18, ["automation"])
     for headless, expected in (("false", False), ("true", True),
                                ("virtual", "virtual")):
