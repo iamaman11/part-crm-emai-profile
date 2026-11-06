@@ -888,6 +888,53 @@ where
         Dl::Error: Into<GenerationObjectDownloadError>,
         V: FnMut() -> Result<(), ()>,
     {
+        self.probe_verified_predecessor_inner(
+            claim, primary, isolated, downloader, now, observe_browser_state, None,
+        )
+    }
+
+    /// Explicit stage-only C09 positive proof. The normal Open and all
+    /// browser-independent tests continue to use identity-only cold probing.
+    pub fn probe_and_certify_verified_predecessor_once<Dl, V>(
+        &mut self,
+        claim: &ClaimUri,
+        primary: &MaterializationRoot,
+        isolated: &MaterializationRoot,
+        downloader: &mut Dl,
+        now: UnixMillis,
+        observe_browser_state: &mut V,
+        native_witness: &std::cell::RefCell<Option<String>>,
+    ) -> Result<HistoricalColdProbeObservation, OperatorFlowError>
+    where
+        C: GenerationReopenControlPort,
+        <C as GenerationReopenControlPort>::Error: Into<GenerationReopenControlError>,
+        Dl: GenerationObjectDownloadPort,
+        Dl::Error: Into<GenerationObjectDownloadError>,
+        V: FnMut() -> Result<(), ()>,
+    {
+        self.probe_verified_predecessor_inner(
+            claim, primary, isolated, downloader, now, observe_browser_state, Some(native_witness),
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn probe_verified_predecessor_inner<Dl, V>(
+        &mut self,
+        claim: &ClaimUri,
+        primary: &MaterializationRoot,
+        isolated: &MaterializationRoot,
+        downloader: &mut Dl,
+        now: UnixMillis,
+        observe_browser_state: &mut V,
+        native_witness: Option<&std::cell::RefCell<Option<String>>>,
+    ) -> Result<HistoricalColdProbeObservation, OperatorFlowError>
+    where
+        C: GenerationReopenControlPort,
+        <C as GenerationReopenControlPort>::Error: Into<GenerationReopenControlError>,
+        Dl: GenerationObjectDownloadPort,
+        Dl::Error: Into<GenerationObjectDownloadError>,
+        V: FnMut() -> Result<(), ()>,
+    {
         if self.cleanup_blocked {
             return Err(OperatorFlowError::CleanupRequired);
         }
@@ -949,16 +996,41 @@ where
             &mut self.camouhost,
             observe_browser_state,
         );
-        // This maintenance observer proves browser identity/readiness only;
-        // it does NOT independently verify cookies, IndexedDB, SessionStore,
-        // user page content or the old key's future recoverability. Calling
-        // the server WORKING certification here would turn an identity-only
-        // readback into a durable pruning authority. Never do that.
-        //
-        // Keep the exact CURRENT fence through the clean browser stop and
-        // post-launch R2/key reauthorization already proved by the probe.
-        // A fully authenticated, separately evidenced browser-data acceptance
-        // flow must own any future certify_verified_predecessor_working call.
+        // The original native user_data snapshot SHA was sealed into the
+        // immutable encrypted generation BEFORE R2 PUT. Cold recovery already
+        // verified the same SHA/AEAD, real Camoufox ran and closed cleanly,
+        // and the original CURRENT fence/old key were reauthorized.
+        // An identity-only probe NEVER certifies: the explicit stage proof
+        // additionally requires the observed managed Firefox IPC witness.
+        let certified = if let (Ok(observation), Some(slot)) = (&observed, native_witness) {
+            let witness = slot.borrow().clone();
+            let inspected = encrypted_generation_domain::inspect_generation_metadata_prelude(
+                observation.opening_prelude(),
+            ).ok();
+            match (witness, inspected) {
+                (Some(witness), Some(metadata))
+                    if witness.len() == 64
+                        && witness.bytes().all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b)) =>
+                {
+                    let snapshot = metadata.metadata().plaintext_digest().bytes();
+                    let snapshot_hex = snapshot.iter()
+                        .map(|byte| format!("{byte:02x}")).collect::<String>();
+                    self.coordinator.certify_verified_predecessor_working(
+                        observation.tenant_id(),
+                        observation.profile_id(),
+                        observation.current_generation_id(),
+                        observation.predecessor_generation_id(),
+                        observation.opening_prelude(),
+                        observation.runtime_inventory_sha256(),
+                        &snapshot_hex,
+                        &witness,
+                    ).unwrap_or(false)
+                }
+                _ => false,
+            }
+        } else {
+            native_witness.is_none()
+        };
         let release_failed = if observed.is_ok() {
             self.coordinator
                 .close_verified_historical_probe(&lease)
@@ -976,7 +1048,11 @@ where
             self.cleanup_blocked = true;
         }
         match observed {
-            Ok(observation) if !release_failed => Ok(observation),
+            Ok(observation) if !release_failed && certified => Ok(observation),
+            Ok(_) if !release_failed => Err(OperatorFlowError::HistoricalProbe {
+                reason: HistoricalColdProbeError::PostLaunchAuthorityUnconfirmed,
+                cleanup,
+            }),
             Ok(_) => Err(OperatorFlowError::CleanupRequired),
             Err(reason) => Err(OperatorFlowError::HistoricalProbe { reason, cleanup }),
         }

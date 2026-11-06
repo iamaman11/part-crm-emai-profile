@@ -606,13 +606,19 @@ mod windows {
                 return Err(ShippingCompositionError::Configuration);
             }
         };
-        let result = operator.probe_verified_predecessor_once(
+        let native_witness = std::cell::RefCell::new(None);
+        let result = operator.probe_and_certify_verified_predecessor_once(
             claim,
             &primary,
             &isolated,
             &mut downloader,
             now()?,
-            &mut || witness.observe_live().map_err(|_| ()),
+            &mut || {
+                let digest = witness.observe_live_with_digest().map_err(|_| ())?;
+                *native_witness.borrow_mut() = Some(digest);
+                Ok(())
+            },
+            &native_witness,
         );
         retire_historical_probe_only_after_proof(
             result.map_err(ShippingCompositionError::Operator),
@@ -666,7 +672,7 @@ mod windows {
             },
         )?;
         eprintln!(
-            "HISTORICAL_COLD_PROBE=BROWSER_IDENTITY_VERIFIED;WORKING_LKG_CERTIFICATE=0;R2_PRUNE_AUTHORITY=0"
+            "HISTORICAL_COLD_PROBE=VERIFIED_RESTORE;WORKING_LKG_CERTIFICATE=1;R2_PRUNE_AUTHORITY=STAGING_CANARY_ONLY"
         );
         Ok(())
     }

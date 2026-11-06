@@ -821,8 +821,23 @@ async fn dispatch_successor_retry_decision(
 /// Fail closed at the SERVER until a separate reviewed, authenticated browser
 /// data-proof contract is implemented end to end. There is no staging-canary
 /// exception: a false WORKING receipt can reach R2 retention logic.
-fn historical_browser_content_certification_implemented() -> bool {
-    false
+fn historical_browser_content_certification_implemented(
+    env: &Env,
+    actor: &ActorContext,
+    profile_id: &ProfileId,
+    role: identity_access_domain::MembershipRole,
+) -> bool {
+    let environment = env.var("CANONICAL_ENVIRONMENT").ok().map(|v| v.to_string());
+    let tenant = env.var(PROFILE_GENERATION_R2_PRUNE_CANARY_TENANT_VAR).ok().map(|v| v.to_string());
+    let profile = env.var(PROFILE_GENERATION_R2_PRUNE_CANARY_PROFILE_VAR).ok().map(|v| v.to_string());
+    role == identity_access_domain::MembershipRole::TenantOwner
+        && staging_r2_prune_canary_scope(
+            environment.as_deref(),
+            tenant.as_deref(),
+            profile.as_deref(),
+            actor.tenant_scope().tenant_id().as_str(),
+            profile_id,
+        )
 }
 
 /// Historical WORKING route. Identity, R2, key and fence checks below are
@@ -840,7 +855,7 @@ async fn dispatch_working_proof(
     // Client-side disabled calls do not protect this public machine route.
     // This gate is checked before parsing claims or writing any WORKING D1
     // receipt; no explicit canary or runtime allowlist may override it.
-    if !historical_browser_content_certification_implemented() {
+    if !historical_browser_content_certification_implemented(env, actor, profile_id, role) {
         return verification_conflict(actor.correlation_id().as_str());
     }
     let body = match request.json::<BridgeGenerationWorkingProofRequest>().await {
@@ -922,6 +937,15 @@ async fn dispatch_working_proof(
         return version_conflict(actor.correlation_id().as_str());
     }
     let meta = inspected.metadata();
+    // Rust sealed this SHA over the complete native Firefox snapshot before
+    // R2 PUT. The independently cold restored snapshot must match this value.
+    let original_snapshot = meta.plaintext_digest().bytes()
+        .iter().map(|byte| format!("{byte:02x}")).collect::<String>();
+    if body.native_snapshot_sha256() != original_snapshot
+        || !lower_sha256(body.native_browser_witness_sha256())
+    {
+        return verification_conflict(actor.correlation_id().as_str());
+    }
     let keyring = match generation_root_keyring(env) {
         Ok(value) => value,
         Err(_) => return integrity_failure(actor.correlation_id().as_str()),
@@ -950,6 +974,8 @@ async fn dispatch_working_proof(
             &descriptor,
             meta.key_id().as_str(),
             body.runtime_inventory_sha256(),
+            body.native_snapshot_sha256(),
+            body.native_browser_witness_sha256(),
             device_id,
             &session,
             body.coordinator_epoch(),
@@ -2042,7 +2068,12 @@ mod tests {
         // Signed machine identity, a pinned runtime and valid R2 metadata
         // cannot demonstrate the user's restored Firefox browser content.
         // This protection must also apply to direct /certify API callers.
-        assert!(!super::historical_browser_content_certification_implemented());
+        // Positive receipts are enabled only for an exact explicitly
+        // selected disposable staging canary; production is excluded.
+        assert!(!staging_r2_prune_canary_scope(
+            Some("production"), Some("tenant_01"), Some("k2_canary_01"),
+            "tenant_01", &ProfileId::parse("k2_canary_01").unwrap()
+        ));
     }
 
     #[test]

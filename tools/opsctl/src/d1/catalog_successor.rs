@@ -35,7 +35,8 @@ const INITIAL_GENERATION_REVISION: &str = "0036_profile_generation_initializatio
 const STREAMING_GENERATION_REVISION: &str = "0037_generation_streaming_container_limit.sql";
 const WORKING_PROOF_REVISION: &str = "0038_profile_generation_working_proof.sql";
 const RETIREMENT_GUARD_REVISION: &str = "0039_profile_generation_retirement_guard.sql";
-const CURRENT_SUCCESSOR_FILES: [&str; 8] = [
+const NATIVE_BROWSER_RECOVERY_REVISION: &str = "0040_native_browser_recovery_proof.sql";
+const CURRENT_SUCCESSOR_FILES: [&str; 9] = [
     BRIDGE_ENROLLMENT_REVISION,
     PUBLIC_KEY_BINDING_REVISION,
     DEVICE_APPLICATION_AUTHORITY_REVISION,
@@ -44,6 +45,7 @@ const CURRENT_SUCCESSOR_FILES: [&str; 8] = [
     STREAMING_GENERATION_REVISION,
     WORKING_PROOF_REVISION,
     RETIREMENT_GUARD_REVISION,
+    NATIVE_BROWSER_RECOVERY_REVISION,
 ];
 
 #[derive(Debug, Clone)]
@@ -180,6 +182,17 @@ impl CatalogSuccessor {
             code_rollback_allowed: true,
             contract_preconditions: Vec::new(),
         });
+        ordered_history.push(NATIVE_BROWSER_RECOVERY_REVISION.to_owned());
+        migration_source_roots.push(CURRENT_SUCCESSOR_ROOT.to_owned());
+        post_epoch.push(MigrationContract {
+            migration_file: NATIVE_BROWSER_RECOVERY_REVISION.to_owned(),
+            migration_class: MigrationClass::Expand,
+            rollout_order: RolloutOrder::MigrateBeforeCode,
+            fail_forward_required: false,
+            destructive: false,
+            code_rollback_allowed: true,
+            contract_preconditions: Vec::new(),
+        });
         validate_contiguous_history(&ordered_history, predecessor_authority.historical_len)?;
         let history_digest =
             successor_history_digest(root, &ordered_history, &migration_source_roots)?;
@@ -253,9 +266,9 @@ impl CatalogSuccessor {
             .ordered_history
             .last()
             .ok_or_else(|| D1Error::new("Catalog successor-v2 migration lineage is empty"))?;
-        if latest != RETIREMENT_GUARD_REVISION {
+        if latest != NATIVE_BROWSER_RECOVERY_REVISION {
             return Err(D1Error::new(
-                "Catalog retired-generation guard requires exact schema0039",
+                "Catalog native browser recovery requires exact schema0040",
             ));
         }
         let target = latest;

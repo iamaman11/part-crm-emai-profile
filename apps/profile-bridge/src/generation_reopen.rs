@@ -161,6 +161,8 @@ pub trait GenerationReopenControlPort {
         _historical: &GenerationId,
         _opening_prelude: &[u8],
         _runtime_inventory_sha256: &str,
+        _native_snapshot_sha256: &str,
+        _native_browser_witness_sha256: &str,
     ) -> Result<bool, Self::Error> {
         Ok(false)
     }

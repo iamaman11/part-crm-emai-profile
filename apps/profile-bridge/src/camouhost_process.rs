@@ -389,6 +389,12 @@ impl ManagedCamouhostIpc {
 
 impl ManagedCamouhostColdProbeObserver {
     pub fn observe_live(&mut self) -> Result<(), BridgePortError> {
+        self.observe_live_with_digest().map(|_| ())
+    }
+
+    /// C09 witness reuses the existing validated Firefox-visible payload,
+    /// without transmitting cookies, tab URLs or private storage.
+    pub fn observe_live_with_digest(&mut self) -> Result<String, BridgePortError> {
         let session = {
             let state = self
                 .shared
@@ -650,7 +656,7 @@ fn verify_managed_browser_visible_identity(
     shared: &Arc<Mutex<ProcessState>>,
     display_mode: RuntimeDisplayMode,
     session_id: &SessionId,
-) -> Result<(), BridgePortError> {
+) -> Result<String, BridgePortError> {
     let observation = exchange_shared(
         shared,
         &CamouhostMessage::ObserveBrowserVisible {
@@ -682,7 +688,7 @@ fn verify_managed_browser_visible_identity(
     .map_err(|_| BridgePortError::InvalidResponse)?;
     verify_host_compatibility(display_mode, host_runtime_evidence)?;
 
-    Ok(())
+    Ok(format!("{:x}", Sha256::digest(&payload)))
 }
 
 fn launch_with_browser_visible_admission(

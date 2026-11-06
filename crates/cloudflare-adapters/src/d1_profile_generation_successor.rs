@@ -24,8 +24,13 @@ use worker::query;
 // certify WORKING, select a protected LKG or admit an R2 retirement effect.
 // This guard is intentionally independent of the Worker ingress gate: old
 // D1 rows remain append-only historical metadata, not pruning authority.
+fn valid_native_proof_digest(value: &str) -> bool {
+    value.len() == 64 && value.bytes().all(|ch| ch.is_ascii_digit() || (b'a'..=b'f').contains(&ch))
+}
+
 fn native_browser_data_working_contract_complete() -> bool {
-    false
+    // Only schema0040 witness-bearing rows are eligible: 0038 legacy rows stay NULL.
+    true
 }
 
 /// Strictly one journal-linked immediate predecessor. This is an immutable
@@ -37,8 +42,9 @@ INSERT INTO profile_generation_working_proofs (
     tenant_id, profile_id, generation_id, observed_current_generation_id,
     metadata_digest, container_digest, root_key_id, runtime_inventory_sha256,
     observed_by_actor_id, observed_by_device_id, coordinator_session_id,
-    coordinator_epoch, proven_at_ms
-) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    coordinator_epoch, proven_at_ms, native_snapshot_sha256,
+    native_browser_witness_sha256
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 ON CONFLICT (tenant_id, profile_id, generation_id) DO NOTHING
 RETURNING generation_id
 "#;
@@ -51,6 +57,7 @@ WHERE tenant_id = ? AND profile_id = ? AND generation_id = ?
   AND root_key_id = ? AND runtime_inventory_sha256 = ?
   AND observed_by_actor_id = ? AND observed_by_device_id = ?
   AND coordinator_session_id = ? AND coordinator_epoch = ?
+  AND native_snapshot_sha256 = ? AND native_browser_witness_sha256 = ?
 "#;
 
 /// Only an already recorded real-browser reserve is eligible after CURRENT
@@ -87,6 +94,8 @@ WHERE profile.tenant_id = ?
   AND proof.metadata_digest = reserve.metadata_digest
   AND proof.container_digest = reserve.container_digest
   AND proof.runtime_inventory_sha256 = ?
+  AND proof.native_snapshot_sha256 IS NOT NULL
+  AND proof.native_browser_witness_sha256 IS NOT NULL
   AND NOT EXISTS (
       SELECT 1 FROM profile_generation_retirement_intents AS retired
       WHERE retired.tenant_id = reserve.tenant_id
@@ -134,6 +143,8 @@ WITH protected AS (
       AND proof.metadata_digest = reserved.metadata_digest
       AND proof.container_digest = reserved.container_digest
       AND proof.runtime_inventory_sha256 = ?
+      AND proof.native_snapshot_sha256 IS NOT NULL
+      AND proof.native_browser_witness_sha256 IS NOT NULL
       AND NOT EXISTS (
           SELECT 1 FROM profile_generation_retirement_intents AS retired
           WHERE retired.tenant_id = reserved.tenant_id
@@ -204,11 +215,17 @@ WHERE tenant_id = ? AND profile_id = ? AND status = 'READY'
 "#;
 
 const LOAD_PENDING_RETIREMENT: &str = r#"
-SELECT generation_id, object_key, metadata_digest, container_digest
-FROM profile_generation_retirement_intents
-WHERE tenant_id = ? AND profile_id = ? AND deleted_at_ms IS NULL
-  AND generation_id <> ? AND generation_id <> ?
-ORDER BY admitted_at_ms ASC, generation_id ASC
+SELECT intent.generation_id, intent.object_key, intent.metadata_digest, intent.container_digest
+FROM profile_generation_retirement_intents AS intent
+JOIN profile_generation_working_proofs AS proof
+  ON proof.tenant_id = intent.tenant_id
+ AND proof.profile_id = intent.profile_id
+ AND proof.generation_id = intent.retained_working_generation_id
+ AND proof.native_snapshot_sha256 IS NOT NULL
+ AND proof.native_browser_witness_sha256 IS NOT NULL
+WHERE intent.tenant_id = ? AND intent.profile_id = ? AND intent.deleted_at_ms IS NULL
+  AND intent.generation_id <> ? AND intent.generation_id <> ?
+ORDER BY intent.admitted_at_ms ASC, intent.generation_id ASC
 LIMIT 1
 "#;
 
@@ -218,6 +235,14 @@ SET deleted_at_ms = ?
 WHERE tenant_id = ? AND profile_id = ? AND generation_id = ?
   AND object_key = ? AND metadata_digest = ? AND container_digest = ?
   AND deleted_at_ms IS NULL AND admitted_at_ms <= ?
+  AND EXISTS (
+      SELECT 1 FROM profile_generation_working_proofs AS proof
+      WHERE proof.tenant_id = profile_generation_retirement_intents.tenant_id
+        AND proof.profile_id = profile_generation_retirement_intents.profile_id
+        AND proof.generation_id = profile_generation_retirement_intents.retained_working_generation_id
+        AND proof.native_snapshot_sha256 IS NOT NULL
+        AND proof.native_browser_witness_sha256 IS NOT NULL
+  )
 RETURNING generation_id
 "#;
 
@@ -415,6 +440,8 @@ impl D1ProfileGenerationSuccessorCommitJournal {
         descriptor: &GenerationObjectDescriptor,
         root_key_id: &str,
         runtime_inventory_sha256: &str,
+        native_snapshot_sha256: &str,
+        native_browser_witness_sha256: &str,
         device_id: &DeviceId,
         session_id: &profile_platform_primitives::SessionId,
         coordinator_epoch: u64,
@@ -426,7 +453,10 @@ impl D1ProfileGenerationSuccessorCommitJournal {
         {
             return Err(historical_integrity_failure());
         }
-        if !native_browser_data_working_contract_complete() {
+        if !native_browser_data_working_contract_complete()
+            || !valid_native_proof_digest(native_snapshot_sha256)
+            || !valid_native_proof_digest(native_browser_witness_sha256)
+        {
             return Err(historical_integrity_failure());
         }
         let epoch = i64::try_from(coordinator_epoch).map_err(|_| historical_integrity_failure())?;
@@ -444,6 +474,8 @@ impl D1ProfileGenerationSuccessorCommitJournal {
             device_id.as_str(),
             session_id.as_str(),
             epoch,
+            native_snapshot_sha256,
+            native_browser_witness_sha256,
         );
         let inserted = query!(
             &self.database,
@@ -461,6 +493,8 @@ impl D1ProfileGenerationSuccessorCommitJournal {
             fields.10,
             fields.11,
             at,
+            fields.12,
+            fields.13,
         )
         .map_err(|_| historical_dependency_failure())?
         .first::<String>(Some("generation_id"))
@@ -485,6 +519,8 @@ impl D1ProfileGenerationSuccessorCommitJournal {
                     fields.9,
                     fields.10,
                     fields.11,
+                    fields.12,
+                    fields.13,
                 )
                 .map_err(|_| historical_dependency_failure())?
                 .first::<String>(Some("generation_id"))
