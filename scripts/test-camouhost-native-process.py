@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import importlib.util
+import json
 import pathlib
 import subprocess
 import sys
@@ -36,11 +37,18 @@ def main() -> int:
         assert kwargs["env"].get("CAMOU_CONFIG_1") is None
         assert kwargs["firefox_user_prefs"]["browser.startup.page"] == 3
         assert kwargs["firefox_user_prefs"]["privacy.baselineFingerprintingProtection"] is False
-        assert kwargs["config"] == {"sentinel": "pinned"}
+        assert kwargs["config"] == {"sentinel": "pinned", "navigator.maxTouchPoints": 7}
         assert kwargs["exclude_addons"] == []
-        return {"env": {**kwargs["env"], "CAMOU_CONFIG_1": "pinned",
+        # Simulate the *real* Camoufox SDK changing an already saved field.
+        altered = dict(kwargs["config"])
+        altered["navigator.maxTouchPoints"] = len(observed_launch_options) % 3
+        altered["addons"] = ["official/default-addon"]
+        return {"env": {**kwargs["env"], "CAMOU_CONFIG_1": json.dumps(altered),
                         "CAMOU_PREFS_1": "native"}}
     util.launch_options = official_options
+    util.get_env_vars = lambda config, target, path: {
+        "CAMOU_CONFIG_1": json.dumps(config, sort_keys=True)
+    }
 
     with tempfile.TemporaryDirectory() as temp:
         workspace = pathlib.Path(temp) / "generation"
@@ -60,7 +68,7 @@ def main() -> int:
             for approved, active in ((False, False), (True, True)):
                 try:
                     module.launch_native_camoufox(
-                        workspace=workspace, browser=browser, identity={"sentinel":"pinned"},
+                        workspace=workspace, browser=browser, identity={"sentinel":"pinned", "navigator.maxTouchPoints":7},
                         inherited={"SYSTEMROOT":"C:\\Windows"}, writer_active=lambda _: active,
                         admission_granted=approved,
                     )
@@ -79,7 +87,12 @@ def main() -> int:
             assert len(created) == 1
             args, kwargs = created[0]
             assert args == [str(browser), "-no-remote", "-profile", str(userdata)]
-            assert kwargs["env"]["CAMOU_CONFIG_1"] == "pinned"
+            actual = json.loads(kwargs["env"]["CAMOU_CONFIG_1"])
+            assert actual["sentinel"] == "pinned"
+            assert actual["navigator.maxTouchPoints"] == 7, (
+                "upstream SDK must not change pinned identity on Open"
+            )
+            assert actual["addons"] == ["official/default-addon"]
             assert kwargs["env"]["CAMOU_PREFS_1"] == "native"
             assert len(observed_launch_options) == 1
             assert "playwright" not in str(args).lower()
