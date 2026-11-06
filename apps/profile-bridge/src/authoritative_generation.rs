@@ -22,8 +22,8 @@ use encrypted_generation_domain::{
 };
 use profile_platform_primitives::{DeviceId, GenerationId, ProfileId, TenantId};
 use std::fs::{self, OpenOptions};
-use std::io::{Read, Seek, SeekFrom};
 use sha2::{Digest, Sha256};
+use std::io::{Read, Seek, SeekFrom};
 
 const LOWER_HEX: &[u8; 16] = b"0123456789abcdef";
 

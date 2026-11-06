@@ -920,8 +920,7 @@ async fn dispatch_working_proof(
         &original_snapshot,
         body.native_snapshot_sha256(),
         body.native_browser_witness_sha256(),
-    )
-    {
+    ) {
         return verification_conflict(actor.correlation_id().as_str());
     }
     let keyring = match generation_root_keyring(env) {
@@ -1848,8 +1847,8 @@ fn dependency(correlation_id: &str) -> Result<Response> {
 mod tests {
     use super::{
         BridgeGenerationMachineOperation, decode_bounded_lower_hex, decode_lower_sha256,
-        descriptor_shape_is_canonical, exact_restored_native_digest,
-        is_approved_working_runtime, operation, valid_stream_container_bytes,
+        descriptor_shape_is_canonical, exact_restored_native_digest, is_approved_working_runtime,
+        operation, valid_stream_container_bytes,
     };
     use encrypted_generation_domain::canonical_generation_object_key;
     use profile_platform_primitives::{
@@ -1974,11 +1973,29 @@ mod tests {
     #[test]
     fn working_requires_same_immutable_before_and_cold_restored_native_bytes() {
         let original = "a".repeat(64);
-        assert!(exact_restored_native_digest(&original, &original, &original));
-        assert!(!exact_restored_native_digest(&original, &"b".repeat(64), &original));
-        assert!(!exact_restored_native_digest(&original, &original, &"b".repeat(64)));
-        assert!(!exact_restored_native_digest(&original, &original, &"A".repeat(64)));
-        assert!(!exact_restored_native_digest("not-sha256", &original, &original));
+        assert!(exact_restored_native_digest(
+            &original, &original, &original
+        ));
+        assert!(!exact_restored_native_digest(
+            &original,
+            &"b".repeat(64),
+            &original
+        ));
+        assert!(!exact_restored_native_digest(
+            &original,
+            &original,
+            &"b".repeat(64)
+        ));
+        assert!(!exact_restored_native_digest(
+            &original,
+            &original,
+            &"A".repeat(64)
+        ));
+        assert!(!exact_restored_native_digest(
+            "not-sha256",
+            &original,
+            &original
+        ));
     }
 
     #[test]

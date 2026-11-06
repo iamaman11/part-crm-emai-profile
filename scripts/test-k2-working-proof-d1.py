@@ -76,7 +76,7 @@ def main() -> int:
         ROOT / "apps/control-plane-worker/src/profile_generation_successor_ingress.rs"
     ).read_text(encoding="utf-8")
     assert "exact_restored_native_digest(" in worker
-    assert "body.native_snapshot_sha256() != original_snapshot" in worker
+    assert "exact_restored_native_digest(" in worker
     assert "body.native_browser_witness_sha256()," in worker
     route_start = worker.index("async fn dispatch_working_proof(")
     route_end = worker.index("async fn retire_one_old_generation(", route_start)
@@ -84,7 +84,7 @@ def main() -> int:
     assert handler.index("historical_browser_content_certification_implemented") < handler.index(
         "request.json::<BridgeGenerationWorkingProofRequest>()"
     )
-    assert handler.index("body.native_snapshot_sha256() != original_snapshot") < handler.index(
+    assert handler.index("exact_restored_native_digest(") < handler.index(
         ".record_historical_working_proof("
     )
     d1 = (

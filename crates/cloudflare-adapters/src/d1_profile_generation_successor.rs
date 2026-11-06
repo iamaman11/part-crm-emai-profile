@@ -1422,7 +1422,9 @@ mod tests {
         ] {
             assert!(sql.contains("proof.native_snapshot_sha256 IS NOT NULL"));
             assert!(sql.contains("proof.native_browser_witness_sha256 IS NOT NULL"));
-            assert!(sql.contains("proof.native_browser_witness_sha256 = proof.native_snapshot_sha256"));
+            assert!(
+                sql.contains("proof.native_browser_witness_sha256 = proof.native_snapshot_sha256")
+            );
         }
     }
 
