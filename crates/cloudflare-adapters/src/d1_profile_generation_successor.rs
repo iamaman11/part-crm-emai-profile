@@ -99,6 +99,7 @@ WHERE profile.tenant_id = ?
   AND proof.runtime_inventory_sha256 = ?
   AND proof.native_snapshot_sha256 IS NOT NULL
   AND proof.native_browser_witness_sha256 IS NOT NULL
+  AND proof.native_browser_witness_sha256 = proof.native_snapshot_sha256
   AND NOT EXISTS (
       SELECT 1 FROM profile_generation_retirement_intents AS retired
       WHERE retired.tenant_id = reserve.tenant_id
@@ -148,6 +149,7 @@ WITH protected AS (
       AND proof.runtime_inventory_sha256 = ?
       AND proof.native_snapshot_sha256 IS NOT NULL
       AND proof.native_browser_witness_sha256 IS NOT NULL
+  AND proof.native_browser_witness_sha256 = proof.native_snapshot_sha256
       AND NOT EXISTS (
           SELECT 1 FROM profile_generation_retirement_intents AS retired
           WHERE retired.tenant_id = reserved.tenant_id
@@ -248,6 +250,7 @@ WHERE tenant_id = ? AND profile_id = ? AND generation_id = ?
         AND proof.generation_id = profile_generation_retirement_intents.retained_working_generation_id
         AND proof.native_snapshot_sha256 IS NOT NULL
         AND proof.native_browser_witness_sha256 IS NOT NULL
+  AND proof.native_browser_witness_sha256 = proof.native_snapshot_sha256
   )
 RETURNING generation_id
 "#;
@@ -462,6 +465,7 @@ impl D1ProfileGenerationSuccessorCommitJournal {
         if !native_browser_data_working_contract_complete()
             || !valid_native_proof_digest(native_snapshot_sha256)
             || !valid_native_proof_digest(native_browser_witness_sha256)
+            || native_snapshot_sha256 != native_browser_witness_sha256
         {
             return Err(historical_integrity_failure());
         }
@@ -1409,6 +1413,7 @@ mod tests {
         assert!(!super::valid_native_proof_digest(&"A".repeat(64)));
         assert!(!super::valid_native_proof_digest(&"0".repeat(63)));
         assert!(super::valid_native_proof_digest(&"a".repeat(64)));
+        assert_ne!("a".repeat(64), "b".repeat(64));
         for sql in [
             super::LOAD_CERTIFIED_WORKING_RESERVE,
             super::LOAD_UNPROVEN_HISTORICAL_PRUNE_REVIEW,
@@ -1417,6 +1422,7 @@ mod tests {
         ] {
             assert!(sql.contains("proof.native_snapshot_sha256 IS NOT NULL"));
             assert!(sql.contains("proof.native_browser_witness_sha256 IS NOT NULL"));
+            assert!(sql.contains("proof.native_browser_witness_sha256 = proof.native_snapshot_sha256"));
         }
     }
 

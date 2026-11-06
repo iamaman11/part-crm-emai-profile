@@ -8,7 +8,7 @@ use crate::generation_reopen::{
     GenerationReopenControlPort,
 };
 use crate::generation_snapshot::{
-    GenerationSnapshotError, StreamedWorkspaceSnapshot,
+    GenerationSnapshotError, StreamedWorkspaceSnapshot, WorkspaceSnapshotReader,
     materialize_workspace_snapshot_streaming_with_pre_publish,
     materialize_workspace_snapshot_with_pre_publish, verify_workspace_matches_snapshot,
     verify_workspace_matches_streamed_snapshot,
@@ -22,7 +22,8 @@ use encrypted_generation_domain::{
 };
 use profile_platform_primitives::{DeviceId, GenerationId, ProfileId, TenantId};
 use std::fs::{self, OpenOptions};
-use std::io::{Seek, SeekFrom};
+use std::io::{Read, Seek, SeekFrom};
+use sha2::{Digest, Sha256};
 
 const LOWER_HEX: &[u8; 16] = b"0123456789abcdef";
 
@@ -567,6 +568,9 @@ pub struct HistoricalColdProbeObservation {
     source_container_sha256: String,
     runtime_inventory_sha256: String,
     materialized_inventory_digest: u64,
+    /// Independent SHA-256 of the exact native Firefox BPGW files read back
+    /// from the cold-restored workspace BEFORE Camoufox can mutate them.
+    native_cold_snapshot_sha256: String,
     /// Bounded original metadata, not a DEK or reusable bearer.
     opening_prelude: Vec<u8>,
 }
@@ -581,6 +585,7 @@ impl core::fmt::Debug for HistoricalColdProbeObservation {
             .field("container_digest", &"[REDACTED]")
             .field("runtime_digest", &"[REDACTED]")
             .field("materialized_inventory_digest", &"[REDACTED]")
+            .field("native_cold_snapshot_sha256", &"[REDACTED]")
             .field("authorization", &"NONE")
             .finish()
     }
@@ -626,6 +631,48 @@ impl HistoricalColdProbeObservation {
     pub fn opening_prelude(&self) -> &[u8] {
         &self.opening_prelude
     }
+
+    #[must_use]
+    pub fn native_cold_snapshot_sha256(&self) -> &str {
+        &self.native_cold_snapshot_sha256
+    }
+}
+
+/// Re-read actual restored Firefox files, not a fingerprint/ready diagnostic.
+/// The original immutable encrypted BPGC metadata was sealed before Save;
+/// this independent 64-KiB bounded readback proves every native byte, including
+/// SessionStore, cookie expiry, SQLite WAL, localStorage and IndexedDB, survived
+/// R2 recovery without creating a second browser data serializer.
+fn verified_native_cold_snapshot_sha256(
+    restored: &GenerationWorkspace,
+    original_prelude: &[u8],
+) -> Result<String, HistoricalColdProbeError> {
+    let inspected = inspect_generation_metadata_prelude(original_prelude)
+        .map_err(|_| HistoricalColdProbeError::BrowserStateNotVerified)?;
+    if inspected.prelude_bytes() != original_prelude.len() {
+        return Err(HistoricalColdProbeError::BrowserStateNotVerified);
+    }
+    let inventory = restored
+        .inventory()
+        .map_err(|_| HistoricalColdProbeError::BrowserStateNotVerified)?;
+    let mut reader = WorkspaceSnapshotReader::new(restored, &inventory)
+        .map_err(|_| HistoricalColdProbeError::BrowserStateNotVerified)?;
+    let mut sha = Sha256::new();
+    let mut block = [0_u8; 65_536];
+    loop {
+        let size = reader
+            .read(&mut block)
+            .map_err(|_| HistoricalColdProbeError::BrowserStateNotVerified)?;
+        if size == 0 {
+            break;
+        }
+        sha.update(&block[..size]);
+    }
+    let actual: [u8; 32] = sha.finalize().into();
+    if actual != inspected.metadata().plaintext_digest().bytes() {
+        return Err(HistoricalColdProbeError::BrowserStateNotVerified);
+    }
+    Ok(actual.iter().map(|byte| format!("{byte:02x}")).collect())
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -705,6 +752,11 @@ where
             BridgeWorkspaceLock::acquire(&historical, lease.device_id(), lease.epoch())
                 .map_err(|_| Error::WorkspaceLock)?;
         let outcome = (|| {
+            // The sole source of a positive content witness is a fresh,
+            // independent full native-byte readback under the historical lock.
+            // Ordinary profile Open does not perform this extra pass.
+            let native_cold_snapshot_sha256 =
+                verified_native_cold_snapshot_sha256(&historical, &historical_opening_prelude)?;
             preflight
                 .evaluate_before_launch(
                     &historical,
@@ -831,6 +883,7 @@ where
                 current_generation_id: current_id.clone(),
                 predecessor_generation_id: historical_id,
                 source_container_sha256: binding.source_container_sha256().to_owned(),
+                native_cold_snapshot_sha256,
                 runtime_inventory_sha256: runtime_bundle
                     .manifest()
                     .inventory_sha256()

@@ -63,17 +63,21 @@ def main() -> int:
     )
     assert "pub fn probe_and_certify_verified_predecessor_once" in operator
     assert "certify_verified_predecessor_working(" in operator
-    assert "native_witness.is_none()" in operator
+    assert "observation.native_cold_snapshot_sha256()" in operator
+    native = (ROOT / "apps/profile-bridge/src/authoritative_generation.rs").read_text(encoding="utf-8")
+    assert "verified_native_cold_snapshot_sha256" in native
+    assert "WorkspaceSnapshotReader::new(restored, &inventory)" in native
+    assert "actual != inspected.metadata().plaintext_digest().bytes()" in native
     shipping = (ROOT / "apps/profile-bridge/src/shipping_composition.rs").read_text(
         encoding="utf-8"
     )
-    assert "R2_PRUNE_AUTHORITY=STAGING_CANARY_ONLY" in shipping
+    assert "R2_PRUNE_AUTHORITY=PROVED_NATIVE_CONTENT" in shipping
     worker = (
         ROOT / "apps/control-plane-worker/src/profile_generation_successor_ingress.rs"
     ).read_text(encoding="utf-8")
-    assert "staging_r2_prune_canary_scope(" in worker
+    assert "exact_restored_native_digest(" in worker
     assert "body.native_snapshot_sha256() != original_snapshot" in worker
-    assert "lower_sha256(body.native_browser_witness_sha256())" in worker
+    assert "body.native_browser_witness_sha256()," in worker
     route_start = worker.index("async fn dispatch_working_proof(")
     route_end = worker.index("async fn retire_one_old_generation(", route_start)
     handler = worker[route_start:route_end]
@@ -90,11 +94,13 @@ def main() -> int:
     assert "native_browser_witness_sha256 IS NOT NULL" in d1
     assert "valid_native_proof_digest(native_snapshot_sha256)" in d1
     assert "valid_native_proof_digest(native_browser_witness_sha256)" in d1
+    assert "native_snapshot_sha256 != native_browser_witness_sha256" in d1
     assert "JOIN profile_generation_working_proofs AS proof" in d1
     # Schema0040 old rows must be NULL, always excluded from reserve/prune.
     migration = NATIVE.read_text(encoding="utf-8")
     assert "retirement_requires_native_cold_recovery_proof" in migration
     assert "native_snapshot_sha256 IS NULL" in migration
+    assert "working_requires_exact_restored_native_bytes" in migration
 
     # The SQL fixture below tests historical schema integrity only. A direct
     # synthetic insert is NOT a working-browser certificate or pruning permit.
@@ -120,7 +126,8 @@ def main() -> int:
         assert fx["catalog_snapshot"](conn) == baseline
         rejected(conn, fx, native_snapshot_sha256="BAD", native_browser_witness_sha256="b" * 64)
         rejected(conn, fx, native_snapshot_sha256="a" * 64, native_browser_witness_sha256="UPPER" * 13)
-        insert(conn, fx, native_snapshot_sha256="a" * 64, native_browser_witness_sha256="b" * 64)
+        rejected(conn, fx, native_snapshot_sha256="a" * 64, native_browser_witness_sha256="b" * 64)
+        insert(conn, fx, native_snapshot_sha256="a" * 64, native_browser_witness_sha256="a" * 64)
         conn.commit()
         assert conn.execute("SELECT COUNT(*) FROM profile_generation_working_proofs").fetchone()[0] == 1
         # Execute the exact Rust D1 loader SQL against the real governed

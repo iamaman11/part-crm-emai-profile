@@ -895,12 +895,12 @@ where
             downloader,
             now,
             observe_browser_state,
-            None,
+            false,
         )
     }
 
-    /// Explicit stage-only C09 positive proof. The normal Open and all
-    /// browser-independent tests continue to use identity-only cold probing.
+    /// C09 production proof using the existing cold restore and native Firefox
+    /// owner; no extra browser process or serialization path is introduced.
     #[allow(clippy::too_many_arguments)]
     pub fn probe_and_certify_verified_predecessor_once<Dl, V>(
         &mut self,
@@ -910,7 +910,6 @@ where
         downloader: &mut Dl,
         now: UnixMillis,
         observe_browser_state: &mut V,
-        native_witness: &std::cell::RefCell<Option<String>>,
     ) -> Result<HistoricalColdProbeObservation, OperatorFlowError>
     where
         C: GenerationReopenControlPort,
@@ -926,7 +925,7 @@ where
             downloader,
             now,
             observe_browser_state,
-            Some(native_witness),
+            true,
         )
     }
 
@@ -939,7 +938,7 @@ where
         downloader: &mut Dl,
         now: UnixMillis,
         observe_browser_state: &mut V,
-        native_witness: Option<&std::cell::RefCell<Option<String>>>,
+        certify_working: bool,
     ) -> Result<HistoricalColdProbeObservation, OperatorFlowError>
     where
         C: GenerationReopenControlPort,
@@ -1015,41 +1014,46 @@ where
         // and the original CURRENT fence/old key were reauthorized.
         // An identity-only probe NEVER certifies: the explicit stage proof
         // additionally requires the observed managed Firefox IPC witness.
-        let certified = if let (Ok(observation), Some(slot)) = (&observed, native_witness) {
-            let witness = slot.borrow().clone();
-            let inspected = encrypted_generation_domain::inspect_generation_metadata_prelude(
-                observation.opening_prelude(),
-            )
-            .ok();
-            match (witness, inspected) {
-                (Some(witness), Some(metadata))
-                    if witness.len() == 64
-                        && witness
-                            .bytes()
-                            .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b)) =>
-                {
-                    let snapshot = metadata.metadata().plaintext_digest().bytes();
-                    let snapshot_hex = snapshot
+        let certified = if let Ok(observation) = &observed {
+            if !certify_working {
+                true // Non-certifying maintenance checks never write D1 WORKING.
+            } else {
+                let inspected = encrypted_generation_domain::inspect_generation_metadata_prelude(
+                    observation.opening_prelude(),
+                );
+                if let Ok(metadata) = inspected {
+                    let original = metadata
+                        .metadata()
+                        .plaintext_digest()
+                        .bytes()
                         .iter()
                         .map(|byte| format!("{byte:02x}"))
                         .collect::<String>();
-                    self.coordinator
-                        .certify_verified_predecessor_working(
-                            observation.tenant_id(),
-                            observation.profile_id(),
-                            observation.current_generation_id(),
-                            observation.predecessor_generation_id(),
-                            observation.opening_prelude(),
-                            observation.runtime_inventory_sha256(),
-                            &snapshot_hex,
-                            &witness,
-                        )
-                        .unwrap_or(false)
+                    // Actual restored native bytes (not the SHA of Firefox
+                    // fingerprint diagnostics) must match immutable pre-Save
+                    // BPGC metadata before any WORKING/DELETE admission.
+                    if observation.native_cold_snapshot_sha256() != original {
+                        false
+                    } else {
+                        self.coordinator
+                            .certify_verified_predecessor_working(
+                                observation.tenant_id(),
+                                observation.profile_id(),
+                                observation.current_generation_id(),
+                                observation.predecessor_generation_id(),
+                                observation.opening_prelude(),
+                                observation.runtime_inventory_sha256(),
+                                &original,
+                                observation.native_cold_snapshot_sha256(),
+                            )
+                            .unwrap_or(false)
+                    }
+                } else {
+                    false
                 }
-                _ => false,
             }
         } else {
-            native_witness.is_none()
+            false
         };
         let release_failed = if observed.is_ok() {
             self.coordinator

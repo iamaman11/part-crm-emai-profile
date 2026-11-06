@@ -1,4 +1,4 @@
--- C09: disposable-staging native browser recovery proof, migrate-before-code.
+-- C09: exact native Firefox snapshot recovery proof, migrate-before-code.
 -- Legacy schema0038 metadata-only receipts remain immutable with NULL witnesses
 -- and cannot grant protected LKG status or authorise any R2 DELETE.
 -- This does NOT store cookie values, URLs, IndexedDB content or encryption keys.
@@ -27,7 +27,21 @@ FOR EACH ROW WHEN NOT EXISTS (
       AND proof.generation_id = NEW.retained_working_generation_id
       AND proof.native_snapshot_sha256 IS NOT NULL
       AND proof.native_browser_witness_sha256 IS NOT NULL
+      AND proof.native_browser_witness_sha256 = proof.native_snapshot_sha256
 )
 BEGIN
     SELECT RAISE(ABORT, 'retirement_requires_native_cold_recovery_proof');
+END;
+
+
+-- The original pre-Save BPGW SHA and independent post-R2 native-file SHA
+-- must be identical. A hash of browser fingerprint/ready diagnostics cannot
+-- ever masquerade as a WORKING/LKG proof, even through a direct D1 caller.
+CREATE TRIGGER profile_generation_exact_native_content_proof_required
+BEFORE INSERT ON profile_generation_working_proofs
+FOR EACH ROW WHEN NEW.native_snapshot_sha256 IS NULL
+    OR NEW.native_browser_witness_sha256 IS NULL
+    OR NEW.native_browser_witness_sha256 <> NEW.native_snapshot_sha256
+BEGIN
+    SELECT RAISE(ABORT, 'working_requires_exact_restored_native_bytes');
 END;

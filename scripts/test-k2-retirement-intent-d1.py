@@ -92,7 +92,7 @@ def previous_browser_proven_lkg_can_be_retired() -> None:
             conn.executescript(path.read_text(encoding="utf-8"))
         FX["insert_device_commit"](conn, FX["command_values"]())
         working_test = runpy.run_path(str(ROOT / "scripts/test-k2-working-proof-d1.py"))
-        working_test["insert"](conn, FX, native_snapshot_sha256="a" * 64, native_browser_witness_sha256="b" * 64)  # BASE is the first certified LKG
+        working_test["insert"](conn, FX, native_snapshot_sha256="a" * 64, native_browser_witness_sha256="a" * 64)  # BASE is the first certified LKG
 
         conn.execute(
             """
@@ -131,7 +131,7 @@ def previous_browser_proven_lkg_can_be_retired() -> None:
             metadata_digest=FX["METADATA_DIGEST"],
             container_digest=FX["CONTAINER_DIGEST"],
             native_snapshot_sha256="a" * 64,
-            native_browser_witness_sha256="b" * 64,
+            native_browser_witness_sha256="a" * 64,
             proven_at_ms=125,
         )
         conn.execute(
@@ -255,7 +255,7 @@ def main() -> None:
         conn.commit()
         refused(conn)  # A VERIFIED predecessor is not a browser WORKING proof.
         working_test = runpy.run_path(str(ROOT / "scripts/test-k2-working-proof-d1.py"))
-        working_test["insert"](conn, FX, native_snapshot_sha256="a" * 64, native_browser_witness_sha256="b" * 64)
+        working_test["insert"](conn, FX, native_snapshot_sha256="a" * 64, native_browser_witness_sha256="a" * 64)
         conn.commit()
         refused(conn)  # Candidate is CURRENT and must remain immutable.
         FX["owner_register"](conn, FX["WINNER"], 110)
