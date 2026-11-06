@@ -248,7 +248,7 @@ export function MailboxesWorkspace() {
       </section>
 
       <section className="panel full-span">
-        <span className="eyebrow">Bounded metadata-only execution</span>
+        <span className="eyebrow">Mailbox check (provider metadata only)</span>
         <h2>Mailbox job</h2>
         <div className="split-grid">
           <form className="stack-form" onSubmit={(event) => {
@@ -297,7 +297,7 @@ export function MailboxesWorkspace() {
             </dl>
             <ConfirmAction
               label="run mailbox job"
-              consequence="The current repository-local provider lane is synthetic metadata-only. Running advances the governed job state; it does not expose message payloads."
+              consequence="Run the authorized provider check using the configured Gmail API, IMAP or Microsoft Graph connection. Only bounded status/count metadata is stored; message content is not returned. Browser fallback requires a separate authorized device job."
               disabled={jobRun.isPending}
               onConfirm={() => jobRun.mutateAsync(job.version).then(() => undefined)}
             />
