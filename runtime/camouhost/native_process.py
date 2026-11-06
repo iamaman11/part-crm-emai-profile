@@ -11,6 +11,7 @@ Firefox owns SessionStore, navigation, window/tab closure, and network state.
 from __future__ import annotations
 
 import copy
+import json
 import subprocess
 from dataclasses import dataclass
 from pathlib import Path
@@ -49,7 +50,7 @@ def prepare_native_environment(
         k: v for k, v in inherited.items()
         if not k.startswith(("CAMOU_CONFIG_", "CAMOU_PREFS_"))
     }
-    from camoufox.utils import launch_options
+    from camoufox.utils import get_env_vars, launch_options
 
     try:
         launch = launch_options(
@@ -73,7 +74,45 @@ def prepare_native_environment(
         raise NativeLaunchError("upstream startup fingerprint missing")
     if any(not isinstance(key, str) for key in official_env):
         raise NativeLaunchError("upstream startup environment invalid")
-    return {key: str(value) for key, value in official_env.items()}
+
+    # The upstream launcher can re-randomize a persisted fingerprint field
+    # (physically reproduced with navigator.maxTouchPoints across six opens).
+    # Let Camoufox own the startup preferences and default addons, but retain
+    # *exactly* the sealed identity supplied by the generation owner. This is
+    # not a second fingerprint generator or a change to Firefox internals.
+    chunks = sorted(
+        (int(key.rsplit("_", 1)[1]), str(value))
+        for key, value in official_env.items()
+        if key.startswith("CAMOU_CONFIG_") and key.rsplit("_", 1)[1].isdigit()
+    )
+    try:
+        generated = json.loads("".join(value for _, value in chunks))
+    except (ValueError, TypeError) as error:
+        raise NativeLaunchError("official startup fingerprint malformed") from error
+    if not isinstance(generated, dict):
+        raise NativeLaunchError("official startup fingerprint invalid")
+    pinned = copy.deepcopy(dict(identity))
+    addons = generated.get("addons")
+    if addons is not None:
+        if not isinstance(addons, list) or any(
+            not isinstance(value, str) for value in addons
+        ):
+            raise NativeLaunchError("official browser addons invalid")
+        if "addons" in pinned and pinned["addons"] != addons:
+            raise NativeLaunchError("persisted addon identity conflicts with upstream")
+        pinned["addons"] = addons
+    # Official get_env_vars serializes the pinned identity in the same chunked
+    # format used at Firefox STARTUP, without launch_options re-generation.
+    try:
+        pinned_env = get_env_vars(pinned, "win", path=browser)
+    except (OSError, TypeError, ValueError) as error:
+        raise NativeLaunchError("pinned native fingerprint unavailable") from error
+    merged = {
+        key: str(value) for key, value in official_env.items()
+        if not key.startswith("CAMOU_CONFIG_")
+    }
+    merged.update({key: str(value) for key, value in pinned_env.items()})
+    return merged
 
 
 @dataclass
