@@ -35,6 +35,8 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 const CONFIG_NAME: &str = "camoufox-config.json";
 const REAL_ENTRYPOINT: &str = "camouhost/real.py";
+#[cfg(windows)]
+const NATIVE_ENTRYPOINT: &str = "camouhost/native_process.py";
 const RUNTIME_LOCK_PATH: &str = "camouhost/runtime-lock.json";
 #[cfg(windows)]
 const WINDOWS_BROWSER_EXECUTABLE: &str = "browser/camoufox.exe";
@@ -112,6 +114,8 @@ struct RuntimeLaunchBinding {
     profile_stable_probe_sha256: String,
     profile_stable_identity: Option<ProfileStableIdentity>,
     entrypoint_sha256: String,
+    #[cfg(windows)]
+    native_entrypoint_sha256: String,
     #[cfg(windows)]
     browser_sha256: String,
     #[cfg(windows)]
@@ -192,6 +196,9 @@ fn validate_runtime_identity(
     }
     let entrypoint_sha256 = inventory_digest(runtime_bundle, REAL_ENTRYPOINT)?.to_owned();
     #[cfg(windows)]
+    let native_entrypoint_sha256 =
+        inventory_digest(runtime_bundle, NATIVE_ENTRYPOINT)?.to_owned();
+    #[cfg(windows)]
     let browser_sha256 = inventory_digest(runtime_bundle, WINDOWS_BROWSER_EXECUTABLE)?.to_owned();
     #[cfg(windows)]
     let python_sha256 = inventory_digest(runtime_bundle, WINDOWS_PYTHON_EXECUTABLE)?.to_owned();
@@ -203,6 +210,8 @@ fn validate_runtime_identity(
         profile_stable_probe_sha256: probe_sha256.to_owned(),
         profile_stable_identity: browser_identity.profile_stable_identity().cloned(),
         entrypoint_sha256,
+        #[cfg(windows)]
+        native_entrypoint_sha256,
         #[cfg(windows)]
         browser_sha256,
         #[cfg(windows)]
@@ -462,6 +471,11 @@ impl ManagedCamouhostProcess {
         verify_file_digest(&entrypoint, &binding.entrypoint_sha256)?;
         verify_file_digest(&runtime_lock, &binding.runtime_lock_sha256)?;
         #[cfg(windows)]
+        verify_file_digest(
+            &self.config.runtime_root.join(NATIVE_ENTRYPOINT),
+            &binding.native_entrypoint_sha256,
+        )?;
+        #[cfg(windows)]
         {
             let browser = self.config.runtime_root.join(WINDOWS_BROWSER_EXECUTABLE);
             let python = self.config.runtime_root.join(WINDOWS_PYTHON_EXECUTABLE);
@@ -657,11 +671,14 @@ impl CamouhostPort for ManagedCamouhostIpc {
                     // Never run browser-visible JS or send a navigation command.
                     // Native Camouhost Ready requires actual Firefox profile
                     // lock acquisition; it is NOT a fingerprint-content proof.
-                    if self.shared.lock().map_err(|_| BridgePortError::Unavailable)?
-                        .navigation_target.is_some()
+                    let state = self.shared.lock()
+                        .map_err(|_| BridgePortError::Unavailable)?;
+                    if state.active_session.as_ref() != Some(session_id)
+                        || state.navigation_target.is_some()
                     {
                         return Err(BridgePortError::InvalidResponse);
                     }
+                    drop(state);
                     exchange_shared(&self.shared, message)
                 }
                 #[cfg(not(windows))]
@@ -718,6 +735,7 @@ fn verify_managed_browser_visible_identity(
         .collect())
 }
 
+#[cfg(not(windows))]
 fn launch_with_browser_visible_admission(
     shared: &Arc<Mutex<ProcessState>>,
     display_mode: RuntimeDisplayMode,
@@ -1694,6 +1712,11 @@ mod tests {
         #[cfg(windows)]
         let entries = {
             let mut entries = entries;
+            entries.push(InventoryEntry::new(
+                BundleRelativePath::parse(super::NATIVE_ENTRYPOINT)?,
+                10,
+                digest('8')?,
+            ));
             entries.push(InventoryEntry::new(
                 BundleRelativePath::parse(super::WINDOWS_BROWSER_EXECUTABLE)?,
                 10,
