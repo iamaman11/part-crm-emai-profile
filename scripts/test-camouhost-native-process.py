@@ -79,7 +79,8 @@ def main() -> int:
                 assert not created
 
             proc = module.launch_native_camoufox(
-                workspace=workspace, browser=browser, identity={"sentinel":"pinned"},
+                workspace=workspace, browser=browser,
+                identity={"sentinel":"pinned", "navigator.maxTouchPoints":7},
                 inherited={"SYSTEMROOT":"C:\\Windows", "CAMOU_CONFIG_1":"injected"},
                 writer_active=lambda _: False,
                 admission_granted=True,
