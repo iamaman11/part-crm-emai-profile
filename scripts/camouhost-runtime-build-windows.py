@@ -25,6 +25,7 @@ from typing import Any
 ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_LOCK = ROOT / "runtime/camouhost/runtime-lock.json"
 DEFAULT_RUNTIME_SOURCE = ROOT / "runtime/camouhost/real.py"
+DEFAULT_NATIVE_SOURCE = ROOT / "runtime/camouhost/native_process.py"
 MAX_DOWNLOAD_BYTES = 2 * 1024 * 1024 * 1024
 MAX_EXTRACTED_BYTES = 4 * 1024 * 1024 * 1024
 MAX_ARCHIVE_FILES = 500_000
@@ -307,7 +308,7 @@ def remove_python_caches(root: Path) -> None:
 
 
 def verify_runtime_tree(output: Path, lock: dict[str, Any], candidate_provenance: dict[str, Any]) -> dict[str, Any]:
-    required = [output/"python/python.exe", output/"browser/camoufox.exe", output/"camouhost/real.py", output/"camouhost/runtime-lock.json", output/"camouhost/browser-official-provenance.json"]
+    required = [output/"python/python.exe", output/"browser/camoufox.exe", output/"camouhost/real.py", output/"camouhost/native_process.py", output/"camouhost/runtime-lock.json", output/"camouhost/browser-official-provenance.json"]
     for path in required:
         if path.is_symlink() or not path.is_file() or path.stat().st_size == 0: fail(f"materialized runtime file missing/not regular: {path}")
     components = lock["components"]
@@ -355,6 +356,10 @@ def materialize(
     if output.exists() or output.is_symlink(): fail("runtime output must not already exist")
     if runtime_source.is_symlink() or not runtime_source.is_file():
         fail("real Camouhost source missing/not regular")
+    # One repository-owned native launch primitive is packaged alongside the
+    # supported real.py entrypoint. Never download executable Python at Open.
+    if DEFAULT_NATIVE_SOURCE.is_symlink() or not DEFAULT_NATIVE_SOURCE.is_file():
+        fail("native Camoufox source missing/not regular")
     build_python = build_python.resolve(strict=True)
     lock = load_lock(runtime_lock)
     with tempfile.TemporaryDirectory(prefix="camouhost-windows-build-") as directory:
@@ -386,6 +391,7 @@ def materialize(
             camouhost = output / "camouhost"
             camouhost.mkdir()
             shutil.copyfile(runtime_source, camouhost / "real.py")
+            shutil.copyfile(DEFAULT_NATIVE_SOURCE, camouhost / "native_process.py")
             shutil.copyfile(runtime_lock, camouhost / "runtime-lock.json")
             (camouhost / "browser-official-provenance.json").write_bytes(canonical(provenance))
             remove_python_caches(output)
