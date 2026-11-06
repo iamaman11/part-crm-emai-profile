@@ -159,6 +159,7 @@ impl FilesystemRuntimeBundleSelection {
     // and repair still use load_bundle() to hash the complete official runtime.
     // The normal Open trusts the already installed file contents, while checking
     // the exact installed tree and the five critical launch files on every run.
+    #[cfg(any(windows, test))]
     pub(crate) fn load_installed_bundle(
         &self,
     ) -> Result<ApprovedRuntimeBundle, RuntimeBundleSelectionError> {
@@ -389,9 +390,11 @@ fn size_balanced_hash_lanes(
     let mut lanes = vec![Vec::new(); workers];
     let mut loads = vec![0_u64; workers];
     for file in largest_first {
-        let lane = (0..workers)
-            .min_by_key(|&index| loads[index])
-            .expect("worker count is checked before scheduling");
+        // Zero workers is already rejected by the verifier. Keep this
+        // scheduling helper non-panicking even if called independently.
+        let Some(lane) = (0..workers).min_by_key(|&index| loads[index]) else {
+            return lanes;
+        };
         loads[lane] = loads[lane].saturating_add(file.size_bytes);
         lanes[lane].push(file);
     }
