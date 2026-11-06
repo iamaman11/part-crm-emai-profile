@@ -1065,7 +1065,10 @@ mod tests {
         visited.sort();
         let mut original: Vec<_> = expected.iter().map(|file| file.path.clone()).collect();
         original.sort();
-        assert_eq!(visited, original, "every official file must be verified once");
+        assert_eq!(
+            visited, original,
+            "every official file must be verified once"
+        );
         for workers in 1..=4 {
             let assigned = size_balanced_hash_lanes(&expected, workers);
             assert_eq!(assigned.len(), workers);
