@@ -143,7 +143,10 @@ mod p3_fixture {
                 || !observed.local_storage
                 || !observed.indexed_db
                 || observed.state_digest.len() != 64
-                || !observed.state_digest.bytes().all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
+                || !observed
+                    .state_digest
+                    .bytes()
+                    .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
                 || observed.state_digest.bytes().all(|b| b == b'0')
             {
                 return Err(format!(
