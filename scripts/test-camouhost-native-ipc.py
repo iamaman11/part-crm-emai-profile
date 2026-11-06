@@ -60,9 +60,9 @@ def main():
              f"hello|{r.IPC_VERSION}\nlaunch|{SESSION}\n"
              f"observe_close|{SESSION}\nobserve_close|{SESSION}\n"
              f"close|{SESSION}\n"
-         )), contextlib.redirect_stdout(io.StringIO()) as stdout:
+         )), contextlib.redirect_stdout(io.TextIOWrapper(io.BytesIO(), encoding="utf-8")) as stdout:
         result = r.run_native_ipc()
-    lines = stdout.getvalue().splitlines()
+    lines = stdout.buffer.getvalue().decode("utf-8").splitlines()
     assert result == 0, result
     assert lines == [
         f"hello_ack|{r.IPC_VERSION}",
@@ -84,9 +84,9 @@ def main():
              f"hello|{r.IPC_VERSION}\nlaunch|{SESSION}\n"
          )), patch.object(r.time, "monotonic", side_effect=[0.0, 32.0]), \
          patch.object(native, "launch_native_camoufox", return_value=MissingWriter()), \
-         contextlib.redirect_stdout(io.StringIO()) as failed:
+         contextlib.redirect_stdout(io.TextIOWrapper(io.BytesIO(), encoding="utf-8")) as failed:
         bad = r.run_native_ipc()
-    assert bad == 5 and failed.getvalue().splitlines()[-1] == "error|runtime"
+    assert bad == 5 and failed.buffer.getvalue().decode("utf-8").splitlines()[-1] == "error|runtime"
 
     print("CAMOUHOST_NATIVE_IPC_BOUNDARY=PASS")
     return 0
