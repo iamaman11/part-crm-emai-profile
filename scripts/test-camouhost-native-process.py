@@ -39,11 +39,6 @@ def main() -> int:
         "CAMOU_PREFS_1": "native" if prefs.get("browser.startup.page") == 3 else "unexpected"
     }
 
-    class FakeProcess:
-        returncode = None
-        def poll(self):
-            return self.returncode
-
     with tempfile.TemporaryDirectory() as temp:
         workspace = pathlib.Path(temp) / "generation"
         userdata = workspace / "user_data"
@@ -53,7 +48,7 @@ def main() -> int:
         created = []
         def spawn(args, **kwargs):
             created.append((args, kwargs))
-            return FakeProcess()
+            return None
         modules = {
             "camoufox": root,
             "camoufox.addons": addon,
@@ -85,39 +80,20 @@ def main() -> int:
             assert kwargs["env"]["CAMOU_CONFIG_1"] == "pinned"
             assert kwargs["env"]["CAMOU_PREFS_1"] == "native"
             assert "playwright" not in str(args).lower()
-            assert proc.exit_state() == "STARTING_OR_QUIESCING"
-            proc.process.returncode = 0
-            assert proc.exit_state() == "UNKNOWN_PRESERVE_LOCAL", (
-                "zero-exit GUI delegate without real Firefox ownership is not clean Save"
-            )
-            proc.process.returncode = None
+            assert proc.profile_state() == "WRITER_NOT_OBSERVED"
+            assert not hasattr(proc, "process"), "Bridge must not supervise native processes"
             proc.writer_active = lambda _: True
-            assert proc.exit_state() == "RUNNING"
+            assert proc.profile_state() == "PROFILE_BUSY"
             assert proc.observed_native_writer
-            proc.process.returncode = 11
             proc.writer_active = lambda _: False
-            assert proc.exit_state() == "ABNORMAL_EXIT_PRESERVE_LOCAL"
-            proc.process.returncode = 0
-            assert proc.exit_state() == "UNKNOWN_PRESERVE_LOCAL", (
-                "a held native Firefox process witness is mandatory even after a lock was seen"
-            )
-            class ActualNativeProcess:
-                exit_zero = False
-                def safely_exited(self):
-                    return self.exit_zero
-            native_root = ActualNativeProcess()
-            proc.browser_exit_witness = native_root
-            assert proc.exit_state() == "RUNNING_OR_ABNORMAL_PRESERVE_LOCAL"
-            native_root.exit_zero = True
-            assert proc.exit_state() == "CLOSED_AND_UNLOCKED"
-            proc.writer_active = lambda _: True
-            assert proc.exit_state() == "RUNNING", (
-                "native Firefox can outlive an exit-zero GUI launcher"
-            )
+            assert proc.profile_state() == "QUIESCENT_REQUIRES_FILE_VALIDATION"
+            # Lock release is not a Save witness, even after a native crash.
+            assert proc.profile_state() != "SAVED"
             def unknown(_):
                 raise OSError("untrusted path hidden")
             proc.writer_active = unknown
-            assert proc.exit_state() == "UNKNOWN_PRESERVE_LOCAL"
+            assert proc.profile_state() == "UNKNOWN_PRESERVE_LOCAL"
+            assert len(created) == 1, "observation must not relaunch the browser"
 
     print("NATIVE_CAMOUFOX_PROCESS_BOUNDARY=PASS")
     return 0
