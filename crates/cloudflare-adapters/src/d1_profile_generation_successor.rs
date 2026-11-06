@@ -18,7 +18,17 @@ use sha2::{Digest, Sha256};
 use worker::d1::D1Database;
 use worker::query;
 
-/// Strictly one journal-linked immediate predecessor. This is an immutable
+/// A metadata-only historical D1 receipt is NOT evidence of recovered native
+// cookies/tabs/localStorage/IndexedDB. Before a reviewed and server-verifiable
+// browser-data contract is implemented end-to-end, no direct D1 call may
+// certify WORKING, select a protected LKG or admit an R2 retirement effect.
+// This guard is intentionally independent of the Worker ingress gate: old
+// D1 rows remain append-only historical metadata, not pruning authority.
+fn native_browser_data_working_contract_complete() -> bool {
+    false
+}
+
+// Strictly one journal-linked immediate predecessor. This is an immutable
 /// candidate descriptor, not a browser WORKING certificate or deletion grant.
 /// The only D1 write path for the browser-proven historical LKG receipt.
 /// A receipt is immutable metadata and NEVER an R2 delete permission.
@@ -77,11 +87,6 @@ WHERE profile.tenant_id = ?
   AND proof.metadata_digest = reserve.metadata_digest
   AND proof.container_digest = reserve.container_digest
   AND proof.runtime_inventory_sha256 = ?
-  -- Migration 0040 rejects all legacy metadata-only WORKING receipts.
-  -- Version 1 is future-only until a genuine native browser-data proof
-  -- and its server-verifiable admission become available together.
-  AND proof.browser_data_proof_version = 1
-  AND proof.browser_data_proof_digest IS NOT NULL
   AND NOT EXISTS (
       SELECT 1 FROM profile_generation_retirement_intents AS retired
       WHERE retired.tenant_id = reserve.tenant_id
@@ -129,9 +134,6 @@ WITH protected AS (
       AND proof.metadata_digest = reserved.metadata_digest
       AND proof.container_digest = reserved.container_digest
       AND proof.runtime_inventory_sha256 = ?
-      -- No old metadata-only WORKING claim may authorize R2 retirement.
-      AND proof.browser_data_proof_version = 1
-      AND proof.browser_data_proof_digest IS NOT NULL
       AND NOT EXISTS (
           SELECT 1 FROM profile_generation_retirement_intents AS retired
           WHERE retired.tenant_id = reserved.tenant_id
@@ -424,6 +426,9 @@ impl D1ProfileGenerationSuccessorCommitJournal {
         {
             return Err(historical_integrity_failure());
         }
+        if !native_browser_data_working_contract_complete() {
+            return Err(historical_integrity_failure());
+        }
         let epoch = i64::try_from(coordinator_epoch).map_err(|_| historical_integrity_failure())?;
         let at = i64::try_from(now.value()).map_err(|_| historical_integrity_failure())?;
         let fields = (
@@ -616,6 +621,9 @@ impl D1ProfileGenerationSuccessorCommitJournal {
         if !is_sha256_hex(approved_runtime_inventory_sha256) {
             return Err(historical_integrity_failure());
         }
+        if !native_browser_data_working_contract_complete() {
+            return Ok(None);
+        }
         let row = query!(
             &self.database,
             LOAD_UNPROVEN_HISTORICAL_PRUNE_REVIEW,
@@ -669,6 +677,9 @@ impl D1ProfileGenerationSuccessorCommitJournal {
             || !is_sha256_hex(candidate.container_digest())
             || !is_sha256_hex(approved_runtime_inventory_sha256)
         {
+            return Err(historical_integrity_failure());
+        }
+        if !native_browser_data_working_contract_complete() {
             return Err(historical_integrity_failure());
         }
         let version =
@@ -763,6 +774,9 @@ impl D1ProfileGenerationSuccessorCommitJournal {
         // allowlist, NEVER a value copied from the untrusted D1 receipt.
         if !is_sha256_hex(approved_runtime_inventory_sha256) {
             return Err(historical_integrity_failure());
+        }
+        if !native_browser_data_working_contract_complete() {
+            return Ok(None);
         }
         let row = query!(
             &self.database,
@@ -1337,6 +1351,14 @@ mod tests {
     };
 
     #[test]
+    fn metadata_only_historical_receipts_cannot_authorize_working_or_retirement() {
+        assert!(
+            !super::native_browser_data_working_contract_complete(),
+            "no native browser-data proof contract is shipping yet"
+        );
+    }
+
+    #[test]
     fn durable_retirement_replay_requires_all_exact_original_fence_fields() {
         let insert = super::INSERT_GENERATION_RETIREMENT_INTENT;
         let replay = super::LOAD_EXACT_GENERATION_RETIREMENT_INTENT;
@@ -1371,8 +1393,6 @@ mod tests {
         assert!(query.contains("profile.status = 'READY'"));
         assert!(query.contains("profile.active_generation_id = ?"));
         assert!(query.contains("proof.runtime_inventory_sha256 = ?"));
-        assert!(query.contains("proof.browser_data_proof_version = 1"));
-        assert!(query.contains("proof.browser_data_proof_digest IS NOT NULL"));
         assert!(query.contains("proof.metadata_digest = reserved.metadata_digest"));
         assert!(query.contains("proof.container_digest = reserved.container_digest"));
         assert!(query.contains("old.generation_id <> protected.active_generation_id"));
@@ -1393,8 +1413,6 @@ mod tests {
         assert!(query.contains("proof.metadata_digest = reserve.metadata_digest"));
         assert!(query.contains("proof.container_digest = reserve.container_digest"));
         assert!(query.contains("proof.runtime_inventory_sha256 = ?"));
-        assert!(query.contains("proof.browser_data_proof_version = 1"));
-        assert!(query.contains("proof.browser_data_proof_digest IS NOT NULL"));
         assert!(query.contains("profile.active_generation_id = ?"));
         assert!(query.contains("reserve.status = 'VERIFIED'"));
         assert!(query.contains("reserve.generation_id <> current.generation_id"));
