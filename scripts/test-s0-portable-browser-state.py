@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import secrets
 import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
@@ -23,9 +24,10 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
-def page(visit: int) -> bytes:
+def page(visit: int, nonce: str) -> bytes:
     source = f"""<!doctype html><meta charset='utf-8'><script>
 const VISIT = {visit};
+const PROOF_NONCE = '{nonce}';
 const COOKIE_NAME = 's0_portable_cookie';
 const COOKIE_VALUE = 'v1';
 const STORAGE_KEY = 's0_portable_local_storage';
@@ -34,9 +36,11 @@ const STORE_NAME = 'markers';
 const MARKER_KEY = 'accepted';
 const MARKER_VALUE = 'profile-generation-portable-v1';
 
-function cookiePresent() {{
-  return document.cookie.split(';').map(value => value.trim())
-    .includes(COOKIE_NAME + '=' + COOKIE_VALUE);
+function observedCookieValue() {{
+  const prefix = COOKIE_NAME + '=';
+  const cookie = document.cookie.split(';').map(value => value.trim())
+    .find(value => value.startsWith(prefix));
+  return cookie ? cookie.slice(prefix.length) : null;
 }}
 function openDb() {{
   return new Promise((resolve, reject) => {{
@@ -53,7 +57,7 @@ function readDb(db) {{
   return new Promise((resolve, reject) => {{
     const tx = db.transaction(STORE_NAME, 'readonly');
     const request = tx.objectStore(STORE_NAME).get(MARKER_KEY);
-    request.onsuccess = () => resolve(request.result === MARKER_VALUE);
+    request.onsuccess = () => resolve(request.result ?? null);
     request.onerror = () => reject(request.error || new Error('indexedDB read failed'));
   }});
 }}
@@ -67,10 +71,24 @@ function writeDb(db) {{
   }});
 }}
 async function snapshot(db) {{
+  const cookieValue = observedCookieValue();
+  const localValue = localStorage.getItem(STORAGE_KEY);
+  const indexedValue = await readDb(db);
+  // The exact same native browser values must survive encrypted Save, a
+  // missing-local cold R2 restore, and the independently cold N-1 open.
+  // Never send raw cookie/LS/IDB values outside this disposable test origin.
+  // Per-run nonce prevents matching a digest reused by an earlier test run.
+  const encoded = new TextEncoder().encode(
+    JSON.stringify([PROOF_NONCE, location.origin, cookieValue, localValue, indexedValue])
+  );
+  const sha = await crypto.subtle.digest('SHA-256', encoded);
+  const stateDigest = Array.from(new Uint8Array(sha))
+    .map(value => value.toString(16).padStart(2, '0')).join('');
   return {{
-    cookie: cookiePresent(),
-    local_storage: localStorage.getItem(STORAGE_KEY) === MARKER_VALUE,
-    indexed_db: await readDb(db),
+    cookie: cookieValue === COOKIE_VALUE,
+    local_storage: localValue === MARKER_VALUE,
+    indexed_db: indexedValue === MARKER_VALUE,
+    state_digest: stateDigest,
   }};
 }}
 async function report(phase, state) {{
@@ -83,6 +101,7 @@ async function report(phase, state) {{
       cookie: state.cookie === true,
       local_storage: state.local_storage === true,
       indexed_db: state.indexed_db === true,
+      state_digest: state.state_digest,
     }}),
   }});
 }}
@@ -105,7 +124,7 @@ async function report(phase, state) {{
   db.close();
 }})().catch(async () => {{
   try {{
-    await report('error', {{cookie: false, local_storage: false, indexed_db: false}});
+    await report('error', {{cookie: false, local_storage: false, indexed_db: false, state_digest: '0'.repeat(64)}});
   }} catch (_) {{}}
 }});
 </script><title>S0 portable browser state</title>"""
@@ -118,6 +137,7 @@ class StateServer(ThreadingHTTPServer):
     def __init__(self, port: int) -> None:
         self._visit_lock = threading.Lock()
         self._visits = 0
+        self.proof_nonce = secrets.token_hex(16)
         super().__init__(("127.0.0.1", port), Handler)
 
     def next_visit(self) -> int:
@@ -137,7 +157,7 @@ class Handler(BaseHTTPRequestHandler):
             self.send_response(404)
             self.end_headers()
             return
-        payload = page(self.server.next_visit())
+        payload = page(self.server.next_visit(), self.server.proof_nonce)
         self.send_response(200)
         self.send_header("Content-Type", "text/html; charset=utf-8")
         self.send_header("Cache-Control", "no-store")
@@ -172,6 +192,7 @@ class Handler(BaseHTTPRequestHandler):
                 "cookie",
                 "local_storage",
                 "indexed_db",
+                "state_digest",
             }
             or value["phase"] not in {"seed", "verify", "error"}
             or isinstance(value["visit"], bool)
@@ -181,6 +202,9 @@ class Handler(BaseHTTPRequestHandler):
                 not isinstance(value[name], bool)
                 for name in ("cookie", "local_storage", "indexed_db")
             )
+            or not isinstance(value["state_digest"], str)
+            or len(value["state_digest"]) != 64
+            or any(char not in "0123456789abcdef" for char in value["state_digest"])
         ):
             self.send_response(400)
             self.end_headers()
