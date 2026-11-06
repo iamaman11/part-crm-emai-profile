@@ -87,6 +87,13 @@ def main() -> int:
         else:
             raise AssertionError("unsupported headless mode accepted")
 
+    # The shipping Windows launcher must select the native path explicitly.
+    # This is source wiring coverage, not a substitute for a Rust build.
+    rust = SOURCE.parents[2] / "apps/profile-bridge/src/camouhost_process.rs"
+    shipping = rust.read_text(encoding="utf-8")
+    assert 'command.env("CAMOUHOST_EXECUTION_MODE", "user-native")' in shipping
+    assert "CAMOUHOST_NATIVE_PROFILE" not in shipping
+
     print("CAMOUHOST_EXECUTION_MODES=PASS")
     return 0
 
