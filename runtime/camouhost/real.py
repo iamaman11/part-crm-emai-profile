@@ -2064,7 +2064,9 @@ def main() -> int:
         if os.environ.get(AGENT_DIRECTORY_ENV):
             print("isolated cold probe rejects executable agent directory", file=sys.stderr)
             return 2
-        if os.environ.get(HEADLESS_MODE_ENV, "false") != "false":
+        if os.name == "nt" and os.environ.get(HEADLESS_MODE_ENV, "false") != "false":
+            # Windows C09 is pinned to a real headful Firefox. Linux CI's
+            # isolated automation fixture may use official virtual display.
             print("isolated cold probe requires pinned headful browser", file=sys.stderr)
             return 2
         return run_ipc()
