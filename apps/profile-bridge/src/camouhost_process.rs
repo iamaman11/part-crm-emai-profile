@@ -196,8 +196,7 @@ fn validate_runtime_identity(
     }
     let entrypoint_sha256 = inventory_digest(runtime_bundle, REAL_ENTRYPOINT)?.to_owned();
     #[cfg(windows)]
-    let native_entrypoint_sha256 =
-        inventory_digest(runtime_bundle, NATIVE_ENTRYPOINT)?.to_owned();
+    let native_entrypoint_sha256 = inventory_digest(runtime_bundle, NATIVE_ENTRYPOINT)?.to_owned();
     #[cfg(windows)]
     let browser_sha256 = inventory_digest(runtime_bundle, WINDOWS_BROWSER_EXECUTABLE)?.to_owned();
     #[cfg(windows)]
@@ -701,7 +700,9 @@ impl CamouhostPort for ManagedCamouhostIpc {
                 if self.execution_owner == RuntimeExecutionOwner::NativeUser {
                     // User Open is never attached to Playwright, does not inspect
                     // a page and cannot be turned into an automation job.
-                    let state = self.shared.lock()
+                    let state = self
+                        .shared
+                        .lock()
                         .map_err(|_| BridgePortError::Unavailable)?;
                     if state.active_session.as_ref() != Some(session_id)
                         || state.navigation_target.is_some()
@@ -713,9 +714,7 @@ impl CamouhostPort for ManagedCamouhostIpc {
                 }
                 // A one-time C09 probe is a distinct, isolated automation-owned
                 // browser context. Only that context may use SDK/Playwright.
-                launch_with_browser_visible_admission(
-                    &self.shared, self.display_mode, session_id
-                )
+                launch_with_browser_visible_admission(&self.shared, self.display_mode, session_id)
             }
             _ => exchange_shared(&self.shared, message),
         }
