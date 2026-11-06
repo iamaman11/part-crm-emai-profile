@@ -85,13 +85,24 @@ def main() -> int:
             assert kwargs["env"]["CAMOU_CONFIG_1"] == "pinned"
             assert kwargs["env"]["CAMOU_PREFS_1"] == "native"
             assert "playwright" not in str(args).lower()
+            assert proc.exit_state() == "STARTING_OR_QUIESCING"
+            proc.process.returncode = 0
+            assert proc.exit_state() == "UNKNOWN_PRESERVE_LOCAL", (
+                "zero-exit GUI delegate without real Firefox ownership is not clean Save"
+            )
+            proc.process.returncode = None
+            proc.writer_active = lambda _: True
             assert proc.exit_state() == "RUNNING"
+            assert proc.observed_native_writer
             proc.process.returncode = 11
+            proc.writer_active = lambda _: False
             assert proc.exit_state() == "ABNORMAL_EXIT_PRESERVE_LOCAL"
             proc.process.returncode = 0
             assert proc.exit_state() == "CLOSED_AND_UNLOCKED"
             proc.writer_active = lambda _: True
-            assert proc.exit_state() == "QUIESCING"
+            assert proc.exit_state() == "RUNNING", (
+                "native Firefox can outlive an exit-zero GUI launcher"
+            )
             def unknown(_):
                 raise OSError("untrusted path hidden")
             proc.writer_active = unknown
