@@ -870,7 +870,7 @@ print(
             diagnostics.seek(0, os.SEEK_END)
             diagnostics.seek(max(0, diagnostics.tell() - 2400))
             tail = diagnostics.read()
-            if result != 0 or "persistent same-origin storage and cookies retained" not in output.read():
+            if result != 0 or "persistent same-origin storage, cookie expiry and attributes retained" not in output.read():
                 raise AssertionError(
                     "real native Firefox tab restoration not proven: "
                     f"rc={result} diagnostic_tail={tail!r}"
