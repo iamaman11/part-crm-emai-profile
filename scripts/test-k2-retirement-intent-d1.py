@@ -12,6 +12,7 @@ FX = runpy.run_path(str(ROOT / "scripts/test-device-generation-commit-d1.py"))
 STREAM = ROOT / "migrations/d1-successor-v2/0037_generation_streaming_container_limit.sql"
 WORKING = ROOT / "migrations/d1-successor-v2/0038_profile_generation_working_proof.sql"
 RETIRE = ROOT / "migrations/d1-successor-v2/0039_profile_generation_retirement_guard.sql"
+NATIVE = ROOT / "migrations/d1-successor-v2/0040_native_browser_recovery_proof.sql"
 
 
 def record(
@@ -87,11 +88,11 @@ def previous_browser_proven_lkg_can_be_retired() -> None:
     # protected; a historical certificate does not preserve BASE forever.
     conn = FX["seed"]()
     try:
-        for path in (STREAM, WORKING, RETIRE):
+        for path in (STREAM, WORKING, RETIRE, NATIVE):
             conn.executescript(path.read_text(encoding="utf-8"))
         FX["insert_device_commit"](conn, FX["command_values"]())
         working_test = runpy.run_path(str(ROOT / "scripts/test-k2-working-proof-d1.py"))
-        working_test["insert"](conn, FX)  # BASE is the first certified LKG
+        working_test["insert"](conn, FX, native_snapshot_sha256="a" * 64, native_browser_witness_sha256="b" * 64)  # BASE is the first certified LKG
 
         conn.execute(
             """
@@ -129,6 +130,8 @@ def previous_browser_proven_lkg_can_be_retired() -> None:
             observed_current_generation_id=FX["WINNER"],
             metadata_digest=FX["METADATA_DIGEST"],
             container_digest=FX["CONTAINER_DIGEST"],
+            native_snapshot_sha256="a" * 64,
+            native_browser_witness_sha256="b" * 64,
             proven_at_ms=125,
         )
         conn.execute(
@@ -246,13 +249,13 @@ def previous_browser_proven_lkg_can_be_retired() -> None:
 def main() -> None:
     conn = FX["seed"]()
     try:
-        for path in (STREAM, WORKING, RETIRE):
+        for path in (STREAM, WORKING, RETIRE, NATIVE):
             conn.executescript(path.read_text(encoding="utf-8"))
         FX["insert_device_commit"](conn, FX["command_values"]())
         conn.commit()
         refused(conn)  # A VERIFIED predecessor is not a browser WORKING proof.
         working_test = runpy.run_path(str(ROOT / "scripts/test-k2-working-proof-d1.py"))
-        working_test["insert"](conn, FX)
+        working_test["insert"](conn, FX, native_snapshot_sha256="a" * 64, native_browser_witness_sha256="b" * 64)
         conn.commit()
         refused(conn)  # Candidate is CURRENT and must remain immutable.
         FX["owner_register"](conn, FX["WINNER"], 110)

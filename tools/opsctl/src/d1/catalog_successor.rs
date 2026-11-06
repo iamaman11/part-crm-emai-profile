@@ -839,8 +839,9 @@ fn repository_identity_from_components(components: &[Value]) -> Result<String, D
 mod tests {
     use super::{
         BRIDGE_ENROLLMENT_REVISION, CURRENT_SUCCESSOR_ROOT, DEVICE_APPLICATION_AUTHORITY_REVISION,
-        PREDECESSOR_SUCCESSOR_ROOT, PUBLIC_KEY_BINDING_REVISION, RETIREMENT_GUARD_REVISION,
-        STREAMING_GENERATION_REVISION, SUCCESSOR_CONTRACT_REVISION, WORKING_PROOF_REVISION,
+        NATIVE_BROWSER_RECOVERY_REVISION, PREDECESSOR_SUCCESSOR_ROOT,
+        PUBLIC_KEY_BINDING_REVISION, RETIREMENT_GUARD_REVISION, STREAMING_GENERATION_REVISION,
+        SUCCESSOR_CONTRACT_REVISION, WORKING_PROOF_REVISION,
         component_authority, release_contract, repository_projection,
     };
     use serde_json::Value;
@@ -854,7 +855,7 @@ mod tests {
     #[test]
     fn current_catalog_appends_initialization_after_pas2_contract() -> Result<(), Box<dyn Error>> {
         let authority = component_authority(&repository_root(), "catalog")?;
-        assert_eq!(authority.ordered_history.len(), 39);
+        assert_eq!(authority.ordered_history.len(), 40);
         assert_eq!(authority.ordered_history[31], BRIDGE_ENROLLMENT_REVISION);
         assert_eq!(authority.ordered_history[32], PUBLIC_KEY_BINDING_REVISION);
         assert_eq!(
@@ -864,9 +865,9 @@ mod tests {
         assert_eq!(authority.ordered_history[34], SUCCESSOR_CONTRACT_REVISION);
         assert_eq!(
             authority.current_repository_revision,
-            RETIREMENT_GUARD_REVISION
+            NATIVE_BROWSER_RECOVERY_REVISION
         );
-        assert_eq!(authority.post_epoch.len(), 13);
+        assert_eq!(authority.post_epoch.len(), 14);
         Ok(())
     }
 
@@ -875,10 +876,10 @@ mod tests {
         let contract = release_contract(&repository_root(), "catalog")?;
         assert_eq!(
             contract["target_schema_revision"],
-            RETIREMENT_GUARD_REVISION
+            NATIVE_BROWSER_RECOVERY_REVISION
         );
-        assert_eq!(contract["supported_schema_min"], RETIREMENT_GUARD_REVISION);
-        assert_eq!(contract["supported_schema_max"], RETIREMENT_GUARD_REVISION);
+        assert_eq!(contract["supported_schema_min"], NATIVE_BROWSER_RECOVERY_REVISION);
+        assert_eq!(contract["supported_schema_max"], NATIVE_BROWSER_RECOVERY_REVISION);
         Ok(())
     }
 
@@ -909,7 +910,7 @@ mod tests {
         let sources = catalog["executable_migration_sources"]
             .as_array()
             .ok_or("executable migration source projection is missing")?;
-        assert_eq!(sources.len(), 39);
+        assert_eq!(sources.len(), 40);
         assert_eq!(sources[26]["source_root"], PREDECESSOR_SUCCESSOR_ROOT);
         assert_eq!(sources[27]["source_root"], "migrations/d1");
         assert_eq!(sources[31]["migration_file"], BRIDGE_ENROLLMENT_REVISION);
@@ -929,6 +930,8 @@ mod tests {
         assert_eq!(sources[37]["source_root"], CURRENT_SUCCESSOR_ROOT);
         assert_eq!(sources[38]["migration_file"], RETIREMENT_GUARD_REVISION);
         assert_eq!(sources[38]["source_root"], CURRENT_SUCCESSOR_ROOT);
+        assert_eq!(sources[39]["migration_file"], NATIVE_BROWSER_RECOVERY_REVISION);
+        assert_eq!(sources[39]["source_root"], CURRENT_SUCCESSOR_ROOT);
         assert_eq!(
             projection["executable_schema_authority"],
             serde_json::json!([

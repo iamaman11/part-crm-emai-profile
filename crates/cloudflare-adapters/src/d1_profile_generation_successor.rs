@@ -227,7 +227,10 @@ JOIN profile_generation_working_proofs AS proof
  AND proof.native_snapshot_sha256 IS NOT NULL
  AND proof.native_browser_witness_sha256 IS NOT NULL
 WHERE intent.tenant_id = ? AND intent.profile_id = ? AND intent.deleted_at_ms IS NULL
-  AND intent.generation_id <> ? AND intent.generation_id <> ?
+  AND intent.observed_current_generation_id = ?
+  AND intent.retained_working_generation_id = ?
+  AND intent.generation_id <> intent.observed_current_generation_id
+  AND intent.generation_id <> intent.retained_working_generation_id
 ORDER BY intent.admitted_at_ms ASC, intent.generation_id ASC
 LIMIT 1
 "#;

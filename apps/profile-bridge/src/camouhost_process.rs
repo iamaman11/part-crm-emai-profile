@@ -688,7 +688,10 @@ fn verify_managed_browser_visible_identity(
     .map_err(|_| BridgePortError::InvalidResponse)?;
     verify_host_compatibility(display_mode, host_runtime_evidence)?;
 
-    Ok(format!("{:x}", Sha256::digest(&payload)))
+    Ok(Sha256::digest(&payload)
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect())
 }
 
 fn launch_with_browser_visible_admission(
