@@ -586,7 +586,8 @@ impl ProcessControlPort for ManagedCamouhostProcess {
         // The existing directory also stores raw redacted-at-UI native traces.
         // Never grant executable diagnostic scripts in an ordinary release.
         let diagnostic_directory = local_agent_directory()?;
-        let test_agent_enabled = cfg!(any(test, feature = "synthetic-test-bin", debug_assertions));
+        let test_agent_enabled = cfg!(any(test, feature = "synthetic-test-bin", debug_assertions))
+            && self.config.execution_owner != RuntimeExecutionOwner::IsolatedHistoricalProbe;
         let mut child = self.launch_child(
             session_id,
             &binding,
