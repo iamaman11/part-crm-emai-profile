@@ -341,14 +341,27 @@ impl UserDiagnostic {
                     crate::generation_initialization::InitialProfileError::Runtime => {
                         "BRIDGE_FIRST_OPEN_RUNTIME_FAILED"
                     }
-                    crate::generation_initialization::InitialProfileError::Upload
-                    | crate::generation_initialization::InitialProfileError::Verification => {
+                    crate::generation_initialization::InitialProfileError::Authorization => {
+                        "BRIDGE_FIRST_OPEN_AUTHORIZATION_FAILED"
+                    }
+                    crate::generation_initialization::InitialProfileError::Snapshot => {
+                        "BRIDGE_FIRST_OPEN_SNAPSHOT_FAILED"
+                    }
+                    crate::generation_initialization::InitialProfileError::Encryption => {
+                        "BRIDGE_FIRST_OPEN_ENCRYPTION_FAILED"
+                    }
+                    crate::generation_initialization::InitialProfileError::Upload => {
                         "BRIDGE_FIRST_SAVE_UPLOAD_FAILED"
+                    }
+                    crate::generation_initialization::InitialProfileError::Verification => {
+                        "BRIDGE_FIRST_SAVE_VERIFICATION_FAILED"
+                    }
+                    crate::generation_initialization::InitialProfileError::Commit => {
+                        "BRIDGE_FIRST_SAVE_COMMIT_UNCONFIRMED"
                     }
                     crate::generation_initialization::InitialProfileError::SavedRecovery => {
                         "BRIDGE_SAVED_LOCAL_RECOVERY_REQUIRED"
                     }
-                    _ => "BRIDGE_PROFILE_OPEN_INCOMPLETE",
                 },
                 ShippingCompositionError::Clock => "BRIDGE_CLOCK_UNAVAILABLE",
                 ShippingCompositionError::ControlPlane => "BRIDGE_SESSION_NOT_AUTHORIZED",
@@ -483,8 +496,40 @@ impl UserDiagnostic {
             )) => {
                 "The verified browser package could not prepare the initial browser state. Keep this computer connected and preserve local profile files. Report this diagnostic code; do not reconnect or reset the profile."
             }
-            Self::Launch(Launch::Initialization(_)) => {
-                "The profile could not open. Return to the application to check access, connection and session status, then try Open again. Keep local profile files; a failed request is not proof of a saved copy."
+            Self::Launch(Launch::Initialization(
+                crate::generation_initialization::InitialProfileError::Authorization,
+            )) => {
+                "The application did not authorize the first profile opening. Return to Profile Operations and review access and the current generation. Do not reuse an old authorization link or delete profile files."
+            }
+            Self::Launch(Launch::Initialization(
+                crate::generation_initialization::InitialProfileError::Snapshot,
+            )) => {
+                "The native browser profile could not be read safely for its first Save. Keep the original Firefox files, close any remaining browser writer and review recovery in Profile Operations. No cloud Save is confirmed."
+            }
+            Self::Launch(Launch::Initialization(
+                crate::generation_initialization::InitialProfileError::Encryption,
+            )) => {
+                "The first browser generation could not be encrypted safely. Keep the original local profile and device keys; no cloud Save is confirmed. Review the connected computer and recovery status."
+            }
+            Self::Launch(Launch::Initialization(
+                crate::generation_initialization::InitialProfileError::Upload,
+            )) => {
+                "The initial encrypted profile upload did not complete successfully. Preserve local Firefox data and check the current cloud generation before using authorized recovery. No successful Save is confirmed."
+            }
+            Self::Launch(Launch::Initialization(
+                crate::generation_initialization::InitialProfileError::Verification,
+            )) => {
+                "The initial uploaded profile could not be independently verified. Preserve local files and the pending encrypted generation; do not assume that its cloud Save succeeded or start a new generation."
+            }
+            Self::Launch(Launch::Initialization(
+                crate::generation_initialization::InitialProfileError::Commit,
+            )) => {
+                "The server did not confirm the initial generation commit. Its cloud outcome may be uncertain. Preserve the original local profile and checkpoint, and review the authoritative generation before any new Open or Save."
+            }
+            Self::Launch(Launch::Initialization(
+                crate::generation_initialization::InitialProfileError::SavedRecovery,
+            )) => {
+                "The initial generation is committed but the local saved state still requires recovery. Do not create another generation or delete the original files. Review the committed generation in Profile Operations."
             }
             Self::Launch(Launch::Operator(
                 crate::operator_flow::OperatorFlowError::AuthoritativeGeneration {
@@ -1156,6 +1201,37 @@ mod tests {
                 .contains("Reconnecting this computer will not repair")
         );
         assert!(identity.message().contains("do not reconnect or reset"));
+    }
+
+    #[test]
+    fn first_open_diagnostics_preserve_exact_owner_outcome_without_claiming_saved() {
+        use crate::generation_initialization::InitialProfileError as Initial;
+        let cases = [
+            (Initial::Authorization, "BRIDGE_FIRST_OPEN_AUTHORIZATION_FAILED"),
+            (Initial::RuntimeBundle, "BRIDGE_RUNTIME_BUNDLE_INVALID"),
+            (Initial::Runtime, "BRIDGE_FIRST_OPEN_RUNTIME_FAILED"),
+            (Initial::Snapshot, "BRIDGE_FIRST_OPEN_SNAPSHOT_FAILED"),
+            (Initial::Encryption, "BRIDGE_FIRST_OPEN_ENCRYPTION_FAILED"),
+            (Initial::Upload, "BRIDGE_FIRST_SAVE_UPLOAD_FAILED"),
+            (Initial::Verification, "BRIDGE_FIRST_SAVE_VERIFICATION_FAILED"),
+            (Initial::Commit, "BRIDGE_FIRST_SAVE_COMMIT_UNCONFIRMED"),
+            (Initial::SavedRecovery, "BRIDGE_SAVED_LOCAL_RECOVERY_REQUIRED"),
+        ];
+        for (error, expected_code) in cases {
+            let diagnostic = UserDiagnostic::Launch(ShippingCompositionError::Initialization(error));
+            assert_eq!(diagnostic.code(), expected_code);
+            let message = diagnostic.message();
+            assert!(!message.is_empty());
+            assert!(!message.contains("password"));
+            assert!(!message.contains("http://"));
+            assert!(!message.contains("tenant_id="));
+            assert!(!message.contains("Saved successfully"));
+        }
+        let uncertain = UserDiagnostic::Launch(ShippingCompositionError::Initialization(
+            Initial::Commit,
+        ));
+        assert!(uncertain.message().contains("uncertain"));
+        assert!(uncertain.message().contains("Preserve"));
     }
 
     #[test]

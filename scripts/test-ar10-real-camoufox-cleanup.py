@@ -674,6 +674,27 @@ try:
         item["name"]: item["value"] for item in context.cookies([origin])
         if item["name"] in expected_cookies
     }
+    # Native Firefox must retain not only the values but also each cookie's
+    # absolute site-compatible expiry. A session-only cookie with the same
+    # value is not an equivalent recovered authenticated session.
+    cookie_metadata_before = {
+        item["name"]: {
+            "expires": item["expires"],
+            "sameSite": item["sameSite"],
+            "secure": item["secure"],
+            "httpOnly": item["httpOnly"],
+        }
+        for item in context.cookies([origin])
+        if item["name"] in expected_cookies
+    }
+    assert set(cookie_metadata_before) == set(expected_cookies)
+    assert all(
+        item["expires"] >= time.time() + 3000
+        and item["sameSite"] == "Lax"
+        and not item["secure"]
+        and not item["httpOnly"]
+        for item in cookie_metadata_before.values()
+    ), "native initial cookie attributes or persistent expiry are missing"
     visible_before = first.evaluate("document.cookie")
     assert actual_before == expected_cookies, (
         "same-context context.add_cookies failed immediate cookie readback: "
@@ -698,6 +719,20 @@ try:
     assert reopened_cookies == expected_cookies, (
         "packaged native full-process reopen did not retain valid cookies: "
         f"initial_urls={initial_urls!r}, retained_names={sorted(reopened_cookies)}"
+    )
+    reopened_metadata = {
+        item["name"]: {
+            "expires": item["expires"],
+            "sameSite": item["sameSite"],
+            "secure": item["secure"],
+            "httpOnly": item["httpOnly"],
+        }
+        for item in context.cookies([origin])
+        if item["name"] in expected_cookies
+    }
+    assert reopened_metadata == cookie_metadata_before, (
+        "native Firefox changed cookie expiration or attributes on cold reopen: "
+        f"names={sorted(reopened_metadata)}"
     )
     # Firefox SessionStore restores windows asynchronously on Windows. Wait
     # for the existing native pages; never synthesize pages on the second launch.
@@ -790,11 +825,24 @@ try:
     assert cookies_after_selective_close == expected_cookies, (
         "closing a window/tab unexpectedly removed persistent origin cookies"
     )
+    final_metadata = {
+        item["name"]: {
+            "expires": item["expires"],
+            "sameSite": item["sameSite"],
+            "secure": item["secure"],
+            "httpOnly": item["httpOnly"],
+        }
+        for item in context.cookies([origin])
+        if item["name"] in expected_cookies
+    }
+    assert final_metadata == cookie_metadata_before, (
+        "native Firefox changed cookie expiry or attributes after a selective tab close"
+    )
 finally:
     runtime.close_context(manager, context, root)
 print(
     "two previous tabs restored; intentionally closed tab remains closed; "
-    "persistent same-origin storage and cookies retained", flush=True
+    "persistent same-origin storage, cookie expiry and attributes retained", flush=True
 )
 """
     try:
