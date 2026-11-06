@@ -526,7 +526,11 @@ impl ManagedCamouhostProcess {
         // after the existing signed bundle/config/lease preflight. The adapter
         // no longer opens or controls Playwright pages or browser network state.
         #[cfg(windows)]
-        command.env("CAMOUHOST_NATIVE_PROFILE", "1");
+        command.env("CAMOUHOST_EXECUTION_MODE", "user-native");
+        // Non-Windows managed automation remains explicit for compatibility
+        // with existing development fixtures; Windows user Open is native.
+        #[cfg(not(windows))]
+        command.env("CAMOUHOST_EXECUTION_MODE", "automation-playwright");
         // A release browser never receives an arbitrary local Python executor.
         // Test/debug builds retain the same existing Camouhost-owned fixture
         // capability; production still has read-only, bounded crash diagnostics.
