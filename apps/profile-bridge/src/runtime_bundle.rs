@@ -159,7 +159,9 @@ impl FilesystemRuntimeBundleSelection {
     // and repair still use load_bundle() to hash the complete official runtime.
     // The normal Open trusts the already installed file contents, while checking
     // the exact installed tree and the five critical launch files on every run.
-    pub(crate) fn load_installed_bundle(&self) -> Result<ApprovedRuntimeBundle, RuntimeBundleSelectionError> {
+    pub(crate) fn load_installed_bundle(
+        &self,
+    ) -> Result<ApprovedRuntimeBundle, RuntimeBundleSelectionError> {
         self.load_bundle_with_mode(true)
     }
 
@@ -217,7 +219,11 @@ impl FilesystemRuntimeBundleSelection {
             })?;
         eprintln!(
             "bridge_runtime_phase name={} elapsed_ms={} files={} bytes={}",
-            if installed_release { "installed_release_readback" } else { "verify_files_and_tree" },
+            if installed_release {
+                "installed_release_readback"
+            } else {
+                "verify_files_and_tree"
+            },
             verification_started.elapsed().as_millis(),
             runtime_files.len(),
             total_bytes,
@@ -254,36 +260,39 @@ fn check_installed_runtime_files(
     root: &Path,
     expected: &[PackagedFileIdentity],
 ) -> Result<Vec<RuntimeFile>, RuntimeBundleSelectionError> {
-    expected.iter().map(|entry| {
-        let relative = BundleRelativePath::parse(&entry.path)
-            .map_err(|_| RuntimeBundleSelectionError::InvalidRuntime)?;
-        let path = root.join(path_from_bundle_relative(&relative));
-        let metadata = fs::symlink_metadata(&path)
-            .map_err(|_| RuntimeBundleSelectionError::MissingRuntimeFile)?;
-        if metadata_is_link_or_reparse(&metadata)
-            || !metadata.is_file()
-            || metadata.len() != entry.size_bytes
-        {
-            return Err(RuntimeBundleSelectionError::InvalidRuntime);
-        }
-        if matches!(
-            entry.path.as_str(),
-            SHIPPING_ENTRYPOINT
-                | SHIPPING_RUNTIME_LOCK
-                | SHIPPING_BROWSER_EXECUTABLE
-                | SHIPPING_PYTHON_EXECUTABLE
-                | SHIPPING_RESOLVED_RUNTIME
-        ) && sha256_regular_file(&path, entry.size_bytes)? != entry.sha256
-        {
-            return Err(RuntimeBundleSelectionError::InvalidRuntime);
-        }
-        Ok(RuntimeFile {
-            path: relative,
-            length: entry.size_bytes,
-            sha256: Sha256Digest::parse(entry.sha256.clone())
-                .map_err(|_| RuntimeBundleSelectionError::InvalidRuntime)?,
+    expected
+        .iter()
+        .map(|entry| {
+            let relative = BundleRelativePath::parse(&entry.path)
+                .map_err(|_| RuntimeBundleSelectionError::InvalidRuntime)?;
+            let path = root.join(path_from_bundle_relative(&relative));
+            let metadata = fs::symlink_metadata(&path)
+                .map_err(|_| RuntimeBundleSelectionError::MissingRuntimeFile)?;
+            if metadata_is_link_or_reparse(&metadata)
+                || !metadata.is_file()
+                || metadata.len() != entry.size_bytes
+            {
+                return Err(RuntimeBundleSelectionError::InvalidRuntime);
+            }
+            if matches!(
+                entry.path.as_str(),
+                SHIPPING_ENTRYPOINT
+                    | SHIPPING_RUNTIME_LOCK
+                    | SHIPPING_BROWSER_EXECUTABLE
+                    | SHIPPING_PYTHON_EXECUTABLE
+                    | SHIPPING_RESOLVED_RUNTIME
+            ) && sha256_regular_file(&path, entry.size_bytes)? != entry.sha256
+            {
+                return Err(RuntimeBundleSelectionError::InvalidRuntime);
+            }
+            Ok(RuntimeFile {
+                path: relative,
+                length: entry.size_bytes,
+                sha256: Sha256Digest::parse(entry.sha256.clone())
+                    .map_err(|_| RuntimeBundleSelectionError::InvalidRuntime)?,
+            })
         })
-    }).collect()
+        .collect()
 }
 
 // Hash all bytes of each immutable file against the signed runtime manifest.
@@ -1230,8 +1239,10 @@ mod tests {
         fs::write(&font, b"font-a")?;
 
         for critical in [
-            SHIPPING_ENTRYPOINT, SHIPPING_RUNTIME_LOCK,
-            SHIPPING_BROWSER_EXECUTABLE, SHIPPING_PYTHON_EXECUTABLE,
+            SHIPPING_ENTRYPOINT,
+            SHIPPING_RUNTIME_LOCK,
+            SHIPPING_BROWSER_EXECUTABLE,
+            SHIPPING_PYTHON_EXECUTABLE,
             SHIPPING_RESOLVED_RUNTIME,
         ] {
             let path = root.join(critical);
