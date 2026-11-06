@@ -2056,9 +2056,14 @@ def main() -> int:
             return 2
         return run_native_ipc()
     if mode == AUTOMATION_PLAYWRIGHT_MODE:
-        # This path is reserved for an explicitly authorized automation job.
-        # run_ipc still validates its signed runtime, sealed config and Bridge
-        # writer lock. No shipping Windows Open selects this path today.
+        # No empty managed browser session: an explicit local automation
+        # job inbox must be bound by the caller. This is a necessary guard,
+        # not a substitute for Rust's tenant/device/lease/job authorization.
+        if not os.environ.get(AGENT_DIRECTORY_ENV):
+            print("Camouhost automation job binding missing", file=sys.stderr)
+            return 2
+        # run_ipc checks the signed runtime, generation and writer lock.
+        # Shipping Windows Open intentionally never selects this mode.
         return run_ipc()
     print("Camouhost execution mode missing or unsupported", file=sys.stderr)
     return 2
