@@ -228,6 +228,7 @@ JOIN profile_generation_working_proofs AS proof
  AND proof.generation_id = intent.retained_working_generation_id
  AND proof.native_snapshot_sha256 IS NOT NULL
  AND proof.native_browser_witness_sha256 IS NOT NULL
+ AND proof.native_browser_witness_sha256 = proof.native_snapshot_sha256
 WHERE intent.tenant_id = ? AND intent.profile_id = ? AND intent.deleted_at_ms IS NULL
   AND intent.observed_current_generation_id = ?
   AND intent.retained_working_generation_id = ?
@@ -250,7 +251,7 @@ WHERE tenant_id = ? AND profile_id = ? AND generation_id = ?
         AND proof.generation_id = profile_generation_retirement_intents.retained_working_generation_id
         AND proof.native_snapshot_sha256 IS NOT NULL
         AND proof.native_browser_witness_sha256 IS NOT NULL
-  AND proof.native_browser_witness_sha256 = proof.native_snapshot_sha256
+        AND proof.native_browser_witness_sha256 = proof.native_snapshot_sha256
   )
 RETURNING generation_id
 "#;
