@@ -41,6 +41,9 @@ EXPECTED_RUNTIME_LOCK_SHA256_ENV = "CAMOUHOST_EXPECTED_RUNTIME_LOCK_SHA256"
 EXPECTED_CONFIG_SHA256_ENV = "CAMOUHOST_EXPECTED_CONFIG_SHA256"
 EXPECTED_PROBE_SHA256_ENV = "CAMOUHOST_EXPECTED_PROBE_SHA256"
 HEADLESS_MODE_ENV = "CAMOUHOST_HEADLESS_MODE"
+EXECUTION_MODE_ENV = "CAMOUHOST_EXECUTION_MODE"
+USER_NATIVE_MODE = "user-native"
+AUTOMATION_PLAYWRIGHT_MODE = "automation-playwright"
 PROXY_CONFIG_ENV = "CAMOUHOST_PROXY_CONFIG_PATH"
 AGENT_DIRECTORY_ENV = "CAMOUHOST_AGENT_DIRECTORY"
 # Distinguishable only app-owned Firefox bootstrap, never a generic user about:blank tab.
@@ -508,6 +511,8 @@ def resolve_headless_mode() -> bool | str:
     value = os.environ.get(HEADLESS_MODE_ENV, "false")
     if value == "false":
         return False
+    if value == "true":
+        return True
     if value == "virtual":
         return "virtual"
     raise RuntimeContractError("unsupported Camouhost headless mode")
@@ -2041,9 +2046,22 @@ def main() -> int:
     if len(sys.argv) != 1:
         print("unsupported Camouhost invocation", file=sys.stderr)
         return 2
-    if os.environ.get("CAMOUHOST_NATIVE_PROFILE") == "1":
+    # No implicit fallback from ordinary native Open to page-controlling
+    # Playwright. The Bridge explicitly selects the runtime owner after its
+    # device/tenant/generation admission. An environment flag is *not* a lease.
+    mode = os.environ.get(EXECUTION_MODE_ENV)
+    if mode == USER_NATIVE_MODE:
+        if os.environ.get(HEADLESS_MODE_ENV, "false") != "false":
+            print("native user browser requires headful mode", file=sys.stderr)
+            return 2
         return run_native_ipc()
-    return run_ipc()
+    if mode == AUTOMATION_PLAYWRIGHT_MODE:
+        # This path is reserved for an explicitly authorized automation job.
+        # run_ipc still validates its signed runtime, sealed config and Bridge
+        # writer lock. No shipping Windows Open selects this path today.
+        return run_ipc()
+    print("Camouhost execution mode missing or unsupported", file=sys.stderr)
+    return 2
 
 
 if __name__ == "__main__":
