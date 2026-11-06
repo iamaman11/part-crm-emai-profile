@@ -1976,6 +1976,7 @@ def run_native_ipc() -> int:
                     inherited=browser_environment(),
                     writer_active=firefox_writer_active,
                     admission_granted=True,
+                    ff_version=locked_firefox_major(lock),
                 )
                 report_runtime_stage("launch", "browser_entered")
                 # Observe only Firefox's own OS lock. This is not browser
