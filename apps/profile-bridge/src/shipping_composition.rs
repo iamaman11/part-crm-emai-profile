@@ -53,7 +53,7 @@ impl core::fmt::Display for ShippingCompositionError {
                 "shipping Profile Bridge delivery recovery is required"
             }
             #[cfg(windows)]
-            Self::DeliveryRuntime(error) => core::fmt::Display::fmt(error, formatter),
+            Self::DeliveryRuntime(error) => return core::fmt::Display::fmt(error, formatter),
             Self::Operator(_) => "shipping Profile Bridge operator flow failed",
             Self::ActiveSessionMissing => "shipping Profile Bridge active session is missing",
             Self::CloseObservation(bridge_domain::BridgePortError::UncleanBrowserExit) => {
