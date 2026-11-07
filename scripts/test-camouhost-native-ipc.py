@@ -152,7 +152,7 @@ def main():
     with patch.dict(sys.modules, {"native_process": native}), patch.multiple(runtime, **old), \
          patch.dict(os.environ, {runtime.EXPECTED_PROBE_SHA256_ENV: "b" * 64}), \
          patch.object(sys, "stdin", io.StringIO(
-             f"hello|{runtime.IPC_VERSION}\\nlaunch|{SESSION}\\n"
+             f"hello|{runtime.IPC_VERSION}\nlaunch|{SESSION}\n"
          )), patch.object(runtime.time, "sleep", lambda _seconds: None), \
          contextlib.redirect_stdout(io.TextIOWrapper(io.BytesIO(), encoding="utf-8")) as orphan_output:
         orphan_result = runtime.run_native_ipc()
@@ -171,7 +171,7 @@ def main():
     with patch.dict(sys.modules, {"native_process": native}), patch.multiple(runtime, **old), \
          patch.dict(os.environ, {runtime.EXPECTED_PROBE_SHA256_ENV: "b" * 64}), \
          patch.object(sys, "stdin", io.StringIO(
-             f"hello|{runtime.IPC_VERSION}\\nlaunch|{SESSION}\\n"
+             f"hello|{runtime.IPC_VERSION}\nlaunch|{SESSION}\n"
          )), patch.object(runtime.time, "sleep", lambda _seconds: None), \
          contextlib.redirect_stdout(io.TextIOWrapper(io.BytesIO(), encoding="utf-8")) as orphan_crash_output:
         orphan_crash_result = runtime.run_native_ipc()
