@@ -25,6 +25,8 @@ pub enum ShippingCompositionError {
     FirstInstallation(crate::windows_delivery_handoff::DeliveryHandoffError),
     InstalledConnection(crate::installed_connection::InstalledConnectionError),
     DeliveryRecoveryRequired,
+    #[cfg(windows)]
+    DeliveryRuntime(crate::windows_delivery_runtime::WindowsDeliveryRuntimeError),
     Operator(crate::operator_flow::OperatorFlowError),
     ActiveSessionMissing,
     CloseObservation(bridge_domain::BridgePortError),
@@ -50,6 +52,8 @@ impl core::fmt::Display for ShippingCompositionError {
             Self::DeliveryRecoveryRequired => {
                 "shipping Profile Bridge delivery recovery is required"
             }
+            #[cfg(windows)]
+            Self::DeliveryRuntime(error) => core::fmt::Display::fmt(error, formatter),
             Self::Operator(_) => "shipping Profile Bridge operator flow failed",
             Self::ActiveSessionMissing => "shipping Profile Bridge active session is missing",
             Self::CloseObservation(bridge_domain::BridgePortError::UncleanBrowserExit) => {
@@ -449,7 +453,7 @@ mod windows {
         let config = ShippingConfig::from_installation()?;
         let active = ActiveWindowsDeliveryRuntime::resolve_current().map_err(|error| {
             eprintln!("BRIDGE_DELIVERY_RUNTIME_FAILURE={error:?}");
-            ShippingCompositionError::DeliveryRecoveryRequired
+            ShippingCompositionError::DeliveryRuntime(error)
         })?;
         let pending_health = active.pending_health_confirmation();
         let runtime_root = active.runtime_root().to_path_buf();
@@ -704,7 +708,7 @@ mod windows {
         let active_delivery =
             ActiveWindowsDeliveryRuntime::resolve_for_browser_open().map_err(|error| {
                 eprintln!("BRIDGE_DELIVERY_RUNTIME_FAILURE={error:?}");
-                ShippingCompositionError::DeliveryRecoveryRequired
+                ShippingCompositionError::DeliveryRuntime(error)
             })?;
         let (release_sequence, runtime_id) = active_delivery.observed_release_identity();
         report::record_runtime_identity(release_sequence, runtime_id);

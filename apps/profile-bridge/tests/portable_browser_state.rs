@@ -254,6 +254,12 @@ mod p3_fixture {
         ];
         #[cfg(windows)]
         {
+            // Match the production runtime inventory: omitting the native entrypoint
+            // used to trigger RuntimeCandidateMismatch before browser launch.
+            files.push(digest_runtime_file(
+                &paths.runtime_root,
+                "camouhost/native_process.py",
+            )?);
             files.push(digest_runtime_file(
                 &paths.runtime_root,
                 "browser/camoufox.exe",
