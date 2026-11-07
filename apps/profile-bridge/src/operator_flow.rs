@@ -1703,8 +1703,9 @@ where
     /// Installed clean-close boundary: only after Firefox's current-session
     /// final SessionStore checkpoint and released native writer lock agree,
     /// persist minimal LOCAL_UNSYNCED evidence before cloud-dependent generation
-    /// sealing, upload or coordinator commit. The original retained workspace
-    /// lock and all original user_data bytes are left in place.
+    /// sealing, upload or coordinator commit. Open/Ready itself depends only on
+    /// the native writer lock. The original workspace lock and user_data bytes
+    /// remain in place until the clean-close decision.
     ///
     /// A failed marker write stops cloud save and never declares Clean/Saved.
     /// The ordinary synthetic close remains available only for its existing
