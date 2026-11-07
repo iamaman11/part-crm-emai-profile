@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import os
 import pathlib
 import subprocess
 import sys
@@ -56,6 +57,11 @@ def main() -> int:
         userdata.mkdir(parents=True)
         browser = pathlib.Path(temp) / "camoufox.exe"
         browser.write_bytes(b"approved-disposable-test-fixture")
+        checkpoint = userdata / "sessionCheckpoints.json"
+        checkpoint.write_text(json.dumps({
+            "profile-after-change": True,
+            "sessionstore-final-state-write-complete": True,
+        }), encoding="utf-8")
         created = []
         def spawn(args, **kwargs):
             created.append((args, kwargs))
@@ -100,17 +106,50 @@ def main() -> int:
             assert proc.profile_state() == "WRITER_NOT_OBSERVED"
             assert not hasattr(proc, "process"), "Bridge must not supervise native processes"
             proc.writer_active = lambda _: True
-            assert proc.profile_state() == "PROFILE_BUSY"
+            assert proc.profile_state() == "PROFILE_STARTING", (
+                "a stale previous-session clean marker cannot admit Open"
+            )
             assert proc.observed_native_writer
+            baseline = checkpoint.stat().st_mtime_ns
+            checkpoint.write_text(json.dumps({"profile-after-change": True}), encoding="utf-8")
+            startup_mtime = max(checkpoint.stat().st_mtime_ns, baseline + 1_000_000_000)
+            os.utime(checkpoint, ns=(startup_mtime, startup_mtime))
+            assert proc.profile_state() == "PROFILE_BUSY"
             proc.writer_active = lambda _: False
-            assert proc.profile_state() == "QUIESCENT_REQUIRES_FILE_VALIDATION"
-            # Lock release is not a Save witness, even after a native crash.
-            assert proc.profile_state() != "SAVED"
+            assert proc.profile_state() == "CRASH_OR_UNKNOWN_PRESERVE_LOCAL"
+            baseline = checkpoint.stat().st_mtime_ns
+            checkpoint.write_text(json.dumps({
+                "profile-after-change": True,
+                "sessionstore-final-state-write-complete": True,
+            }), encoding="utf-8")
+            clean_mtime = max(checkpoint.stat().st_mtime_ns, baseline + 1_000_000_000)
+            os.utime(checkpoint, ns=(clean_mtime, clean_mtime))
+            assert proc.profile_state() == "CLEAN_SHUTDOWN_VERIFIED"
+
+            # Reopening after a clean session must clear the old final marker
+            # before the native profile is reported Ready.
+            reopened = module.launch_native_camoufox(
+                workspace=workspace, browser=browser,
+                identity={"sentinel":"pinned", "navigator.maxTouchPoints":7},
+                inherited={"SYSTEMROOT":"C:\\Windows"},
+                writer_active=lambda _: False, admission_granted=True,
+            )
+            assert reopened.profile_state() == "WRITER_NOT_OBSERVED"
+            reopened.writer_active = lambda _: True
+            assert reopened.profile_state() == "PROFILE_STARTING"
+            baseline = checkpoint.stat().st_mtime_ns
+            checkpoint.write_text(json.dumps({"profile-after-change": True}), encoding="utf-8")
+            reopened_mtime = max(checkpoint.stat().st_mtime_ns, baseline + 1_000_000_000)
+            os.utime(checkpoint, ns=(reopened_mtime, reopened_mtime))
+            assert reopened.profile_state() == "PROFILE_BUSY"
+            reopened.writer_active = lambda _: False
+            assert reopened.profile_state() == "CRASH_OR_UNKNOWN_PRESERVE_LOCAL"
+
             def unknown(_):
                 raise OSError("untrusted path hidden")
-            proc.writer_active = unknown
-            assert proc.profile_state() == "UNKNOWN_PRESERVE_LOCAL"
-            assert len(created) == 1, "observation must not relaunch the browser"
+            reopened.writer_active = unknown
+            assert reopened.profile_state() == "UNKNOWN_PRESERVE_LOCAL"
+            assert len(created) == 2, "observation must not relaunch the browser"
 
     print("NATIVE_CAMOUFOX_PROCESS_BOUNDARY=PASS")
     return 0
