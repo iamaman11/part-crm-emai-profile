@@ -204,9 +204,11 @@ the startup checkpoint does not delay or gate browser use. A clean-close witness
 released native writer lock and Firefox CrashMonitor's current-session
 `sessionCheckpoints.json` markers: `profile-after-change` must have changed from the pre-launch
 checkpoint during this session, and `sessionstore-final-state-write-complete` must be present after
-shutdown. Lock release alone means quiescence, not clean close. A missing, stale, invalid or ambiguous
-checkpoint follows the existing crash/RecoveryRequired path and preserves local bytes. This is passive
-observation of browser-owned state, not a new process manager.
+shutdown. Lock release alone means quiescence, not clean close. Once a clean-close witness is observed,
+any later native writer or checkpoint change invalidates it for that session; the old witness cannot be
+reused. A missing, stale, invalid or ambiguous checkpoint follows the existing crash/RecoveryRequired
+path and preserves local bytes. This is passive observation of browser-owned state, not a new process
+manager.
 
 Phase 2F makes a verified graceful browser close a retained-ownership transition: the Bridge keeps
 the workspace writer lock and Coordinator lease until immutable dirty-generation publication, exact
