@@ -1992,10 +1992,12 @@ def run_native_ipc() -> int:
                 deadline = time.monotonic() + 30.0
                 status = native_session.profile_state()
                 while status != "PROFILE_BUSY":
-                    if status in ("CRASH_OR_UNKNOWN_PRESERVE_LOCAL", "UNKNOWN_PRESERVE_LOCAL"):
-                        raise RuntimeContractError("native Firefox startup checkpoint unavailable")
+                    if status == "UNKNOWN_PRESERVE_LOCAL":
+                        raise RuntimeContractError("native Firefox writer lock could not be verified")
+                    if status == "CRASH_OR_UNKNOWN_PRESERVE_LOCAL":
+                        raise RuntimeContractError("native Firefox exited before readiness")
                     if time.monotonic() >= deadline:
-                        raise RuntimeContractError("native Firefox startup checkpoint was not observed")
+                        raise RuntimeContractError("native Firefox writer lock was not observed")
                     time.sleep(0.05)
                     status = native_session.profile_state()
             except BaseException as error:
