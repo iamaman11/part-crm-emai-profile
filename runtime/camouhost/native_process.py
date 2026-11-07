@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Official Camoufox Playwright persistent-context owner and passive close witness.
+"""Official async Camoufox Playwright persistent-context owner and passive close witness.
 
 The Bridge proves the device/profile/generation lease before calling this module.
 The upstream Camoufox SDK launches and owns the persistent Playwright context.
@@ -146,7 +146,7 @@ class NativeProfileSession:
             return "CLEAN_SHUTDOWN_VERIFIED"
         return "CRASH_OR_UNKNOWN_PRESERVE_LOCAL"
 
-    def _release_playwright(self) -> None:
+    async def _release_playwright(self) -> None:
         manager = self.manager
         if manager is None:
             return
@@ -154,7 +154,7 @@ class NativeProfileSession:
         self.context = None
         try:
             with contextlib.redirect_stdout(sys.stderr):
-                manager.__exit__(None, None, None)
+                await manager.__aexit__(None, None, None)
         except BaseException as error:
             try:
                 active = self.writer_active(self.workspace)
@@ -166,25 +166,25 @@ class NativeProfileSession:
             # block. Firefox is already gone, so duplicate close errors cannot
             # alter or invalidate the native profile bytes.
 
-    def close(self) -> None:
+    async def close(self) -> None:
         if self.profile_state() != "CLEAN_SHUTDOWN_VERIFIED":
             raise NativeLaunchError("clean Firefox shutdown is not verified")
-        self._release_playwright()
+        await self._release_playwright()
 
-    def close_after_browser_exit(self) -> None:
+    async def close_after_browser_exit(self) -> None:
         try:
             active = self.writer_active(self.workspace)
         except (OSError, RuntimeError) as error:
             raise NativeLaunchError("Firefox writer state is unknown") from error
         if active:
             raise NativeLaunchError("refusing to detach Playwright from a live Firefox profile")
-        self._release_playwright()
+        await self._release_playwright()
 
-    def abort_startup(self) -> None:
-        self._release_playwright()
+    async def abort_startup(self) -> None:
+        await self._release_playwright()
 
 
-def launch_native_camoufox(
+async def launch_native_camoufox(
     *,
     workspace: Path,
     options: Mapping[str, Any],
@@ -224,9 +224,9 @@ def launch_native_camoufox(
         raise NativeLaunchError("Firefox already owns this profile")
     startup_checkpoint_mtime_ns = _session_checkpoint_mtime_ns(workspace)
 
-    from camoufox.sync_api import Camoufox
+    from camoufox.async_api import AsyncCamoufox
 
-    manager = Camoufox(
+    manager = AsyncCamoufox(
         from_options=dict(options),
         headless=headless,
         persistent_context=True,
@@ -236,7 +236,7 @@ def launch_native_camoufox(
         # computing pinned options. Never inspect or manipulate user pages.
         print("camouhost_stage phase=launch step=sdk_enter", file=sys.stderr, flush=True)
         with contextlib.redirect_stdout(sys.stderr):
-            context = manager.__enter__()
+            context = await manager.__aenter__()
     except BaseException as error:
         raise NativeLaunchError("official Camoufox Playwright launch failed") from error
     return NativeProfileSession(

@@ -2,6 +2,7 @@
 """Official Camoufox Playwright persistent-context boundary tests."""
 from __future__ import annotations
 
+import asyncio
 import importlib.util
 import json
 import os
@@ -32,7 +33,7 @@ def write_checkpoints(path, values, previous_mtime=None):
         os.utime(path, ns=(target, target))
 
 
-def main() -> int:
+async def verify() -> int:
     module = load()
     assert "subprocess" not in module.__dict__, "user Open must not Popen the browser executable"
 
@@ -40,7 +41,7 @@ def main() -> int:
         # Deliberately no page/DOM/navigation APIs: the adapter must not call them.
         pass
 
-    class FakeCamoufox:
+    class FakeAsyncCamoufox:
         instances = []
 
         def __init__(self, **kwargs):
@@ -49,17 +50,17 @@ def main() -> int:
             self.exit_calls = 0
             self.instances.append(self)
 
-        def __enter__(self):
+        async def __aenter__(self):
             return self.context
 
-        def __exit__(self, *_args):
+        async def __aexit__(self, *_args):
             self.exit_calls += 1
             return False
 
     package = types.ModuleType("camoufox")
     package.__path__ = []
-    sync_api = types.ModuleType("camoufox.sync_api")
-    sync_api.Camoufox = FakeCamoufox
+    async_api = types.ModuleType("camoufox.async_api")
+    async_api.AsyncCamoufox = FakeAsyncCamoufox
 
     with tempfile.TemporaryDirectory() as temporary:
         workspace = pathlib.Path(temporary) / "generation"
@@ -86,12 +87,12 @@ def main() -> int:
 
         with patch.dict(sys.modules, {
             "camoufox": package,
-            "camoufox.sync_api": sync_api,
+            "camoufox.async_api": async_api,
         }):
             for admission, writer in ((False, False), (True, True)):
                 active = writer
                 try:
-                    module.launch_native_camoufox(
+                    await module.launch_native_camoufox(
                         workspace=workspace, options=options,
                         writer_active=writer_active, admission_granted=admission,
                         headless=False,
@@ -100,14 +101,14 @@ def main() -> int:
                     pass
                 else:
                     raise AssertionError("unauthorized/already-owned profile launched")
-                assert not FakeCamoufox.instances
+                assert not FakeAsyncCamoufox.instances
 
             active = False
-            session = module.launch_native_camoufox(
+            session = await module.launch_native_camoufox(
                 workspace=workspace, options=options,
                 writer_active=writer_active, admission_granted=True, headless=False,
             )
-            manager = FakeCamoufox.instances[-1]
+            manager = FakeAsyncCamoufox.instances[-1]
             assert manager.kwargs == {
                 "from_options": options,
                 "headless": False,
@@ -129,7 +130,7 @@ def main() -> int:
                 "sessionstore-final-state-write-complete": True,
             }, baseline)
             assert session.profile_state() == "CLEAN_SHUTDOWN_VERIFIED"
-            session.close()
+            await session.close()
             assert manager.exit_calls == 1
             assert session.manager is None and session.context is None
 
@@ -142,49 +143,49 @@ def main() -> int:
             assert session.profile_state() == "CRASH_OR_UNKNOWN_PRESERVE_LOCAL"
 
             active = False
-            reopened = module.launch_native_camoufox(
+            reopened = await module.launch_native_camoufox(
                 workspace=workspace, options=options,
                 writer_active=writer_active, admission_granted=True, headless=False,
             )
-            reopened_manager = FakeCamoufox.instances[-1]
+            reopened_manager = FakeAsyncCamoufox.instances[-1]
             active = True
             baseline = checkpoint.stat().st_mtime_ns
             write_checkpoints(checkpoint, {"profile-after-change": True}, baseline)
             assert reopened.profile_state() == "PROFILE_BUSY"
             active = False
             assert reopened.profile_state() == "CRASH_OR_UNKNOWN_PRESERVE_LOCAL"
-            reopened.close_after_browser_exit()
+            await reopened.close_after_browser_exit()
             assert reopened_manager.exit_calls == 1
 
             active = False
-            startup = module.launch_native_camoufox(
+            startup = await module.launch_native_camoufox(
                 workspace=workspace, options=options,
                 writer_active=writer_active, admission_granted=True, headless=False,
             )
-            startup_manager = FakeCamoufox.instances[-1]
-            startup.abort_startup()
+            startup_manager = FakeAsyncCamoufox.instances[-1]
+            await startup.abort_startup()
             assert startup_manager.exit_calls == 1
 
             def unknown(_workspace):
                 raise OSError("untrusted lock path")
-            unknown_session = module.launch_native_camoufox(
+            unknown_session = await module.launch_native_camoufox(
                 workspace=workspace, options=options,
                 writer_active=writer_active, admission_granted=True, headless=False,
             )
             unknown_session.writer_active = unknown
             assert unknown_session.profile_state() == "UNKNOWN_PRESERVE_LOCAL"
             unknown_session.writer_active = writer_active
-            unknown_session.abort_startup()
+            await unknown_session.abort_startup()
 
             virtual_options = dict(options)
             virtual_options["headless"] = "virtual"
-            virtual = module.launch_native_camoufox(
+            virtual = await module.launch_native_camoufox(
                 workspace=workspace, options=virtual_options,
                 writer_active=writer_active, admission_granted=True, headless="virtual",
             )
-            virtual_manager = FakeCamoufox.instances[-1]
+            virtual_manager = FakeAsyncCamoufox.instances[-1]
             assert virtual_manager.kwargs["headless"] == "virtual"
-            virtual.abort_startup()
+            await virtual.abort_startup()
             assert virtual_manager.exit_calls == 1
 
     print("CAMOUHOST_OFFICIAL_PLAYWRIGHT_CONTEXT=PASS")
@@ -192,4 +193,4 @@ def main() -> int:
 
 
 if __name__ == "__main__":
-    raise SystemExit(main())
+    raise SystemExit(asyncio.run(verify()))

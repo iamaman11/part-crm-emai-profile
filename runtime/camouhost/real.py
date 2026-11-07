@@ -8,6 +8,7 @@ credentials, or entropy material.
 
 from __future__ import annotations
 
+import asyncio
 import contextlib
 import copy
 import hashlib
@@ -2019,7 +2020,7 @@ def run_ipc() -> int:
                 report_runtime_failure("cleanup", error)
 
 
-def run_native_ipc() -> int:
+async def run_native_ipc_async() -> int:
     """Production user Open through the official Camoufox SDK/Playwright API.
 
     Rust has already verified the signed runtime/config identities and redeemed
@@ -2048,7 +2049,9 @@ def run_native_ipc() -> int:
     active_session: str | None = None
     user_session: Any | None = None
     while True:
-        raw = sys.stdin.readline()
+        # Read stdin without starving the official async Playwright dispatcher.
+        # One reader at a time: no second IPC command or browser writer.
+        raw = await asyncio.to_thread(sys.stdin.readline)
         if not raw:
             if user_session is None:
                 return 0
@@ -2058,17 +2061,17 @@ def run_native_ipc() -> int:
                 status = user_session.profile_state()
                 if status == "CLEAN_SHUTDOWN_VERIFIED":
                     with contextlib.suppress(BaseException):
-                        user_session.close()
+                        await user_session.close()
                     return 3
                 if status == "CRASH_OR_UNKNOWN_PRESERVE_LOCAL":
                     with contextlib.suppress(BaseException):
-                        user_session.close_after_browser_exit()
+                        await user_session.close_after_browser_exit()
                     return 3
                 if status == "WRITER_NOT_OBSERVED":
                     with contextlib.suppress(BaseException):
-                        user_session.abort_startup()
+                        await user_session.abort_startup()
                     return 3
-                time.sleep(0.25)
+                await asyncio.sleep(0.25)
         if not valid_frame(raw):
             emit("error|protocol")
             if user_session is None:
@@ -2085,7 +2088,7 @@ def run_native_ipc() -> int:
                 report_runtime_stage("launch", "before_browser_enter")
                 options = camoufox_launch_options(lock, root, config)
                 report_runtime_stage("launch", "options_ready")
-                user_session = launch_native_camoufox(
+                user_session = await launch_native_camoufox(
                     workspace=root,
                     options=options,
                     writer_active=firefox_writer_active,
@@ -2104,12 +2107,12 @@ def run_native_ipc() -> int:
                         raise RuntimeContractError("Camoufox exited before readiness")
                     if time.monotonic() >= deadline:
                         raise RuntimeContractError("Firefox writer lock was not observed")
-                    time.sleep(0.05)
+                    await asyncio.sleep(0.05)
                     status = user_session.profile_state()
             except BaseException as error:
                 if user_session is not None:
                     with contextlib.suppress(BaseException):
-                        user_session.abort_startup()
+                        await user_session.abort_startup()
                     user_session = None
                 report_runtime_failure("launch", error)
                 emit("error|runtime")
@@ -2135,7 +2138,7 @@ def run_native_ipc() -> int:
             status = user_session.profile_state()
             if status == "CLEAN_SHUTDOWN_VERIFIED":
                 try:
-                    user_session.close()
+                    await user_session.close()
                 except BaseException as error:
                     report_runtime_failure("cleanup", error)
                     emit(f"closed|{active_session}|false")
@@ -2145,11 +2148,11 @@ def run_native_ipc() -> int:
             emit(f"closed|{active_session}|false")
             if status == "CRASH_OR_UNKNOWN_PRESERVE_LOCAL":
                 with contextlib.suppress(BaseException):
-                    user_session.close_after_browser_exit()
+                    await user_session.close_after_browser_exit()
                 return 6
             if status == "WRITER_NOT_OBSERVED":
                 with contextlib.suppress(BaseException):
-                    user_session.abort_startup()
+                    await user_session.abort_startup()
                 return 6
             continue
         emit("error|protocol")
@@ -2157,6 +2160,11 @@ def run_native_ipc() -> int:
             return 2
 
 
+
+
+def run_native_ipc() -> int:
+    """Keep the current IPC entrypoint while the native Playwright loop stays alive."""
+    return asyncio.run(run_native_ipc_async())
 
 
 def main() -> int:

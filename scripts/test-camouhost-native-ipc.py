@@ -38,13 +38,13 @@ class UserSession:
             self.last = self.states.pop(0)
         return self.last
 
-    def close(self):
+    async def close(self):
         self.closed += 1
 
-    def close_after_browser_exit(self):
+    async def close_after_browser_exit(self):
         self.detached_after_exit += 1
 
-    def abort_startup(self):
+    async def abort_startup(self):
         self.aborted_startup += 1
 
 
@@ -62,7 +62,7 @@ def main():
         "CLEAN_SHUTDOWN_VERIFIED", "CLEAN_SHUTDOWN_VERIFIED",
     ])]
 
-    def launch_native_camoufox(**kwargs):
+    async def launch_native_camoufox(**kwargs):
         called.append(kwargs)
         return sessions.pop(0)
 
@@ -135,7 +135,7 @@ def main():
          patch.dict(os.environ, {runtime.EXPECTED_PROBE_SHA256_ENV: "b" * 64}), \
          patch.object(sys, "stdin", io.StringIO(
              f"hello|{runtime.IPC_VERSION}\nlaunch|{SESSION}\n"
-         )), patch.object(runtime.time, "monotonic", side_effect=[0.0, 32.0]), \
+         )), patch.object(runtime, "time", types.SimpleNamespace(monotonic=lambda: next(iter([0.0, 32.0])))), \
          contextlib.redirect_stdout(io.TextIOWrapper(io.BytesIO(), encoding="utf-8")) as failed:
         bad = runtime.run_native_ipc()
     assert bad == 5
@@ -153,8 +153,7 @@ def main():
          patch.dict(os.environ, {runtime.EXPECTED_PROBE_SHA256_ENV: "b" * 64}), \
          patch.object(sys, "stdin", io.StringIO(
              f"hello|{runtime.IPC_VERSION}\nlaunch|{SESSION}\n"
-         )), patch.object(runtime.time, "sleep", lambda _seconds: None), \
-         contextlib.redirect_stdout(io.TextIOWrapper(io.BytesIO(), encoding="utf-8")) as orphan_output:
+         )), contextlib.redirect_stdout(io.TextIOWrapper(io.BytesIO(), encoding="utf-8")) as orphan_output:
         orphan_result = runtime.run_native_ipc()
     orphan_lines = orphan_output.buffer.getvalue().decode("utf-8").splitlines()
     assert orphan_result == 3, orphan_result
@@ -172,8 +171,7 @@ def main():
          patch.dict(os.environ, {runtime.EXPECTED_PROBE_SHA256_ENV: "b" * 64}), \
          patch.object(sys, "stdin", io.StringIO(
              f"hello|{runtime.IPC_VERSION}\nlaunch|{SESSION}\n"
-         )), patch.object(runtime.time, "sleep", lambda _seconds: None), \
-         contextlib.redirect_stdout(io.TextIOWrapper(io.BytesIO(), encoding="utf-8")) as orphan_crash_output:
+         )), contextlib.redirect_stdout(io.TextIOWrapper(io.BytesIO(), encoding="utf-8")) as orphan_crash_output:
         orphan_crash_result = runtime.run_native_ipc()
     assert orphan_crash_result == 3, orphan_crash_result
     assert orphaned_crash.detached_after_exit == 1
