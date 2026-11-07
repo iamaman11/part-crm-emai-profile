@@ -272,7 +272,7 @@ pub enum RuntimeDisplayMode {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum RuntimeExecutionOwner {
     NativeUser,
-    IsolatedHistoricalProbe,
+    IsolatedBrowserStateTest,
 }
 
 #[derive(Clone)]
@@ -330,8 +330,8 @@ impl ManagedCamouhostConfig {
     /// separately materialized historical generation, never a live user one.
     /// The caller still must supply the original one-time coordinator claim.
     #[must_use]
-    pub fn for_isolated_historical_probe(mut self) -> Self {
-        self.execution_owner = RuntimeExecutionOwner::IsolatedHistoricalProbe;
+    pub fn for_isolated_browser_state_test(mut self) -> Self {
+        self.execution_owner = RuntimeExecutionOwner::IsolatedBrowserStateTest;
         self
     }
 }
@@ -566,7 +566,7 @@ impl ManagedCamouhostProcess {
             "CAMOUHOST_EXECUTION_MODE",
             match self.config.execution_owner {
                 RuntimeExecutionOwner::NativeUser => "user-native",
-                RuntimeExecutionOwner::IsolatedHistoricalProbe => "isolated-cold-probe",
+                RuntimeExecutionOwner::IsolatedBrowserStateTest => "isolated-cold-probe",
             },
         );
         // The Linux developer-only managed fixture remains an isolated,
@@ -606,7 +606,7 @@ impl ProcessControlPort for ManagedCamouhostProcess {
         // The older Linux-only disposable agent fixture remains test-only.
         let test_agent_enabled = !cfg!(windows)
             && cfg!(any(test, feature = "synthetic-test-bin", debug_assertions))
-            && self.config.execution_owner != RuntimeExecutionOwner::IsolatedHistoricalProbe;
+            && self.config.execution_owner != RuntimeExecutionOwner::IsolatedBrowserStateTest;
         let mut child = self.launch_child(
             session_id,
             &binding,

@@ -128,16 +128,16 @@ def main() -> int:
     rust = SOURCE.parents[2] / "apps/profile-bridge/src/camouhost_process.rs"
     shipping = rust.read_text(encoding="utf-8")
     assert 'RuntimeExecutionOwner::NativeUser => "user-native"' in shipping
-    assert 'RuntimeExecutionOwner::IsolatedHistoricalProbe => "isolated-cold-probe"' in shipping
+    assert 'RuntimeExecutionOwner::IsolatedBrowserStateTest => "isolated-cold-probe"' in shipping
     assert "CAMOUHOST_NATIVE_PROFILE" not in shipping
     assert 'launch_with_browser_visible_admission(' in shipping
     assert 'let test_agent_enabled = !cfg!(windows)' in shipping
-    assert "&& self.config.execution_owner != RuntimeExecutionOwner::IsolatedHistoricalProbe" in shipping
+    assert "&& self.config.execution_owner != RuntimeExecutionOwner::IsolatedBrowserStateTest" in shipping
     composition = (SOURCE.parents[2] /
                    "apps/profile-bridge/src/shipping_composition.rs").read_text(encoding="utf-8")
     # The historical diagnostic has been removed from shipping entirely.
     # Only disposable CI state tests retain a separately authorized probe.
-    assert ".for_isolated_historical_probe()" not in composition
+    assert ".for_isolated_browser_state_test()" not in composition
     assert "run_historical_candidate_probe" not in composition
     app = (SOURCE.parents[2] / "apps/profile-bridge/src/main.rs").read_text(
         encoding="utf-8"
