@@ -296,13 +296,19 @@ def materialize(
     required = {
         "fingerprint_config_sha256",
         "fingerprint_policy_version",
-        "profile_stable_probe_sha256",
+        "fingerprint_materialization_sha256",
         "runtime_lock_sha256",
     }
     if set(report) != required or any(
         not isinstance(value, str) or not value for value in report.values()
     ):
-        raise AssertionError(f"unexpected materialization report: {report}")
+        raise AssertionError(f"unexpected materialization report keys: {sorted(report)}")
+    import hashlib
+
+    canonical = (root / "camoufox-config.json").read_bytes()
+    expected = hashlib.sha256(b"profile-stability-v2-fpgen-config\0" + canonical).hexdigest()
+    if report["fingerprint_materialization_sha256"] != expected:
+        raise AssertionError("official fpgen materialization was not bound to exact config")
     return report
 
 
@@ -318,7 +324,7 @@ def process_env(
             "CAMOUHOST_PROFILE_ROOT": str(root.resolve(strict=True)),
             "CAMOUHOST_EXPECTED_RUNTIME_LOCK_SHA256": report["runtime_lock_sha256"],
             "CAMOUHOST_EXPECTED_CONFIG_SHA256": report["fingerprint_config_sha256"],
-            "CAMOUHOST_EXPECTED_PROBE_SHA256": report["profile_stable_probe_sha256"],
+            "CAMOUHOST_EXPECTED_PROBE_SHA256": report["fingerprint_materialization_sha256"],
         }
     )
     return env
