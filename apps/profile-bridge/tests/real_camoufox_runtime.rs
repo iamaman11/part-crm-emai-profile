@@ -211,19 +211,47 @@ fn sha256_hex(bytes: &[u8]) -> String {
     encoded
 }
 
+fn native_startup_checkpoint_seen(workspace: &Path, baseline: Option<SystemTime>) -> bool {
+    let path = workspace.join("user_data").join("sessionCheckpoints.json");
+    let Ok(metadata) = fs::symlink_metadata(&path) else {
+        return false;
+    };
+    if metadata.file_type().is_symlink() || !metadata.file_type().is_file() {
+        return false;
+    }
+    let Ok(modified) = metadata.modified() else {
+        return false;
+    };
+    if baseline.is_some_and(|before| modified <= before) {
+        return false;
+    }
+    let Ok(bytes) = fs::read(path) else {
+        return false;
+    };
+    let Ok(checkpoints) = serde_json::from_slice::<serde_json::Value>(&bytes) else {
+        return false;
+    };
+    checkpoints.get("profile-after-change").and_then(serde_json::Value::as_bool)
+        == Some(true)
+        && checkpoints
+            .get("sessionstore-final-state-write-complete")
+            .and_then(serde_json::Value::as_bool)
+            != Some(true)
+}
+
 fn close_native_camoufox_window() -> Result<(), Box<dyn std::error::Error>> {
     let script = r#"
 $ErrorActionPreference = 'Stop'
 $deadline = [DateTime]::UtcNow.AddSeconds(30)
 $browser = $null
 do {
-    $matches = @(Get-Process -Name 'camoufox' -ErrorAction SilentlyContinue |
+    $browserWindows = @(Get-Process -Name 'camoufox' -ErrorAction SilentlyContinue |
         Where-Object { $_.MainWindowHandle -ne [IntPtr]::Zero })
-    if ($matches.Count -gt 1) {
-        throw "expected one native Camoufox window, found $($matches.Count)"
+    if ($browserWindows.Count -gt 1) {
+        throw "expected one native Camoufox window, found $($browserWindows.Count)"
     }
-    if ($matches.Count -eq 1) {
-        $browser = $matches[0]
+    if ($browserWindows.Count -eq 1) {
+        $browser = $browserWindows[0]
         break
     }
     Start-Sleep -Milliseconds 100
@@ -539,10 +567,24 @@ fn run_managed_cold_launch_cycle() -> Result<ApprovedRuntimeBundle, Box<dyn std:
         "AR10_COLD_CYCLE_PHASE=native_launch;elapsed_ms={}",
         browser_launch_started.elapsed().as_millis()
     );
-    assert!(
-        !close_observer.observe_controlled_close(&session)?,
-        "native browser must remain open until the user closes its window"
-    );
+    let checkpoint_path = workspace.path().join("user_data").join("sessionCheckpoints.json");
+    let checkpoint_baseline = fs::metadata(&checkpoint_path)
+        .and_then(|metadata| metadata.modified())
+        .ok();
+    let startup_deadline = Instant::now() + Duration::from_secs(30);
+    loop {
+        assert!(
+            !close_observer.observe_controlled_close(&session)?,
+            "native browser must remain open until the user closes its window"
+        );
+        if native_startup_checkpoint_seen(workspace.path(), checkpoint_baseline) {
+            break;
+        }
+        if Instant::now() >= startup_deadline {
+            return Err("native Firefox did not write its current-session startup checkpoint".into());
+        }
+        thread::sleep(Duration::from_millis(100));
+    }
 
     let browser_close_started = Instant::now();
     close_native_camoufox_window()?;
