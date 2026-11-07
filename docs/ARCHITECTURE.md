@@ -208,7 +208,9 @@ shutdown. Lock release alone means quiescence, not clean close. Once a clean-clo
 any later native writer or checkpoint change invalidates it for that session; the old witness cannot be
 reused. A missing, stale, invalid or ambiguous checkpoint follows the existing crash/RecoveryRequired
 path and preserves local bytes. This is passive observation of browser-owned state, not a new process
-manager.
+manager. The separate isolated Playwright automation path may retire only its uniquely marked
+Camouhost bootstrap tab after Rust admission, inside its exclusive job workspace; it never attaches
+to or manipulates the NativeUser browser.
 
 Phase 2F makes a verified graceful browser close a retained-ownership transition: the Bridge keeps
 the workspace writer lock and Coordinator lease until immutable dirty-generation publication, exact
