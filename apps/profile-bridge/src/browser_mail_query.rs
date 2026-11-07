@@ -312,6 +312,7 @@ mod tests {
         search_calls: Cell<u32>,
         body_calls: Cell<u32>,
         returned_binding: MailboxBindingId,
+        returned_reference_override: Option<&'static str>,
     }
 
     impl BrowserMailRuntimePort for SyntheticBrowserRuntime {
@@ -349,7 +350,8 @@ mod tests {
             let summary = MailMessageSummary::new(
                 MailboxMessageReference::new(
                     self.returned_binding.clone(),
-                    reference.provider_reference(),
+                    self.returned_reference_override
+                        .unwrap_or(reference.provider_reference()),
                 )
                 .map_err(|_| QueryPortError::new(QueryPortErrorClass::IntegrityFailure))?,
                 Some("Transient subject".to_owned()),
@@ -368,6 +370,7 @@ mod tests {
             search_calls: Cell::new(0),
             body_calls: Cell::new(0),
             returned_binding: binding_id,
+            returned_reference_override: None,
         }
     }
 
@@ -484,6 +487,61 @@ mod tests {
         );
         assert_eq!(adapter.runtime.search_calls.get(), 0);
         assert_eq!(adapter.fence.calls.get(), 0);
+        Ok(())
+    }
+
+    #[test]
+    fn message_reference_substitution_is_rejected_after_runtime()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let proof = proof()?;
+        let binding_id = proof.binding_id().clone();
+        let reference = MailboxMessageReference::new(
+            binding_id.clone(),
+            "browser-requested-message",
+        )?;
+        let mut malicious_runtime = runtime(binding_id.clone());
+        malicious_runtime.returned_reference_override = Some("browser-different-message");
+        let adapter = BrowserClientMailQueryAdapter::new(
+            proof,
+            CountingFence {
+                calls: Cell::new(0),
+                valid_checks: 2,
+            },
+            malicious_runtime,
+        );
+        let result = block_on(adapter.get_message(&scope()?, &reference));
+        assert_eq!(
+            result.map(|_| ()),
+            Err(QueryPortError::new(QueryPortErrorClass::IntegrityFailure))
+        );
+        // No substituted body reaches the caller, and no false post-success
+        // fence can turn the invalid result into a successful read.
+        assert_eq!(adapter.runtime.body_calls.get(), 1);
+        assert_eq!(adapter.fence.calls.get(), 1);
+        Ok(())
+    }
+
+    #[test]
+    fn exact_message_reference_is_accepted_after_two_fences()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let proof = proof()?;
+        let binding_id = proof.binding_id().clone();
+        let reference = MailboxMessageReference::new(
+            binding_id.clone(),
+            "browser-requested-message",
+        )?;
+        let adapter = BrowserClientMailQueryAdapter::new(
+            proof,
+            CountingFence {
+                calls: Cell::new(0),
+                valid_checks: 2,
+            },
+            runtime(binding_id),
+        );
+        let result = block_on(adapter.get_message(&scope()?, &reference))?
+            .ok_or_else(|| std::io::Error::other("expected browser message"))?;
+        assert_eq!(result.summary().reference(), &reference);
+        assert_eq!(adapter.fence.calls.get(), 2);
         Ok(())
     }
 
