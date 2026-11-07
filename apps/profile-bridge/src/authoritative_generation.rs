@@ -8,7 +8,7 @@ use crate::generation_reopen::{
     GenerationReopenControlPort,
 };
 use crate::generation_snapshot::{
-    GenerationSnapshotError, StreamedWorkspaceSnapshot, WorkspaceSnapshotReader,
+    GenerationSnapshotError, StreamedWorkspaceSnapshot,
     materialize_workspace_snapshot_streaming_with_pre_publish,
     materialize_workspace_snapshot_with_pre_publish, verify_workspace_matches_snapshot,
     verify_workspace_matches_streamed_snapshot,
@@ -21,9 +21,8 @@ use encrypted_generation_domain::{
     open_generation_streaming,
 };
 use profile_platform_primitives::{DeviceId, GenerationId, ProfileId, TenantId};
-use sha2::{Digest, Sha256};
 use std::fs::{self, OpenOptions};
-use std::io::{Read, Seek, SeekFrom};
+use std::io::{Seek, SeekFrom};
 
 const LOWER_HEX: &[u8; 16] = b"0123456789abcdef";
 
@@ -383,6 +382,7 @@ where
     Ok(())
 }
 
+#[allow(clippy::too_many_arguments)]
 fn materialize_streamed_authoritative_generation<C>(
     root: &MaterializationRoot,
     tenant_id: &TenantId,
