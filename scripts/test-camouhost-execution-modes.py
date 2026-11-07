@@ -26,30 +26,25 @@ def load_runtime():
     return module
 
 
-def verify_native_adapter_sibling_import(runtime):
-    expected = (SOURCE.parent / "native_process.py").resolve(strict=True)
-    prior = sys.modules.pop("native_process", None)
-    try:
-        # Match the packaged embeddable Python path: no repository root or
-        # Camouhost source directory is implicitly available on sys.path.
-        isolated_path = [
-            entry for entry in sys.path
-            if Path(entry or ".").resolve() != expected.parent
-        ]
-        with patch.object(sys, "path", isolated_path):
-            launcher = runtime.load_native_process_launcher()
-            loaded = sys.modules.get("native_process")
-            assert loaded is not None and Path(loaded.__file__).resolve() == expected
-            assert callable(launcher)
-    finally:
-        sys.modules.pop("native_process", None)
-        if prior is not None:
-            sys.modules["native_process"] = prior
+def verify_embedded_python_path_configuration():
+    builder_path = SOURCE.parents[2] / "scripts" / "camouhost-runtime-build-windows.py"
+    spec = importlib.util.spec_from_file_location("camouhost_runtime_builder_test", builder_path)
+    assert spec is not None and spec.loader is not None
+    builder = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(builder)
+    with __import__("tempfile").TemporaryDirectory() as directory:
+        python_root = Path(directory) / "python"
+        python_root.mkdir()
+        path_file = python_root / "python312._pth"
+        path_file.write_text("original", encoding="utf-8")
+        builder.rewrite_embedded_python_path(python_root)
+        expected = "python312.zip\n.\nLib\\site-packages\n..\\camouhost\nimport site\n"
+        assert path_file.read_text(encoding="utf-8") == expected
 
 
 def main() -> int:
     runtime = load_runtime()
-    verify_native_adapter_sibling_import(runtime)
+    verify_embedded_python_path_configuration()
     invoked = []
 
     def native():
