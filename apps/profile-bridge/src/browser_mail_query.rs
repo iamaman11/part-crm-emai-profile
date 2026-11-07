@@ -207,7 +207,10 @@ where
             .get_message(&self.proof, scope, reference)
             .await?;
         if body.as_ref().is_some_and(|message| {
-            message.summary().reference().binding_id() != self.proof.binding_id()
+            // A provider must not answer a request for message A with
+            // message B from the same mailbox. The complete opaque provider
+            // reference is part of the fenced request identity.
+            message.summary().reference() != reference
         }) {
             return Err(integrity_failure());
         }
