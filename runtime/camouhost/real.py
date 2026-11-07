@@ -1990,10 +1990,14 @@ def run_native_ipc() -> int:
                 # evidence appears. A bounded startup failure prevents a dead
                 # launcher from being reported as Browser Ready.
                 deadline = time.monotonic() + 30.0
-                while native_session.profile_state() != "PROFILE_BUSY":
+                status = native_session.profile_state()
+                while status != "PROFILE_BUSY":
+                    if status in ("CRASH_OR_UNKNOWN_PRESERVE_LOCAL", "UNKNOWN_PRESERVE_LOCAL"):
+                        raise RuntimeContractError("native Firefox startup checkpoint unavailable")
                     if time.monotonic() >= deadline:
-                        raise RuntimeContractError("native Firefox never acquired profile")
+                        raise RuntimeContractError("native Firefox startup checkpoint was not observed")
                     time.sleep(0.05)
+                    status = native_session.profile_state()
             except BaseException as error:
                 report_runtime_failure("launch", error)
                 emit("error|runtime")
@@ -2006,23 +2010,24 @@ def run_native_ipc() -> int:
             and active_session is not None and parts[1] == active_session
             and native_session is not None):
             status = native_session.profile_state()
-            # A released native lock is permission to validate the real files,
-            # not evidence for Saved. Rust owns exact WAL, sealed checkpoint,
-            # signed R2 commit and verified local retirement.
-            emit(f"close_observed|{active_session}|"
-                 f"{'true' if status == 'QUIESCENT_REQUIRES_FILE_VALIDATION' else 'false'}")
+            if status == "CLEAN_SHUTDOWN_VERIFIED":
+                emit(f"close_observed|{active_session}|true")
+            elif status == "CRASH_OR_UNKNOWN_PRESERVE_LOCAL":
+                # Rust aborts the active lease into the existing RecoveryRequired
+                # path. Keep this sidecar alive until it receives that decision.
+                emit("error|runtime")
+            else:
+                emit(f"close_observed|{active_session}|false")
             continue
         if (len(parts) == 2 and parts[0] == "close"
             and active_session is not None and parts[1] == active_session
             and native_session is not None):
             status = native_session.profile_state()
-            if status != "QUIESCENT_REQUIRES_FILE_VALIDATION":
-                emit(f"closed|{active_session}|false")
-                return 6
+            clean = status == "CLEAN_SHUTDOWN_VERIFIED"
             # This closes only our IPC sidecar. It does not send any command
             # to Firefox. Actual CLOUD_SAVED is decided by Rust/D1/R2 only.
-            emit(f"closed|{active_session}|true")
-            return 0
+            emit(f"closed|{active_session}|{'true' if clean else 'false'}")
+            return 0 if clean else 6
         emit("error|protocol")
         return 2
 
