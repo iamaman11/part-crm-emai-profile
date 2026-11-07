@@ -210,7 +210,10 @@ class NativeProfileSession:
                     and values.get(SESSION_CLEAN_CLOSE_CHECKPOINT) is not True
                 ):
                     self.active_session_checkpoint_seen = True
-            return "PROFILE_BUSY" if self.active_session_checkpoint_seen else "PROFILE_STARTING"
+            # The OS-held native lock is sufficient for Open/Ready. The
+            # current-session checkpoint is an independent Save/clean-close
+            # witness and must never add startup delay.
+            return "PROFILE_BUSY"
 
         if not self.observed_native_writer:
             return "WRITER_NOT_OBSERVED"
