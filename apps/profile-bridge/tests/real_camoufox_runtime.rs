@@ -231,7 +231,9 @@ fn native_startup_checkpoint_seen(workspace: &Path, baseline: Option<SystemTime>
     let Ok(checkpoints) = serde_json::from_slice::<serde_json::Value>(&bytes) else {
         return false;
     };
-    checkpoints.get("profile-after-change").and_then(serde_json::Value::as_bool)
+    checkpoints
+        .get("profile-after-change")
+        .and_then(serde_json::Value::as_bool)
         == Some(true)
         && checkpoints
             .get("sessionstore-final-state-write-complete")
@@ -567,7 +569,10 @@ fn run_managed_cold_launch_cycle() -> Result<ApprovedRuntimeBundle, Box<dyn std:
         "AR10_COLD_CYCLE_PHASE=native_launch;elapsed_ms={}",
         browser_launch_started.elapsed().as_millis()
     );
-    let checkpoint_path = workspace.path().join("user_data").join("sessionCheckpoints.json");
+    let checkpoint_path = workspace
+        .path()
+        .join("user_data")
+        .join("sessionCheckpoints.json");
     let checkpoint_baseline = fs::metadata(&checkpoint_path)
         .and_then(|metadata| metadata.modified())
         .ok();
@@ -585,7 +590,9 @@ fn run_managed_cold_launch_cycle() -> Result<ApprovedRuntimeBundle, Box<dyn std:
             break;
         }
         if Instant::now() >= startup_deadline {
-            return Err("native Firefox did not write its current-session startup checkpoint".into());
+            return Err(
+                "native Firefox did not write its current-session startup checkpoint".into(),
+            );
         }
         thread::sleep(Duration::from_millis(100));
     }
@@ -600,7 +607,9 @@ fn run_managed_cold_launch_cycle() -> Result<ApprovedRuntimeBundle, Box<dyn std:
                 thread::sleep(Duration::from_millis(100));
             }
             Ok(false) => return Err("native Firefox did not produce a clean-close witness".into()),
-            Err(error) => return Err(format!("native Firefox clean-close proof failed: {error:?}").into()),
+            Err(error) => {
+                return Err(format!("native Firefox clean-close proof failed: {error:?}").into());
+            }
         }
     }
     RuntimeSessionOrchestrator::close(&bundle, &session, &mut process, &mut camouhost)?;
