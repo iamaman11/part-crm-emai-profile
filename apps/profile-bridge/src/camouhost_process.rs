@@ -1250,7 +1250,12 @@ fn allowlisted_camouhost_diagnostic(line: &[u8]) -> Option<&str> {
                 || (phase == "launch"
                     && matches!(
                         step,
-                        "before_browser_enter" | "options_ready" | "sdk_enter" | "browser_entered" | "network_blocked" | "ready"
+                        "before_browser_enter"
+                            | "options_ready"
+                            | "sdk_enter"
+                            | "browser_entered"
+                            | "network_blocked"
+                            | "ready"
                     ))
         });
     let allowed_pages = message
