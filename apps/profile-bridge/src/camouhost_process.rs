@@ -691,8 +691,15 @@ impl ProcessControlPort for ManagedCamouhostProcess {
             .shared
             .lock()
             .map_err(|_| BridgePortError::Unavailable)?;
+        if state.active_session.is_none() && state.child.is_none() {
+            return Ok(());
+        }
         if state.active_session.as_ref() != Some(session_id) {
             return Err(BridgePortError::InvalidResponse);
+        }
+        if state.child.is_none() {
+            state.clear();
+            return Ok(());
         }
         // EOF tells the Python owner to keep the official Playwright context
         // alive until Firefox releases the profile lock and writes its final
