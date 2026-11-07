@@ -651,7 +651,10 @@ mod tests {
         );
         assert_eq!(result, Err(InitialProfileError::SavedRecovery));
         assert_eq!(transport.commit_count, 1);
-        assert_eq!(transport.upload_capability_count, 1, "Commit is the sole final R2 verification; no redundant capability retry");
+        assert_eq!(
+            transport.upload_capability_count, 1,
+            "Commit is the sole final R2 verification; no redundant capability retry"
+        );
         let generation = GenerationId::parse(
             transport
                 .committed_generation
