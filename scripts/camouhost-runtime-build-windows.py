@@ -261,7 +261,7 @@ def verify_official_archive(archive: Path, lock: dict[str, Any]) -> dict[str, An
 def rewrite_embedded_python_path(root: Path) -> None:
     path = root / "python312._pth"
     if path.is_symlink() or not path.is_file(): fail("embedded Python path configuration is missing")
-    path.write_text("python312.zip\n.\nLib\\site-packages\nimport site\n", encoding="utf-8", newline="\n")
+    path.write_text("python312.zip\n.\nLib\\site-packages\n..\\camouhost\nimport site\n", encoding="utf-8", newline="\n")
 
 
 def install_python_components(build_python: Path, lock: dict[str, Any], python_root: Path, distribution_cache: Path | None = None) -> None:
@@ -318,6 +318,28 @@ def verify_runtime_tree(output: Path, lock: dict[str, Any], candidate_provenance
     try: observed = json.loads(completed.stdout.strip())
     except json.JSONDecodeError as error: raise RuntimeBuildError("embedded Python verification output is invalid") from error
     if completed.returncode != 0 or observed != expected: fail("materialized Python component identity mismatch")
+    # The embeddable interpreter must resolve the packaged native adapter by
+    # its normal ._pth search path. This proves the shipping import contract
+    # with the actual isolated interpreter, not the build host's Python path.
+    native_probe = subprocess.run(
+        [
+            str(output / "python/python.exe"),
+            "-I", "-c",
+            "import json,native_process; print(json.dumps(native_process.__file__))",
+        ],
+        cwd=output,
+        capture_output=True,
+        text=True,
+        check=False,
+        timeout=30,
+    )
+    expected_native = str((output / "camouhost/native_process.py").resolve())
+    try:
+        observed_native = json.loads(native_probe.stdout.strip())
+    except json.JSONDecodeError as error:
+        raise RuntimeBuildError("embedded Python native adapter import output is invalid") from error
+    if native_probe.returncode != 0 or observed_native != expected_native:
+        fail("embedded Python cannot import the packaged native Camouhost adapter")
     model_probe = subprocess.run(
         [
             str(output / "python/python.exe"),
