@@ -1525,7 +1525,8 @@ fn inherit_runtime_environment(command: &mut Command) {
 mod tests {
     use super::{
         FINGERPRINT_SOURCE_PREFIX, RuntimeBindingBrowserLaunchPreflight, RuntimeBindingSlot,
-        allowlisted_camouhost_diagnostic, decode_hex, hex_encode, receive_response, sha256_hex,
+        allowlisted_camouhost_diagnostic, decode_hex, hex_encode, native_close_observation_result,
+        receive_response, sha256_hex,
     };
     use crate::browser_execution::persist_materialization_binding;
     use crate::browser_preflight::{BrowserRuntimeObservation, BrowserRuntimeObservationPort};
