@@ -48,9 +48,10 @@ def _session_checkpoint_mtime_ns(workspace: Path) -> int | None:
         path.is_symlink()
         or not stat.S_ISREG(metadata.st_mode)
         or (getattr(metadata, "st_file_attributes", 0) & FILE_ATTRIBUTE_REPARSE_POINT)
-        or metadata.st_size > MAX_SESSION_CHECKPOINT_BYTES
     ):
         raise NativeLaunchError("native shutdown checkpoint path unavailable")
+    # A large or malformed regular checkpoint must not gate browser Open.
+    # The bounded reader below will simply refuse to use it as Save evidence.
     return metadata.st_mtime_ns
 
 
