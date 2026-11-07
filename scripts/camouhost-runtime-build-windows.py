@@ -325,7 +325,7 @@ def verify_runtime_tree(output: Path, lock: dict[str, Any], candidate_provenance
         [
             str(output / "python/python.exe"),
             "-I", "-c",
-            "import json,native_process; print(json.dumps(native_process.__file__))",
+            "import json,native_process,pathlib; print(json.dumps(str(pathlib.Path(native_process.__file__).resolve())))",
         ],
         cwd=output,
         capture_output=True,
