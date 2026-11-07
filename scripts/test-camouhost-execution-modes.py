@@ -26,8 +26,30 @@ def load_runtime():
     return module
 
 
+def verify_native_adapter_sibling_import(runtime):
+    expected = (SOURCE.parent / "native_process.py").resolve(strict=True)
+    prior = sys.modules.pop("native_process", None)
+    try:
+        # Match the packaged embeddable Python path: no repository root or
+        # Camouhost source directory is implicitly available on sys.path.
+        isolated_path = [
+            entry for entry in sys.path
+            if Path(entry or ".").resolve() != expected.parent
+        ]
+        with patch.object(sys, "path", isolated_path):
+            launcher = runtime.load_native_process_launcher()
+            loaded = sys.modules.get("native_process")
+            assert loaded is not None and Path(loaded.__file__).resolve() == expected
+            assert callable(launcher)
+    finally:
+        sys.modules.pop("native_process", None)
+        if prior is not None:
+            sys.modules["native_process"] = prior
+
+
 def main() -> int:
     runtime = load_runtime()
+    verify_native_adapter_sibling_import(runtime)
     invoked = []
 
     def native():
