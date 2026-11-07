@@ -377,6 +377,7 @@ pub struct ManagedCamouhostProcess {
 pub struct ManagedCamouhostIpc {
     shared: Arc<Mutex<ProcessState>>,
     display_mode: RuntimeDisplayMode,
+    #[cfg(windows)]
     execution_owner: RuntimeExecutionOwner,
 }
 
@@ -476,6 +477,7 @@ impl ManagedCamouhostProcess {
     ) -> (Self, ManagedCamouhostIpc) {
         let shared = Arc::new(Mutex::new(ProcessState::new()));
         let display_mode = config.display_mode;
+        #[cfg(windows)]
         let execution_owner = config.execution_owner;
         (
             Self {
@@ -486,6 +488,7 @@ impl ManagedCamouhostProcess {
             ManagedCamouhostIpc {
                 shared,
                 display_mode,
+                #[cfg(windows)]
                 execution_owner,
             },
         )
