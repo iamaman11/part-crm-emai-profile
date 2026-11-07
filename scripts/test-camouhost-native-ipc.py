@@ -2,6 +2,7 @@
 """Offline user-session IPC regression; no real Firefox or credentials."""
 from __future__ import annotations
 
+import asyncio
 import contextlib
 import importlib.util
 import io
