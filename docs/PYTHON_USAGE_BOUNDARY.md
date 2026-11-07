@@ -23,10 +23,13 @@ a small helper that duplicates policy or bypasses admission is not.
 
 ### Product Runtime cross-language adapter
 
-`runtime/camouhost/real.py` is the current canonical example: a versioned/bounded Bridge IPC adapter to
-Camoufox/BrowserForge/Playwright. Rust owners retain profile/business/lifecycle policy, Profile Bridge
-retains writer/process composition, runtime identity is pinned, stdout is protocol-only, diagnostics
-are stderr, inputs are bounded and no independent cloud/database/provider authority is acquired.
+`runtime/camouhost/real.py` is the current canonical versioned/bounded Bridge IPC adapter. The ordinary
+`user-native` path launches independent native Camoufox and observes only the native writer lock and
+Firefox CrashMonitor checkpoint; it never uses Playwright to attach to or drive the user browser.
+Playwright remains isolated to explicitly authorized automation/SDK scenarios and tests. Rust owners
+retain profile/business/lifecycle policy, Profile Bridge retains writer-lock/IPC composition, runtime
+identity is pinned, stdout is protocol-only, diagnostics are stderr, inputs are bounded and no
+independent cloud/database/provider authority is acquired.
 
 `runtime/camouhost/main.py` is synthetic/test-only and must never be selected as a Production runtime by
 an ungoverned flag.
