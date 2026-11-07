@@ -805,19 +805,16 @@ def report_live_page_count(context: Any) -> None:
         return
 
 
-def native_firefox_startup_page(user_data_dir: Path, *, isolated: bool = False) -> int:
-    """Use Firefox's own first-run page until there is native session state.
+def firefox_native_first_run_args(user_data_dir: Path) -> list[str]:
+    """Ask Firefox itself for its ordinary blank tab only on a virgin profile.
 
-    A new persistent context with session-restore-only startup (value 3)
-    can leave Playwright waiting for an initial Page event indefinitely.
-    Value 1 is Firefox's normal homepage, not an app-created tab. Once
-    Firefox has written its own profile files, preserve SessionStore restore.
-    The isolated browser-state fixture always explicitly manages its own
-    disposable startup window.
+    Playwright's persistent context needs an initial native Page event; native
+    session restore (startup.page=3) has no previous page on first Open. Use
+    Firefox's standard CLI switch rather than opening, inspecting, closing or
+    navigating tabs through the application. All subsequent Opens preserve the
+    browser's own SessionStore without CLI startup overrides.
     """
-    if isolated:
-        return 3
-    return 3 if any(user_data_dir.iterdir()) else 1
+    return ["-new-tab", "about:blank"] if not any(user_data_dir.iterdir()) else []
 
 
 def camoufox_launch_options(
@@ -842,7 +839,7 @@ def camoufox_launch_options(
     browser_selector = camoufox_browser_selector(lock)
     browser_path = browser_selector.get("executable_path")
     firefox_prefs: dict[str, Any] = {
-        "browser.startup.page": native_firefox_startup_page(user_data_dir, isolated=isolated),
+        "browser.startup.page": 3,
         "privacy.baselineFingerprintingProtection": False,
         **accessibility_preferences(os.name),
     }
@@ -868,6 +865,12 @@ def camoufox_launch_options(
     if isolated:
         options["offline"] = True
         options["args"] = ["-new-tab", MANAGED_BOOTSTRAP_TAB_URL]
+    else:
+        # Native Firefox, not CRM or Playwright, creates the only first-run tab.
+        # No change to any profile whose native session has already begun.
+        first_run_args = firefox_native_first_run_args(user_data_dir)
+        if first_run_args:
+            options["args"] = first_run_args
 
     official_env = options.get("env")
     if not isinstance(official_env, dict) or not any(

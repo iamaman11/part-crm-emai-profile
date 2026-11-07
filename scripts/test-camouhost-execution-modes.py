@@ -46,17 +46,15 @@ def verify_embedded_python_path_configuration():
 def main() -> int:
     runtime = load_runtime()
     verify_embedded_python_path_configuration()
-    # Native Firefox must create the first window itself on a genuinely empty
-    # user_data profile. Do not synthesize a Playwright tab or invoke any
-    # application-controlled navigation. Once Firefox owns its native session
-    # files, restore mode (3) preserves the user's own tabs.
+    # First user Open asks Firefox itself for its standard blank initial
+    # tab. No app-controlled Playwright Page command is ever sent. Reopen
+    # receives no startup flags, preserving Firefox's native saved tabs.
     with tempfile.TemporaryDirectory() as directory:
         fresh = Path(directory) / "user_data"
         fresh.mkdir()
-        assert runtime.native_firefox_startup_page(fresh) == 1
-        assert runtime.native_firefox_startup_page(fresh, isolated=True) == 3
+        assert runtime.firefox_native_first_run_args(fresh) == ["-new-tab", "about:blank"]
         (fresh / "places.sqlite").write_bytes(b"synthetic existing Firefox state")
-        assert runtime.native_firefox_startup_page(fresh) == 3
+        assert runtime.firefox_native_first_run_args(fresh) == []
 
     invoked = []
 
