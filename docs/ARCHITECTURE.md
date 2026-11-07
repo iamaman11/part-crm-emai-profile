@@ -47,7 +47,9 @@ Web UI
 ```
 
 Standalone v1 has no required VM/backend daemon, PostgreSQL or Keycloak. Workers executes
-control-plane code only. Camoufox/browser filesystem/process supervision stays on Windows.
+control-plane code only. Camoufox execution and browser files stay on Windows. The ordinary user
+browser remains an independent native process: the Bridge does not supervise its process tree or
+manipulate its tabs/pages; it observes only the native writer lock and Firefox-owned shutdown checkpoint.
 
 ## 3. Deployment And URL Boundary
 
@@ -195,17 +197,26 @@ parse/authenticate, construct adapters/context, call one application command/que
 typed result. Ordinary transports do not own D1 mutation construction, authorization policy,
 idempotency workflow or provider-specific business sequencing.
 
-`apps/profile-bridge` owns Windows-native device trust, materialization and process/runtime
-composition. Phase 2F additionally makes graceful browser close a retained-ownership transition:
-the Bridge keeps the workspace writer lock and Coordinator lease until immutable dirty-generation
-publication, exact verification, authoritative fenced/CAS commit and local successor bookkeeping
-complete. React owns presentation/navigation/remote-cache behavior only.
+`apps/profile-bridge` owns Windows-native device trust, materialization and typed runtime composition.
+For ordinary user Open, Camoufox remains an independent native process; the Bridge never controls its
+tabs, pages, DOM, navigation or process tree. A clean-close witness requires both the released native
+writer lock and Firefox CrashMonitor's current-session `sessionCheckpoints.json` markers:
+`profile-after-change` must be observed after launch, and
+`sessionstore-final-state-write-complete` must be present after shutdown. Lock release alone means
+quiescence, not clean close. A missing, stale, invalid or ambiguous checkpoint follows the existing
+crash/RecoveryRequired path and preserves local bytes. This is passive observation of browser-owned
+state, not a new process manager.
 
-Confirmed Save / Reopen closes that retained transition for ordinary interactive browser use. Only a
-positive controlled-close witness may enter the save path. The Bridge seals one deterministic encrypted
-successor from the retained owned workspace, uses the canonical Profile Generation Successor Commit
-contract, and reports `Saved` only after exact immutable-object verification, atomic backend activation
-and successful local successor/ownership completion. Generic abort/error cleanup remains fail-closed as
+Phase 2F makes a verified graceful browser close a retained-ownership transition: the Bridge keeps
+the workspace writer lock and Coordinator lease until immutable dirty-generation publication, exact
+verification, authoritative fenced/CAS commit and local successor bookkeeping complete. React owns
+presentation/navigation/remote-cache behavior only.
+
+Confirmed Save / Reopen closes that retained transition for ordinary interactive browser use. Only the
+positive native clean-close witness described above may enter the save path. The Bridge seals one
+deterministic encrypted successor from the retained owned workspace, uses the canonical Profile
+Generation Successor Commit contract, and reports `Saved` only after exact immutable-object verification,
+atomic backend activation and successful local successor/ownership completion. Generic abort/error cleanup remains fail-closed as
 uncertain; only a committed confirmed save uses clean Coordinator release back to `Idle`. The next normal
 P2 launch resolves the active verified generation from backend authority. Missing, stale or invalid local
 state may trigger exact rematerialization of that server-selected generation but may never select or fall
@@ -240,8 +251,9 @@ Generation lifecycle follows crash-safe saga/reconciliation semantics. For an or
 
 1. P2 backend authority has already selected the exact active verified base generation and issued the
    live Coordinator session/epoch/fencing authority used by the one local writer;
-2. a positive controlled browser-close witness moves the workspace to retained dirty ownership; close
-   alone is never `Saved` and does not release writer/Coordinator ownership;
+2. a positive clean-close witness moves the workspace to retained dirty ownership; for native user
+   Open this requires both released native writer lock and the current-session Firefox CrashMonitor
+   final checkpoint. Lock release alone is quiescence, not a clean-close witness;
 3. the Bridge snapshots the retained workspace and derives deterministic generation cryptographic
    material for one exact successor identity;
 4. the immutable encrypted successor is uploaded through a bounded operation/object/digest/size/expiry
@@ -275,7 +287,8 @@ Forbidden:
 - reporting `Saved` before exact verification plus authoritative backend commit and required local
   completion;
 - caller/local generation selection or fallback to N after backend commit made N+1 authoritative;
-- treating IPC EOF, runtime crash or ambiguous close as a controlled-close witness.
+- treating IPC EOF, runtime crash, ambiguous close or native writer-lock release alone as a
+  controlled-close witness.
 
 ## 7. Durable Object / Session Boundary
 
@@ -404,9 +417,13 @@ object verification and an authoritative fenced/CAS active-generation commit. Th
 superseded before ownership release; post-commit local candidate drift/failure requires rematerialization
 instead of reopening the base. Real browser/kernel-lock/device/provider execution remains External.
 
-Confirmed Save / Reopen further requires an explicit positive controlled-close witness; runtime crash,
-ambiguous close and IPC disconnect/EOF cannot synthesize one. Before backend commit, failure retains the
-last confirmed generation and exact dirty local ownership for retry. After backend commit, the committed
+Confirmed Save / Reopen further requires an explicit positive controlled-close witness. For native
+user Open, the witness is Firefox's current-session `sessionstore-final-state-write-complete` marker
+together with an absent native writer lock; the current-session `profile-after-change` marker must
+have replaced the pre-launch checkpoint before Ready. Runtime crash, missing/stale/invalid checkpoint,
+ambiguous close and IPC disconnect/EOF cannot synthesize one. They enter the existing RecoveryRequired
+path and preserve local bytes. Before backend commit, failure retains the last confirmed generation and
+exact dirty local ownership for retry. After backend commit, the committed
 successor remains authoritative even if local candidate acceptance or cleanup fails. Reopen is always a
 normal P2 server-authorized launch: the Bridge may reuse an exact local copy or rematerialize that exact
 server-selected active verified generation, but it has no older-generation fallback or caller-selected
