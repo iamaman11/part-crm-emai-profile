@@ -418,7 +418,10 @@ mod windows {
             return Ok(());
         }
         let config = ShippingConfig::from_installation()?;
-        let active = ActiveWindowsDeliveryRuntime::resolve_current().map_err(|error| {
+        // First Open of a DRAFT profile is an ordinary browser Open too.
+        // Reuse the verified signed installation and check its critical launch
+        // files; full 2.8 GiB runtime verification belongs to setup/repair.
+        let active = ActiveWindowsDeliveryRuntime::resolve_for_browser_open().map_err(|error| {
             eprintln!("BRIDGE_DELIVERY_RUNTIME_FAILURE={error:?}");
             ShippingCompositionError::DeliveryRuntime(error)
         })?;
