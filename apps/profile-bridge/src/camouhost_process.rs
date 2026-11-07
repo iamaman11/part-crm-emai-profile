@@ -63,7 +63,6 @@ const PROCESS_EXIT_TIMEOUT: Duration = Duration::from_secs(15);
 const FORCE_EXIT_TIMEOUT: Duration = Duration::from_secs(10);
 const PROCESS_POLL_INTERVAL: Duration = Duration::from_millis(25);
 const IDENTITY_COMPATIBILITY_VERSION: u32 = 2;
-const FINGERPRINT_SOURCE_PREFIX: &str = "profile-stability-v1-probe-";
 const FINGERPRINT_CONFIG_SOURCE_PREFIX: &str = "profile-stability-v2-fpgen-config-";
 const LOWER_HEX: &[u8; 16] = b"0123456789abcdef";
 
@@ -177,17 +176,10 @@ fn validate_runtime_identity(
         return Err(BrowserLaunchBlocker::MaterializationStale);
     }
 
-    // Old confirmed generations bind a real Firefox probe. New fast first
-    // generations bind the canonical official fpgen configuration without
-    // starting and closing an extra Firefox instance before the user's Open.
+    // One canonical native fpgen identity; no legacy browser-probe branch.
     let probe_sha256 = browser_identity
         .fingerprint_source()
         .strip_prefix(FINGERPRINT_CONFIG_SOURCE_PREFIX)
-        .or_else(|| {
-            browser_identity
-                .fingerprint_source()
-                .strip_prefix(FINGERPRINT_SOURCE_PREFIX)
-        })
         .ok_or(BrowserLaunchBlocker::InvalidMaterializationEvidence)?;
     if !valid_sha256(probe_sha256) {
         return Err(BrowserLaunchBlocker::InvalidMaterializationEvidence);
@@ -1595,7 +1587,7 @@ fn inherit_runtime_environment(command: &mut Command) {
 #[cfg(test)]
 mod tests {
     use super::{
-        FINGERPRINT_SOURCE_PREFIX, RuntimeBindingBrowserLaunchPreflight, RuntimeBindingSlot,
+        FINGERPRINT_CONFIG_SOURCE_PREFIX, RuntimeBindingBrowserLaunchPreflight, RuntimeBindingSlot,
         allowlisted_camouhost_diagnostic, decode_hex, hex_encode, native_close_observation_result,
         receive_response, sha256_hex,
     };
@@ -1899,7 +1891,7 @@ mod tests {
         config_sha256: String,
         probe_sha256: &str,
     ) -> Result<MaterializationBinding, Box<dyn std::error::Error>> {
-        let fingerprint_source = format!("{FINGERPRINT_SOURCE_PREFIX}{probe_sha256}");
+        let fingerprint_source = format!("{FINGERPRINT_CONFIG_SOURCE_PREFIX}{probe_sha256}");
         let browser_identity = browser_identity_fixture(
             approved.manifest().runtime_version(),
             approved.manifest().inventory_sha256().as_str(),
