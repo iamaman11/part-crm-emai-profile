@@ -458,9 +458,10 @@ mod p3_fixture {
         );
         // Real native Firefox state can exceed the 64 MiB legacy Vec limit.
         // Reopen via the same exact signed-R2 streaming spool as shipping.
-        let mut downloader = crate::generation_reopen::VerifiedGenerationObjectStreamDownloader::new(BackendGet {
-            state: Rc::clone(&state),
-        });
+        let mut downloader =
+            crate::generation_reopen::VerifiedGenerationObjectStreamDownloader::new(BackendGet {
+                state: Rc::clone(&state),
+            });
 
         let first_claim =
             ClaimUri::parse("profilebridge://claim/claim_s0_browser_state_first_000001")?;
