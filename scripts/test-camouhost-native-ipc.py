@@ -86,11 +86,11 @@ def main():
 
     # A native crash releases parent.lock but lacks Firefox's final checkpoint.
     # The IPC reports an unclean exit and remains alive for Rust's abort/recovery.
-    with patch.dict(sys.modules, {"native_process": native}), patch.multiple(r, **old), \\
-         patch.dict(os.environ, {r.EXPECTED_PROBE_SHA256_ENV: "b" * 64}), \\
+    with patch.dict(sys.modules, {"native_process": native}), patch.multiple(r, **old), \
+         patch.dict(os.environ, {r.EXPECTED_PROBE_SHA256_ENV: "b" * 64}), \
          patch.object(sys, "stdin", io.StringIO(
-             f"hello|{r.IPC_VERSION}\\nlaunch|{SESSION}\\n"
-             f"observe_close|{SESSION}\\nclose|{SESSION}\\n"
+             f"hello|{r.IPC_VERSION}\nlaunch|{SESSION}\n"
+             f"observe_close|{SESSION}\nclose|{SESSION}\n"
          )), contextlib.redirect_stdout(io.TextIOWrapper(io.BytesIO(), encoding="utf-8")) as crashed:
         crash_result = r.run_native_ipc()
     crash_lines = crashed.buffer.getvalue().decode("utf-8").splitlines()
