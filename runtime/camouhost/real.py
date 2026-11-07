@@ -676,17 +676,20 @@ def retire_managed_bootstrap_tabs(context: Any) -> None:
 
 
 def admit_navigation(context: Any, target: str | None) -> None:
-    """Release the already-authorized launch gate without operating Firefox tabs.
+    """Admit the isolated Playwright context after Rust identity authorization.
 
-    Firefox alone owns SessionStore, tab retry, navigation and error-page UI.
-    Opening a saved CRM profile must not click buttons, poll page URLs, create
-    or close tabs, or navigate on the user's behalf.
+    This function is never used by NativeUser. In an exclusive automation/probe
+    workspace it may retire only the exact bootstrap tab Camouhost created;
+    Firefox continues to own restored/user tabs, SessionStore and navigation.
     """
     if target is not None:
         raise RuntimeContractError("Profile launch cannot navigate the browser")
-    # This is the existing pre-admission network isolation boundary. Removing
-    # the gate requires migrating authorization ahead of native process spawn;
-    # that separate change must preserve the tenant/lease fail-closed contract.
+    # The Playwright persistent-context launch creates one marked bootstrap
+    # tab so SessionStore can restore normally. Retire only that app-owned tab,
+    # after Rust admission; never guess at or close an ordinary about:blank tab.
+    retire_managed_bootstrap_tabs(context)
+    # Release the existing pre-admission network isolation boundary only after
+    # identity admission and bootstrap retirement have completed.
     context.set_offline(False)
     print(
         "camouhost_session_restore native_retry_attempts=0 failures=0",
