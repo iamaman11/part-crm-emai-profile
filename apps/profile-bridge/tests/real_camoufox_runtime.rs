@@ -578,6 +578,10 @@ fn run_managed_cold_launch_cycle() -> Result<ApprovedRuntimeBundle, Box<dyn std:
             "native browser must remain open until the user closes its window"
         );
         if native_startup_checkpoint_seen(workspace.path(), checkpoint_baseline) {
+            assert!(
+                !close_observer.observe_controlled_close(&session)?,
+                "native browser must still hold its profile lock before WM_CLOSE"
+            );
             break;
         }
         if Instant::now() >= startup_deadline {
