@@ -64,6 +64,9 @@ def main() -> int:
     run({runtime.EXECUTION_MODE_ENV: runtime.USER_NATIVE_MODE}, 17, ["native"])
     run({runtime.EXECUTION_MODE_ENV: runtime.USER_NATIVE_MODE,
          runtime.HEADLESS_MODE_ENV: "false"}, 17, ["native"])
+    assert run({runtime.EXECUTION_MODE_ENV: runtime.USER_NATIVE_MODE,
+                runtime.AGENT_DIRECTORY_ENV: "/tmp/never-run-scripts"},
+               2, []), "native user context must never execute local Python scripts"
     for invalid in ("true", "virtual", "1", ""):
         assert run({runtime.EXECUTION_MODE_ENV: runtime.USER_NATIVE_MODE,
                     runtime.HEADLESS_MODE_ENV: invalid}, 2, []), "no headless fallback"
