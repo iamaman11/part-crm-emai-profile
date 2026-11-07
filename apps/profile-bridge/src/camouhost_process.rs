@@ -682,6 +682,10 @@ impl ProcessControlPort for ManagedCamouhostProcess {
         Ok(())
     }
 
+    fn preserve_live_browser_on_failure(&self) -> bool {
+        self.config.execution_owner == RuntimeExecutionOwner::NativeUser
+    }
+
     fn force_terminate(&mut self, session_id: &SessionId) -> Result<(), BridgePortError> {
         let mut state = self
             .shared
@@ -690,19 +694,65 @@ impl ProcessControlPort for ManagedCamouhostProcess {
         if state.active_session.as_ref() != Some(session_id) {
             return Err(BridgePortError::InvalidResponse);
         }
+        // EOF tells the Python owner to keep the official Playwright context
+        // alive until Firefox releases the profile lock and writes its final
+        // checkpoint. Never kill a NativeUser sidecar: that could kill the
+        // user's browser along with the SDK driver.
         state.stdin = None;
-        let child = state
-            .child
-            .as_mut()
-            .ok_or(BridgePortError::InvalidResponse)?;
-        if child
-            .try_wait()
-            .map_err(|_| BridgePortError::Unavailable)?
-            .is_none()
+        let already_exited = {
+            let child = state
+                .child
+                .as_mut()
+                .ok_or(BridgePortError::InvalidResponse)?;
+            child
+                .try_wait()
+                .map_err(|_| BridgePortError::Unavailable)?
+                .is_some()
+        };
+        if already_exited {
+            state.clear();
+            return Ok(());
+        }
+
+        if self.config.execution_owner == RuntimeExecutionOwner::NativeUser {
+            {
+                let child = state
+                    .child
+                    .as_mut()
+                    .ok_or(BridgePortError::InvalidResponse)?;
+                let _ = wait_for_child_exit(child, std::time::Duration::from_millis(750));
+            }
+            let exited = {
+                let child = state
+                    .child
+                    .as_mut()
+                    .ok_or(BridgePortError::InvalidResponse)?;
+                child
+                    .try_wait()
+                    .map_err(|_| BridgePortError::Unavailable)?
+                    .is_some()
+            };
+            if exited {
+                state.clear();
+                return Ok(());
+            }
+            return Err(BridgePortError::Unavailable);
+        }
+
         {
+            let child = state
+                .child
+                .as_mut()
+                .ok_or(BridgePortError::InvalidResponse)?;
             child.kill().map_err(|_| BridgePortError::Unavailable)?;
         }
-        wait_for_child_exit(child, FORCE_EXIT_TIMEOUT)?;
+        {
+            let child = state
+                .child
+                .as_mut()
+                .ok_or(BridgePortError::InvalidResponse)?;
+            wait_for_child_exit(child, FORCE_EXIT_TIMEOUT)?;
+        }
         state.clear();
         Ok(())
     }

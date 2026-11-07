@@ -82,6 +82,11 @@ pub trait ProcessControlPort {
     fn is_running(&mut self, session_id: &SessionId) -> Result<bool, BridgePortError>;
     fn request_graceful_close(&mut self, session_id: &SessionId) -> Result<(), BridgePortError>;
     fn confirm_stopped(&mut self, session_id: &SessionId) -> Result<(), BridgePortError>;
+    /// Whether a failed stop must preserve a still-running user-owned browser.
+    /// Disposable isolated probes may be terminated; ordinary user browsers may not.
+    fn preserve_live_browser_on_failure(&self) -> bool {
+        false
+    }
     fn force_terminate(&mut self, session_id: &SessionId) -> Result<(), BridgePortError>;
 }
 
