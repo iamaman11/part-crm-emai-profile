@@ -106,10 +106,13 @@ def main() -> int:
             assert proc.profile_state() == "WRITER_NOT_OBSERVED"
             assert not hasattr(proc, "process"), "Bridge must not supervise native processes"
             proc.writer_active = lambda _: True
-            assert proc.profile_state() == "PROFILE_STARTING", (
-                "a stale previous-session clean marker cannot admit Open"
+            assert proc.profile_state() == "PROFILE_BUSY", (
+                "native writer lock admits Open without reusing a stale clean marker"
             )
             assert proc.observed_native_writer
+            assert not proc.active_session_checkpoint_seen, (
+                "a stale previous-session clean marker cannot prove this session"
+            )
             baseline = checkpoint.stat().st_mtime_ns
             checkpoint.write_text(json.dumps({"profile-after-change": True}), encoding="utf-8")
             startup_mtime = max(checkpoint.stat().st_mtime_ns, baseline + 1_000_000_000)
@@ -136,12 +139,14 @@ def main() -> int:
             )
             assert reopened.profile_state() == "WRITER_NOT_OBSERVED"
             reopened.writer_active = lambda _: True
-            assert reopened.profile_state() == "PROFILE_STARTING"
+            assert reopened.profile_state() == "PROFILE_BUSY"
+            assert not reopened.active_session_checkpoint_seen
             baseline = checkpoint.stat().st_mtime_ns
             checkpoint.write_text(json.dumps({"profile-after-change": True}), encoding="utf-8")
             reopened_mtime = max(checkpoint.stat().st_mtime_ns, baseline + 1_000_000_000)
             os.utime(checkpoint, ns=(reopened_mtime, reopened_mtime))
             assert reopened.profile_state() == "PROFILE_BUSY"
+            assert reopened.active_session_checkpoint_seen
             reopened.writer_active = lambda _: False
             assert reopened.profile_state() == "CRASH_OR_UNKNOWN_PRESERVE_LOCAL"
 
