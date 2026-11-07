@@ -372,7 +372,7 @@ mod p3_fixture {
             TenantId::parse(TENANT)?,
             ProfileId::parse(PROFILE)?,
             GenerationId::parse(BASE_GENERATION)?,
-            "c".repeat(64),
+            bundle.manifest().inventory_sha256().as_str().to_owned(),
             workspace.materialization_inventory_digest()?,
             identity,
         )?;
@@ -618,7 +618,8 @@ mod p3_fixture {
             paths.display_mode,
             Some(origin.url()),
             None,
-        )?;
+        )?
+        .for_isolated_historical_probe();
         let (historical_process, historical_camouhost) =
             crate::camouhost_process::ManagedCamouhostProcess::pair(
                 historical_config,
@@ -799,7 +800,8 @@ mod p3_fixture {
             paths.display_mode,
             Some(origin.url()),
             None,
-        )?;
+        )?
+        .for_isolated_historical_probe();
         let (mut stale_process, mut stale_camouhost) =
             crate::camouhost_process::ManagedCamouhostProcess::pair(stale_config, stale_slot);
         let mut stale_downloader = VerifiedGenerationObjectDownloader::new(BackendGet {
@@ -859,7 +861,8 @@ mod p3_fixture {
             paths.display_mode,
             Some(origin.url()),
             None,
-        )?;
+        )?
+        .for_isolated_historical_probe();
         let (mut lost_process, mut lost_camouhost) =
             crate::camouhost_process::ManagedCamouhostProcess::pair(lost_config, lost_slot);
         let mut lost_downloader = VerifiedGenerationObjectDownloader::new(BackendGet {
@@ -930,7 +933,8 @@ mod p3_fixture {
             paths.display_mode,
             Some(origin.url()),
             None,
-        )?;
+        )?
+        .for_isolated_historical_probe();
         let (mut missing_process, mut missing_camouhost) =
             crate::camouhost_process::ManagedCamouhostProcess::pair(missing_config, missing_slot);
         let mut missing_download = VerifiedGenerationObjectDownloader::new(BackendGet {
