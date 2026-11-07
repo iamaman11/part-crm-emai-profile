@@ -1,17 +1,20 @@
 #!/usr/bin/env python3
-"""Native Camoufox profile launcher; no Playwright, tabs, DOM, or browser commands.
+"""Native Camoufox launch and browser-owned shutdown observation.
 
-This is the next-generation launch primitive. The Bridge's Rust control-plane
-owner MUST prove and redeem the device/profile/tenant lease and immutable
-generation before invoking this module. It does not replace current IPC yet.
+The Bridge's Rust control-plane owner MUST prove and redeem the device/profile/
+tenant lease and immutable generation before invoking this module. The official
+Camoufox SDK owns fingerprint serialization; Firefox owns SessionStore,
+navigation, window/tab closure, and network state.
 
-The official Camoufox SDK owns fingerprint serialization and default extensions;
-Firefox owns SessionStore, navigation, window/tab closure, and network state.
+Clean-close observation is passive: native profile lock plus Firefox
+CrashMonitor's current-session checkpoint. No process tree, PID, Playwright
+context, tabs, DOM, or page commands are used.
 """
 from __future__ import annotations
 
 import copy
 import json
+import stat
 import subprocess
 from dataclasses import dataclass
 from pathlib import Path
@@ -20,6 +23,67 @@ from typing import Any, Callable, Mapping
 
 class NativeLaunchError(RuntimeError):
     """Typed fail-closed error; do not include personal profile data."""
+
+
+SESSION_CHECKPOINTS_NAME = "sessionCheckpoints.json"
+SESSION_START_CHECKPOINT = "profile-after-change"
+SESSION_CLEAN_CLOSE_CHECKPOINT = "sessionstore-final-state-write-complete"
+MAX_SESSION_CHECKPOINT_BYTES = 64 * 1024
+FILE_ATTRIBUTE_REPARSE_POINT = 0x0400
+
+
+def _session_checkpoint_path(workspace: Path) -> Path:
+    return workspace / "user_data" / SESSION_CHECKPOINTS_NAME
+
+
+def _session_checkpoint_mtime_ns(workspace: Path) -> int | None:
+    path = _session_checkpoint_path(workspace)
+    try:
+        metadata = path.lstat()
+    except FileNotFoundError:
+        return None
+    except OSError as error:
+        raise NativeLaunchError("native shutdown checkpoint unavailable") from error
+    if (
+        path.is_symlink()
+        or not stat.S_ISREG(metadata.st_mode)
+        or (getattr(metadata, "st_file_attributes", 0) & FILE_ATTRIBUTE_REPARSE_POINT)
+        or metadata.st_size > MAX_SESSION_CHECKPOINT_BYTES
+    ):
+        raise NativeLaunchError("native shutdown checkpoint path unavailable")
+    return metadata.st_mtime_ns
+
+
+def _read_session_checkpoints(workspace: Path) -> tuple[int, dict[str, bool]] | None:
+    path = _session_checkpoint_path(workspace)
+    try:
+        metadata = path.lstat()
+        if (
+            path.is_symlink()
+            or not stat.S_ISREG(metadata.st_mode)
+            or (getattr(metadata, "st_file_attributes", 0) & FILE_ATTRIBUTE_REPARSE_POINT)
+            or metadata.st_size <= 0
+            or metadata.st_size > MAX_SESSION_CHECKPOINT_BYTES
+        ):
+            return None
+        raw = path.read_bytes()
+        after = path.lstat()
+        if (
+            len(raw) != metadata.st_size
+            or after.st_size != metadata.st_size
+            or after.st_mtime_ns != metadata.st_mtime_ns
+        ):
+            return None
+        checkpoints = json.loads(raw.decode("utf-8"))
+    except (OSError, UnicodeDecodeError, ValueError):
+        return None
+    if not isinstance(checkpoints, dict):
+        return None
+    if any(not isinstance(key, str) or not isinstance(value, bool)
+           for key, value in checkpoints.items()):
+        return None
+    return metadata.st_mtime_ns, checkpoints
+
 
 
 def prepare_native_environment(
@@ -117,30 +181,52 @@ def prepare_native_environment(
 
 @dataclass
 class NativeProfileSession:
-    """Observe only Firefox's native profile lock, never its processes or UI.
+    """Observe the native writer lock and Firefox's own shutdown checkpoint.
 
-    Lock release is merely permission to attempt an independently validated
-    consistent file snapshot, NOT a successful Save or a clean-exit claim.
+    A released lock alone is ambiguous. Save is allowed only after the current
+    session's final SessionStore checkpoint proves a clean Firefox shutdown.
     """
 
     workspace: Path
     writer_active: Callable[[Path], bool]
+    startup_checkpoint_mtime_ns: int | None = None
     observed_native_writer: bool = False
+    active_session_checkpoint_seen: bool = False
 
     def profile_state(self) -> str:
         try:
             active = self.writer_active(self.workspace)
         except (OSError, RuntimeError):
             return "UNKNOWN_PRESERVE_LOCAL"
+
         if active:
             self.observed_native_writer = True
-            return "PROFILE_BUSY"
+            checkpoint = _read_session_checkpoints(self.workspace)
+            if checkpoint is not None:
+                checkpoint_mtime_ns, values = checkpoint
+                if (
+                    checkpoint_mtime_ns != self.startup_checkpoint_mtime_ns
+                    and values.get(SESSION_START_CHECKPOINT) is True
+                    and values.get(SESSION_CLEAN_CLOSE_CHECKPOINT) is not True
+                ):
+                    self.active_session_checkpoint_seen = True
+            return "PROFILE_BUSY" if self.active_session_checkpoint_seen else "PROFILE_STARTING"
+
         if not self.observed_native_writer:
-            # Cannot infer successful native launch from the absence of a lock.
             return "WRITER_NOT_OBSERVED"
-        # A crash may also release the lock. The Save owner must separately
-        # validate the exact native files and make a durable checkpoint.
-        return "QUIESCENT_REQUIRES_FILE_VALIDATION"
+        if not self.active_session_checkpoint_seen:
+            return "CRASH_OR_UNKNOWN_PRESERVE_LOCAL"
+
+        checkpoint = _read_session_checkpoints(self.workspace)
+        if checkpoint is None:
+            return "CRASH_OR_UNKNOWN_PRESERVE_LOCAL"
+        _, values = checkpoint
+        if (
+            values.get(SESSION_START_CHECKPOINT) is True
+            and values.get(SESSION_CLEAN_CLOSE_CHECKPOINT) is True
+        ):
+            return "CLEAN_SHUTDOWN_VERIFIED"
+        return "CRASH_OR_UNKNOWN_PRESERVE_LOCAL"
 
 
 def launch_native_camoufox(
@@ -167,6 +253,7 @@ def launch_native_camoufox(
         raise NativeLaunchError("native user data unavailable")
     if writer_active(workspace):
         raise NativeLaunchError("Firefox already owns this profile")
+    startup_checkpoint_mtime_ns = _session_checkpoint_mtime_ns(workspace)
 
     env = prepare_native_environment(
         browser=browser,
@@ -194,8 +281,8 @@ def launch_native_camoufox(
     except OSError as error:
         raise NativeLaunchError("native Camoufox process launch failed") from error
     # No process polling, process tree, browser hooks or PID-based Save proof.
-    # Only the native Firefox profile lock is observed after this launch.
-    return NativeProfileSession(workspace, writer_active)
+    # Startup and clean shutdown are witnessed by Firefox's own checkpoint file.
+    return NativeProfileSession(workspace, writer_active, startup_checkpoint_mtime_ns)
 
 
 __all__ = [
