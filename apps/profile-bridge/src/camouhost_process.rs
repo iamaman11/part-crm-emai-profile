@@ -507,15 +507,15 @@ impl ManagedCamouhostProcess {
         // RuntimeBundleSelectionPort already authenticated the signed active
         // Release Set's critical launch bytes and bound their identities to
         // BrowserPreflight. Avoid hashing the exact same files again here.
-        let required = [
-            entrypoint.clone(),
-            runtime_lock.clone(),
-            self.config.runtime_root.join(NATIVE_ENTRYPOINT),
-            self.config.runtime_root.join(WINDOWS_BROWSER_EXECUTABLE),
-            self.config.runtime_root.join(WINDOWS_PYTHON_EXECUTABLE),
-        ];
-        for path in &required {
-            verify_launch_file_shape(path)?;
+        verify_launch_file_shape(&entrypoint)?;
+        verify_launch_file_shape(&runtime_lock)?;
+        #[cfg(windows)]
+        for relative in [
+            NATIVE_ENTRYPOINT,
+            WINDOWS_BROWSER_EXECUTABLE,
+            WINDOWS_PYTHON_EXECUTABLE,
+        ] {
+            verify_launch_file_shape(&self.config.runtime_root.join(relative))?;
         }
 
         #[cfg(windows)]
