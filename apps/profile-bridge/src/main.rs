@@ -646,11 +646,14 @@ mod tests {
 
     #[test]
     fn obsolete_historical_probe_cli_is_not_a_supported_application_mode() {
-        assert!(parse_command([
-            "profile-bridge".to_owned(),
-            "--verify-historical-candidate".to_owned(),
-            "profilebridge://claim/claim_01JBRIDGE_FEASIBILITY".to_owned(),
-        ]).is_err());
+        assert!(
+            parse_command([
+                "profile-bridge".to_owned(),
+                "--verify-historical-candidate".to_owned(),
+                "profilebridge://claim/claim_01JBRIDGE_FEASIBILITY".to_owned(),
+            ])
+            .is_err()
+        );
     }
 
     #[test]
