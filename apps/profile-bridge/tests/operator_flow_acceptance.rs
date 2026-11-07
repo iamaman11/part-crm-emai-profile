@@ -320,12 +320,7 @@ fn failed_live_user_close_keeps_browser_and_writer_ownership()
     let fixture = Fixture::new()?;
     let process = FakeProcessControl::preserving_live_browser();
     let camouhost = FakeCamouhost::default().with_close_failure();
-    let mut operator = operator_with_process(
-        &fixture,
-        fixture.coordinator(),
-        process,
-        camouhost,
-    )?;
+    let mut operator = operator_with_process(&fixture, fixture.coordinator(), process, camouhost)?;
     operator.open(&fixture.claim_uri, &fixture.root, UnixMillis::new(10))?;
     let session_id = fixture.lease.session_id().clone();
 
