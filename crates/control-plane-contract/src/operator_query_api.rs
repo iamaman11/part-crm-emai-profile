@@ -14,7 +14,12 @@ pub const PROFILE_STATUSES: [&str; 9] = [
 ];
 pub const MEMBERSHIP_ROLES: [&str; 2] = ["TENANT_OWNER", "MEMBER"];
 pub const MEMBERSHIP_STATUSES: [&str; 3] = ["ACTIVE", "SUSPENDED", "REVOKED"];
-pub const MAILBOX_PROVIDERS: [&str; 4] = ["GMAIL_API", "IMAP", "BROWSER_FALLBACK", "MICROSOFT_GRAPH"];
+pub const MAILBOX_PROVIDERS: [&str; 4] = [
+    "GMAIL_API",
+    "IMAP",
+    "BROWSER_FALLBACK",
+    "MICROSOFT_GRAPH",
+];
 pub const MAILBOX_STATUSES: [&str; 4] = ["ACTIVE", "AUTH_REQUIRED", "SUSPENDED", "REVOKED"];
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -291,7 +296,12 @@ mod tests {
         }
         assert_eq!(
             schemas["OperatorMailboxProvider"]["enum"],
-            serde_json::json!(["GMAIL_API", "IMAP", "BROWSER_FALLBACK", "MICROSOFT_GRAPH"])
+            serde_json::json!([
+                "GMAIL_API",
+                "IMAP",
+                "BROWSER_FALLBACK",
+                "MICROSOFT_GRAPH"
+            ])
         );
         for globally_reserved in [
             "ProfileStatus",
