@@ -19,7 +19,9 @@ use sha2::{Digest, Sha256};
 use std::env;
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::time::{Instant, SystemTime, UNIX_EPOCH};
+use std::process::Command;
+use std::thread;
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 const ENABLE_ENV: &str = "AR10_REAL_CAMOUFOX";
 const PYTHON_ENV: &str = "AR10_PYTHON";
@@ -207,6 +209,62 @@ fn sha256_hex(bytes: &[u8]) -> String {
         encoded.push(char::from(LOWER_HEX[usize::from(byte & 0x0f)]));
     }
     encoded
+}
+
+fn close_native_camoufox_window() -> Result<(), Box<dyn std::error::Error>> {
+    let script = r#"
+$ErrorActionPreference = 'Stop'
+$deadline = [DateTime]::UtcNow.AddSeconds(30)
+$browser = $null
+do {
+    $matches = @(Get-Process -Name 'camoufox' -ErrorAction SilentlyContinue |
+        Where-Object { $_.MainWindowHandle -ne [IntPtr]::Zero })
+    if ($matches.Count -gt 1) {
+        throw "expected one native Camoufox window, found $($matches.Count)"
+    }
+    if ($matches.Count -eq 1) {
+        $browser = $matches[0]
+        break
+    }
+    Start-Sleep -Milliseconds 100
+} while ([DateTime]::UtcNow -lt $deadline)
+if ($null -eq $browser) {
+    throw 'native Camoufox window was not found'
+}
+Add-Type -TypeDefinition @'
+using System;
+using System.Runtime.InteropServices;
+public static class NativeCamoufoxWindow {
+    [DllImport("user32.dll", SetLastError = true)]
+    public static extern bool PostMessage(IntPtr hWnd, uint msg, IntPtr wParam, IntPtr lParam);
+}
+'@
+if (-not [NativeCamoufoxWindow]::PostMessage(
+    $browser.MainWindowHandle, 0x0010, [IntPtr]::Zero, [IntPtr]::Zero
+)) {
+    throw "WM_CLOSE failed: $([Runtime.InteropServices.Marshal]::GetLastWin32Error())"
+}
+Write-Output 'NATIVE_CAMOUFOX_WM_CLOSE=POSTED'
+"#;
+    let output = Command::new("powershell.exe")
+        .args([
+            "-NoProfile",
+            "-NonInteractive",
+            "-ExecutionPolicy",
+            "Bypass",
+            "-Command",
+            script,
+        ])
+        .output()?;
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    if !output.status.success() || !stdout.contains("NATIVE_CAMOUFOX_WM_CLOSE=POSTED") {
+        return Err(format!(
+            "native Camoufox WM_CLOSE failed: stdout={stdout:?}; stderr={stderr:?}"
+        )
+        .into());
+    }
+    Ok(())
 }
 
 #[cfg(not(windows))]
@@ -470,8 +528,9 @@ fn run_managed_cold_launch_cycle() -> Result<ApprovedRuntimeBundle, Box<dyn std:
 
     let config = ManagedCamouhostConfig::new(python, runtime_root, display_mode, None, None)?;
     let (mut process, camouhost) = ManagedCamouhostProcess::pair(config, slot);
-    let mut cold_observer = camouhost.cold_probe_observer();
-    assert!(cold_observer.observe_live().is_err());
+    // Normal user Open is a native Firefox process. Do not create a Playwright
+    // observer or inspect pages/DOM; the test closes only its disposable window.
+    let mut close_observer = camouhost.close_observer();
     let mut camouhost = StageTracingCamouhost::new(camouhost);
     let session = SessionId::parse("session_01JAR10REAL")?;
     let browser_launch_started = Instant::now();
@@ -480,16 +539,29 @@ fn run_managed_cold_launch_cycle() -> Result<ApprovedRuntimeBundle, Box<dyn std:
         "AR10_COLD_CYCLE_PHASE=native_launch;elapsed_ms={}",
         browser_launch_started.elapsed().as_millis()
     );
-    // The candidate witness must be independent of the already authenticated
-    // Launch/Ready exchange, with the SAME fingerprint and managed session.
-    cold_observer.observe_live()?;
+    assert!(
+        !close_observer.observe_controlled_close(&session)?,
+        "native browser must remain open until the user closes its window"
+    );
+
     let browser_close_started = Instant::now();
+    close_native_camoufox_window()?;
+    let close_deadline = Instant::now() + Duration::from_secs(30);
+    loop {
+        match close_observer.observe_controlled_close(&session) {
+            Ok(true) => break,
+            Ok(false) if Instant::now() < close_deadline => {
+                thread::sleep(Duration::from_millis(100));
+            }
+            Ok(false) => return Err("native Firefox did not produce a clean-close witness".into()),
+            Err(error) => return Err(format!("native Firefox clean-close proof failed: {error:?}").into()),
+        }
+    }
     RuntimeSessionOrchestrator::close(&bundle, &session, &mut process, &mut camouhost)?;
     eprintln!(
         "AR10_COLD_CYCLE_PHASE=native_close;elapsed_ms={}",
         browser_close_started.elapsed().as_millis()
     );
-    assert!(cold_observer.observe_live().is_err());
 
     // The next cycle re-selects (and fully hashes) the exact runtime before
     // admission; one final post-run check below guards the last cycle. This
@@ -501,7 +573,7 @@ fn run_managed_cold_launch_cycle() -> Result<ApprovedRuntimeBundle, Box<dyn std:
 }
 
 #[test]
-fn bridge_preflight_launches_real_camoufox_through_managed_ipc()
+fn bridge_preflight_launches_real_camoufox_natively_without_page_inspection()
 -> Result<(), Box<dyn std::error::Error>> {
     if env::var(ENABLE_ENV).as_deref() != Ok("1") {
         return Ok(());
