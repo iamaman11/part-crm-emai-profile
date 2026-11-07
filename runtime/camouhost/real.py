@@ -805,6 +805,21 @@ def report_live_page_count(context: Any) -> None:
         return
 
 
+def native_firefox_startup_page(user_data_dir: Path, *, isolated: bool = False) -> int:
+    """Use Firefox's own first-run page until there is native session state.
+
+    A new persistent context with session-restore-only startup (value 3)
+    can leave Playwright waiting for an initial Page event indefinitely.
+    Value 1 is Firefox's normal homepage, not an app-created tab. Once
+    Firefox has written its own profile files, preserve SessionStore restore.
+    The isolated browser-state fixture always explicitly manages its own
+    disposable startup window.
+    """
+    if isolated:
+        return 3
+    return 3 if any(user_data_dir.iterdir()) else 1
+
+
 def camoufox_launch_options(
     lock: dict[str, Any],
     root: Path,
@@ -827,7 +842,7 @@ def camoufox_launch_options(
     browser_selector = camoufox_browser_selector(lock)
     browser_path = browser_selector.get("executable_path")
     firefox_prefs: dict[str, Any] = {
-        "browser.startup.page": 3,
+        "browser.startup.page": native_firefox_startup_page(user_data_dir, isolated=isolated),
         "privacy.baselineFingerprintingProtection": False,
         **accessibility_preferences(os.name),
     }
