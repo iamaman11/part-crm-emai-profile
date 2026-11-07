@@ -55,23 +55,24 @@ def rejected(conn: sqlite3.Connection, fx: dict, **changes: object) -> None:
 
 
 def main() -> int:
-    # Existing identity-only probe must never certify. Only the explicitly
-    # selected staging cold-probe path may present an original encrypted
-    # native snapshot SHA plus the validated real-browser witness.
+    # The one native Open/Save/Reopen model no longer exposes any historical
+    # Camoufox execution or CLI certification path. Retained D1 history remains
+    # an inert, integrity-checked schema fact, never an app-issued prune grant.
     operator = (ROOT / "apps/profile-bridge/src/operator_flow.rs").read_text(
         encoding="utf-8"
     )
-    assert "pub fn probe_and_certify_verified_predecessor_once" in operator
-    assert "certify_verified_predecessor_working(" in operator
-    assert "observation.native_cold_snapshot_sha256()" in operator
-    native = (ROOT / "apps/profile-bridge/src/authoritative_generation.rs").read_text(encoding="utf-8")
-    assert "verified_native_cold_snapshot_sha256" in native
-    assert "WorkspaceSnapshotReader::new(restored, &inventory)" in native
-    assert "actual != inspected.metadata().plaintext_digest().bytes()" in native
+    assert "probe_and_certify_verified_predecessor_once" not in operator
+    assert "certify_verified_predecessor_working(" not in operator
+    native = (ROOT / "apps/profile-bridge/src/authoritative_generation.rs").read_text(
+        encoding="utf-8"
+    )
+    assert "cold_launch_verified_predecessor_once" not in native
+    assert "verified_native_cold_snapshot_sha256" not in native
     shipping = (ROOT / "apps/profile-bridge/src/shipping_composition.rs").read_text(
         encoding="utf-8"
     )
-    assert "R2_PRUNE_AUTHORITY=PROVED_NATIVE_CONTENT" in shipping
+    assert "R2_PRUNE_AUTHORITY=PROVED_NATIVE_CONTENT" not in shipping
+    assert "run_historical_candidate_probe" not in shipping
     worker = (
         ROOT / "apps/control-plane-worker/src/profile_generation_successor_ingress.rs"
     ).read_text(encoding="utf-8")
