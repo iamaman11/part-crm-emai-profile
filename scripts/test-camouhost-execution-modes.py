@@ -109,6 +109,7 @@ def main() -> int:
     assert 'RuntimeExecutionOwner::IsolatedHistoricalProbe => "isolated-cold-probe"' in shipping
     assert "CAMOUHOST_NATIVE_PROFILE" not in shipping
     assert 'launch_with_browser_visible_admission(' in shipping
+    assert 'let test_agent_enabled = !cfg!(windows)' in shipping
     assert "&& self.config.execution_owner != RuntimeExecutionOwner::IsolatedHistoricalProbe" in shipping
     composition = (SOURCE.parents[2] /
                    "apps/profile-bridge/src/shipping_composition.rs").read_text(encoding="utf-8")
