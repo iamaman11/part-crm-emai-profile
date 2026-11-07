@@ -536,7 +536,7 @@ mod tests {
         );
         let result = block_on(adapter.get_message(&scope()?, &reference))?
             .ok_or_else(|| std::io::Error::other("expected browser message"))?;
-        assert_eq!(result.summary().reference(), &reference);
+        assert!(result.summary().reference() == &reference);
         assert_eq!(adapter.fence.calls.get(), 2);
         Ok(())
     }
