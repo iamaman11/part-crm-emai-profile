@@ -199,6 +199,26 @@ fn diagnostic_cause(result: &Result<(), BridgeCliError>) -> Cause {
         Err(BridgeCliError::LaunchFailed(ShippingCompositionError::Operator(
             profile_bridge::operator_flow::OperatorFlowError::EnrollmentConflict,
         ))) => Cause::CoordinatorLeaseConflict,
+        Err(BridgeCliError::LaunchFailed(ShippingCompositionError::Operator(
+            profile_bridge::operator_flow::OperatorFlowError::Preflight { reason, .. },
+        ))) => match reason {
+            profile_bridge::operator_flow::OperationalRejectionReason::RuntimeCandidateMismatch
+            | profile_bridge::operator_flow::OperationalRejectionReason::ConfigIntegrityMismatch
+            | profile_bridge::operator_flow::OperationalRejectionReason::IdentityObservationMismatch => Cause::BrowserConfigMismatch,
+            profile_bridge::operator_flow::OperationalRejectionReason::ProfileBusy => Cause::BrowserProfileBusy,
+            profile_bridge::operator_flow::OperationalRejectionReason::RecoveryRequired => Cause::BrowserRecoveryRequired,
+            profile_bridge::operator_flow::OperationalRejectionReason::RetryableNetworkRouteChurn => Cause::BrowserRouteUnstable,
+            profile_bridge::operator_flow::OperationalRejectionReason::LocalCacheIncomplete
+            | profile_bridge::operator_flow::OperationalRejectionReason::LocalCacheInaccessible
+            | profile_bridge::operator_flow::OperationalRejectionReason::FilesystemProcessCapabilityUnavailable => Cause::BrowserLocalCacheUnavailable,
+            profile_bridge::operator_flow::OperationalRejectionReason::BrowserPreflightRejected => Cause::BrowserUnavailable,
+        },
+        Err(BridgeCliError::LaunchFailed(ShippingCompositionError::Operator(
+            profile_bridge::operator_flow::OperatorFlowError::Runtime { .. },
+        ))) => Cause::BrowserRuntimeLaunchFailed,
+        Err(BridgeCliError::LaunchFailed(ShippingCompositionError::Operator(
+            profile_bridge::operator_flow::OperatorFlowError::AuthoritativeGeneration { .. },
+        ))) => Cause::DownloadFailed,
         Err(BridgeCliError::LaunchFailed(_)) => Cause::BrowserUnavailable,
         Err(_) => Cause::OtherSafeFailure,
     }

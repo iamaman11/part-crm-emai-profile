@@ -504,19 +504,18 @@ impl ManagedCamouhostProcess {
     ) -> Result<Child, BridgePortError> {
         let entrypoint = self.config.runtime_root.join(REAL_ENTRYPOINT);
         let runtime_lock = self.config.runtime_root.join(RUNTIME_LOCK_PATH);
-        verify_file_digest(&entrypoint, &binding.entrypoint_sha256)?;
-        verify_file_digest(&runtime_lock, &binding.runtime_lock_sha256)?;
-        #[cfg(windows)]
-        verify_file_digest(
-            &self.config.runtime_root.join(NATIVE_ENTRYPOINT),
-            &binding.native_entrypoint_sha256,
-        )?;
-        #[cfg(windows)]
-        {
-            let browser = self.config.runtime_root.join(WINDOWS_BROWSER_EXECUTABLE);
-            let python = self.config.runtime_root.join(WINDOWS_PYTHON_EXECUTABLE);
-            verify_file_digest(&browser, &binding.browser_sha256)?;
-            verify_file_digest(&python, &binding.python_sha256)?;
+        // RuntimeBundleSelectionPort already authenticated the signed active
+        // Release Set's critical launch bytes and bound their identities to
+        // BrowserPreflight. Avoid hashing the exact same files again here.
+        let required = [
+            entrypoint.clone(),
+            runtime_lock.clone(),
+            self.config.runtime_root.join(NATIVE_ENTRYPOINT),
+            self.config.runtime_root.join(WINDOWS_BROWSER_EXECUTABLE),
+            self.config.runtime_root.join(WINDOWS_PYTHON_EXECUTABLE),
+        ];
+        for path in &required {
+            verify_launch_file_shape(path)?;
         }
 
         #[cfg(windows)]
@@ -1536,14 +1535,17 @@ fn hex_nibble(value: u8) -> Option<u8> {
     }
 }
 
-fn verify_file_digest(path: &Path, expected: &str) -> Result<(), BridgePortError> {
+fn verify_launch_file_shape(path: &Path) -> Result<(), BridgePortError> {
     let metadata = fs::symlink_metadata(path).map_err(|_| BridgePortError::Unavailable)?;
-    if metadata.file_type().is_symlink() || !metadata.is_file() {
+    if metadata.file_type().is_symlink() || !metadata.is_file() || metadata.len() == 0 {
         return Err(BridgePortError::InvalidResponse);
     }
-    let bytes = fs::read(path).map_err(|_| BridgePortError::Unavailable)?;
-    if sha256_hex(&bytes) != expected {
-        return Err(BridgePortError::InvalidResponse);
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::MetadataExt;
+        if metadata.file_attributes() & 0x0400 != 0 {
+            return Err(BridgePortError::InvalidResponse);
+        }
     }
     Ok(())
 }

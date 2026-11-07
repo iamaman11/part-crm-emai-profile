@@ -347,6 +347,13 @@ impl GenerationWorkspace {
         build_inventory(&self.canonical_path)
     }
 
+    /// Fast size hint for the in-memory Open lifecycle record. Metadata only:
+    /// no reads of browser cookies, SQLite/WAL contents, sessions or caches.
+    /// Full per-file hashes are computed only by snapshot/Save/repair owners.
+    pub fn metadata_total_bytes(&self) -> Result<u64, LocalProfileError> {
+        metadata_total_bytes(&self.canonical_path)
+    }
+
     /// Flush a verified independent native copy, including its directory
     /// entries. A preexisting reserve is re-flushed on restart too, never
     /// trusted merely because its size and inventory currently match.
@@ -711,6 +718,54 @@ fn read_control_text(path: &Path) -> Result<String, LocalProfileError> {
     Ok(content)
 }
 
+// Do not replace this with inventory(): its content reads are Save-only.
+fn metadata_total_bytes(root: &Path) -> Result<u64, LocalProfileError> {
+    let mut dirs = vec![root.to_path_buf()];
+    let mut count = 0_usize;
+    let mut total = 0_u64;
+    while let Some(dir) = dirs.pop() {
+        for child in fs::read_dir(&dir)? {
+            let path = child?.path();
+            let relative = path
+                .strip_prefix(root)
+                .map_err(|_| LocalProfileError::UnsafeRelativePath)?;
+            let relative = normalized_relative_path(relative)?;
+            let metadata = fs::symlink_metadata(&path)?;
+            let kind = metadata.file_type();
+            if kind.is_symlink() {
+                return Err(LocalProfileError::SymbolicLinkRejected);
+            }
+            #[cfg(windows)]
+            {
+                use std::os::windows::fs::MetadataExt;
+                if metadata.file_attributes() & 0x0400 != 0 {
+                    return Err(LocalProfileError::SymbolicLinkRejected);
+                }
+            }
+            if is_ephemeral_browser_lock(&relative) || is_bridge_control_file(&relative) {
+                if !kind.is_file() {
+                    return Err(LocalProfileError::SpecialFileRejected);
+                }
+                continue;
+            }
+            if kind.is_dir() {
+                dirs.push(path);
+            } else if kind.is_file() {
+                count += 1;
+                if count > MAX_INVENTORY_FILES {
+                    return Err(LocalProfileError::InventoryLimitExceeded);
+                }
+                total = total
+                    .checked_add(metadata.len())
+                    .ok_or(LocalProfileError::InventorySizeOverflow)?;
+            } else {
+                return Err(LocalProfileError::SpecialFileRejected);
+            }
+        }
+    }
+    Ok(total)
+}
+
 fn build_inventory(root: &Path) -> Result<GenerationInventory, LocalProfileError> {
     let mut entries = Vec::new();
     collect_inventory(root, root, &mut entries)?;
@@ -961,6 +1016,20 @@ mod tests {
             ProfileId::parse(format!("profile_reject_{sequence}"))?,
             GenerationId::parse(format!("generation_reject_{sequence}"))?,
         ))
+    }
+
+    #[test]
+    fn ordinary_open_metadata_size_matches_save_inventory_without_reading_content()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let (path, root, tenant, profile, generation) = fixture()?;
+        let workspace = root.create_generation(&tenant, &profile, &generation)?;
+        std::fs::write(workspace.path().join("camoufox-config.json"), b"{}\\n")?;
+        std::fs::write(workspace.path().join("user_data").join("cookies.sqlite"), vec![5_u8; 8192])?;
+        assert_eq!(workspace.metadata_total_bytes()?, workspace.inventory()?.total_bytes());
+        std::fs::write(workspace.path().join("user_data").join("cookies.sqlite"), vec![9_u8; 8192])?;
+        assert_eq!(workspace.metadata_total_bytes()?, workspace.inventory()?.total_bytes());
+        let _ = crate::test_support::remove_test_root(&path);
+        Ok(())
     }
 
     #[test]

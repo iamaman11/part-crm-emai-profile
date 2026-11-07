@@ -1265,9 +1265,14 @@ where
                 &workspace,
             ));
         }
+        // Ordinary Open requires only metadata for an ephemeral lifecycle
+        // record, NOT a snapshot inventory. Reading every Firefox cache,
+        // SQLite and WAL byte here can delay Open by seconds and is useless:
+        // the native browser changes those bytes immediately on launch.
+        // Save/recovery remain the exclusive owners of full content hashes.
         #[cfg(windows)]
-        let inventory_started = std::time::Instant::now();
-        let inventory = match workspace.inventory() {
+        let metadata_started = std::time::Instant::now();
+        let local_bytes = match workspace.metadata_total_bytes() {
             Ok(value) => value,
             Err(_) => {
                 return Err(self.fail_with_lock_before_use(
@@ -1280,8 +1285,8 @@ where
         };
         #[cfg(windows)]
         eprintln!(
-            "bridge_open_subphase name=workspace_inventory elapsed_ms={}",
-            inventory_started.elapsed().as_millis()
+            "bridge_open_subphase name=workspace_metadata elapsed_ms={}",
+            metadata_started.elapsed().as_millis()
         );
         // Only this exact boundary may consume pending delivery health. The runtime has
         // not been spawned or allowed to mutate the workspace at this point.
@@ -1295,7 +1300,7 @@ where
         }
         let mut local_record = LocalGenerationRecord::new(
             enrollment.generation_id().clone(),
-            inventory.total_bytes(),
+            local_bytes,
             now,
         );
         if local_record.set_locked(true).is_err() || local_record.begin_use(now).is_err() {
