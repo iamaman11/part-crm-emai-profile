@@ -480,7 +480,7 @@ mod tests {
         assert!(runtime_lock.consumed_by("runtime_bundle.files"));
 
         let resolved = topology.resolve(&root())?;
-        assert_eq!(resolved.len(), 19);
+        assert_eq!(resolved.len(), 20);
         assert!(
             resolved
                 .iter()
@@ -488,6 +488,7 @@ mod tests {
                     && input.sha256.len() == 64)
         );
         for input_id in [
+            "camouhost_native_process",
             "camouhost_runtime_materializer_policy",
             "camouhost_runtime_packager_policy",
         ] {

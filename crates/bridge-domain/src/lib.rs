@@ -823,6 +823,7 @@ pub trait CamouhostPort {
 pub enum BridgePortError {
     Unavailable,
     InvalidResponse,
+    UncleanBrowserExit,
 }
 
 impl fmt::Display for BridgePortError {
@@ -830,6 +831,7 @@ impl fmt::Display for BridgePortError {
         formatter.write_str(match self {
             Self::Unavailable => "Bridge port is unavailable",
             Self::InvalidResponse => "Bridge port returned an invalid response",
+            Self::UncleanBrowserExit => "Camoufox exited without a clean shutdown checkpoint",
         })
     }
 }

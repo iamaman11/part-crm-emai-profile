@@ -284,6 +284,20 @@ fn operator<H: CamouhostPort>(
     coordinator: TestCoordinator,
     camouhost: H,
 ) -> Result<TestOperator<H>, Box<dyn std::error::Error>> {
+    operator_with_process(
+        fixture,
+        coordinator,
+        FakeProcessControl::default(),
+        camouhost,
+    )
+}
+
+fn operator_with_process<H: CamouhostPort>(
+    fixture: &Fixture,
+    coordinator: TestCoordinator,
+    process: FakeProcessControl,
+    camouhost: H,
+) -> Result<TestOperator<H>, Box<dyn std::error::Error>> {
     Ok(ProfileBridgeOperator::new(
         FakeDeviceIdentity::new(fixture.device_id.clone()),
         FakeDeviceKeyStore::default(),
@@ -295,9 +309,44 @@ fn operator<H: CamouhostPort>(
             allow: true,
         },
         AllowBrowserPreflight,
-        FakeProcessControl::default(),
+        process,
         camouhost,
     ))
+}
+
+#[test]
+fn failed_live_user_close_keeps_browser_and_writer_ownership()
+-> Result<(), Box<dyn std::error::Error>> {
+    let fixture = Fixture::new()?;
+    let process = FakeProcessControl::preserving_live_browser();
+    let camouhost = FakeCamouhost::default().with_close_failure();
+    let mut operator = operator_with_process(&fixture, fixture.coordinator(), process, camouhost)?;
+    operator.open(&fixture.claim_uri, &fixture.root, UnixMillis::new(10))?;
+    let session_id = fixture.lease.session_id().clone();
+
+    let result = operator.close(UnixMillis::new(20));
+    assert!(matches!(
+        result,
+        Err(OperatorFlowError::Runtime {
+            stage: OperatorFailureStage::RuntimeClose,
+            cleanup,
+            ..
+        }) if cleanup.process() && !cleanup.workspace_lock() && !cleanup.coordinator_lease()
+    ));
+    assert_eq!(operator.active_session_id(), Some(&session_id));
+    assert_eq!(operator.coordinator().closed, 0);
+    assert_eq!(operator.coordinator().claimed, 1);
+    assert_eq!(
+        operator.open(&fixture.claim_uri, &fixture.root, UnixMillis::new(21)),
+        Err(OperatorFlowError::Busy)
+    );
+    assert!(operator.last_terminal().is_none());
+    assert!(!operator.cleanup_blocked());
+    assert_eq!(
+        operator.process().actions().last(),
+        Some(&ProcessAction::ForceTerminate(session_id))
+    );
+    Ok(())
 }
 
 #[test]

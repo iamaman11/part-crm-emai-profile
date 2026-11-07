@@ -54,7 +54,7 @@ export function MailboxesWorkspace() {
       setOverviewCursor(data.nextCursor);
     },
   });
-  const bindingCreate = useLogicalCommandMutation((input: { bindingId: string; provider: 'GMAIL_API' | 'IMAP' | 'BROWSER_FALLBACK'; secretHandle: string }, idempotencyKey) => createMailboxBinding(tenantId, input, idempotencyKey));
+  const bindingCreate = useLogicalCommandMutation((input: { bindingId: string; provider: 'GMAIL_API' | 'IMAP' | 'MICROSOFT_GRAPH' | 'BROWSER_FALLBACK'; secretHandle: string }, idempotencyKey) => createMailboxBinding(tenantId, input, idempotencyKey));
   const bindingRevoke = useLogicalCommandMutation((version: number, idempotencyKey) => revokeMailboxBinding(tenantId, bindingId, version, idempotencyKey));
   const associationChange = useLogicalCommandMutation((input: { bindingId: string; clientId: string | null; expectedRelationshipVersion: number }, idempotencyKey) =>
       changeMailboxClientAssociation(tenantId, input.bindingId, {
@@ -235,12 +235,12 @@ export function MailboxesWorkspace() {
           setBindingId(id);
           bindingCreate.mutate({
             bindingId: id,
-            provider: field(data, 'provider') as 'GMAIL_API' | 'IMAP' | 'BROWSER_FALLBACK',
+            provider: field(data, 'provider') as 'GMAIL_API' | 'IMAP' | 'MICROSOFT_GRAPH' | 'BROWSER_FALLBACK',
             secretHandle: field(data, 'secretHandle'),
           });
         }}>
           <label>Binding ID<input name="bindingId" required disabled={!enabled} /></label>
-          <label>Provider<select name="provider" defaultValue="IMAP" disabled={!enabled}><option value="IMAP">IMAP</option><option value="GMAIL_API">Gmail API</option><option value="BROWSER_FALLBACK">Browser fallback</option></select></label>
+          <label>Provider<select name="provider" defaultValue="IMAP" disabled={!enabled}><option value="IMAP">IMAP</option><option value="GMAIL_API">Gmail API</option><option value="MICROSOFT_GRAPH">Microsoft Graph</option><option value="BROWSER_FALLBACK">Browser fallback (device job)</option></select></label>
           <label>Secret handle<input name="secretHandle" autoComplete="off" required disabled={!enabled} /></label>
           <button type="submit" disabled={!enabled || bindingCreate.isPending}>Create binding</button>
         </form>
@@ -248,7 +248,7 @@ export function MailboxesWorkspace() {
       </section>
 
       <section className="panel full-span">
-        <span className="eyebrow">Bounded metadata-only execution</span>
+        <span className="eyebrow">Mailbox check (provider metadata only)</span>
         <h2>Mailbox job</h2>
         <div className="split-grid">
           <form className="stack-form" onSubmit={(event) => {
@@ -297,7 +297,7 @@ export function MailboxesWorkspace() {
             </dl>
             <ConfirmAction
               label="run mailbox job"
-              consequence="The current repository-local provider lane is synthetic metadata-only. Running advances the governed job state; it does not expose message payloads."
+              consequence="Run the authorized provider check using the configured Gmail API, IMAP or Microsoft Graph connection. Only bounded status/count metadata is stored; message content is not returned. Browser fallback requires a separate authorized device job."
               disabled={jobRun.isPending}
               onConfirm={() => jobRun.mutateAsync(job.version).then(() => undefined)}
             />

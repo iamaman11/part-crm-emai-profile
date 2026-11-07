@@ -63,10 +63,13 @@ Do not create parallel policy services or a second crash-recovery engine.
 
 **Lease and save are separate semantic responsibilities (accepted 2026-10-25).**
 The coordinator owns heartbeat strictly as bounded renewal/refusal/uncertainty
-of exclusive writer authority. Bridge owns supervised browser-close
-observation and the automatic post-quiescence save trigger; the save/generation
-owner retains durable unsynced intent until exact encrypted remote
-verification and authoritative CAS/commit. Heartbeat success is never
+of exclusive writer authority. Bridge passively observes native browser close
+using the browser-owned profile lock and Firefox CrashMonitor's current-session
+checkpoint; it does not supervise or drive the ordinary user browser. Lock
+release alone is quiescence, not a clean-close witness. Only the final
+`sessionstore-final-state-write-complete` marker plus a released native lock
+may trigger the existing save/generation owner, which retains durable unsynced
+intent until exact encrypted remote verification and authoritative CAS/commit. Heartbeat success is never
 evidence of a browser close or a saved generation. A transport failure
 never grants offline writing authority and never licenses deleting local
 `user_data`. During confirmed revoke/expiry, remote publication must be

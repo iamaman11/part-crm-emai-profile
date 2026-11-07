@@ -1685,6 +1685,18 @@ where
                     .process
                     .force_terminate(session.lease.session_id())
                     .is_err();
+                if self.must_preserve_live_user_session(&session, process_failed) {
+                    self.active = Some(session);
+                    return Err(OperatorFlowError::Runtime {
+                        stage: OperatorFailureStage::RuntimeClose,
+                        source,
+                        cleanup: CleanupFailures {
+                            process: true,
+                            workspace_lock: false,
+                            coordinator_lease: false,
+                        },
+                    });
+                }
                 let _ = session.local_record.observe_crash(now);
                 let cleanup = self.cleanup_active_session(&mut session, process_failed);
                 self.record_terminal(&session.lease, &session.local_record, cleanup);
@@ -1700,10 +1712,12 @@ where
         }
     }
 
-    /// Installed controlled-close boundary: after native Firefox has ceased
-    /// writing, persist minimal LOCAL_UNSYNCED evidence before cloud-dependent
-    /// generation sealing, upload or coordinator commit. The original retained
-    /// workspace lock and all original user_data bytes are left in place.
+    /// Installed clean-close boundary: only after Firefox's current-session
+    /// final SessionStore checkpoint and released native writer lock agree,
+    /// persist minimal LOCAL_UNSYNCED evidence before cloud-dependent generation
+    /// sealing, upload or coordinator commit. Open/Ready itself depends only on
+    /// the native writer lock. The original workspace lock and user_data bytes
+    /// remain in place until the clean-close decision.
     ///
     /// A failed marker write stops cloud save and never declares Clean/Saved.
     /// The ordinary synthetic close remains available only for its existing
@@ -2331,6 +2345,10 @@ where
             .process
             .force_terminate(session.lease.session_id())
             .is_err();
+        if self.must_preserve_live_user_session(&session, process_failed) {
+            self.active = Some(session);
+            return Err(OperatorFlowError::Stage(OperatorFailureStage::RuntimeAbort));
+        }
         if session.local_record.observe_crash(now).is_err() {
             return Err(self.finish_failed_session(
                 OperatorFailureStage::LocalLifecycle,
@@ -2514,6 +2532,10 @@ where
             .process
             .force_terminate(session.lease.session_id())
             .is_err();
+        if self.must_preserve_live_user_session(&session, process_failed) {
+            self.active = Some(session);
+            return OperatorFlowError::Stage(stage);
+        }
         let _ = session.local_record.observe_crash(now);
         self.finish_failed_session(stage, session, process_failed)
     }
@@ -2529,6 +2551,22 @@ where
             workspace_lock: workspace_lock.release().is_err(),
             coordinator_lease: self.coordinator.close_lease(lease).is_err(),
         }
+    }
+
+    fn must_preserve_live_user_session(
+        &mut self,
+        session: &ActiveOperatorSession,
+        process_failed: bool,
+    ) -> bool {
+        if !process_failed || !self.process.preserve_live_browser_on_failure() {
+            return false;
+        }
+        // Unknown process state is treated as still running. Releasing the
+        // writer lock or coordinator lease here could admit a second writer
+        // while the user's Playwright-owned Firefox context is alive.
+        self.process
+            .is_running(session.lease.session_id())
+            .unwrap_or(true)
     }
 
     fn cleanup_active_session(

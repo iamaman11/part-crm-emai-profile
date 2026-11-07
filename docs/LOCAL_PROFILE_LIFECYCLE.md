@@ -29,25 +29,32 @@ safe recovery mechanism for an interrupted local writer. The Bridge MUST:
   sweeper, re-materializer or retry may silently delete, overwrite, reset or declare that
   working state clean. Fresh on-disk evidence belongs to the local profile owner, not
   the R2 object or a hash alone.
-- On next launch on the **same Windows device**, distinguish *crashed process* from
-  *active writer* using native OS handle/process evidence; obtain fresh, currently
-  authorized Profile/tenant/device access and current coordinator ownership before
-  resuming normal browser execution. Reuse the original local working state **only**
-  after checking that there is no incompatible newer cloud generation or competing
-  writer and that runtime/profile identity and policy are compatible. Do not simply
-  re-download the old remote generation onto unsynced local data.
+- On next launch on the **same Windows device**, identify an active native writer by
+  the browser-owned profile lock. Classify a released lock using Firefox CrashMonitor's
+  `sessionCheckpoints.json`: the current session must write `profile-after-change`
+  after launch; only `sessionstore-final-state-write-complete` together with a released
+  native lock proves a clean close. Lock release alone is quiescence. A missing, stale,
+  invalid or absent final marker is an unclean/unknown exit and enters the existing
+  RecoveryRequired path. Do not inspect, supervise or kill the user browser's PID or
+  process tree. Obtain fresh, currently authorized Profile/tenant/device access and
+  current coordinator ownership before resuming normal browser execution. Reuse the
+  original local working state **only** after checking that there is no incompatible
+  newer cloud generation or competing writer and that runtime/profile identity and
+  policy are compatible. Do not simply re-download the old remote generation onto
+  unsynced local data.
 - Reuse the browser's native crash recovery against that retained working directory
   whenever an authorized restart is safe. Clone/isolate only for destructive repair,
   forensic investigation or migration; clone-only is **not** a mandate to replace the
   everyday working profile with a fresh copy after every crash.
 - Treat a transient heartbeat timeout/dependency outage as `AUTHORITY_UNKNOWN`, **not**
-  affirmative lease revocation or safe `CLEAN`. Preserve process/user-state
-  evidence. If the coordinator cannot prove exclusive authorization, do not issue
-  remote commits or falsely grant a new writer; use an explicitly tested
-  bounded authority-loss response that maximizes local state preservation.
-  A positively revoked/stale/expired fence forbids further privileged writes;
-  graceful quiescence should be preferred when safe, with forced termination only
-  for evidenced security/process-safety necessity. No unchecked offline lease
+  affirmative lease revocation or safe `CLEAN`. Preserve native writer-lock,
+  CrashMonitor-checkpoint and browser-user-state evidence. If the coordinator cannot
+  prove exclusive authorization, do not issue remote commits or falsely grant a new
+  writer; use an explicitly tested bounded authority-loss response that maximizes
+  local state preservation. A positively revoked/stale/expired fence forbids further
+  privileged writes. Do not force-terminate or supervise the ordinary user browser;
+  retain its native writer lock while it remains active and block new writer admission
+  and cloud publication until safe close/recovery. No unchecked offline lease
   extension, duplicate writers, hidden reconciliation, or stale token reuse.
 - Separate `LOCAL_WORKING` (local browser data remains recoverable),
   `LOCAL_UNSYNCED` (local changes not yet cloud-confirmed),
@@ -149,7 +156,8 @@ profilebridge://claim/<opaque-code>
 -> open exact materialized generation
 -> acquire local writer lock
 -> validate materialization + runtime + network preflight
--> start managed Camouhost / real Camoufox
+-> start the Camouhost IPC sidecar -> official Camoufox SDK/Playwright persistent context
+-> Firefox browser process
 ```
 
 The claim URI is a bounded one-time handoff, not a local authorization source. Local code does not choose
@@ -233,7 +241,7 @@ An explicitly observed lack of WebGL is permitted; missing or malformed observat
 of a compatible runtime. The supported headful platform, usable display/process/filesystem and clock
 requirements remain enforced. Strict fingerprint comparison remains available for certification.
 
-## 6. Runtime Supervision And Coordinator Heartbeat
+## 6. Native Browser Lifecycle Observation And Coordinator Heartbeat
 
 `ProfileBridgeOperator` is the local runtime orchestration owner. The shipping composition creates the
 concrete adapters and calls it; `main.rs` does not duplicate its lifecycle algorithm.
@@ -251,9 +259,14 @@ claims, profile data or local paths. Close-observation failure never fabricates 
    transport/dependency uncertainty. It is neither a browser-close observer,
    a profile-dirty signal, nor permission to publish an otherwise unverified
    generation. Do not introduce per-file/polling cloud sync or duplicate leases.
-2. Bridge independently supervises the controlled native Firefox process. A
-   witnessed normal close is the **automatic** save trigger: quiesce and
-   confirm all Firefox writers/locks are gone, retain the same working
+2. Camouhost holds the official Camoufox SDK/Playwright persistent context for
+   the user session, but sends no page, DOM, JavaScript, tab or navigation
+   commands. Bridge passively observes the native browser lock and Firefox
+   CrashMonitor checkpoint; it does not inspect or kill the Firefox PID. A clean
+   close requires the current session's `profile-after-change` checkpoint (written
+   after launch), `sessionstore-final-state-write-complete`, and a released
+   native writer lock. Lock release alone is not a clean-close witness. This
+   positive witness is the **automatic** save trigger: retain the same working
    `user_data` and durable unsynced intent, then perform encrypted generation
    upload, storage verification, authoritative CAS/commit, and truthful status.
    The entire save must still have **fresh** allowed ownership/effect authority.
@@ -262,7 +275,7 @@ claims, profile data or local paths. Close-observation failure never fabricates 
 3. Unexpected browser/Bridge exit, Windows shutdown or sudden power loss is
    **not** a controlled-close witness and cannot guarantee immediate cloud
    upload. The original local working bytes, Firefox WAL/session state and
-   unsynced/recovery evidence survive; on restart, fresh process/lock, device,
+   unsynced/recovery evidence survive; on restart, fresh native-lock/checkpoint, device,
    ACL, coordinator, active-generation and conflict checks decide whether
    same-directory native Firefox recovery or an authorized deferred save can
    proceed. No fresh cloud download may overwrite unsynced local state.
@@ -276,8 +289,8 @@ claims, profile data or local paths. Close-observation failure never fabricates 
    authority retains unsynced files rather than performing a speculative save.
 5. The UI must distinguish browser closed, locally recoverable/unsynced,
    cloud-verified saved, and recovery/conflict; heartbeat acknowledgements,
-   HTTP request completion and local checkpoint existence are **not** `Saved`
-   proof. Remote N-1 and independently recoverable keys remain required.
+   HTTP request completion and the CrashMonitor close checkpoint are **not**
+   `Saved` proof. Remote N-1 and independently recoverable keys remain required.
 
 **Required regression proof:** independently simulate normal close with
 healthy lease (single upload/commit and truthful `Saved`), long live browsing
@@ -293,18 +306,22 @@ staging proof remain mandatory to close #802.
 
 While a browser is active:
 
-1. the supervised process must still belong to the exact active session;
+1. the native browser writer lock remains held for the exact active workspace;
+   the SDK owner/Bridge IPC sidecar is session-bound. No page-inspection or
+   navigation commands are sent, and the Bridge does not inspect or monitor the
+   Firefox PID/process tree;
 2. the Bridge heartbeats the exact coordinator lease/session/epoch/fence;
 3. heartbeat success preserves ownership;
-4. an independently evidenced local process crash preserves working Profile files and
-   records recovery, without deleting native Firefox WAL/session data;
+4. a released native lock without the current-session final checkpoint is an
+   unclean exit; preserve working Profile files and record recovery without
+   deleting native Firefox WAL/session data;
 5. transport timeout/dependency failure alone does not prove fence revocation: it
    enters explicit uncertain-authority handling, preserves local bytes, forbids
    unproven cloud commit and does not claim a Clean release;
-6. proven lease revocation/expiry/loss of exclusive writer authority requires a bounded,
-   state-preserving stop/quiescence with no further unauthorized writes and no
-   second writer; the current blanket force-terminate-on-heartbeat-error path must
-   be replaced and validated before this contract is accepted in shipping.
+6. proven lease revocation/expiry/loss of exclusive writer authority forbids further
+   privileged cloud writes and new writer admission. Do not force-kill the ordinary
+   user browser; its native lock keeps the workspace busy until it closes. No
+   second writer is admitted.
 
 A failed force termination, local-lock release or coordinator release is retained as explicit cleanup
 failure and blocks new ownership until recovered.
@@ -337,9 +354,11 @@ IN_USE
   -> MATERIALIZED_CLEAN | QUARANTINED
 ```
 
-Opening requires exact distributed/local ownership and a successful preflight. Graceful browser close
-produces `DIRTY_LOCAL`, not a clean or evictable state. Crash, process loss or coordinator ownership loss
-produces `RECOVERY_REQUIRED`.
+Opening requires exact distributed/local ownership and a successful preflight. A graceful browser close
+is witnessed by the released native lock plus the current-session
+`sessionstore-final-state-write-complete` checkpoint and produces `DIRTY_LOCAL`, not a cloud-clean or
+evictable state. Lock release alone or a missing/invalid checkpoint is an unclean exit and produces
+`RECOVERY_REQUIRED`.
 
 A controlled dirty close retains the local writer lock and coordinator ownership until the immutable
 successor is uploaded, exactly verified and authoritatively committed, or until an explicit recovery
@@ -350,9 +369,12 @@ application transaction, not by launch admission itself.
 
 An interrupted Firefox writer does not automatically mean its local working profile is
 corrupt. Before any repair or replacement, preserve its original bytes and prove the
-old process has exited, current device/user/tenant rights are valid, there is no
-competing writer or unhandled remote successor, and the pinned runtime can safely
-attempt Firefox's normal SQLite/WAL/session recovery on the same working directory.
+native writer lock is released; use the current-session CrashMonitor checkpoint to
+classify clean close versus unclean/unknown exit. Do not use browser PID/process-tree
+supervision or force termination as the ordinary proof. Current device/user/tenant
+rights must be valid, there must be no competing writer or unhandled remote successor,
+and the pinned runtime must safely attempt Firefox's normal SQLite/WAL/session recovery
+on the same working directory.
 
 **Clone-only applies to destructive repair/migration/forensics**, not to every ordinary
 same-device crash restart. If repair is needed, a fresh recovery clone records

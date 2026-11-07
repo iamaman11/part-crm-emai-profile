@@ -44,6 +44,15 @@ impl DeviceKeyPort for FakeDeviceKeyStore {
 pub struct FakeCamouhost {
     negotiated: bool,
     active_session: Option<SessionId>,
+    close_fail: bool,
+}
+
+impl FakeCamouhost {
+    #[must_use]
+    pub fn with_close_failure(mut self) -> Self {
+        self.close_fail = true;
+        self
+    }
 }
 
 impl CamouhostPort for FakeCamouhost {
@@ -77,6 +86,9 @@ impl CamouhostPort for FakeCamouhost {
             CamouhostMessage::Close { session_id }
                 if self.active_session.as_ref() == Some(session_id) =>
             {
+                if self.close_fail {
+                    return Err(BridgePortError::Unavailable);
+                }
                 self.active_session = None;
                 Ok(CamouhostMessage::Closed {
                     session_id: session_id.clone(),
@@ -101,9 +113,18 @@ pub struct FakeProcessControl {
     active_session: Option<SessionId>,
     running: bool,
     actions: Vec<ProcessAction>,
+    preserve_live_browser: bool,
 }
 
 impl FakeProcessControl {
+    #[must_use]
+    pub fn preserving_live_browser() -> Self {
+        Self {
+            preserve_live_browser: true,
+            ..Self::default()
+        }
+    }
+
     #[must_use]
     pub fn actions(&self) -> &[ProcessAction] {
         &self.actions
@@ -119,6 +140,10 @@ impl FakeProcessControl {
 }
 
 impl ProcessControlPort for FakeProcessControl {
+    fn preserve_live_browser_on_failure(&self) -> bool {
+        self.preserve_live_browser
+    }
+
     fn spawn(&mut self, session_id: &SessionId) -> Result<(), BridgePortError> {
         if self.active_session.is_some() {
             return Err(BridgePortError::Unavailable);
@@ -162,6 +187,9 @@ impl ProcessControlPort for FakeProcessControl {
         }
         self.actions
             .push(ProcessAction::ForceTerminate(session_id.clone()));
+        if self.preserve_live_browser && self.running {
+            return Err(BridgePortError::Unavailable);
+        }
         self.running = false;
         self.active_session = None;
         Ok(())

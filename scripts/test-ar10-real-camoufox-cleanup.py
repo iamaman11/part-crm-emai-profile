@@ -257,6 +257,7 @@ def runtime_env(runtime_lock: Path, headless: str) -> dict[str, str]:
         {
             "CAMOUHOST_RUNTIME_LOCK": str(runtime_lock),
             "CAMOUHOST_HEADLESS_MODE": headless,
+            "CAMOUHOST_EXECUTION_MODE": "isolated-cold-probe",
             "PYTHONUNBUFFERED": "1",
         }
     )
@@ -331,10 +332,16 @@ def start_runtime(
     # Firefox grandchildren can retain stderr across Camouhost teardown.
     # A file prevents both pipe backpressure and an unbounded stderr.read().
     diagnostics = tempfile.TemporaryFile(mode="w+t", encoding="utf-8")
+    # This is a disposable CI-only context. A test requesting unrestricted
+    # local Playwright fixtures must select the explicit agent mode; the C09
+    # historical mode rejects executable script inboxes.
+    dispatch_env = dict(env)
+    if dispatch_env.get("CAMOUHOST_AGENT_DIRECTORY"):
+        dispatch_env["CAMOUHOST_EXECUTION_MODE"] = "automation-playwright"
     try:
         process = subprocess.Popen(
             [str(python), str(camouhost)],
-            env=env,
+            env=dispatch_env,
             stdin=subprocess.PIPE,
             stdout=subprocess.PIPE,
             stderr=diagnostics,
@@ -620,11 +627,28 @@ root = Path(root)
 lock = json.loads(Path(lockfile).read_text(encoding="utf-8"))
 config = json.loads((root / "camoufox-config.json").read_text(encoding="utf-8"))
 urls = [origin + "/prior-first", origin + "/prior-second"]
+expected_title = "Disposable Firefox sessionstore proof"
+
+def retry_as_user(page):
+    # Firefox owns retry/error-page UI. Releasing the isolated context's offline
+    # gate must not cause Camouhost to reload or navigate restored tabs.
+    if page.title() != expected_title:
+        assert page.evaluate("document.documentURI").startswith(
+            "about:neterror?e=netOffline&"
+        ), "restored tab was neither loaded nor Firefox's native offline error page"
+        page.reload(wait_until="domcontentloaded", timeout=15000)
+    assert page.title() == expected_title, (
+        "Firefox's native user retry did not recover the restored tab"
+    )
 
 def enter():
-    kwargs = runtime.camoufox_kwargs(lock, root, config)
+    kwargs = runtime.camoufox_launch_options(lock, root, config, isolated=True)
     assert kwargs["firefox_user_prefs"]["browser.startup.page"] == 3
-    manager = Camoufox(**kwargs)
+    manager = Camoufox(
+        from_options=kwargs,
+        headless=runtime.resolve_headless_mode(),
+        persistent_context=True,
+    )
     with contextlib.redirect_stdout(sys.stderr):
         context = manager.__enter__()
     context.set_offline(True)
@@ -760,12 +784,8 @@ try:
     assert not any(
         page.url == runtime.MANAGED_BOOTSTRAP_TAB_URL for page in context.pages
     ), "Camouhost's internal bootstrap tab survived a native SessionStore restore"
-    assert present[urls[0]].title() == "Disposable Firefox sessionstore proof", (
-        "first saved tab did not retry after identity admission"
-    )
-    assert present[urls[1]].title() == "Disposable Firefox sessionstore proof", (
-        "second saved tab did not retry after identity admission"
-    )
+    retry_as_user(present[urls[0]])
+    retry_as_user(present[urls[1]])
     retained = present[urls[0]].evaluate("localStorage.getItem('restore-proof')")
     if retained != "retained":
         raise AssertionError("restored tab lost persistent origin state")
@@ -814,7 +834,7 @@ try:
     assert not any(
         page.url == runtime.MANAGED_BOOTSTRAP_TAB_URL for page in context.pages
     ), "Camouhost's internal bootstrap tab survived a native SessionStore restore"
-    assert present_third[urls[1]].title() == "Disposable Firefox sessionstore proof"
+    retry_as_user(present_third[urls[1]])
     assert present_third[urls[1]].evaluate(
         "localStorage.getItem('restore-proof')"
     ) == "retained", "closing a tab did not preserve its persistent origin storage"
@@ -2069,7 +2089,12 @@ def prove_shipping_agent_build_boundary() -> None:
     """Release Bridge must never publish an implicit in-browser Python runner."""
     source = (Path(__file__).resolve().parents[1]
               / "apps/profile-bridge/src/camouhost_process.rs").read_text(encoding="utf-8")
-    assert 'let test_agent_enabled = cfg!(any(test, feature = "synthetic-test-bin", debug_assertions));' in source
+    normalized = " ".join(source.split())
+    assert (
+        "let test_agent_enabled = !cfg!(windows) && "
+        "cfg!(any(test, feature = \"synthetic-test-bin\", debug_assertions)) && "
+        "self.config.execution_owner != RuntimeExecutionOwner::IsolatedHistoricalProbe;"
+    ) in normalized
     assert 'test_agent_enabled.then_some(diagnostic_directory.as_path())' in source
     assert 'state.agent_directory = test_agent_enabled.then_some(diagnostic_directory);' in source
     assert 'if let Some(directory) = agent_directory {' in source
