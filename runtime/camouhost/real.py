@@ -1404,7 +1404,6 @@ def observe_controlled_close(context: Any, state: dict[str, Any] | None) -> bool
 def materialize_candidate_identity(root: Path) -> dict[str, str]:
     """Create exact generation identity once under an already acquired Bridge writer lock."""
     from camoufox.fingerprints import generate_fingerprint
-    from camoufox.sync_api import Camoufox
     from camoufox.utils import get_screen_cons, launch_options
 
     lock, runtime_lock_sha256 = load_runtime_lock()
@@ -1447,23 +1446,18 @@ def materialize_candidate_identity(root: Path) -> dict[str, str]:
     config_path.write_bytes(config_bytes)
     config_sha256 = sha256_bytes(config_bytes)
 
-    manager = Camoufox(
-        from_options=options,
-        headless=headless_mode,
-        persistent_context=True,
+    # Native Firefox belongs to the subsequent user Open, never to a
+    # preparatory first-generation task. The SDK/fpgen owns the exact pinned
+    # fingerprint; no browser/Playwright window is spawned merely to sample
+    # its own configuration. Preserve this domain-separated provenance in the
+    # encrypted base generation and validate it again from the saved bytes.
+    materialization_digest = sha256_bytes(
+        b"profile-stability-v2-fpgen-config\0" + config_bytes
     )
-    with contextlib.redirect_stdout(sys.stderr):
-        context = manager.__enter__()
-    try:
-        page = context.pages[0] if context.pages else context.new_page()
-        probe_sha256 = stable_probe_digest(page)
-    finally:
-        close_context(manager, context, root)
-
     return {
         "fingerprint_config_sha256": config_sha256,
         "fingerprint_policy_version": str(lock["fingerprint_policy_version"]),
-        "profile_stable_probe_sha256": probe_sha256,
+        "fingerprint_materialization_sha256": materialization_digest,
         "runtime_lock_sha256": runtime_lock_sha256,
     }
 

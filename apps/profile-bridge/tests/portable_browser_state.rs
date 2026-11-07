@@ -25,7 +25,7 @@ mod p3_fixture {
     struct RealIdentityReport {
         fingerprint_config_sha256: String,
         fingerprint_policy_version: String,
-        profile_stable_probe_sha256: String,
+        fingerprint_materialization_sha256: String,
         runtime_lock_sha256: String,
     }
 
@@ -341,7 +341,7 @@ mod p3_fixture {
         let report: RealIdentityReport = serde_json::from_slice(&output.stdout)?;
         for (value, label) in [
             (&report.fingerprint_config_sha256, "fingerprint config"),
-            (&report.profile_stable_probe_sha256, "profile-stable probe"),
+            (&report.fingerprint_materialization_sha256, "fingerprint materialization"),
             (&report.runtime_lock_sha256, "runtime lock"),
         ] {
             if value.len() != 64
@@ -359,6 +359,12 @@ mod p3_fixture {
 
         fs::write(workspace.path().join("prefs.js"), b"portable-browser-state")?;
         let config_bytes = fs::read(workspace.path().join("camoufox-config.json"))?;
+        let mut provenance = Vec::with_capacity(config_bytes.len() + 37);
+        provenance.extend_from_slice(b"profile-stability-v2-fpgen-config\0");
+        provenance.extend_from_slice(&config_bytes);
+        if lower_hex(&Sha256::digest(&provenance)) != report.fingerprint_materialization_sha256 {
+            return Err("disposable identity did not bind official fpgen config evidence".into());
+        }
         if lower_hex(&Sha256::digest(&config_bytes)) != report.fingerprint_config_sha256 {
             return Err("materialization report config digest mismatch".into());
         }
@@ -369,8 +375,8 @@ mod p3_fixture {
             bundle.manifest().runtime_version(),
             bundle.manifest().inventory_sha256().as_str(),
             format!(
-                "{}-probe-{}",
-                report.fingerprint_policy_version, report.profile_stable_probe_sha256
+                "profile-stability-v2-fpgen-config-{}",
+                report.fingerprint_materialization_sha256
             ),
             report.fingerprint_config_sha256,
         )?;

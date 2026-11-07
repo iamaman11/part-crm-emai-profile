@@ -64,6 +64,7 @@ const FORCE_EXIT_TIMEOUT: Duration = Duration::from_secs(10);
 const PROCESS_POLL_INTERVAL: Duration = Duration::from_millis(25);
 const IDENTITY_COMPATIBILITY_VERSION: u32 = 2;
 const FINGERPRINT_SOURCE_PREFIX: &str = "profile-stability-v1-probe-";
+const FINGERPRINT_CONFIG_SOURCE_PREFIX: &str = "profile-stability-v2-fpgen-config-";
 const LOWER_HEX: &[u8; 16] = b"0123456789abcdef";
 
 #[derive(Clone)]
@@ -176,9 +177,17 @@ fn validate_runtime_identity(
         return Err(BrowserLaunchBlocker::MaterializationStale);
     }
 
+    // Old confirmed generations bind a real Firefox probe. New fast first
+    // generations bind the canonical official fpgen configuration without
+    // starting and closing an extra Firefox instance before the user's Open.
     let probe_sha256 = browser_identity
         .fingerprint_source()
-        .strip_prefix(FINGERPRINT_SOURCE_PREFIX)
+        .strip_prefix(FINGERPRINT_CONFIG_SOURCE_PREFIX)
+        .or_else(|| {
+            browser_identity
+                .fingerprint_source()
+                .strip_prefix(FINGERPRINT_SOURCE_PREFIX)
+        })
         .ok_or(BrowserLaunchBlocker::InvalidMaterializationEvidence)?;
     if !valid_sha256(probe_sha256) {
         return Err(BrowserLaunchBlocker::InvalidMaterializationEvidence);
