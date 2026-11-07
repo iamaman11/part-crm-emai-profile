@@ -1,8 +1,6 @@
 use crate::ProcessControlPort;
 use crate::authoritative_generation::{
-    AuthoritativeGenerationMaterializationError, HistoricalColdProbeError,
-    HistoricalColdProbeObservation, cold_launch_verified_predecessor_once,
-    ensure_authoritative_generation,
+    AuthoritativeGenerationMaterializationError, ensure_authoritative_generation,
 };
 use crate::browser_execution::browser_writer_locks_absent;
 #[cfg(any(test, feature = "synthetic-test-bin"))]
@@ -559,10 +557,6 @@ pub enum OperatorFlowError {
         reason: AuthoritativeGenerationMaterializationError,
         cleanup: CleanupFailures,
     },
-    HistoricalProbe {
-        reason: HistoricalColdProbeError,
-        cleanup: CleanupFailures,
-    },
     Preflight {
         reason: OperationalRejectionReason,
         local_state: LocalGenerationState,
@@ -595,7 +589,7 @@ impl OperatorFlowError {
             Self::Stage(stage) | Self::Runtime { stage, .. } | Self::Terminal { stage, .. } => {
                 Some(*stage)
             }
-            Self::AuthoritativeGeneration { .. } | Self::HistoricalProbe { .. } => {
+            Self::AuthoritativeGeneration { .. } => {
                 Some(OperatorFailureStage::AuthoritativeGeneration)
             }
             Self::Preflight { .. } => Some(OperatorFailureStage::BrowserPreflight),
@@ -627,10 +621,6 @@ impl fmt::Display for OperatorFlowError {
             Self::AuthoritativeGeneration { reason, cleanup } => write!(
                 formatter,
                 "authoritative generation preparation failed: {reason}; cleanup={cleanup:?}"
-            ),
-            Self::HistoricalProbe { reason, cleanup } => write!(
-                formatter,
-                "historical browser cold probe failed: {reason}; cleanup={cleanup:?}"
             ),
             Self::Preflight {
                 reason,
@@ -860,226 +850,6 @@ where
             before_runtime_start,
             observe_pending,
         )
-    }
-
-    /// Explicit maintenance/proof operation. Uses the SAME installed device,
-    /// one-time server claim, CURRENT coordinator, native locks, bundle,
-    /// preflight and managed Camoufox as ordinary Open. It does not replace
-    /// normal Open, is not a background worker and does not claim an LKG
-    /// certificate or delete any generation. Caller supplies an isolated
-    /// marked local root, which must not overlap the live primary.
-    ///
-    /// A cold-probe failure releases the coordinator as Uncertain. Only a
-    /// fully observed, cleanly stopped, post-launch reauthorized probe may
-    /// use the narrowly typed clean release. No local Save/commit is issued.
-    pub fn probe_verified_predecessor_once<Dl, V>(
-        &mut self,
-        claim: &ClaimUri,
-        primary: &MaterializationRoot,
-        isolated: &MaterializationRoot,
-        downloader: &mut Dl,
-        now: UnixMillis,
-        observe_browser_state: &mut V,
-    ) -> Result<HistoricalColdProbeObservation, OperatorFlowError>
-    where
-        C: GenerationReopenControlPort,
-        <C as GenerationReopenControlPort>::Error: Into<GenerationReopenControlError>,
-        Dl: GenerationObjectDownloadPort,
-        Dl::Error: Into<GenerationObjectDownloadError>,
-        V: FnMut() -> Result<(), ()>,
-    {
-        self.probe_verified_predecessor_inner(
-            claim,
-            primary,
-            isolated,
-            downloader,
-            now,
-            observe_browser_state,
-            false,
-        )
-    }
-
-    /// C09 production proof using the existing cold restore and native Firefox
-    /// owner; no extra browser process or serialization path is introduced.
-    #[allow(clippy::too_many_arguments)]
-    pub fn probe_and_certify_verified_predecessor_once<Dl, V>(
-        &mut self,
-        claim: &ClaimUri,
-        primary: &MaterializationRoot,
-        isolated: &MaterializationRoot,
-        downloader: &mut Dl,
-        now: UnixMillis,
-        observe_browser_state: &mut V,
-    ) -> Result<HistoricalColdProbeObservation, OperatorFlowError>
-    where
-        C: GenerationReopenControlPort,
-        <C as GenerationReopenControlPort>::Error: Into<GenerationReopenControlError>,
-        Dl: GenerationObjectDownloadPort,
-        Dl::Error: Into<GenerationObjectDownloadError>,
-        V: FnMut() -> Result<(), ()>,
-    {
-        self.probe_verified_predecessor_inner(
-            claim,
-            primary,
-            isolated,
-            downloader,
-            now,
-            observe_browser_state,
-            true,
-        )
-    }
-
-    #[allow(clippy::too_many_arguments)]
-    fn probe_verified_predecessor_inner<Dl, V>(
-        &mut self,
-        claim: &ClaimUri,
-        primary: &MaterializationRoot,
-        isolated: &MaterializationRoot,
-        downloader: &mut Dl,
-        now: UnixMillis,
-        observe_browser_state: &mut V,
-        certify_working: bool,
-    ) -> Result<HistoricalColdProbeObservation, OperatorFlowError>
-    where
-        C: GenerationReopenControlPort,
-        <C as GenerationReopenControlPort>::Error: Into<GenerationReopenControlError>,
-        Dl: GenerationObjectDownloadPort,
-        Dl::Error: Into<GenerationObjectDownloadError>,
-        V: FnMut() -> Result<(), ()>,
-    {
-        if self.cleanup_blocked {
-            return Err(OperatorFlowError::CleanupRequired);
-        }
-        if self.active.is_some() || self.retained_dirty.is_some() {
-            return Err(OperatorFlowError::Busy);
-        }
-        let bundle = self
-            .runtime_bundles
-            .select_bundle()
-            .map_err(|_| OperatorFlowError::Stage(OperatorFailureStage::RuntimeBundle))?;
-        let device_id = self
-            .device_identity
-            .device_id()
-            .map_err(|_| OperatorFlowError::Stage(OperatorFailureStage::DeviceIdentity))?;
-        let key = self
-            .device_keys
-            .ensure_key_handle(&device_id)
-            .map_err(|_| OperatorFlowError::Stage(OperatorFailureStage::DeviceKey))?;
-        self.device_authentication
-            .authenticate(&device_id, &key)
-            .map_err(|_| OperatorFlowError::Stage(OperatorFailureStage::DeviceAuthentication))?;
-        let enrollment = self
-            .enrollment
-            .redeem_claim(claim, &device_id, now)
-            .map_err(|error| match E::classify_error(&error) {
-                EnrollmentFailureKind::LeaseConflict => OperatorFlowError::EnrollmentConflict,
-                EnrollmentFailureKind::ServiceUncertain => {
-                    OperatorFlowError::EnrollmentServiceUncertain
-                }
-                EnrollmentFailureKind::Other => {
-                    OperatorFlowError::Stage(OperatorFailureStage::Enrollment)
-                }
-            })?;
-        let lease = self
-            .coordinator
-            .claim_launch_intent(
-                enrollment.actor(),
-                enrollment.profile_id(),
-                &device_id,
-                enrollment.launch_intent_id(),
-            )
-            .map_err(|_| OperatorFlowError::Stage(OperatorFailureStage::CoordinatorClaim))?;
-        if lease.tenant_id() != enrollment.actor().tenant_scope().tenant_id()
-            || lease.profile_id() != enrollment.profile_id()
-            || lease.device_id() != &device_id
-        {
-            return Err(self.fail_before_local_use(OperatorFailureStage::LeaseValidation, lease));
-        }
-        let observed = cold_launch_verified_predecessor_once(
-            primary,
-            isolated,
-            enrollment.generation_id(),
-            &lease,
-            &bundle,
-            &mut self.coordinator,
-            downloader,
-            &mut self.browser_preflight,
-            &mut self.process,
-            &mut self.camouhost,
-            observe_browser_state,
-        );
-        // The original native user_data snapshot SHA was sealed into the
-        // immutable encrypted generation BEFORE R2 PUT. Cold recovery already
-        // verified the same SHA/AEAD, real Camoufox ran and closed cleanly,
-        // and the original CURRENT fence/old key were reauthorized.
-        // An identity-only probe NEVER certifies: the explicit stage proof
-        // additionally requires the observed managed Firefox IPC witness.
-        let certified = if let Ok(observation) = &observed {
-            if !certify_working {
-                true // Non-certifying maintenance checks never write D1 WORKING.
-            } else {
-                let inspected = encrypted_generation_domain::inspect_generation_metadata_prelude(
-                    observation.opening_prelude(),
-                );
-                if let Ok(metadata) = inspected {
-                    let original = metadata
-                        .metadata()
-                        .plaintext_digest()
-                        .bytes()
-                        .iter()
-                        .map(|byte| format!("{byte:02x}"))
-                        .collect::<String>();
-                    // Actual restored native bytes (not the SHA of Firefox
-                    // fingerprint diagnostics) must match immutable pre-Save
-                    // BPGC metadata before any WORKING/DELETE admission.
-                    if observation.native_cold_snapshot_sha256() != original {
-                        false
-                    } else {
-                        self.coordinator
-                            .certify_verified_predecessor_working(
-                                observation.tenant_id(),
-                                observation.profile_id(),
-                                observation.current_generation_id(),
-                                observation.predecessor_generation_id(),
-                                observation.opening_prelude(),
-                                observation.runtime_inventory_sha256(),
-                                &original,
-                                observation.native_cold_snapshot_sha256(),
-                            )
-                            .unwrap_or(false)
-                    }
-                } else {
-                    false
-                }
-            }
-        } else {
-            false
-        };
-        let release_failed = if observed.is_ok() {
-            self.coordinator
-                .close_verified_historical_probe(&lease)
-                .is_err()
-        } else {
-            self.coordinator.close_lease(&lease).is_err()
-        };
-        let unsafe_cleanup = matches!(observed, Err(HistoricalColdProbeError::CleanupUncertain));
-        let cleanup = CleanupFailures {
-            process: unsafe_cleanup,
-            workspace_lock: unsafe_cleanup,
-            coordinator_lease: release_failed,
-        };
-        if cleanup.any() {
-            self.cleanup_blocked = true;
-        }
-        match observed {
-            Ok(observation) if !release_failed && certified => Ok(observation),
-            Ok(_) if !release_failed => Err(OperatorFlowError::HistoricalProbe {
-                reason: HistoricalColdProbeError::PostLaunchAuthorityUnconfirmed,
-                cleanup,
-            }),
-            Ok(_) => Err(OperatorFlowError::CleanupRequired),
-            Err(reason) => Err(OperatorFlowError::HistoricalProbe { reason, cleanup }),
-        }
     }
 
     /// Test/synthetic entrypoint for already-materialized fixtures. Shipping code cannot compile
