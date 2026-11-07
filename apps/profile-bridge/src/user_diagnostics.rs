@@ -784,6 +784,34 @@ impl UserDiagnostic {
             )) => {
                 "The original browser profile needs supported recovery before another writer can open it. Keep the local unsaved data and recovery markers; do not reset the profile or start a second browser."
             }
+            Self::Launch(Launch::Operator(
+                crate::operator_flow::OperatorFlowError::Preflight {
+                    reason: crate::operator_flow::OperationalRejectionReason::ConfigIntegrityMismatch
+                        | crate::operator_flow::OperationalRejectionReason::RuntimeCandidateMismatch,
+                    ..
+                },
+            )) => {
+                "This local browser profile has an incompatible or unverified browser identity. It cannot be opened by the installed Camoufox runtime. Keep existing files for diagnosis; for an obsolete disposable test profile create a new profile through the application. No automatic compatibility fallback is used."
+            }
+            Self::Launch(Launch::Operator(
+                crate::operator_flow::OperatorFlowError::Preflight {
+                    reason: crate::operator_flow::OperationalRejectionReason::IdentityObservationMismatch
+                        | crate::operator_flow::OperationalRejectionReason::RetryableNetworkRouteChurn,
+                    ..
+                },
+            )) => {
+                "The profile's required network route or identity was not verified. Check the network route in Profile Operations and request a fresh authorized Open. The local browser files were not replaced."
+            }
+            Self::Launch(Launch::Operator(
+                crate::operator_flow::OperatorFlowError::Preflight {
+                    reason: crate::operator_flow::OperationalRejectionReason::LocalCacheIncomplete
+                        | crate::operator_flow::OperationalRejectionReason::LocalCacheInaccessible
+                        | crate::operator_flow::OperationalRejectionReason::FilesystemProcessCapabilityUnavailable,
+                    ..
+                },
+            )) => {
+                "The current local profile is unavailable or incomplete. Keep the files and review the diagnostic report before an authorized recovery; do not delete locks, WAL files or the browser profile."
+            }
             Self::Launch(
                 Launch::Operator(_) | Launch::ActiveSessionMissing | Launch::CloseObservation(_),
             ) => {
@@ -965,6 +993,26 @@ const fn operator_code(error: crate::operator_flow::OperatorFlowError) -> &'stat
             reason: crate::operator_flow::OperationalRejectionReason::LocalCacheInaccessible,
             ..
         } => "BRIDGE_LOCAL_CACHE_INACCESSIBLE",
+        Error::Preflight {
+            reason: crate::operator_flow::OperationalRejectionReason::ConfigIntegrityMismatch,
+            ..
+        } => "BRIDGE_BROWSER_CONFIG_INCOMPATIBLE",
+        Error::Preflight {
+            reason: crate::operator_flow::OperationalRejectionReason::RuntimeCandidateMismatch,
+            ..
+        } => "BRIDGE_BROWSER_RUNTIME_MISMATCH",
+        Error::Preflight {
+            reason: crate::operator_flow::OperationalRejectionReason::IdentityObservationMismatch,
+            ..
+        } => "BRIDGE_BROWSER_NETWORK_IDENTITY_MISMATCH",
+        Error::Preflight {
+            reason: crate::operator_flow::OperationalRejectionReason::RetryableNetworkRouteChurn,
+            ..
+        } => "BRIDGE_BROWSER_ROUTE_UNSTABLE",
+        Error::Preflight {
+            reason: crate::operator_flow::OperationalRejectionReason::FilesystemProcessCapabilityUnavailable,
+            ..
+        } => "BRIDGE_LOCAL_WORKSPACE_UNAVAILABLE",
         _ => match error.stage() {
             Some(Stage::DeviceIdentity) => "BRIDGE_DEVICE_IDENTITY_FAILED",
             Some(Stage::DeviceKey) => "BRIDGE_DEVICE_KEY_UNAVAILABLE",
@@ -1516,6 +1564,33 @@ mod tests {
         ));
         assert_eq!(workspace.code(), "BRIDGE_LOCAL_WORKSPACE_FAILED");
         assert!(workspace.message().contains("Do not delete lock files"));
+    }
+
+    #[test]
+    fn preflight_reports_distinct_identity_route_and_recovery_codes_without_site_rules() {
+        use crate::local_profile::LocalGenerationState;
+        use crate::operator_flow::{
+            CleanupFailures, OperationalRejectionReason, OperatorFlowError,
+        };
+        let cases = [
+            (OperationalRejectionReason::ConfigIntegrityMismatch, "BRIDGE_BROWSER_CONFIG_INCOMPATIBLE"),
+            (OperationalRejectionReason::RuntimeCandidateMismatch, "BRIDGE_BROWSER_RUNTIME_MISMATCH"),
+            (OperationalRejectionReason::IdentityObservationMismatch, "BRIDGE_BROWSER_NETWORK_IDENTITY_MISMATCH"),
+            (OperationalRejectionReason::RetryableNetworkRouteChurn, "BRIDGE_BROWSER_ROUTE_UNSTABLE"),
+            (OperationalRejectionReason::FilesystemProcessCapabilityUnavailable, "BRIDGE_LOCAL_WORKSPACE_UNAVAILABLE"),
+        ];
+        for (reason, code) in cases {
+            let diagnostic = UserDiagnostic::Launch(ShippingCompositionError::Operator(
+                OperatorFlowError::Preflight {
+                    reason,
+                    local_state: LocalGenerationState::MaterializedClean,
+                    cleanup: CleanupFailures::none(),
+                },
+            ));
+            assert_eq!(diagnostic.code(), code);
+            assert!(diagnostic.message().contains("profile") || diagnostic.message().contains("Profile"));
+            assert!(!diagnostic.message().contains("mail.ru"));
+        }
     }
 
     #[test]
