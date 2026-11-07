@@ -2099,7 +2099,7 @@ def prove_shipping_agent_build_boundary() -> None:
     assert (
         "let test_agent_enabled = !cfg!(windows) && "
         "cfg!(any(test, feature = \"synthetic-test-bin\", debug_assertions)) && "
-        "self.config.execution_owner != RuntimeExecutionOwner::IsolatedHistoricalProbe;"
+        "self.config.execution_owner != RuntimeExecutionOwner::IsolatedBrowserStateTest;"
     ) in normalized
     assert 'test_agent_enabled.then_some(diagnostic_directory.as_path())' in source
     assert 'state.agent_directory = test_agent_enabled.then_some(diagnostic_directory);' in source
