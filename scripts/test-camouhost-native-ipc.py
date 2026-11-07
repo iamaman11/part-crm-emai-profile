@@ -135,7 +135,7 @@ def main():
          patch.dict(os.environ, {runtime.EXPECTED_PROBE_SHA256_ENV: "b" * 64}), \
          patch.object(sys, "stdin", io.StringIO(
              f"hello|{runtime.IPC_VERSION}\nlaunch|{SESSION}\n"
-         )), patch.object(runtime, "time", types.SimpleNamespace(monotonic=lambda: next(iter([0.0, 32.0])))), \
+         )), patch.object(runtime, "time", types.SimpleNamespace(monotonic=(iter([0.0, 32.0])).__next__)), \
          contextlib.redirect_stdout(io.TextIOWrapper(io.BytesIO(), encoding="utf-8")) as failed:
         bad = runtime.run_native_ipc()
     assert bad == 5
