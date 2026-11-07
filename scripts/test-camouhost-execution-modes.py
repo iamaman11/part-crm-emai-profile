@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Explicit normal-native vs official Playwright automation routing contract.
+"""Explicit official user persistent-context vs page-inspecting automation routing contract.
 
 Offline negative tests: no browser launch, no test credentials, no cloud calls.
 The real browser/lease/Save invariants require separate physical acceptance.
@@ -78,7 +78,8 @@ def main() -> int:
                 {runtime.EXECUTION_MODE_ENV: "playwright"}):
         assert run(env, 2, []), "fail-closed dispatch must explain rejection"
 
-    # Normal CRM user Open always launches native; never page-managing Playwright.
+    # Normal CRM user Open uses the official Playwright persistent context,
+    # never the page-inspecting automation/admission path.
     run({runtime.EXECUTION_MODE_ENV: runtime.USER_NATIVE_MODE}, 17, ["native"])
     run({runtime.EXECUTION_MODE_ENV: runtime.USER_NATIVE_MODE,
          runtime.HEADLESS_MODE_ENV: "false"}, 17, ["native"])
@@ -122,7 +123,7 @@ def main() -> int:
         else:
             raise AssertionError("unsupported headless mode accepted")
 
-    # The shipping Windows launcher must select the native path explicitly.
+    # The shipping Windows launcher selects the user-owned SDK context explicitly.
     # This is source wiring coverage, not a substitute for a Rust build.
     rust = SOURCE.parents[2] / "apps/profile-bridge/src/camouhost_process.rs"
     shipping = rust.read_text(encoding="utf-8")
@@ -137,7 +138,12 @@ def main() -> int:
     assert composition.count(".for_isolated_historical_probe()") == 1
     assert composition.index(".for_isolated_historical_probe()") < composition.index(
         "pub fn run(claim:"
-    ), "ordinary user Open must never request Playwright"
+    ), "ordinary user Open must not request page-inspecting probe admission"
+    native_process = (SOURCE.parents[2] / "runtime/camouhost/native_process.py").read_text(encoding="utf-8")
+    assert "from_options=dict(options)" in native_process
+    assert "persistent_context=True" in native_process
+    assert "subprocess.Popen" not in native_process
+    assert "context.pages" not in native_process and "context.new_page" not in native_process
 
     print("CAMOUHOST_EXECUTION_MODES=PASS")
     return 0

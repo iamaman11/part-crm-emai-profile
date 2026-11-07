@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Offline native-only Camouhost IPC regression; no real Firefox or credentials."""
+"""Offline user-session IPC regression; no real Firefox or credentials."""
 from __future__ import annotations
 
 import contextlib
@@ -15,110 +15,135 @@ ROOT = pathlib.Path(__file__).resolve().parents[1]
 SOURCE = ROOT / "runtime/camouhost/real.py"
 SESSION = "session_01JAR10CLOSE"
 
+
 def load_runtime():
-    spec = importlib.util.spec_from_file_location("native_camouhost_protocol_fixture", SOURCE)
+    spec = importlib.util.spec_from_file_location("camouhost_user_ipc_fixture", SOURCE)
     assert spec is not None and spec.loader is not None
     module = importlib.util.module_from_spec(spec)
     sys.modules[spec.name] = module
     spec.loader.exec_module(module)
     return module
 
-class NativeSession:
+
+class UserSession:
     def __init__(self, states):
         self.states = list(states)
         self.last = "WRITER_NOT_OBSERVED"
+        self.closed = 0
+        self.detached_after_exit = 0
+        self.aborted_startup = 0
+
     def profile_state(self):
         if self.states:
             self.last = self.states.pop(0)
         return self.last
 
+    def close(self):
+        self.closed += 1
+
+    def close_after_browser_exit(self):
+        self.detached_after_exit += 1
+
+    def abort_startup(self):
+        self.aborted_startup += 1
+
+
 def main():
-    r = load_runtime()
+    runtime = load_runtime()
     native = types.ModuleType("native_process")
+
     class NativeLaunchError(RuntimeError):
         pass
+
     native.NativeLaunchError = NativeLaunchError
     called = []
-    sessions = [
-        NativeSession([
-            "PROFILE_BUSY", "PROFILE_BUSY",
-            "CLEAN_SHUTDOWN_VERIFIED", "CLEAN_SHUTDOWN_VERIFIED",
-        ]),
-        NativeSession([
-            "PROFILE_BUSY", "CRASH_OR_UNKNOWN_PRESERVE_LOCAL",
-            "CRASH_OR_UNKNOWN_PRESERVE_LOCAL",
-        ]),
-    ]
+    sessions = [UserSession([
+        "PROFILE_BUSY", "PROFILE_BUSY",
+        "CLEAN_SHUTDOWN_VERIFIED", "CLEAN_SHUTDOWN_VERIFIED",
+    ])]
+
     def launch_native_camoufox(**kwargs):
         called.append(kwargs)
         return sessions.pop(0)
+
     native.launch_native_camoufox = launch_native_camoufox
     old = {
-        "load_runtime_lock": lambda: ({"browser": {"version":"158.0.1-beta.41"}}, "x" * 64),
+        "load_runtime_lock": lambda: ({"browser": {"version": "158.0.1-beta.41"}}, "x" * 64),
         "verify_python_components": lambda _: None,
         "resolve_profile_root": lambda require_bridge_lock: pathlib.Path("/tmp/test-root"),
         "load_generation_config": lambda root: ({"test": True}, "a" * 64),
         "firefox_writer_active": lambda root: False,
-        "resolve_proxy": lambda: None,
-        "packaged_windows_browser": lambda lock: pathlib.Path("/tmp/camoufox.exe"),
-        "browser_environment": lambda: {"SYSTEMROOT": "/system"},
+        "camoufox_launch_options": lambda lock, root, config, isolated=False: {
+            "approved": "official-sdk-options",
+            "user_data_dir": str(root / "user_data"),
+        },
     }
-    with patch.dict(sys.modules, {"native_process": native}), patch.multiple(r, **old), \
-         patch.dict(os.environ, {r.EXPECTED_PROBE_SHA256_ENV: "b" * 64}), \
+
+    with patch.dict(sys.modules, {"native_process": native}), patch.multiple(runtime, **old), \
+         patch.dict(os.environ, {runtime.EXPECTED_PROBE_SHA256_ENV: "b" * 64}), \
          patch.object(sys, "stdin", io.StringIO(
-             f"hello|{r.IPC_VERSION}\nlaunch|{SESSION}\n"
+             f"hello|{runtime.IPC_VERSION}\nlaunch|{SESSION}\n"
              f"observe_close|{SESSION}\nobserve_close|{SESSION}\n"
              f"close|{SESSION}\n"
          )), contextlib.redirect_stdout(io.TextIOWrapper(io.BytesIO(), encoding="utf-8")) as stdout:
-        result = r.run_native_ipc()
+        result = runtime.run_native_ipc()
     lines = stdout.buffer.getvalue().decode("utf-8").splitlines()
     assert result == 0, result
     assert lines == [
-        f"hello_ack|{r.IPC_VERSION}",
+        f"hello_ack|{runtime.IPC_VERSION}",
         f"ready|{SESSION}",
         f"close_observed|{SESSION}|false",
         f"close_observed|{SESSION}|true",
         f"closed|{SESSION}|true",
     ], lines
-    assert len(called) == 1 and called[0]["admission_granted"] is True
-    assert called[0]["identity"] == {"test": True}
-    assert called[0]["ff_version"] == 158
+    assert len(called) == 1
+    assert called[0]["admission_granted"] is True
+    assert called[0]["options"]["approved"] == "official-sdk-options"
+    assert called[0]["headless"] is False
+    assert sessions == []
 
-    # A native crash releases parent.lock but lacks Firefox's final checkpoint.
-    # The IPC reports an unclean exit and remains alive for Rust's abort/recovery.
-    with patch.dict(sys.modules, {"native_process": native}), patch.multiple(r, **old), \
-         patch.dict(os.environ, {r.EXPECTED_PROBE_SHA256_ENV: "b" * 64}), \
+    crashed_session = UserSession([
+        "PROFILE_BUSY", "CRASH_OR_UNKNOWN_PRESERVE_LOCAL",
+        "CRASH_OR_UNKNOWN_PRESERVE_LOCAL",
+    ])
+    sessions.append(crashed_session)
+    with patch.dict(sys.modules, {"native_process": native}), patch.multiple(runtime, **old), \
+         patch.dict(os.environ, {runtime.EXPECTED_PROBE_SHA256_ENV: "b" * 64}), \
          patch.object(sys, "stdin", io.StringIO(
-             f"hello|{r.IPC_VERSION}\nlaunch|{SESSION}\n"
+             f"hello|{runtime.IPC_VERSION}\nlaunch|{SESSION}\n"
              f"observe_close|{SESSION}\nclose|{SESSION}\n"
          )), contextlib.redirect_stdout(io.TextIOWrapper(io.BytesIO(), encoding="utf-8")) as crashed:
-        crash_result = r.run_native_ipc()
+        crash_result = runtime.run_native_ipc()
     crash_lines = crashed.buffer.getvalue().decode("utf-8").splitlines()
     assert crash_result == 6, crash_result
     assert crash_lines == [
-        f"hello_ack|{r.IPC_VERSION}",
+        f"hello_ack|{runtime.IPC_VERSION}",
         f"ready|{SESSION}",
         "error|runtime",
         f"closed|{SESSION}|false",
     ], crash_lines
-    assert len(called) == 2
+    assert crashed_session.detached_after_exit == 1
 
-    # A missing native writer must NEVER be classified as closed/Saved.
-    class MissingWriter:
-        def profile_state(self):
-            return "WRITER_NOT_OBSERVED"
-    with patch.dict(sys.modules, {"native_process": native}), patch.multiple(r, **old), \
-         patch.dict(os.environ, {r.EXPECTED_PROBE_SHA256_ENV: "b" * 64}), \
+    class MissingWriter(UserSession):
+        def __init__(self):
+            super().__init__(["WRITER_NOT_OBSERVED"])
+
+    missing = MissingWriter()
+    sessions.append(missing)
+    with patch.dict(sys.modules, {"native_process": native}), patch.multiple(runtime, **old), \
+         patch.dict(os.environ, {runtime.EXPECTED_PROBE_SHA256_ENV: "b" * 64}), \
          patch.object(sys, "stdin", io.StringIO(
-             f"hello|{r.IPC_VERSION}\nlaunch|{SESSION}\n"
-         )), patch.object(r.time, "monotonic", side_effect=[0.0, 32.0]), \
-         patch.object(native, "launch_native_camoufox", return_value=MissingWriter()), \
+             f"hello|{runtime.IPC_VERSION}\nlaunch|{SESSION}\n"
+         )), patch.object(runtime.time, "monotonic", side_effect=[0.0, 32.0]), \
          contextlib.redirect_stdout(io.TextIOWrapper(io.BytesIO(), encoding="utf-8")) as failed:
-        bad = r.run_native_ipc()
-    assert bad == 5 and failed.buffer.getvalue().decode("utf-8").splitlines()[-1] == "error|runtime"
+        bad = runtime.run_native_ipc()
+    assert bad == 5
+    assert failed.buffer.getvalue().decode("utf-8").splitlines()[-1] == "error|runtime"
+    assert missing.aborted_startup == 1
 
-    print("CAMOUHOST_NATIVE_IPC_BOUNDARY=PASS")
+    print("CAMOUHOST_USER_PLAYWRIGHT_IPC=PASS")
     return 0
+
 
 if __name__ == "__main__":
     raise SystemExit(main())

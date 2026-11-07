@@ -642,9 +642,13 @@ def retry_as_user(page):
     )
 
 def enter():
-    kwargs = runtime.camoufox_kwargs(lock, root, config)
+    kwargs = runtime.camoufox_launch_options(lock, root, config, isolated=True)
     assert kwargs["firefox_user_prefs"]["browser.startup.page"] == 3
-    manager = Camoufox(**kwargs)
+    manager = Camoufox(
+        from_options=kwargs,
+        headless=runtime.resolve_headless_mode(),
+        persistent_context=True,
+    )
     with contextlib.redirect_stdout(sys.stderr):
         context = manager.__enter__()
     context.set_offline(True)

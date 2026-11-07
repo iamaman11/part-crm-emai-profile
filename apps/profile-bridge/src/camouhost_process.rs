@@ -265,8 +265,9 @@ pub enum RuntimeDisplayMode {
     VirtualHeadful,
 }
 
-/// Normal Open and independent historical probe are distinct launch owners.
-/// Only the probe is allowed to use Playwright; user Open stays native.
+/// Normal Open uses the official Camoufox SDK/Playwright persistent context
+/// without page inspection. The isolated historical probe has separate
+/// page-visible admission and is never a live user profile.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum RuntimeExecutionOwner {
     NativeUser,
@@ -324,7 +325,7 @@ impl ManagedCamouhostConfig {
         })
     }
 
-    /// The only Playwright-enabled Windows maintenance operation uses a
+    /// Page-inspecting Playwright admission is restricted to an isolated,
     /// separately materialized historical generation, never a live user one.
     /// The caller still must supply the original one-time coordinator claim.
     #[must_use]
@@ -556,9 +557,9 @@ impl ManagedCamouhostProcess {
             command.env("CAMOUHOST_PROXY_CONFIG_PATH", path);
         }
         inherit_runtime_environment(&mut command);
-        // On Windows the shipping adapter launches official Camoufox natively
-        // after the existing signed bundle/config/lease preflight. The adapter
-        // no longer opens or controls Playwright pages or browser network state.
+        // On Windows the shipping adapter launches the official Camoufox SDK
+        // through a Playwright persistent context after signed bundle/config/
+        // lease preflight. It does not inspect or command user pages.
         #[cfg(windows)]
         command.env(
             "CAMOUHOST_EXECUTION_MODE",
@@ -567,9 +568,9 @@ impl ManagedCamouhostProcess {
                 RuntimeExecutionOwner::IsolatedHistoricalProbe => "isolated-cold-probe",
             },
         );
-        // The Linux developer-only managed fixture remains an isolated
-        // Playwright probe, not a remote mailbox-agent executor. Windows
-        // shipping user Open stays native.
+        // The Linux developer-only managed fixture remains an isolated,
+        // page-inspecting Playwright probe, not a remote mailbox-agent executor.
+        // Windows user Open also uses the SDK, but never this probe IPC path.
         #[cfg(not(windows))]
         command.env("CAMOUHOST_EXECUTION_MODE", "isolated-cold-probe");
         // A release browser never receives an arbitrary local Python executor.
@@ -716,8 +717,9 @@ impl CamouhostPort for ManagedCamouhostIpc {
             CamouhostMessage::Launch { session_id } => {
                 #[cfg(windows)]
                 if self.execution_owner == RuntimeExecutionOwner::NativeUser {
-                    // User Open is never attached to Playwright, does not inspect
-                    // a page and cannot be turned into an automation job.
+                    // User Open uses the SDK-owned persistent context, but is
+                    // never attached to page-inspecting automation and cannot
+                    // be turned into an automation job.
                     let state = self
                         .shared
                         .lock()

@@ -764,11 +764,6 @@ def camoufox_browser_selector(lock: dict[str, Any]) -> dict[str, str | Path]:
     raise RuntimeContractError("unsupported Camoufox runtime platform")
 
 
-def default_addon_exclusions() -> list[Any]:
-    """Leave official Camoufox extensions under the upstream browser's control."""
-    return []
-
-
 def accessibility_preferences(platform_name: str) -> dict[str, int]:
     """Keep standard OS accessibility available; no remote debugging, no page inspection."""
     return {"accessibility.force_disabled": 0} if platform_name == "nt" else {}
@@ -785,49 +780,91 @@ def report_live_page_count(context: Any) -> None:
         return
 
 
-def camoufox_kwargs(
+def camoufox_launch_options(
     lock: dict[str, Any],
     root: Path,
     config: dict[str, Any],
+    *,
+    isolated: bool = False,
 ) -> dict[str, Any]:
-    # WebGL and GPU capabilities belong to Camoufox/Firefox, not CRM.
+    """Build one pinned option set through the official Camoufox SDK.
+
+    Normal user Open uses upstream default extensions and the persistent
+    profile, without bootstrap tabs, offline toggles or page inspection.
+    The isolated C09 probe alone opts into its pre-admission offline boundary.
+    """
+    from camoufox.utils import get_env_vars, launch_options
+
     user_data_dir = root / USER_DATA_NAME
     if user_data_dir.is_symlink():
         raise RuntimeContractError("browser user-data directory may not be a symlink")
     user_data_dir.mkdir(exist_ok=True)
-    return {
-        **camoufox_browser_selector(lock),
-        "config": copy.deepcopy(config),
-        "enable_cache": True,
-        "env": browser_environment(),
-        "exclude_addons": default_addon_exclusions(),
-        "ff_version": locked_firefox_major(lock),
-        "firefox_user_prefs": {
-            # Native Firefox SessionStore restores previous windows and tabs.
-            "browser.startup.page": 3,
-            "privacy.baselineFingerprintingProtection": False,
-            # Keep native Windows accessibility APIs available to standard GUI automation.
-            # This does not enable remote debugging or inspect page content.
-            **accessibility_preferences(os.name),
-            # Firefox offline mode can allow localhost by default. Block it
-            # before restored pages load; admission later releases offline mode.
-            "network.disable-localhost-when-offline": True,
-        },
-        "headless": resolve_headless_mode(),
-        # A restored Firefox session can open only chrome/internal tabs first.
-        # Playwright 1.60 waits for a Page/load during persistent-context
-        # startup; explicitly request a regular blank tab so that its normal
-        # default-context admission can complete without disabling session restore.
-        # Set offline as a native persistent-context launch option, before
-        # restored tabs are admitted. Unlike Firefox's -offline CLI switch,
-        # this is released by Playwright set_offline(False) at admission.
-        "offline": True,
-        "args": ["-new-tab", MANAGED_BOOTSTRAP_TAB_URL],
-        "i_know_what_im_doing": True,
-        "persistent_context": True,
-        "proxy": resolve_proxy(),
-        "user_data_dir": str(user_data_dir),
+    browser_selector = camoufox_browser_selector(lock)
+    browser_path = browser_selector.get("executable_path")
+    firefox_prefs: dict[str, Any] = {
+        "browser.startup.page": 3,
+        "privacy.baselineFingerprintingProtection": False,
+        **accessibility_preferences(os.name),
     }
+    if isolated:
+        firefox_prefs["network.disable-localhost-when-offline"] = True
+    try:
+        options = launch_options(
+            **browser_selector,
+            config=copy.deepcopy(config),
+            enable_cache=True,
+            env=browser_environment(),
+            ff_version=locked_firefox_major(lock),
+            firefox_user_prefs=firefox_prefs,
+            headless=resolve_headless_mode(),
+            i_know_what_im_doing=True,
+            os="windows",
+            proxy=resolve_proxy(),
+            user_data_dir=str(user_data_dir),
+        )
+    except (OSError, ValueError, TypeError) as error:
+        raise RuntimeContractError("official Camoufox launch options rejected") from error
+
+    if isolated:
+        options["offline"] = True
+        options["args"] = ["-new-tab", MANAGED_BOOTSTRAP_TAB_URL]
+
+    official_env = options.get("env")
+    if not isinstance(official_env, dict) or not any(
+        isinstance(key, str) and key.startswith("CAMOU_CONFIG_") for key in official_env
+    ):
+        raise RuntimeContractError("official Camoufox fingerprint environment missing")
+    if any(not isinstance(key, str) for key in official_env):
+        raise RuntimeContractError("official Camoufox environment invalid")
+
+    # Preserve the generation's exact sealed identity while retaining the
+    # official SDK's generated default-addon list and all its other options.
+    generated = extract_camoufox_config(options)
+    pinned = copy.deepcopy(config)
+    addons = generated.get("addons")
+    if addons is not None:
+        if not isinstance(addons, list) or any(not isinstance(value, str) for value in addons):
+            raise RuntimeContractError("official Camoufox addon list invalid")
+        if "addons" in pinned and pinned["addons"] != addons:
+            raise RuntimeContractError("persisted addon identity conflicts with upstream")
+        pinned["addons"] = addons
+    try:
+        pinned_env = get_env_vars(pinned, "win", path=browser_path)
+    except (OSError, TypeError, ValueError) as error:
+        raise RuntimeContractError("pinned Camoufox fingerprint unavailable") from error
+    if not isinstance(pinned_env, dict) or not any(
+        isinstance(key, str) and key.startswith("CAMOU_CONFIG_") for key in pinned_env
+    ):
+        raise RuntimeContractError("pinned Camoufox fingerprint serialization missing")
+    merged_env = {
+        key: str(value) for key, value in official_env.items()
+        if not key.startswith("CAMOU_CONFIG_")
+    }
+    merged_env.update({key: str(value) for key, value in pinned_env.items()})
+    options["env"] = merged_env
+    return options
+
+
 
 
 def launch_verified_context(
@@ -842,7 +879,12 @@ def launch_verified_context(
         raise RuntimeContractError("profile-stable probe digest is invalid")
     if firefox_writer_active(root):
         raise RuntimeContractError("Firefox writer is already active")
-    manager = Camoufox(**camoufox_kwargs(lock, root, config))
+    options = camoufox_launch_options(lock, root, config, isolated=True)
+    manager = Camoufox(
+        from_options=options,
+        headless=resolve_headless_mode(),
+        persistent_context=True,
+    )
     try:
         report_runtime_stage("launch", "before_browser_enter")
         with contextlib.redirect_stdout(sys.stderr):
@@ -1366,12 +1408,12 @@ def materialize_candidate_identity(root: Path) -> dict[str, str]:
             **browser_selector,
             enable_cache=True,
             env=browser_env,
-            exclude_addons=default_addon_exclusions(),
             ff_version=locked_firefox_major(lock),
             fingerprint=fingerprint,
             headless=headless_mode,
             i_know_what_im_doing=True,
             os="windows",
+            user_data_dir=str(user_data_dir),
         )
     config = extract_camoufox_config(options)
     # Persist the canonical Camoufox configuration once; never draw again on Reopen.
@@ -1380,7 +1422,11 @@ def materialize_candidate_identity(root: Path) -> dict[str, str]:
     config_path.write_bytes(config_bytes)
     config_sha256 = sha256_bytes(config_bytes)
 
-    manager = Camoufox(**camoufox_kwargs(lock, root, config))
+    manager = Camoufox(
+        from_options=options,
+        headless=headless_mode,
+        persistent_context=True,
+    )
     with contextlib.redirect_stdout(sys.stderr):
         context = manager.__enter__()
     try:
@@ -1929,33 +1975,24 @@ def run_ipc() -> int:
 
 
 def run_native_ipc() -> int:
-    """Production runtime IPC: launch official Firefox, never inspect its pages.
+    """Production user Open through the official Camoufox SDK/Playwright API.
 
-    Rust has already verified the signed browser/runtime/config identities,
-    acquired the exact tenant/device/profile writer lease, and issued this
-    sidecar a single-use capability. This adapter only releases native Firefox
-    with the bound on-disk identity and observes its own profile lock.
+    Rust has already verified the signed runtime/config identities and redeemed
+    the exact tenant/device/profile writer lease. Playwright owns the persistent
+    browser context and its driver lifetime; this adapter observes only Firefox's
+    profile lock and current-session shutdown checkpoint. It never inspects or
+    commands user pages, tabs, DOM or navigation.
     """
     report_runtime_stage("startup", "begin")
     try:
-        # native_process is a sibling module included in the embedded
-        # interpreter's generated ._pth search path by the runtime builder.
-        try:
-            from native_process import launch_native_camoufox
-        except ImportError as error:
-            raise RuntimeContractError("native process adapter import failed") from error
+        from native_process import launch_native_camoufox
         lock, _ = load_runtime_lock()
         verify_python_components(lock)
         root = resolve_profile_root(require_bridge_lock=True)
         config, _ = load_generation_config(root)
         expected = os.environ.get(EXPECTED_PROBE_SHA256_ENV)
         if not valid_sha256(expected) or firefox_writer_active(root):
-            raise RuntimeContractError("native runtime identity unavailable")
-        if resolve_proxy() is not None:
-            # Do not silently ignore configured proxy routing when no
-            # native Firefox proxy policy has been proven.
-            raise RuntimeContractError("native proxy cannot be applied safely")
-        browser = packaged_windows_browser(lock)
+            raise RuntimeContractError("user runtime identity unavailable")
     except BaseException as error:
         report_runtime_failure("startup", error)
         emit("error|identity")
@@ -1964,15 +2001,34 @@ def run_native_ipc() -> int:
     report_runtime_stage("startup", "ready")
     negotiated = False
     active_session: str | None = None
-    native_session: Any | None = None
+    user_session: Any | None = None
     while True:
         raw = sys.stdin.readline()
         if not raw:
-            # Never kill Firefox because the control pipe disappeared.
-            return 3 if negotiated or active_session is not None else 0
+            if user_session is None:
+                return 0
+            # If Bridge IPC disappears, keep the official Playwright driver
+            # alive while the user still owns Firefox.
+            while True:
+                status = user_session.profile_state()
+                if status == "CLEAN_SHUTDOWN_VERIFIED":
+                    with contextlib.suppress(BaseException):
+                        user_session.close()
+                    return 3
+                if status == "CRASH_OR_UNKNOWN_PRESERVE_LOCAL":
+                    with contextlib.suppress(BaseException):
+                        user_session.close_after_browser_exit()
+                    return 3
+                if status == "WRITER_NOT_OBSERVED":
+                    with contextlib.suppress(BaseException):
+                        user_session.abort_startup()
+                    return 3
+                time.sleep(0.25)
         if not valid_frame(raw):
             emit("error|protocol")
-            return 2
+            if user_session is None:
+                return 2
+            continue
         parts = raw[:-1].split("|")
         if parts == ["hello", IPC_VERSION] and not negotiated:
             negotiated = True
@@ -1981,33 +2037,34 @@ def run_native_ipc() -> int:
         if (len(parts) == 2 and parts[0] == "launch" and negotiated
             and active_session is None and SESSION_PATTERN.fullmatch(parts[1]) is not None):
             try:
-                # Browser startup is admitted *before* spawning; no network
-                # mode toggles, new tabs, page code or mutation after spawn.
                 report_runtime_stage("launch", "before_browser_enter")
-                native_session = launch_native_camoufox(
-                    workspace=root, browser=browser, identity=config,
-                    inherited=browser_environment(),
+                options = camoufox_launch_options(lock, root, config)
+                user_session = launch_native_camoufox(
+                    workspace=root,
+                    options=options,
                     writer_active=firefox_writer_active,
                     admission_granted=True,
-                    ff_version=locked_firefox_major(lock),
+                    headless=False,
                 )
                 report_runtime_stage("launch", "browser_entered")
-                # Observe only Firefox's own OS lock. This is not browser
-                # control: return Ready as soon as the native writer appears.
-                # Firefox's current-session checkpoint is checked separately
-                # at Close, before Save can begin.
+                # Ready depends only on Firefox's native writer lock. No page
+                # is queried, opened, evaluated or navigated by the application.
                 deadline = time.monotonic() + 30.0
-                status = native_session.profile_state()
+                status = user_session.profile_state()
                 while status != "PROFILE_BUSY":
                     if status == "UNKNOWN_PRESERVE_LOCAL":
-                        raise RuntimeContractError("native Firefox writer lock could not be verified")
+                        raise RuntimeContractError("Firefox writer lock could not be verified")
                     if status == "CRASH_OR_UNKNOWN_PRESERVE_LOCAL":
-                        raise RuntimeContractError("native Firefox exited before readiness")
+                        raise RuntimeContractError("Camoufox exited before readiness")
                     if time.monotonic() >= deadline:
-                        raise RuntimeContractError("native Firefox writer lock was not observed")
+                        raise RuntimeContractError("Firefox writer lock was not observed")
                     time.sleep(0.05)
-                    status = native_session.profile_state()
+                    status = user_session.profile_state()
             except BaseException as error:
+                if user_session is not None:
+                    with contextlib.suppress(BaseException):
+                        user_session.abort_startup()
+                    user_session = None
                 report_runtime_failure("launch", error)
                 emit("error|runtime")
                 return 5
@@ -2017,28 +2074,43 @@ def run_native_ipc() -> int:
             continue
         if (len(parts) == 2 and parts[0] == "observe_close"
             and active_session is not None and parts[1] == active_session
-            and native_session is not None):
-            status = native_session.profile_state()
+            and user_session is not None):
+            status = user_session.profile_state()
             if status == "CLEAN_SHUTDOWN_VERIFIED":
                 emit(f"close_observed|{active_session}|true")
             elif status == "CRASH_OR_UNKNOWN_PRESERVE_LOCAL":
-                # Rust aborts the active lease into the existing RecoveryRequired
-                # path. Keep this sidecar alive until it receives that decision.
                 emit("error|runtime")
             else:
                 emit(f"close_observed|{active_session}|false")
             continue
         if (len(parts) == 2 and parts[0] == "close"
             and active_session is not None and parts[1] == active_session
-            and native_session is not None):
-            status = native_session.profile_state()
-            clean = status == "CLEAN_SHUTDOWN_VERIFIED"
-            # This closes only our IPC sidecar. It does not send any command
-            # to Firefox. Actual CLOUD_SAVED is decided by Rust/D1/R2 only.
-            emit(f"closed|{active_session}|{'true' if clean else 'false'}")
-            return 0 if clean else 6
+            and user_session is not None):
+            status = user_session.profile_state()
+            if status == "CLEAN_SHUTDOWN_VERIFIED":
+                try:
+                    user_session.close()
+                except BaseException as error:
+                    report_runtime_failure("cleanup", error)
+                    emit(f"closed|{active_session}|false")
+                    return 6
+                emit(f"closed|{active_session}|true")
+                return 0
+            emit(f"closed|{active_session}|false")
+            if status == "CRASH_OR_UNKNOWN_PRESERVE_LOCAL":
+                with contextlib.suppress(BaseException):
+                    user_session.close_after_browser_exit()
+                return 6
+            if status == "WRITER_NOT_OBSERVED":
+                with contextlib.suppress(BaseException):
+                    user_session.abort_startup()
+                return 6
+            continue
         emit("error|protocol")
-        return 2
+        if user_session is None:
+            return 2
+
+
 
 
 def main() -> int:
@@ -2061,18 +2133,18 @@ def main() -> int:
     if len(sys.argv) != 1:
         print("unsupported Camouhost invocation", file=sys.stderr)
         return 2
-    # No implicit fallback from ordinary native Open to page-controlling
-    # Playwright. The Bridge explicitly selects the runtime owner after its
-    # device/tenant/generation admission. An environment flag is *not* a lease.
+    # Normal user Open uses the official Camoufox SDK/Playwright persistent
+    # context, but never enters the page-inspecting automation IPC path. The
+    # Bridge selects the owner only after device/tenant/generation admission.
     mode = os.environ.get(EXECUTION_MODE_ENV)
     if mode == USER_NATIVE_MODE:
         # A user's native Firefox never accepts a Python execution inbox,
         # including direct adapter invocation outside a packaged Rust build.
         if os.environ.get(AGENT_DIRECTORY_ENV):
-            print("native user browser rejects executable agent directory", file=sys.stderr)
+            print("user browser rejects executable agent directory", file=sys.stderr)
             return 2
         if os.environ.get(HEADLESS_MODE_ENV, "false") != "false":
-            print("native user browser requires headful mode", file=sys.stderr)
+            print("user browser requires headful mode", file=sys.stderr)
             return 2
         return run_native_ipc()
     if mode == ISOLATED_COLD_PROBE_MODE:

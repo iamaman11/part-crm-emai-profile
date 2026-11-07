@@ -424,7 +424,8 @@ mod p3_fixture {
             paths.display_mode,
             Some(origin.url()),
             None,
-        )?;
+        )?
+        .for_isolated_historical_probe();
         let (process, camouhost) = crate::camouhost_process::ManagedCamouhostProcess::pair(
             managed_config,
             runtime_binding,

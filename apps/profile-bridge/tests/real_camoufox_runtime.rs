@@ -628,7 +628,7 @@ fn run_managed_cold_launch_cycle() -> Result<ApprovedRuntimeBundle, Box<dyn std:
 }
 
 #[test]
-fn bridge_preflight_launches_real_camoufox_natively_without_page_inspection()
+fn bridge_preflight_launches_real_camoufox_through_official_playwright_without_page_inspection()
 -> Result<(), Box<dyn std::error::Error>> {
     if env::var(ENABLE_ENV).as_deref() != Ok("1") {
         return Ok(());

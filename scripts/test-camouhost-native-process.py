@@ -1,12 +1,11 @@
 #!/usr/bin/env python3
-"""Offline native process boundary tests, without building or launching Firefox."""
+"""Official Camoufox Playwright persistent-context boundary tests."""
 from __future__ import annotations
 
 import importlib.util
 import json
 import os
 import pathlib
-import subprocess
 import sys
 import tempfile
 import types
@@ -17,7 +16,7 @@ SOURCE = ROOT / "runtime" / "camouhost" / "native_process.py"
 
 
 def load():
-    spec = importlib.util.spec_from_file_location("camouhost_native_process_test", SOURCE)
+    spec = importlib.util.spec_from_file_location("camouhost_playwright_process_test", SOURCE)
     assert spec and spec.loader
     module = importlib.util.module_from_spec(spec)
     sys.modules[spec.name] = module
@@ -25,153 +24,159 @@ def load():
     return module
 
 
+def write_checkpoints(path, values, previous_mtime=None):
+    path.write_text(json.dumps(values), encoding="utf-8")
+    if previous_mtime is not None:
+        observed = path.stat().st_mtime_ns
+        target = max(observed, previous_mtime + 1_000_000_000)
+        os.utime(path, ns=(target, target))
+
+
 def main() -> int:
     module = load()
-    util = types.ModuleType("camoufox.utils")
-    root = types.ModuleType("camoufox")
-    observed_launch_options = []
+    assert "subprocess" not in module.__dict__, "user Open must not Popen the browser executable"
 
-    def official_options(**kwargs):
-        observed_launch_options.append(kwargs)
-        assert kwargs["ff_version"] == 158
-        assert kwargs["os"] == "windows"
-        assert kwargs["env"].get("CAMOU_CONFIG_1") is None
-        assert kwargs["firefox_user_prefs"]["browser.startup.page"] == 3
-        assert kwargs["firefox_user_prefs"]["privacy.baselineFingerprintingProtection"] is False
-        assert kwargs["config"] == {"sentinel": "pinned", "navigator.maxTouchPoints": 7}
-        assert kwargs["exclude_addons"] == []
-        # Simulate the *real* Camoufox SDK changing an already saved field.
-        altered = dict(kwargs["config"])
-        altered["navigator.maxTouchPoints"] = len(observed_launch_options) % 3
-        altered["addons"] = ["official/default-addon"]
-        return {"env": {**kwargs["env"], "CAMOU_CONFIG_1": json.dumps(altered),
-                        "CAMOU_PREFS_1": "native"}}
-    util.launch_options = official_options
-    util.get_env_vars = lambda config, target, path: {
-        "CAMOU_CONFIG_1": json.dumps(config, sort_keys=True)
-    }
+    class FakeContext:
+        # Deliberately no page/DOM/navigation APIs: the adapter must not call them.
+        pass
 
-    with tempfile.TemporaryDirectory() as temp:
-        workspace = pathlib.Path(temp) / "generation"
-        userdata = workspace / "user_data"
-        userdata.mkdir(parents=True)
-        browser = pathlib.Path(temp) / "camoufox.exe"
-        browser.write_bytes(b"approved-disposable-test-fixture")
-        checkpoint = userdata / "sessionCheckpoints.json"
-        checkpoint.write_text(json.dumps({
+    class FakeCamoufox:
+        instances = []
+
+        def __init__(self, **kwargs):
+            self.kwargs = kwargs
+            self.context = FakeContext()
+            self.exit_calls = 0
+            self.instances.append(self)
+
+        def __enter__(self):
+            return self.context
+
+        def __exit__(self, *_args):
+            self.exit_calls += 1
+            return False
+
+    package = types.ModuleType("camoufox")
+    package.__path__ = []
+    sync_api = types.ModuleType("camoufox.sync_api")
+    sync_api.Camoufox = FakeCamoufox
+
+    with tempfile.TemporaryDirectory() as temporary:
+        workspace = pathlib.Path(temporary) / "generation"
+        user_data = workspace / "user_data"
+        user_data.mkdir(parents=True)
+        browser = pathlib.Path(temporary) / "camoufox.exe"
+        browser.write_bytes(b"approved disposable browser fixture")
+        checkpoint = user_data / "sessionCheckpoints.json"
+        write_checkpoints(checkpoint, {
             "profile-after-change": True,
             "sessionstore-final-state-write-complete": True,
-        }), encoding="utf-8")
-        created = []
-        def spawn(args, **kwargs):
-            created.append((args, kwargs))
-            return None
-        modules = {
-            "camoufox": root,
-            "camoufox.utils": util,
+        })
+        active = False
+
+        def writer_active(_workspace):
+            return active
+
+        options = {
+            "executable_path": str(browser),
+            "user_data_dir": str(user_data),
+            "headless": False,
+            "env": {"CAMOU_CONFIG_1": "{}"},
         }
-        with patch.dict(sys.modules, modules), patch.object(subprocess, "Popen", side_effect=spawn):
-            for approved, active in ((False, False), (True, True)):
+
+        with patch.dict(sys.modules, {
+            "camoufox": package,
+            "camoufox.sync_api": sync_api,
+        }):
+            for admission, writer in ((False, False), (True, True)):
+                active = writer
                 try:
                     module.launch_native_camoufox(
-                        workspace=workspace, browser=browser, identity={"sentinel":"pinned", "navigator.maxTouchPoints":7},
-                        inherited={"SYSTEMROOT":"C:\\Windows"}, writer_active=lambda _: active,
-                        admission_granted=approved,
+                        workspace=workspace, options=options,
+                        writer_active=writer_active, admission_granted=admission,
+                        headless=False,
                     )
                 except module.NativeLaunchError:
                     pass
                 else:
-                    raise AssertionError("unauthorized or already-owned profile launched")
-                assert not created
+                    raise AssertionError("unauthorized/already-owned profile launched")
+                assert not FakeCamoufox.instances
 
-            proc = module.launch_native_camoufox(
-                workspace=workspace, browser=browser,
-                identity={"sentinel":"pinned", "navigator.maxTouchPoints":7},
-                inherited={"SYSTEMROOT":"C:\\Windows", "CAMOU_CONFIG_1":"injected"},
-                writer_active=lambda _: False,
-                admission_granted=True,
+            active = False
+            session = module.launch_native_camoufox(
+                workspace=workspace, options=options,
+                writer_active=writer_active, admission_granted=True, headless=False,
             )
-            assert len(created) == 1
-            args, kwargs = created[0]
-            assert args == [str(browser), "-no-remote", "-profile", str(userdata)]
-            actual = json.loads(kwargs["env"]["CAMOU_CONFIG_1"])
-            assert actual["sentinel"] == "pinned"
-            assert actual["navigator.maxTouchPoints"] == 7, (
-                "upstream SDK must not change pinned identity on Open"
-            )
-            assert actual["addons"] == ["official/default-addon"]
-            assert kwargs["env"]["CAMOU_PREFS_1"] == "native"
-            assert len(observed_launch_options) == 1
-            assert "playwright" not in str(args).lower()
-            assert proc.profile_state() == "WRITER_NOT_OBSERVED"
-            assert not hasattr(proc, "process"), "Bridge must not supervise native processes"
-            proc.writer_active = lambda _: True
-            assert proc.profile_state() == "PROFILE_BUSY", (
-                "native writer lock admits Open without reusing a stale clean marker"
-            )
-            assert proc.observed_native_writer
-            assert not proc.active_session_checkpoint_seen, (
-                "a stale previous-session clean marker cannot prove this session"
-            )
+            manager = FakeCamoufox.instances[-1]
+            assert manager.kwargs == {
+                "from_options": options,
+                "headless": False,
+                "persistent_context": True,
+            }
+            assert session.context is manager.context
+            assert session.profile_state() == "WRITER_NOT_OBSERVED"
+
+            active = True
             baseline = checkpoint.stat().st_mtime_ns
-            checkpoint.write_text(json.dumps({"profile-after-change": True}), encoding="utf-8")
-            startup_mtime = max(checkpoint.stat().st_mtime_ns, baseline + 1_000_000_000)
-            os.utime(checkpoint, ns=(startup_mtime, startup_mtime))
-            assert proc.profile_state() == "PROFILE_BUSY"
-            proc.writer_active = lambda _: False
-            assert proc.profile_state() == "CRASH_OR_UNKNOWN_PRESERVE_LOCAL"
+            write_checkpoints(checkpoint, {"profile-after-change": True}, baseline)
+            assert session.profile_state() == "PROFILE_BUSY"
+            assert session.active_session_checkpoint_seen
+
+            active = False
             baseline = checkpoint.stat().st_mtime_ns
-            checkpoint.write_text(json.dumps({
+            write_checkpoints(checkpoint, {
                 "profile-after-change": True,
                 "sessionstore-final-state-write-complete": True,
-            }), encoding="utf-8")
-            clean_mtime = max(checkpoint.stat().st_mtime_ns, baseline + 1_000_000_000)
-            os.utime(checkpoint, ns=(clean_mtime, clean_mtime))
-            assert proc.profile_state() == "CLEAN_SHUTDOWN_VERIFIED"
-            clean_mtime = checkpoint.stat().st_mtime_ns
+            }, baseline)
+            assert session.profile_state() == "CLEAN_SHUTDOWN_VERIFIED"
+            session.close()
+            assert manager.exit_calls == 1
+            assert session.manager is None and session.context is None
 
-            # A second session can start and exit between observer polls.
-            # Its rewritten checkpoint must invalidate the previous session's
-            # already-observed clean witness, even if its final marker is true.
-            checkpoint.write_text(json.dumps({
+            active = True
+            baseline = checkpoint.stat().st_mtime_ns
+            write_checkpoints(checkpoint, {
                 "profile-after-change": True,
                 "sessionstore-final-state-write-complete": True,
-            }), encoding="utf-8")
-            next_session_mtime = max(
-                checkpoint.stat().st_mtime_ns, clean_mtime + 1_000_000_000
-            )
-            os.utime(checkpoint, ns=(next_session_mtime, next_session_mtime))
-            assert proc.profile_state() == "CRASH_OR_UNKNOWN_PRESERVE_LOCAL"
-            assert proc.profile_state() == "CRASH_OR_UNKNOWN_PRESERVE_LOCAL"
+            }, baseline)
+            assert session.profile_state() == "CRASH_OR_UNKNOWN_PRESERVE_LOCAL"
 
-            # Reopening after a clean session must clear the old final marker
-            # before the native profile is reported Ready.
+            active = False
             reopened = module.launch_native_camoufox(
-                workspace=workspace, browser=browser,
-                identity={"sentinel":"pinned", "navigator.maxTouchPoints":7},
-                inherited={"SYSTEMROOT":"C:\\Windows"},
-                writer_active=lambda _: False, admission_granted=True,
+                workspace=workspace, options=options,
+                writer_active=writer_active, admission_granted=True, headless=False,
             )
-            assert reopened.profile_state() == "WRITER_NOT_OBSERVED"
-            reopened.writer_active = lambda _: True
-            assert reopened.profile_state() == "PROFILE_BUSY"
-            assert not reopened.active_session_checkpoint_seen
+            reopened_manager = FakeCamoufox.instances[-1]
+            active = True
             baseline = checkpoint.stat().st_mtime_ns
-            checkpoint.write_text(json.dumps({"profile-after-change": True}), encoding="utf-8")
-            reopened_mtime = max(checkpoint.stat().st_mtime_ns, baseline + 1_000_000_000)
-            os.utime(checkpoint, ns=(reopened_mtime, reopened_mtime))
+            write_checkpoints(checkpoint, {"profile-after-change": True}, baseline)
             assert reopened.profile_state() == "PROFILE_BUSY"
-            assert reopened.active_session_checkpoint_seen
-            reopened.writer_active = lambda _: False
+            active = False
             assert reopened.profile_state() == "CRASH_OR_UNKNOWN_PRESERVE_LOCAL"
+            reopened.close_after_browser_exit()
+            assert reopened_manager.exit_calls == 1
 
-            def unknown(_):
-                raise OSError("untrusted path hidden")
-            reopened.writer_active = unknown
-            assert reopened.profile_state() == "UNKNOWN_PRESERVE_LOCAL"
-            assert len(created) == 2, "observation must not relaunch the browser"
+            active = False
+            startup = module.launch_native_camoufox(
+                workspace=workspace, options=options,
+                writer_active=writer_active, admission_granted=True, headless=False,
+            )
+            startup_manager = FakeCamoufox.instances[-1]
+            startup.abort_startup()
+            assert startup_manager.exit_calls == 1
 
-    print("NATIVE_CAMOUFOX_PROCESS_BOUNDARY=PASS")
+            def unknown(_workspace):
+                raise OSError("untrusted lock path")
+            unknown_session = module.launch_native_camoufox(
+                workspace=workspace, options=options,
+                writer_active=writer_active, admission_granted=True, headless=False,
+            )
+            unknown_session.writer_active = unknown
+            assert unknown_session.profile_state() == "UNKNOWN_PRESERVE_LOCAL"
+            unknown_session.writer_active = writer_active
+            unknown_session.abort_startup()
+
+    print("CAMOUHOST_OFFICIAL_PLAYWRIGHT_CONTEXT=PASS")
     return 0
 
 
