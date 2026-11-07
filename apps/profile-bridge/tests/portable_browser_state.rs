@@ -341,7 +341,10 @@ mod p3_fixture {
         let report: RealIdentityReport = serde_json::from_slice(&output.stdout)?;
         for (value, label) in [
             (&report.fingerprint_config_sha256, "fingerprint config"),
-            (&report.fingerprint_materialization_sha256, "fingerprint materialization"),
+            (
+                &report.fingerprint_materialization_sha256,
+                "fingerprint materialization",
+            ),
             (&report.runtime_lock_sha256, "runtime lock"),
         ] {
             if value.len() != 64
