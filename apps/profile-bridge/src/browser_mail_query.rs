@@ -495,10 +495,8 @@ mod tests {
     -> Result<(), Box<dyn std::error::Error>> {
         let proof = proof()?;
         let binding_id = proof.binding_id().clone();
-        let reference = MailboxMessageReference::new(
-            binding_id.clone(),
-            "browser-requested-message",
-        )?;
+        let reference =
+            MailboxMessageReference::new(binding_id.clone(), "browser-requested-message")?;
         let mut malicious_runtime = runtime(binding_id.clone());
         malicious_runtime.returned_reference_override = Some("browser-different-message");
         let adapter = BrowserClientMailQueryAdapter::new(
@@ -526,10 +524,8 @@ mod tests {
     -> Result<(), Box<dyn std::error::Error>> {
         let proof = proof()?;
         let binding_id = proof.binding_id().clone();
-        let reference = MailboxMessageReference::new(
-            binding_id.clone(),
-            "browser-requested-message",
-        )?;
+        let reference =
+            MailboxMessageReference::new(binding_id.clone(), "browser-requested-message")?;
         let adapter = BrowserClientMailQueryAdapter::new(
             proof,
             CountingFence {
