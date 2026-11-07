@@ -1986,9 +1986,9 @@ def run_native_ipc() -> int:
                 )
                 report_runtime_stage("launch", "browser_entered")
                 # Observe only Firefox's own OS lock. This is not browser
-                # control, nor a fixed delay: return as soon as native writer
-                # evidence appears. A bounded startup failure prevents a dead
-                # launcher from being reported as Browser Ready.
+                # control: return Ready as soon as the native writer appears.
+                # Firefox's current-session checkpoint is checked separately
+                # at Close, before Save can begin.
                 deadline = time.monotonic() + 30.0
                 status = native_session.profile_state()
                 while status != "PROFILE_BUSY":
