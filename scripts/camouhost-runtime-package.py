@@ -30,6 +30,7 @@ MAX_RUNTIME_BYTES = 4 * 1024 * 1024 * 1024
 REQUIRED_RUNTIME_PATHS = {
     "browser/camoufox.exe",
     "camouhost/real.py",
+    "camouhost/native_process.py",
     "camouhost/resolved-runtime.json",
     "camouhost/runtime-lock.json",
     "python/python.exe",
@@ -503,6 +504,7 @@ def write_fixture_runtime(root: Path) -> None:
     fixtures = {
         "browser/camoufox.exe": b"browser",
         "camouhost/real.py": b"print('fixture')\n",
+        "camouhost/native_process.py": b"# native fixture\n",
         "camouhost/resolved-runtime.json": b"{}\n",
         "camouhost/runtime-lock.json": b"{}\n",
         "python/python.exe": b"python",

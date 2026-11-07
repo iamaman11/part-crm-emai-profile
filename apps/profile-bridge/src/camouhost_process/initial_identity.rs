@@ -19,7 +19,7 @@ fn read_initial_report(reader: impl Read) -> std::io::Result<Vec<u8>> {
 struct InitialReport {
     fingerprint_config_sha256: String,
     fingerprint_policy_version: String,
-    profile_stable_probe_sha256: String,
+    fingerprint_materialization_sha256: String,
     runtime_lock_sha256: String,
 }
 
@@ -202,14 +202,24 @@ impl ManagedCamouhostConfig {
             eprintln!("INITIAL_IDENTITY_FAILURE=config_shape;category={error:?}");
             BridgePortError::InvalidResponse
         })?;
+        // The fingerprint provenance comes from the official SDK/fpgen
+        // configuration itself, not an extra browser round trip. Bind it to
+        // the exact on-disk bytes so a substituted report cannot be accepted.
+        let mut fingerprint_evidence = Vec::with_capacity(config.len() + 37);
+        fingerprint_evidence.extend_from_slice(b"profile-stability-v2-fpgen-config\0");
+        fingerprint_evidence.extend_from_slice(&config);
+        if sha256_hex(&fingerprint_evidence) != report.fingerprint_materialization_sha256 {
+            eprintln!("INITIAL_IDENTITY_FAILURE=materialization_evidence");
+            return Err(BridgePortError::InvalidResponse);
+        }
         BrowserIdentityManifest::new_native(
             IDENTITY_COMPATIBILITY_VERSION,
             report.fingerprint_policy_version,
             bundle.manifest().runtime_version(),
             bundle.manifest().inventory_sha256().as_str(),
             format!(
-                "{FINGERPRINT_SOURCE_PREFIX}{}",
-                report.profile_stable_probe_sha256
+                "{FINGERPRINT_CONFIG_SOURCE_PREFIX}{}",
+                report.fingerprint_materialization_sha256
             ),
             report.fingerprint_config_sha256,
         )

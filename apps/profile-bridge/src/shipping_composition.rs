@@ -4,7 +4,6 @@ use bridge_domain::ClaimUri;
 
 /// Internal one-shot maintenance command, never a normal Profile Open.
 /// It requires a fresh ordinary device-bound one-time launch claim.
-pub const VERIFY_HISTORICAL_CANDIDATE_ARGUMENT: &str = "--verify-historical-candidate";
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum ShippingDeliveryCommand {
@@ -25,6 +24,8 @@ pub enum ShippingCompositionError {
     FirstInstallation(crate::windows_delivery_handoff::DeliveryHandoffError),
     InstalledConnection(crate::installed_connection::InstalledConnectionError),
     DeliveryRecoveryRequired,
+    #[cfg(windows)]
+    DeliveryRuntime(crate::windows_delivery_runtime::WindowsDeliveryRuntimeError),
     Operator(crate::operator_flow::OperatorFlowError),
     ActiveSessionMissing,
     CloseObservation(bridge_domain::BridgePortError),
@@ -50,8 +51,13 @@ impl core::fmt::Display for ShippingCompositionError {
             Self::DeliveryRecoveryRequired => {
                 "shipping Profile Bridge delivery recovery is required"
             }
+            #[cfg(windows)]
+            Self::DeliveryRuntime(error) => return core::fmt::Display::fmt(error, formatter),
             Self::Operator(_) => "shipping Profile Bridge operator flow failed",
             Self::ActiveSessionMissing => "shipping Profile Bridge active session is missing",
+            Self::CloseObservation(bridge_domain::BridgePortError::UncleanBrowserExit) => {
+                "Camoufox exited without a clean shutdown checkpoint; local recovery is required"
+            }
             Self::CloseObservation(_) => "shipping Profile Bridge close observation failed",
             Self::Initialization(_) => "profile first-open preparation failed",
             Self::HeartbeatAuthorityUncertain => {
@@ -68,20 +74,24 @@ impl std::error::Error for ShippingCompositionError {}
 
 #[cfg(any(windows, test))]
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-enum ConfirmedSaveTrigger {
+enum CloseObservationDisposition {
     ContinueRuntime,
     BeginConfirmedSave,
+    RecoverUncleanExit,
 }
 
 #[cfg(any(windows, test))]
-fn confirmed_save_trigger<E>(observation: Result<bool, E>) -> Result<ConfirmedSaveTrigger, E> {
-    observation.map(|controlled| {
-        if controlled {
-            ConfirmedSaveTrigger::BeginConfirmedSave
-        } else {
-            ConfirmedSaveTrigger::ContinueRuntime
+fn close_observation_disposition(
+    observation: Result<bool, bridge_domain::BridgePortError>,
+) -> Result<CloseObservationDisposition, bridge_domain::BridgePortError> {
+    match observation {
+        Ok(true) => Ok(CloseObservationDisposition::BeginConfirmedSave),
+        Ok(false) => Ok(CloseObservationDisposition::ContinueRuntime),
+        Err(bridge_domain::BridgePortError::UncleanBrowserExit) => {
+            Ok(CloseObservationDisposition::RecoverUncleanExit)
         }
-    })
+        Err(error) => Err(error),
+    }
 }
 
 /// The existing pending-recovery observation is read-only. Preserve an
@@ -176,41 +186,10 @@ where
     }
 }
 
-/// A disposable cold-probe workspace can be retired only after an
-/// independently positive managed-browser observation. In particular,
-/// cleanup is NEVER attempted on unknown/failed probe outcomes even when
-/// the generic operator cleanup flag happens to be clear. Caller-owned
-/// native-writer, immutable path and lease checks remain mandatory in retire.
-#[cfg(any(windows, test))]
-fn retire_historical_probe_only_after_proof<T>(
-    proof: Result<T, ShippingCompositionError>,
-    retire: impl FnOnce(&T) -> Result<(), ShippingCompositionError>,
-) -> Result<T, ShippingCompositionError> {
-    let observation = proof?;
-    retire(&observation)?;
-    Ok(observation)
-}
-
 pub fn run_claim(claim: &ClaimUri) -> Result<(), ShippingCompositionError> {
     #[cfg(windows)]
     {
         return windows::run(claim);
-    }
-    #[cfg(not(windows))]
-    {
-        let _ = claim;
-        Err(ShippingCompositionError::UnsupportedPlatform)
-    }
-}
-
-/// One-shot read-only cloud recovery probe using the existing Windows
-/// device/Coordinator/managed browser owners. An observed browser identity
-/// is NOT a durable WORKING/LKG certificate or R2 prune grant; the normal
-/// user Open/Close path is never changed by this maintenance operation.
-pub fn run_historical_candidate_probe(claim: &ClaimUri) -> Result<(), ShippingCompositionError> {
-    #[cfg(windows)]
-    {
-        return windows::run_historical_candidate_probe(claim);
     }
     #[cfg(not(windows))]
     {
@@ -250,9 +229,9 @@ pub fn run_delivery_command(
 #[cfg(windows)]
 mod windows {
     use super::{
-        ConfirmedSaveTrigger, ShippingCompositionError, ShippingDeliveryCommand,
-        confirmed_save_trigger, open_with_one_fresh_claim, pending_recovery_failure_disposition,
-        recovery_next_safe_step, retire_historical_probe_only_after_proof,
+        CloseObservationDisposition, ShippingCompositionError, ShippingDeliveryCommand,
+        close_observation_disposition, open_with_one_fresh_claim,
+        pending_recovery_failure_disposition, recovery_next_safe_step,
         retryable_reconnect_observation,
     };
     use crate::camouhost_process::{
@@ -305,7 +284,6 @@ mod windows {
     // Exactly one protected staging slot. A crashed/uncertain cold probe
     // leaves this slot occupied rather than silently deleting a potentially
     // still-running Firefox workspace or accumulating unlimited full clones.
-    const HISTORICAL_PROBE_SLOT: &str = ".profile-bridge-cold-candidate";
     const CONTROLLED_CLOSE_POLL_MS: u64 = 250;
     const HEARTBEAT_TRANSPORT_RETRY_MS: u64 = 1_000;
     const SAVE_RECONNECT_PAUSE_MS: u64 = 1_000;
@@ -440,9 +418,12 @@ mod windows {
             return Ok(());
         }
         let config = ShippingConfig::from_installation()?;
-        let active = ActiveWindowsDeliveryRuntime::resolve_current().map_err(|error| {
+        // First Open of a DRAFT profile is an ordinary browser Open too.
+        // Reuse the verified signed installation and check its critical launch
+        // files; full 2.8 GiB runtime verification belongs to setup/repair.
+        let active = ActiveWindowsDeliveryRuntime::resolve_for_browser_open().map_err(|error| {
             eprintln!("BRIDGE_DELIVERY_RUNTIME_FAILURE={error:?}");
-            ShippingCompositionError::DeliveryRecoveryRequired
+            ShippingCompositionError::DeliveryRuntime(error)
         })?;
         let pending_health = active.pending_health_confirmation();
         let runtime_root = active.runtime_root().to_path_buf();
@@ -531,146 +512,6 @@ mod windows {
         })
     }
 
-    /// Maintenance-only, one real managed Camoufox in a fixed isolated slot.
-    /// The normal Open is never delayed or contingent on R2 availability.
-    /// A missing proof, stale lease, native writer, old key or probe-slot
-    /// collision fails closed without touching the authoritative CURRENT.
-    pub fn run_historical_candidate_probe(
-        claim: &ClaimUri,
-    ) -> Result<(), ShippingCompositionError> {
-        if recover_delivery_before_claim()? {
-            return Err(ShippingCompositionError::DeliveryRecoveryRequired);
-        }
-        let config = ShippingConfig::from_installation()?;
-        let delivery = ActiveWindowsDeliveryRuntime::resolve_current()
-            .map_err(|_| ShippingCompositionError::DeliveryRecoveryRequired)?;
-        if delivery.pending_health_confirmation().is_some() {
-            // Installing a new runtime is not a safe historical compatibility
-            // witness until its own delivery-health owner has confirmed it.
-            return Err(ShippingCompositionError::DeliveryRecoveryRequired);
-        }
-        let runtime_root = delivery.runtime_root().to_path_buf();
-        let bundles = delivery.into_bundle_selection();
-        let binding =
-            WindowsDeviceApplicationBinding::open(&config.device_application_binding_path)
-                .map_err(|_| ShippingCompositionError::Configuration)?;
-        let identity = WindowsDeviceIdentity::new(binding.device_id().clone());
-        let application =
-            WindowsDeviceApplication::from_system(config.control_plane_origin, binding)
-                .map_err(|_| ShippingCompositionError::Configuration)?;
-        let transport = application.transport();
-        let downloader = WindowsSignedGenerationObjectGet::from_system()
-            .map_err(|_| ShippingCompositionError::Configuration)?;
-        let mut downloader = VerifiedGenerationObjectStreamDownloader::new(downloader);
-        let primary = MaterializationRoot::open_or_create(&config.materialization_root)
-            .map_err(|_| ShippingCompositionError::Configuration)?;
-        let parent = primary
-            .path()
-            .parent()
-            .ok_or(ShippingCompositionError::Configuration)?;
-        let slot_path = parent.join(HISTORICAL_PROBE_SLOT);
-        let slot = RuntimeBindingSlot::new();
-        let preflight = ShippingBrowserLaunchPreflight::new(slot.clone());
-        let config = ManagedCamouhostConfig::new(
-            runtime_root.join(PACKAGED_PYTHON_EXECUTABLE),
-            runtime_root,
-            RuntimeDisplayMode::Headful,
-            None,
-            None,
-        )
-        .map_err(|_| ShippingCompositionError::Configuration)?;
-        let (process, camouhost) = ManagedCamouhostProcess::pair(config, slot);
-        let mut witness = camouhost.cold_probe_observer();
-        let mut operator = ProfileBridgeOperator::new(
-            identity,
-            application.clone(),
-            application,
-            ControlPlaneEnrollment::new(transport.clone()),
-            ControlPlaneCoordinator::new(transport),
-            bundles,
-            preflight,
-            process,
-            camouhost,
-        );
-        // Create the one protected slot only AFTER all fallible installed
-        // runtime/device/bootstrap construction. This avoids leaving a
-        // permanent blocker when configuration is rejected before any probe.
-        // Never remove/reuse unknown bytes after a prior crash.
-        fs::create_dir(&slot_path).map_err(|_| ShippingCompositionError::Configuration)?;
-        let isolated = match MaterializationRoot::open_or_create(&slot_path) {
-            Ok(root) => root,
-            Err(_) => {
-                // Only remove our still-empty directory; do not recursively
-                // delete an unverified profile or follow an injected link.
-                let _ = fs::remove_dir(&slot_path);
-                return Err(ShippingCompositionError::Configuration);
-            }
-        };
-        let result = operator.probe_and_certify_verified_predecessor_once(
-            claim,
-            &primary,
-            &isolated,
-            &mut downloader,
-            now()?,
-            &mut || witness.observe_live().map_err(|_| ()),
-        );
-        retire_historical_probe_only_after_proof(
-            result.map_err(ShippingCompositionError::Operator),
-            |observation| {
-                // Called ONLY after a proved clean historical Camoufox run. Any
-                // uncertain/failing probe leaves all bytes and writer evidence in
-                // this slot even when the operator cleanup flag is false.
-                if operator.cleanup_blocked() {
-                    return Err(ShippingCompositionError::CommittedRecoveryRequired);
-                }
-                let restored = isolated
-                    .open_generation(
-                        observation.tenant_id(),
-                        observation.profile_id(),
-                        observation.predecessor_generation_id(),
-                    )
-                    .map_err(|_| ShippingCompositionError::CommittedRecoveryRequired)?;
-                // The closed historical browser must leave no live native writer.
-                // Unknown/unreadable locks are never a deletion authorization.
-                if !matches!(
-                    crate::browser_execution::browser_writer_locks_absent(&restored),
-                    Ok(true)
-                ) {
-                    return Err(ShippingCompositionError::CommittedRecoveryRequired);
-                }
-                // The probe slot was atomically created by THIS invocation. Before
-                // deleting even that disposable restore, reject a substituted Windows
-                // junction/reparse point or a changed canonical destination. Never
-                // traverse a foreign link into the real user-data directory.
-                const REPARSE_POINT: u32 = 0x0400;
-                let slot_metadata = fs::symlink_metadata(&slot_path)
-                    .map_err(|_| ShippingCompositionError::Configuration)?;
-                // On Windows, canonicalize may add the extended-length prefix
-                // (\\\\?\\) to an ordinary absolute path. Compare two canonical
-                // paths, not a canonical path against the user's original spelling.
-                // A substituted junction to another directory still cannot match
-                // the exact canonical child of the original parent.
-                let physical_parent = fs::canonicalize(parent)
-                    .map_err(|_| ShippingCompositionError::Configuration)?;
-                let physical_slot = fs::canonicalize(&slot_path)
-                    .map_err(|_| ShippingCompositionError::Configuration)?;
-                if !slot_metadata.is_dir()
-                    || slot_metadata.file_attributes() & REPARSE_POINT != 0
-                    || physical_slot != physical_parent.join(HISTORICAL_PROBE_SLOT)
-                {
-                    return Err(ShippingCompositionError::Configuration);
-                }
-                fs::remove_dir_all(&slot_path)
-                    .map_err(|_| ShippingCompositionError::Configuration)?;
-                Ok(())
-            },
-        )?;
-        eprintln!(
-            "HISTORICAL_COLD_PROBE=VERIFIED_RESTORE;WORKING_LKG_CERTIFICATE=1;R2_PRUNE_AUTHORITY=PROVED_NATIVE_CONTENT"
-        );
-        Ok(())
-    }
-
     pub fn run(claim: &ClaimUri) -> Result<(), ShippingCompositionError> {
         #[cfg(windows)]
         let preparation_started = std::time::Instant::now();
@@ -693,7 +534,7 @@ mod windows {
         let active_delivery =
             ActiveWindowsDeliveryRuntime::resolve_for_browser_open().map_err(|error| {
                 eprintln!("BRIDGE_DELIVERY_RUNTIME_FAILURE={error:?}");
-                ShippingCompositionError::DeliveryRecoveryRequired
+                ShippingCompositionError::DeliveryRuntime(error)
             })?;
         let (release_sequence, runtime_id) = active_delivery.observed_release_identity();
         report::record_runtime_identity(release_sequence, runtime_id);
@@ -1024,12 +865,18 @@ mod windows {
                 .active_session_id()
                 .cloned()
                 .ok_or(ShippingCompositionError::ActiveSessionMissing)?;
-            let save_trigger = confirmed_save_trigger(
-                close_observer
-                    .observe_controlled_close(&session_id)
-                    .map_err(ShippingCompositionError::CloseObservation),
-            )?;
-            if save_trigger == ConfirmedSaveTrigger::BeginConfirmedSave {
+            let close_disposition =
+                close_observation_disposition(close_observer.observe_controlled_close(&session_id))
+                    .map_err(ShippingCompositionError::CloseObservation)?;
+            if close_disposition == CloseObservationDisposition::RecoverUncleanExit {
+                operator
+                    .abort(now()?)
+                    .map_err(ShippingCompositionError::Operator)?;
+                return Err(ShippingCompositionError::CloseObservation(
+                    bridge_domain::BridgePortError::UncleanBrowserExit,
+                ));
+            }
+            if close_disposition == CloseObservationDisposition::BeginConfirmedSave {
                 operator
                     .close_with_durable_local_intent(&materialization_root, now()?)
                     .map_err(ShippingCompositionError::Operator)?;
@@ -1639,63 +1486,15 @@ mod windows {
 #[cfg(test)]
 mod tests {
     use super::{
-        ConfirmedSaveTrigger, ShippingCompositionError, confirmed_save_trigger,
+        CloseObservationDisposition, ShippingCompositionError, close_observation_disposition,
         open_with_one_fresh_claim, pending_recovery_failure_disposition, recovery_next_safe_step,
-        retire_historical_probe_only_after_proof, retryable_reconnect_observation,
+        retryable_reconnect_observation,
     };
     #[cfg(not(windows))]
     use super::{ShippingDeliveryCommand, run_claim, run_delivery_command};
     use crate::operator_flow::OperatorFlowError;
     use bridge_domain::ClaimUri;
     use std::cell::Cell;
-
-    #[test]
-    fn failed_or_unknown_historical_probe_never_deletes_its_recovery_slot()
-    -> Result<(), Box<dyn std::error::Error>> {
-        use std::sync::atomic::{AtomicU64, Ordering};
-        static SEQUENCE: AtomicU64 = AtomicU64::new(1);
-        let slot = std::env::temp_dir().join(format!(
-            "historical-probe-retention-{}-{}",
-            std::process::id(),
-            SEQUENCE.fetch_add(1, Ordering::Relaxed)
-        ));
-        std::fs::create_dir(&slot)?;
-        let native_evidence = slot.join("retained-user-data-marker");
-        std::fs::write(&native_evidence, b"dirty-firefox-evidence")?;
-        let calls = Cell::new(0);
-        for failed in [
-            ShippingCompositionError::CommittedRecoveryRequired,
-            ShippingCompositionError::ControlPlane,
-            ShippingCompositionError::Configuration,
-        ] {
-            let result = retire_historical_probe_only_after_proof::<()>(Err(failed), |_| {
-                calls.set(calls.get() + 1);
-                std::fs::remove_dir_all(&slot).map_err(|_| ShippingCompositionError::Configuration)
-            });
-            assert_eq!(result, Err(failed));
-            assert_eq!(calls.get(), 0);
-            assert_eq!(std::fs::read(&native_evidence)?, b"dirty-firefox-evidence");
-        }
-        // A positive probe alone is not deletion authority: the retire
-        // closure must additionally prove writer, lease and exact path.
-        let denied = retire_historical_probe_only_after_proof(Ok(()), |_| {
-            calls.set(calls.get() + 1);
-            Err(ShippingCompositionError::CommittedRecoveryRequired)
-        });
-        assert_eq!(
-            denied,
-            Err(ShippingCompositionError::CommittedRecoveryRequired)
-        );
-        assert_eq!(std::fs::read(&native_evidence)?, b"dirty-firefox-evidence");
-        assert_eq!(calls.get(), 1);
-        retire_historical_probe_only_after_proof(Ok(()), |_| {
-            calls.set(calls.get() + 1);
-            std::fs::remove_dir_all(&slot).map_err(|_| ShippingCompositionError::Configuration)
-        })?;
-        assert_eq!(calls.get(), 2);
-        assert!(!slot.exists());
-        Ok(())
-    }
 
     #[test]
     fn committed_newer_generation_reopens_once_with_independent_claim()
@@ -1925,22 +1724,22 @@ mod tests {
     }
 
     #[test]
-    fn confirmed_save_requires_positive_controlled_close_witness() {
+    fn only_verified_clean_shutdown_starts_save_and_unclean_exit_recovers() {
         assert_eq!(
-            confirmed_save_trigger::<ShippingCompositionError>(Ok(false)),
-            Ok(ConfirmedSaveTrigger::ContinueRuntime)
+            close_observation_disposition(Ok(false)),
+            Ok(CloseObservationDisposition::ContinueRuntime)
         );
         assert_eq!(
-            confirmed_save_trigger::<ShippingCompositionError>(Ok(true)),
-            Ok(ConfirmedSaveTrigger::BeginConfirmedSave)
+            close_observation_disposition(Ok(true)),
+            Ok(CloseObservationDisposition::BeginConfirmedSave)
         );
         assert_eq!(
-            confirmed_save_trigger(Err(ShippingCompositionError::CloseObservation(
-                bridge_domain::BridgePortError::Unavailable,
-            ))),
-            Err(ShippingCompositionError::CloseObservation(
-                bridge_domain::BridgePortError::Unavailable,
-            ))
+            close_observation_disposition(Err(bridge_domain::BridgePortError::UncleanBrowserExit)),
+            Ok(CloseObservationDisposition::RecoverUncleanExit)
+        );
+        assert_eq!(
+            close_observation_disposition(Err(bridge_domain::BridgePortError::Unavailable)),
+            Err(bridge_domain::BridgePortError::Unavailable)
         );
     }
 

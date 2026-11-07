@@ -353,9 +353,6 @@ impl UserDiagnostic {
                     crate::generation_initialization::InitialProfileError::Upload => {
                         "BRIDGE_FIRST_SAVE_UPLOAD_FAILED"
                     }
-                    crate::generation_initialization::InitialProfileError::Verification => {
-                        "BRIDGE_FIRST_SAVE_VERIFICATION_FAILED"
-                    }
                     crate::generation_initialization::InitialProfileError::Commit => {
                         "BRIDGE_FIRST_SAVE_COMMIT_UNCONFIRMED"
                     }
@@ -392,6 +389,20 @@ impl UserDiagnostic {
                 }
                 ShippingCompositionError::DeliveryRecoveryRequired => {
                     "BRIDGE_UPDATE_RECOVERY_REQUIRED"
+                }
+                #[cfg(windows)]
+                ShippingCompositionError::DeliveryRuntime(error) => {
+                    use crate::windows_delivery_runtime::WindowsDeliveryRuntimeError as Runtime;
+                    match error {
+                        Runtime::InvalidInstalledLayout => "BRIDGE_INSTALLED_LAYOUT_INVALID",
+                        Runtime::PersistedState => "BRIDGE_INSTALLED_STATE_INVALID",
+                        Runtime::HandoffNotArrived => "BRIDGE_UPDATE_HANDOFF_NOT_ARRIVED",
+                        Runtime::InterruptedHealthAttempt => "BRIDGE_UPDATE_HEALTH_INTERRUPTED",
+                        Runtime::NoActiveDelivery => "BRIDGE_INSTALLED_RELEASE_MISSING",
+                        Runtime::StagedDelivery => "BRIDGE_INSTALLED_STAGE_INVALID",
+                        Runtime::ActiveExecutableMismatch => "BRIDGE_INSTALLED_EXE_MISMATCH",
+                        Runtime::RuntimeIdentity => "BRIDGE_INSTALLED_RUNTIME_IDENTITY_INVALID",
+                    }
                 }
                 ShippingCompositionError::Operator(error) => operator_code(error),
                 ShippingCompositionError::ActiveSessionMissing => "BRIDGE_ACTIVE_SESSION_MISSING",
@@ -480,6 +491,22 @@ impl UserDiagnostic {
             Self::Launch(Launch::DeliveryHandoff | Launch::DeliveryRecoveryRequired) => {
                 "The installed browser update has not completed its readiness check. Update Profile Bridge from Install for Windows in the application when a newer repair is available. Keep this computer connected and preserve local profile files; reconnecting will not repair the browser update."
             }
+            #[cfg(windows)]
+            Self::Launch(Launch::DeliveryRuntime(error)) => {
+                use crate::windows_delivery_runtime::WindowsDeliveryRuntimeError as Runtime;
+                match error {
+                    Runtime::InvalidInstalledLayout | Runtime::StagedDelivery
+                    | Runtime::ActiveExecutableMismatch | Runtime::RuntimeIdentity => {
+                        "Installed browser files do not match the approved active release. Review this diagnostic code and use the signed Install for Windows repair when available. Keep all profile files and device keys. Reconnecting will not repair these files."
+                    }
+                    Runtime::PersistedState | Runtime::NoActiveDelivery => {
+                        "Profile Bridge could not verify its installed release state. Keep all profile files and device keys; do not reset state manually. Review this diagnostic code and repair through the signed Install for Windows flow."
+                    }
+                    Runtime::HandoffNotArrived | Runtime::InterruptedHealthAttempt => {
+                        "The browser update has an incomplete handoff or health attempt. Keep all profile files and device keys. Review this diagnostic code and complete the signed repair through Install for Windows."
+                    }
+                }
+            }
             Self::Launch(Launch::FirstInstallation(_)) => {
                 "Profile Bridge installation could not be completed. Return to computer setup in the application and review the diagnostic code. Keep existing profile files until recovery is confirmed."
             }
@@ -515,11 +542,6 @@ impl UserDiagnostic {
                 crate::generation_initialization::InitialProfileError::Upload,
             )) => {
                 "The initial encrypted profile upload did not complete successfully. Preserve local Firefox data and check the current cloud generation before using authorized recovery. No successful Save is confirmed."
-            }
-            Self::Launch(Launch::Initialization(
-                crate::generation_initialization::InitialProfileError::Verification,
-            )) => {
-                "The initial uploaded profile could not be independently verified. Preserve local files and the pending encrypted generation; do not assume that its cloud Save succeeded or start a new generation."
             }
             Self::Launch(Launch::Initialization(
                 crate::generation_initialization::InitialProfileError::Commit,
@@ -1216,10 +1238,6 @@ mod tests {
             (Initial::Snapshot, "BRIDGE_FIRST_OPEN_SNAPSHOT_FAILED"),
             (Initial::Encryption, "BRIDGE_FIRST_OPEN_ENCRYPTION_FAILED"),
             (Initial::Upload, "BRIDGE_FIRST_SAVE_UPLOAD_FAILED"),
-            (
-                Initial::Verification,
-                "BRIDGE_FIRST_SAVE_VERIFICATION_FAILED",
-            ),
             (Initial::Commit, "BRIDGE_FIRST_SAVE_COMMIT_UNCONFIRMED"),
             (
                 Initial::SavedRecovery,
@@ -1510,6 +1528,46 @@ mod tests {
         assert!(diagnostic.message().contains("unsaved profile data"));
         assert!(diagnostic.message().contains("Do not delete lock files"));
         assert!(!diagnostic.message().contains("reset the profile"));
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn installed_runtime_refusals_have_distinct_codes_and_do_not_invent_pending_health() {
+        use crate::windows_delivery_runtime::WindowsDeliveryRuntimeError as Runtime;
+        let cases = [
+            (
+                Runtime::InvalidInstalledLayout,
+                "BRIDGE_INSTALLED_LAYOUT_INVALID",
+            ),
+            (Runtime::PersistedState, "BRIDGE_INSTALLED_STATE_INVALID"),
+            (
+                Runtime::HandoffNotArrived,
+                "BRIDGE_UPDATE_HANDOFF_NOT_ARRIVED",
+            ),
+            (
+                Runtime::InterruptedHealthAttempt,
+                "BRIDGE_UPDATE_HEALTH_INTERRUPTED",
+            ),
+            (
+                Runtime::NoActiveDelivery,
+                "BRIDGE_INSTALLED_RELEASE_MISSING",
+            ),
+            (Runtime::StagedDelivery, "BRIDGE_INSTALLED_STAGE_INVALID"),
+            (
+                Runtime::ActiveExecutableMismatch,
+                "BRIDGE_INSTALLED_EXE_MISMATCH",
+            ),
+            (
+                Runtime::RuntimeIdentity,
+                "BRIDGE_INSTALLED_RUNTIME_IDENTITY_INVALID",
+            ),
+        ];
+        for (reason, code) in cases {
+            let d = UserDiagnostic::Launch(ShippingCompositionError::DeliveryRuntime(reason));
+            assert_eq!(d.code(), code);
+            assert!(d.message().contains("profile files"));
+            assert!(!d.message().contains("reconnecting this computer"));
+        }
     }
 
     #[test]

@@ -19,7 +19,9 @@ use sha2::{Digest, Sha256};
 use std::env;
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::time::{Instant, SystemTime, UNIX_EPOCH};
+use std::process::Command;
+use std::thread;
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 const ENABLE_ENV: &str = "AR10_REAL_CAMOUFOX";
 const PYTHON_ENV: &str = "AR10_PYTHON";
@@ -209,6 +211,92 @@ fn sha256_hex(bytes: &[u8]) -> String {
     encoded
 }
 
+fn native_startup_checkpoint_seen(workspace: &Path, baseline: Option<SystemTime>) -> bool {
+    let path = workspace.join("user_data").join("sessionCheckpoints.json");
+    let Ok(metadata) = fs::symlink_metadata(&path) else {
+        return false;
+    };
+    if metadata.file_type().is_symlink() || !metadata.file_type().is_file() {
+        return false;
+    }
+    let Ok(modified) = metadata.modified() else {
+        return false;
+    };
+    if baseline.is_some_and(|before| modified <= before) {
+        return false;
+    }
+    let Ok(bytes) = fs::read(path) else {
+        return false;
+    };
+    let Ok(checkpoints) = serde_json::from_slice::<serde_json::Value>(&bytes) else {
+        return false;
+    };
+    checkpoints
+        .get("profile-after-change")
+        .and_then(serde_json::Value::as_bool)
+        == Some(true)
+        && checkpoints
+            .get("sessionstore-final-state-write-complete")
+            .and_then(serde_json::Value::as_bool)
+            != Some(true)
+}
+
+fn close_native_camoufox_window() -> Result<(), Box<dyn std::error::Error>> {
+    let script = r#"
+$ErrorActionPreference = 'Stop'
+$deadline = [DateTime]::UtcNow.AddSeconds(30)
+$browser = $null
+do {
+    $browserWindows = @(Get-Process -Name 'camoufox' -ErrorAction SilentlyContinue |
+        Where-Object { $_.MainWindowHandle -ne [IntPtr]::Zero })
+    if ($browserWindows.Count -gt 1) {
+        throw "expected one native Camoufox window, found $($browserWindows.Count)"
+    }
+    if ($browserWindows.Count -eq 1) {
+        $browser = $browserWindows[0]
+        break
+    }
+    Start-Sleep -Milliseconds 100
+} while ([DateTime]::UtcNow -lt $deadline)
+if ($null -eq $browser) {
+    throw 'native Camoufox window was not found'
+}
+Add-Type -TypeDefinition @'
+using System;
+using System.Runtime.InteropServices;
+public static class NativeCamoufoxWindow {
+    [DllImport("user32.dll", SetLastError = true)]
+    public static extern bool PostMessage(IntPtr hWnd, uint msg, IntPtr wParam, IntPtr lParam);
+}
+'@
+if (-not [NativeCamoufoxWindow]::PostMessage(
+    $browser.MainWindowHandle, 0x0010, [IntPtr]::Zero, [IntPtr]::Zero
+)) {
+    throw "WM_CLOSE failed: $([Runtime.InteropServices.Marshal]::GetLastWin32Error())"
+}
+Write-Output 'NATIVE_CAMOUFOX_WM_CLOSE=POSTED'
+"#;
+    let output = Command::new("powershell.exe")
+        .args([
+            "-NoProfile",
+            "-NonInteractive",
+            "-ExecutionPolicy",
+            "Bypass",
+            "-Command",
+            script,
+        ])
+        .output()?;
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    if !output.status.success() || !stdout.contains("NATIVE_CAMOUFOX_WM_CLOSE=POSTED") {
+        return Err(format!(
+            "native Camoufox WM_CLOSE failed: stdout={stdout:?}; stderr={stderr:?}"
+        )
+        .into());
+    }
+    Ok(())
+}
+
 #[cfg(not(windows))]
 fn digest_file(path: &Path) -> Result<(u64, String), Box<dyn std::error::Error>> {
     let metadata = fs::symlink_metadata(path)?;
@@ -350,8 +438,18 @@ impl profile_bridge::shipping_control_plane::MachineHttpPort for InitialControl 
                     serde_json::to_vec(&BridgeGenerationUploadCapabilityResponse::verified())
                 }
             }
-            Request::Commit { generation_id, expected_profile_version, container_digest, .. } => {
-                if !object.verified || sha256_hex(&object.container) != container_digest { return Err(error()); }
+            Request::Commit { generation_id, expected_profile_version, metadata_digest, container_digest, container_bytes } => {
+                // Match the real Worker: Commit independently verifies the
+                // exact R2 object before making the generation READY.
+                // No duplicate UploadCapability request is needed after PUT.
+                let inspected = encrypted_generation_domain::inspect_generation_metadata_prelude(&object.container).map_err(|_| error())?;
+                let actual_metadata = inspected.metadata_digest().bytes().iter().map(|b| format!("{b:02x}")).collect::<String>();
+                if actual_metadata != metadata_digest || sha256_hex(&object.container) != container_digest || u64::try_from(object.container.len()).ok() != Some(container_bytes) || inspected.metadata().base_generation_id().is_some() { return Err(error()); }
+                let generation = object.generation.as_ref().ok_or_else(error)?;
+                let dek = encrypted_generation_domain::GenerationDek::new(encrypted_generation_domain::KeyId::parse("profile-generation-root-v1-2").map_err(|_| error())?, [0xab; 32]);
+                let opened = encrypted_generation_domain::open_generation_expected(&object.container, &dek, &TenantId::parse("tenant_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa").map_err(|_| error())?, &ProfileId::parse("profile_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb").map_err(|_| error())?, generation).map_err(|_| error())?;
+                if !opened.plaintext().starts_with(b"BPGW0001") { return Err(error()); }
+                object.verified = true;
                 object.committed = true;
                 serde_json::to_vec(&InitialGenerationCommitted { generation_id, profile_version: expected_profile_version + 1, replayed: false,
                     launch: control_plane_contract::profile_launch_api::ProfileLaunchProjection { launch_uri: "profilebridge://claim/claim_01JAR10_INITIAL_CONFIRMED".to_owned(), expires_at_ms: 1000 } })
@@ -470,26 +568,65 @@ fn run_managed_cold_launch_cycle() -> Result<ApprovedRuntimeBundle, Box<dyn std:
 
     let config = ManagedCamouhostConfig::new(python, runtime_root, display_mode, None, None)?;
     let (mut process, camouhost) = ManagedCamouhostProcess::pair(config, slot);
-    let mut cold_observer = camouhost.cold_probe_observer();
-    assert!(cold_observer.observe_live().is_err());
+    // Normal user Open is a native Firefox process. Do not create a Playwright
+    // observer or inspect pages/DOM; the test closes only its disposable window.
+    let mut close_observer = camouhost.close_observer();
     let mut camouhost = StageTracingCamouhost::new(camouhost);
     let session = SessionId::parse("session_01JAR10REAL")?;
+    let checkpoint_path = workspace
+        .path()
+        .join("user_data")
+        .join("sessionCheckpoints.json");
+    let checkpoint_baseline = fs::metadata(&checkpoint_path)
+        .and_then(|metadata| metadata.modified())
+        .ok();
     let browser_launch_started = Instant::now();
     RuntimeSessionOrchestrator::launch(&bundle, &session, &mut process, &mut camouhost)?;
     eprintln!(
         "AR10_COLD_CYCLE_PHASE=native_launch;elapsed_ms={}",
         browser_launch_started.elapsed().as_millis()
     );
-    // The candidate witness must be independent of the already authenticated
-    // Launch/Ready exchange, with the SAME fingerprint and managed session.
-    cold_observer.observe_live()?;
+    let startup_deadline = Instant::now() + Duration::from_secs(30);
+    loop {
+        assert!(
+            !close_observer.observe_controlled_close(&session)?,
+            "native browser must remain open until the user closes its window"
+        );
+        if native_startup_checkpoint_seen(workspace.path(), checkpoint_baseline) {
+            assert!(
+                !close_observer.observe_controlled_close(&session)?,
+                "native browser must still hold its profile lock before WM_CLOSE"
+            );
+            break;
+        }
+        if Instant::now() >= startup_deadline {
+            return Err(
+                "native Firefox did not write its current-session startup checkpoint".into(),
+            );
+        }
+        thread::sleep(Duration::from_millis(100));
+    }
+
     let browser_close_started = Instant::now();
+    close_native_camoufox_window()?;
+    let close_deadline = Instant::now() + Duration::from_secs(30);
+    loop {
+        match close_observer.observe_controlled_close(&session) {
+            Ok(true) => break,
+            Ok(false) if Instant::now() < close_deadline => {
+                thread::sleep(Duration::from_millis(100));
+            }
+            Ok(false) => return Err("native Firefox did not produce a clean-close witness".into()),
+            Err(error) => {
+                return Err(format!("native Firefox clean-close proof failed: {error:?}").into());
+            }
+        }
+    }
     RuntimeSessionOrchestrator::close(&bundle, &session, &mut process, &mut camouhost)?;
     eprintln!(
         "AR10_COLD_CYCLE_PHASE=native_close;elapsed_ms={}",
         browser_close_started.elapsed().as_millis()
     );
-    assert!(cold_observer.observe_live().is_err());
 
     // The next cycle re-selects (and fully hashes) the exact runtime before
     // admission; one final post-run check below guards the last cycle. This
@@ -501,7 +638,7 @@ fn run_managed_cold_launch_cycle() -> Result<ApprovedRuntimeBundle, Box<dyn std:
 }
 
 #[test]
-fn bridge_preflight_launches_real_camoufox_through_managed_ipc()
+fn bridge_preflight_launches_real_camoufox_through_official_playwright_without_page_inspection()
 -> Result<(), Box<dyn std::error::Error>> {
     if env::var(ENABLE_ENV).as_deref() != Ok("1") {
         return Ok(());

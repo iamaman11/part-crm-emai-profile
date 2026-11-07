@@ -723,11 +723,19 @@ def prove_wm_close_exit_timing_requires_native_success() -> None:
                 self.exited = True
             return self.exited
 
+        def has_exited(self) -> bool:
+            # Mirror the real native witness API: unknown/nonzero exit
+            # remains a failure, never evidence of a clean browser close.
+            return self.exited
+
     def state(witness: NativeExit, *, closed: bool = True, crashed: bool = False) -> dict:
         return {
             "tracked_pages": {1},
             "closed_pages": {1} if closed else set(),
             "crashed": crashed,
+            "unresolved_crashes": {1} if crashed else set(),
+            "recovery_candidates": set(),
+            "page_objects": {},
             "browser_exit": witness,
         }
 

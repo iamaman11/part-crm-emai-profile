@@ -124,8 +124,15 @@ fn canonical_repository_topology_still_resolves() -> Result<(), Box<dyn std::err
     );
     assert!(runtime_lock.consumed_by("runtime_bundle.files"));
 
+    let native_process = topology.require("camouhost_native_process")?;
+    assert_eq!(
+        native_process.release_identity_source,
+        "runtime/camouhost/native_process.py"
+    );
+    assert!(native_process.consumed_by("runtime_bundle.files"));
+
     let resolved = topology.resolve(&root)?;
-    assert_eq!(resolved.len(), 19);
+    assert_eq!(resolved.len(), 20);
     assert!(
         resolved
             .iter()
@@ -133,6 +140,7 @@ fn canonical_repository_topology_still_resolves() -> Result<(), Box<dyn std::err
                 && input.sha256.len() == 64)
     );
     for input_id in [
+        "camouhost_native_process",
         "camouhost_runtime_materializer_policy",
         "camouhost_runtime_packager_policy",
     ] {

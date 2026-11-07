@@ -10,8 +10,7 @@ use profile_bridge::generation_initialization::{INITIAL_OPEN_URI_PREFIX, Initial
 use profile_bridge::installed_connection::ControlPlaneOrigin;
 use profile_bridge::shipping_composition::run_claim;
 use profile_bridge::shipping_composition::{
-    ShippingCompositionError, ShippingDeliveryCommand, VERIFY_HISTORICAL_CANDIDATE_ARGUMENT,
-    run_delivery_command, run_historical_candidate_probe,
+    ShippingCompositionError, ShippingDeliveryCommand, run_delivery_command,
 };
 use profile_bridge::user_diagnostics::UserDiagnostic;
 use profile_bridge::user_diagnostics::report::{self, Cause, Cloud, Outcome, Stage};
@@ -66,7 +65,6 @@ where
             Stage::InstallPrepare
         }
         BridgeCommand::InitialProfile(_) | BridgeCommand::Claim(_) => Stage::OpenRequested,
-        BridgeCommand::VerifyHistoricalCandidate(_) => Stage::LocalRecovery,
         BridgeCommand::PairingStart(_) | BridgeCommand::PairingComplete(_) => Stage::Pairing,
         BridgeCommand::DeliveryActivateStaged => Stage::InstallActivate,
         BridgeCommand::DeliveryInstallStaged(_) | BridgeCommand::DeliveryHandoffArrived => {
@@ -135,9 +133,6 @@ where
                 .map_err(BridgeCliError::LaunchFailed)
         }
         BridgeCommand::Claim(claim) => run_claim(&claim).map_err(BridgeCliError::LaunchFailed),
-        BridgeCommand::VerifyHistoricalCandidate(claim) => {
-            run_historical_candidate_probe(&claim).map_err(BridgeCliError::LaunchFailed)
-        }
         BridgeCommand::PairingStart(uri) => {
             run_pairing_start(&uri).map_err(BridgeCliError::PairingFailed)
         }
@@ -229,7 +224,6 @@ enum BridgeCommand {
     PrepareInstallation(PathBuf, PathBuf),
     ReadOnlyS1(PathBuf, PathBuf, Option<PathBuf>),
     Claim(ClaimUri),
-    VerifyHistoricalCandidate(ClaimUri),
     InitialProfile(InitialProfileOpen),
     PairingStart(DevicePairingStartUri),
     PairingComplete(DevicePairingCompleteUri),
@@ -289,15 +283,6 @@ where
             return Err(BridgeCliError::InvalidInstallationArgument);
         }
         return Ok(BridgeCommand::PrepareInstallation(bundle, root));
-    }
-    if argument.as_str() == VERIFY_HISTORICAL_CANDIDATE_ARGUMENT {
-        let claim = Zeroizing::new(arguments.next().ok_or(BridgeCliError::InvalidClaimUri)?);
-        if arguments.next().is_some() {
-            return Err(BridgeCliError::UnexpectedArgument);
-        }
-        return ClaimUri::parse(&claim)
-            .map(BridgeCommand::VerifyHistoricalCandidate)
-            .map_err(|_| BridgeCliError::InvalidClaimUri);
     }
     if argument.as_str() == FIRST_INSTALL_ARGUMENT {
         let origin = arguments
@@ -660,34 +645,15 @@ mod tests {
     }
 
     #[test]
-    fn historical_candidate_probe_requires_fresh_exact_claim_without_extra_arguments()
-    -> Result<(), Box<dyn std::error::Error>> {
-        let command = [
-            "profile-bridge".to_owned(),
-            super::VERIFY_HISTORICAL_CANDIDATE_ARGUMENT.to_owned(),
-            "profilebridge://claim/claim_01JBRIDGE_FEASIBILITY".to_owned(),
-        ];
-        assert!(matches!(
-            parse_command(command.clone())?,
-            BridgeCommand::VerifyHistoricalCandidate(_)
-        ));
-        for invalid in [
-            vec![command[0].clone(), command[1].clone()],
-            vec![
-                command[0].clone(),
-                command[1].clone(),
-                "not-a-claim".to_owned(),
-            ],
-            vec![
-                command[0].clone(),
-                command[1].clone(),
-                command[2].clone(),
-                "extra".to_owned(),
-            ],
-        ] {
-            assert!(parse_command(invalid).is_err());
-        }
-        Ok(())
+    fn obsolete_historical_probe_cli_is_not_a_supported_application_mode() {
+        assert!(
+            parse_command([
+                "profile-bridge".to_owned(),
+                "--verify-historical-candidate".to_owned(),
+                "profilebridge://claim/claim_01JBRIDGE_FEASIBILITY".to_owned(),
+            ])
+            .is_err()
+        );
     }
 
     #[test]

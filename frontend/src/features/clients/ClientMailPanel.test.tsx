@@ -52,6 +52,7 @@ describe('ClientMailPanel mailbox scoping', () => {
     mockedListMailboxes.mockResolvedValue({
       mailboxes: [
         { bindingId: 'binding_current', provider: 'GMAIL_API', status: 'ACTIVE', version: 1 },
+        { bindingId: 'binding_graph', provider: 'MICROSOFT_GRAPH', status: 'ACTIVE', version: 1 },
         { bindingId: 'binding_foreign', provider: 'IMAP', status: 'ACTIVE', version: 1 },
         { bindingId: 'binding_auth', provider: 'GMAIL_API', status: 'AUTH_REQUIRED', version: 1 },
         { bindingId: 'binding_browser', provider: 'BROWSER_FALLBACK', status: 'ACTIVE', version: 1 },
@@ -61,6 +62,14 @@ describe('ClientMailPanel mailbox scoping', () => {
     mockedAssociation.mockImplementation(async (_tenantId, bindingId) => {
       switch (bindingId) {
         case 'binding_current':
+          return {
+            bindingId,
+            canManage: true,
+            clientId: 'client_current',
+            mailboxExecutable: true,
+            relationshipVersion: 1,
+          };
+        case 'binding_graph':
           return {
             bindingId,
             canManage: true,
@@ -99,7 +108,11 @@ describe('ClientMailPanel mailbox scoping', () => {
       expect(within(searchMailbox).getByRole('option', { name: 'binding_current · GMAIL_API' })).toBeTruthy();
     });
     const options = within(searchMailbox).getAllByRole('option').map((option) => option.textContent);
-    expect(options).toEqual(['Select mailbox', 'binding_current · GMAIL_API']);
+    expect(options).toEqual([
+      'Select mailbox',
+      'binding_current · GMAIL_API',
+      'binding_graph · MICROSOFT_GRAPH',
+    ]);
     expect(screen.queryByText(/binding_foreign/u)).toBeNull();
     expect(mockedAssociation).not.toHaveBeenCalledWith('tenant_current', 'binding_browser');
 
@@ -109,7 +122,11 @@ describe('ClientMailPanel mailbox scoping', () => {
     await user.click(screen.getByRole('button', { name: 'Compose' }));
     const from = screen.getByLabelText('From');
     const fromOptions = within(from).getAllByRole('option').map((option) => option.textContent);
-    expect(fromOptions).toEqual(['Select eligible mailbox', 'binding_current · GMAIL_API']);
+    expect(fromOptions).toEqual([
+      'Select eligible mailbox',
+      'binding_current · GMAIL_API',
+      'binding_graph · MICROSOFT_GRAPH',
+    ]);
     expect(mockedListMailboxes).toHaveBeenCalledTimes(1);
   });
 

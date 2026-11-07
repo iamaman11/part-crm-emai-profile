@@ -102,6 +102,9 @@ def base_env(root: Path, report: dict[str, str]) -> dict[str, str]:
             "CAMOUHOST_EXPECTED_CONFIG_SHA256": report["fingerprint_config_sha256"],
             "CAMOUHOST_EXPECTED_PROBE_SHA256": report["profile_stable_probe_sha256"],
             "CAMOUHOST_HEADLESS_MODE": requested_headless_mode(),
+            # CI owns a disposable profile; never select user-native Open or
+            # launch a Playwright agent against an actual CRM user session.
+            "CAMOUHOST_EXECUTION_MODE": "isolated-cold-probe",
             "PYTHONUNBUFFERED": "1",
         }
     )

@@ -73,7 +73,6 @@ pub enum InitialProfileError {
     Snapshot,
     Encryption,
     Upload,
-    Verification,
     Commit,
     SavedRecovery,
 }
@@ -325,14 +324,11 @@ where
                 .put_exact(&capability, sealed.container())
                 .map_err(|_| InitialProfileError::Upload)?;
         }
-        let verification: BridgeGenerationUploadCapabilityResponse =
-            decode(post(transport, &path, &upload)?)?;
-        if decode_upload_authorization::<core::convert::Infallible>(verification)
-            .map_err(|_| InitialProfileError::Verification)?
-            != GenerationUploadAuthorization::Verified
-        {
-            return Err(InitialProfileError::Verification);
-        }
+        // The authoritative Commit handler verifies the exact encrypted R2
+        // descriptor again *before* persisting READY and issuing a claim.
+        // A second UploadCapability call would repeat the same read, add
+        // another network round trip and still not replace commit validation.
+        // No browser can start unless Commit succeeds with that exact object.
         let receipt: InitialGenerationCommitted = decode(post(
             transport,
             &path,
@@ -518,6 +514,7 @@ mod tests {
         struct CommittingTransport {
             committed_generation: Option<String>,
             commit_count: u64,
+            upload_capability_count: u64,
         }
         impl MachineHttpPort for CommittingTransport {
             type Error = ();
@@ -551,6 +548,7 @@ mod tests {
                         .map_err(|_| ())?
                     }
                     Request::UploadCapability { .. } => {
+                        self.upload_capability_count += 1;
                         serde_json::to_value(BridgeGenerationUploadCapabilityResponse::verified())
                             .map_err(|_| ())?
                     }
@@ -653,6 +651,10 @@ mod tests {
         );
         assert_eq!(result, Err(InitialProfileError::SavedRecovery));
         assert_eq!(transport.commit_count, 1);
+        assert_eq!(
+            transport.upload_capability_count, 1,
+            "Commit is the sole final R2 verification; no redundant capability retry"
+        );
         let generation = GenerationId::parse(
             transport
                 .committed_generation

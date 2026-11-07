@@ -2,7 +2,7 @@ use crate::browser_execution::{load_materialization_binding, persist_materializa
 use crate::generation_object_spool::VerifiedGenerationObjectFile;
 use crate::generation_reopen::{
     SignedGenerationObjectGetPort, SignedGenerationObjectGetResponse,
-    VerifiedGenerationObjectDownloader,
+    SignedGenerationObjectStreamGetPort, VerifiedGenerationObjectDownloader,
 };
 use crate::local_profile::{GenerationWorkspace, LocalGenerationState, MaterializationRoot};
 use crate::operator_flow::{
@@ -651,7 +651,8 @@ impl BackendState {
             request.coordinator_session_id(),
             request.coordinator_fencing_token(),
             request.coordinator_epoch(),
-        )?;
+        )
+        .inspect_err(|_| eprintln!("P3_REOPEN_FIXTURE_REJECT=stale_coordinator_witness"))?;
         let object = self
             .object
             .as_ref()
@@ -661,17 +662,23 @@ impl BackendState {
         let prelude = object
             .get(..inspected.prelude_bytes())
             .ok_or(BridgePortError::InvalidResponse)?;
-        if request.metadata_prelude_hex() != lower_hex(prelude)
-            || inspected.metadata().generation_id() != &self.active_generation
-            || inspected.metadata().object_key()
-                != canonical_generation_object_key(
-                    &TenantId::parse(TENANT.to_owned())
-                        .map_err(|_| BridgePortError::InvalidResponse)?,
-                    &ProfileId::parse(PROFILE.to_owned())
-                        .map_err(|_| BridgePortError::InvalidResponse)?,
-                    &self.active_generation,
-                )
-        {
+        let prelude_matches = request.metadata_prelude_hex() == lower_hex(prelude);
+        let generation_matches = inspected.metadata().generation_id() == &self.active_generation;
+        let object_key_matches = inspected.metadata().object_key()
+            == canonical_generation_object_key(
+                &TenantId::parse(TENANT.to_owned())
+                    .map_err(|_| BridgePortError::InvalidResponse)?,
+                &ProfileId::parse(PROFILE.to_owned())
+                    .map_err(|_| BridgePortError::InvalidResponse)?,
+                &self.active_generation,
+            );
+        if !prelude_matches || !generation_matches || !object_key_matches {
+            // Fixture-only, fixed-vocabulary evidence: never print the
+            // metadata prelude, profile data, DEK or encrypted object.
+            eprintln!(
+                "P3_REOPEN_FIXTURE_REJECT prelude={} generation={} object_key={}",
+                prelude_matches, generation_matches, object_key_matches
+            );
             return Err(BridgePortError::InvalidResponse);
         }
         self.events.push(format!(
@@ -682,9 +689,15 @@ impl BackendState {
         // object's metadata. Never substitute the currently active root.
         let opening_key = match inspected.metadata().key_id().as_str() {
             ROOT_KEY_ID if self.historical_root_available => [7_u8; 32],
-            ROOT_KEY_ID => return Err(BridgePortError::InvalidResponse),
+            ROOT_KEY_ID => {
+                eprintln!("P3_REOPEN_FIXTURE_REJECT=historical_root_unavailable");
+                return Err(BridgePortError::InvalidResponse);
+            }
             ROTATED_ROOT_KEY_ID => [9_u8; 32],
-            _ => return Err(BridgePortError::InvalidResponse),
+            _ => {
+                eprintln!("P3_REOPEN_FIXTURE_REJECT=unknown_root_key_version");
+                return Err(BridgePortError::InvalidResponse);
+            }
         };
         json_response(&BridgeGenerationOpeningMaterialResponse::new(
             inspected.metadata().key_id().as_str(),
@@ -839,6 +852,36 @@ impl SignedGenerationObjectGetPort for BackendGet {
             state.events.push(format!("get:{selected}"));
         }
         Ok(SignedGenerationObjectGetResponse::new(200, object))
+    }
+}
+
+// The production shipping cold-R2 owner streams authenticated ciphertext to
+// an unpublished spool. The old Vec-only fixture cannot reopen native Firefox
+// profiles that exceed its 64 MiB legacy cap, even when the encrypted object
+// is valid. Exercise the same bounded stream path here, with no extra memory
+// copy and no relaxation of the production signed capability check.
+impl SignedGenerationObjectStreamGetPort for BackendGet {
+    type Error = BridgePortError;
+
+    fn get_exact_stream(
+        &mut self,
+        signed_url: &str,
+        max_bytes: u64,
+        destination: &mut dyn std::io::Write,
+    ) -> Result<u16, Self::Error> {
+        if signed_url != SIGNED_DOWNLOAD_URL {
+            return Err(BridgePortError::InvalidResponse);
+        }
+        let state = self.state.borrow();
+        let object = state.object.as_ref().ok_or(BridgePortError::InvalidResponse)?;
+        if u64::try_from(object.len()).ok() != Some(max_bytes) {
+            return Err(BridgePortError::InvalidResponse);
+        }
+        destination.write_all(object).map_err(|_| BridgePortError::InvalidResponse)?;
+        let selected = state.active_generation.as_str().to_owned();
+        drop(state);
+        self.state.borrow_mut().events.push(format!("get:{selected}"));
+        Ok(200)
     }
 }
 

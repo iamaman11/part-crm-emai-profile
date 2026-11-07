@@ -10,7 +10,7 @@ use crate::browser_preflight::{BoundBrowserLaunchPreflight, BrowserRuntimeObserv
 use crate::local_profile::GenerationWorkspace;
 use crate::operator_flow::BrowserLaunchPreflightPort;
 use crate::runtime_bundle::ApprovedRuntimeBundle;
-use bridge_domain::{BridgePortError, CamouhostMessage, CamouhostPort};
+use bridge_domain::{BridgePortError, CamouhostErrorKind, CamouhostMessage, CamouhostPort};
 use browser_execution_domain::host_compatibility::{
     HostArchitecture, HostCompatibilityDecision, HostCompatibilityObservation,
     HostCompatibilityPolicy, HostExecutionMode, HostPlatformClass, HostRuntimeClass,
@@ -35,6 +35,8 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 const CONFIG_NAME: &str = "camoufox-config.json";
 const REAL_ENTRYPOINT: &str = "camouhost/real.py";
+#[cfg(windows)]
+const NATIVE_ENTRYPOINT: &str = "camouhost/native_process.py";
 const RUNTIME_LOCK_PATH: &str = "camouhost/runtime-lock.json";
 #[cfg(windows)]
 const WINDOWS_BROWSER_EXECUTABLE: &str = "browser/camoufox.exe";
@@ -61,7 +63,7 @@ const PROCESS_EXIT_TIMEOUT: Duration = Duration::from_secs(15);
 const FORCE_EXIT_TIMEOUT: Duration = Duration::from_secs(10);
 const PROCESS_POLL_INTERVAL: Duration = Duration::from_millis(25);
 const IDENTITY_COMPATIBILITY_VERSION: u32 = 2;
-const FINGERPRINT_SOURCE_PREFIX: &str = "profile-stability-v1-probe-";
+const FINGERPRINT_CONFIG_SOURCE_PREFIX: &str = "profile-stability-v2-fpgen-config-";
 const LOWER_HEX: &[u8; 16] = b"0123456789abcdef";
 
 #[derive(Clone)]
@@ -112,6 +114,8 @@ struct RuntimeLaunchBinding {
     profile_stable_probe_sha256: String,
     profile_stable_identity: Option<ProfileStableIdentity>,
     entrypoint_sha256: String,
+    #[cfg(windows)]
+    native_entrypoint_sha256: String,
     #[cfg(windows)]
     browser_sha256: String,
     #[cfg(windows)]
@@ -172,9 +176,10 @@ fn validate_runtime_identity(
         return Err(BrowserLaunchBlocker::MaterializationStale);
     }
 
+    // One canonical native fpgen identity; no legacy browser-probe branch.
     let probe_sha256 = browser_identity
         .fingerprint_source()
-        .strip_prefix(FINGERPRINT_SOURCE_PREFIX)
+        .strip_prefix(FINGERPRINT_CONFIG_SOURCE_PREFIX)
         .ok_or(BrowserLaunchBlocker::InvalidMaterializationEvidence)?;
     if !valid_sha256(probe_sha256) {
         return Err(BrowserLaunchBlocker::InvalidMaterializationEvidence);
@@ -192,6 +197,8 @@ fn validate_runtime_identity(
     }
     let entrypoint_sha256 = inventory_digest(runtime_bundle, REAL_ENTRYPOINT)?.to_owned();
     #[cfg(windows)]
+    let native_entrypoint_sha256 = inventory_digest(runtime_bundle, NATIVE_ENTRYPOINT)?.to_owned();
+    #[cfg(windows)]
     let browser_sha256 = inventory_digest(runtime_bundle, WINDOWS_BROWSER_EXECUTABLE)?.to_owned();
     #[cfg(windows)]
     let python_sha256 = inventory_digest(runtime_bundle, WINDOWS_PYTHON_EXECUTABLE)?.to_owned();
@@ -203,6 +210,8 @@ fn validate_runtime_identity(
         profile_stable_probe_sha256: probe_sha256.to_owned(),
         profile_stable_identity: browser_identity.profile_stable_identity().cloned(),
         entrypoint_sha256,
+        #[cfg(windows)]
+        native_entrypoint_sha256,
         #[cfg(windows)]
         browser_sha256,
         #[cfg(windows)]
@@ -257,11 +266,21 @@ pub enum RuntimeDisplayMode {
     VirtualHeadful,
 }
 
+/// Normal Open uses the official Camoufox SDK/Playwright persistent context
+/// without page inspection. The isolated historical probe has separate
+/// page-visible admission and is never a live user profile.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum RuntimeExecutionOwner {
+    NativeUser,
+    IsolatedBrowserStateTest,
+}
+
 #[derive(Clone)]
 pub struct ManagedCamouhostConfig {
     python_executable: PathBuf,
     runtime_root: PathBuf,
     display_mode: RuntimeDisplayMode,
+    execution_owner: RuntimeExecutionOwner,
     initial_url: Option<String>,
     proxy_config_path: Option<PathBuf>,
 }
@@ -301,9 +320,19 @@ impl ManagedCamouhostConfig {
             python_executable,
             runtime_root,
             display_mode,
+            execution_owner: RuntimeExecutionOwner::NativeUser,
             initial_url,
             proxy_config_path,
         })
+    }
+
+    /// Page-inspecting Playwright admission is restricted to an isolated,
+    /// separately materialized historical generation, never a live user one.
+    /// The caller still must supply the original one-time coordinator claim.
+    #[must_use]
+    pub fn for_isolated_browser_state_test(mut self) -> Self {
+        self.execution_owner = RuntimeExecutionOwner::IsolatedBrowserStateTest;
+        self
     }
 }
 
@@ -350,6 +379,8 @@ pub struct ManagedCamouhostProcess {
 pub struct ManagedCamouhostIpc {
     shared: Arc<Mutex<ProcessState>>,
     display_mode: RuntimeDisplayMode,
+    #[cfg(windows)]
+    execution_owner: RuntimeExecutionOwner,
 }
 
 #[derive(Clone)]
@@ -409,6 +440,22 @@ impl ManagedCamouhostColdProbeObserver {
     }
 }
 
+fn native_close_observation_result(
+    response: CamouhostMessage,
+    session_id: &SessionId,
+) -> Result<bool, BridgePortError> {
+    match response {
+        CamouhostMessage::CloseObserved {
+            session_id: observed,
+            controlled,
+        } if observed == *session_id => Ok(controlled),
+        CamouhostMessage::Error {
+            kind: CamouhostErrorKind::Runtime,
+        } => Err(BridgePortError::UncleanBrowserExit),
+        _ => Err(BridgePortError::InvalidResponse),
+    }
+}
+
 impl ManagedCamouhostCloseObserver {
     pub fn observe_controlled_close(
         &mut self,
@@ -420,13 +467,7 @@ impl ManagedCamouhostCloseObserver {
                 session_id: session_id.clone(),
             },
         )?;
-        match response {
-            CamouhostMessage::CloseObserved {
-                session_id: observed,
-                controlled,
-            } if observed == *session_id => Ok(controlled),
-            _ => Err(BridgePortError::InvalidResponse),
-        }
+        native_close_observation_result(response, session_id)
     }
 }
 
@@ -438,6 +479,8 @@ impl ManagedCamouhostProcess {
     ) -> (Self, ManagedCamouhostIpc) {
         let shared = Arc::new(Mutex::new(ProcessState::new()));
         let display_mode = config.display_mode;
+        #[cfg(windows)]
+        let execution_owner = config.execution_owner;
         (
             Self {
                 shared: Arc::clone(&shared),
@@ -447,6 +490,8 @@ impl ManagedCamouhostProcess {
             ManagedCamouhostIpc {
                 shared,
                 display_mode,
+                #[cfg(windows)]
+                execution_owner,
             },
         )
     }
@@ -461,6 +506,11 @@ impl ManagedCamouhostProcess {
         let runtime_lock = self.config.runtime_root.join(RUNTIME_LOCK_PATH);
         verify_file_digest(&entrypoint, &binding.entrypoint_sha256)?;
         verify_file_digest(&runtime_lock, &binding.runtime_lock_sha256)?;
+        #[cfg(windows)]
+        verify_file_digest(
+            &self.config.runtime_root.join(NATIVE_ENTRYPOINT),
+            &binding.native_entrypoint_sha256,
+        )?;
         #[cfg(windows)]
         {
             let browser = self.config.runtime_root.join(WINDOWS_BROWSER_EXECUTABLE);
@@ -508,6 +558,22 @@ impl ManagedCamouhostProcess {
             command.env("CAMOUHOST_PROXY_CONFIG_PATH", path);
         }
         inherit_runtime_environment(&mut command);
+        // On Windows the shipping adapter launches the official Camoufox SDK
+        // through a Playwright persistent context after signed bundle/config/
+        // lease preflight. It does not inspect or command user pages.
+        #[cfg(windows)]
+        command.env(
+            "CAMOUHOST_EXECUTION_MODE",
+            match self.config.execution_owner {
+                RuntimeExecutionOwner::NativeUser => "user-native",
+                RuntimeExecutionOwner::IsolatedBrowserStateTest => "isolated-cold-probe",
+            },
+        );
+        // The Linux developer-only managed fixture remains an isolated,
+        // page-inspecting Playwright probe, not a remote mailbox-agent executor.
+        // Windows user Open also uses the SDK, but never this probe IPC path.
+        #[cfg(not(windows))]
+        command.env("CAMOUHOST_EXECUTION_MODE", "isolated-cold-probe");
         // A release browser never receives an arbitrary local Python executor.
         // Test/debug builds retain the same existing Camouhost-owned fixture
         // capability; production still has read-only, bounded crash diagnostics.
@@ -535,7 +601,12 @@ impl ProcessControlPort for ManagedCamouhostProcess {
         // The existing directory also stores raw redacted-at-UI native traces.
         // Never grant executable diagnostic scripts in an ordinary release.
         let diagnostic_directory = local_agent_directory()?;
-        let test_agent_enabled = cfg!(any(test, feature = "synthetic-test-bin", debug_assertions));
+        // Windows user Open is never a Python-script execution host, even
+        // when a debug binary is used. C09 also never accepts script inboxes.
+        // The older Linux-only disposable agent fixture remains test-only.
+        let test_agent_enabled = !cfg!(windows)
+            && cfg!(any(test, feature = "synthetic-test-bin", debug_assertions))
+            && self.config.execution_owner != RuntimeExecutionOwner::IsolatedBrowserStateTest;
         let mut child = self.launch_child(
             session_id,
             &binding,
@@ -612,27 +683,84 @@ impl ProcessControlPort for ManagedCamouhostProcess {
         Ok(())
     }
 
+    fn preserve_live_browser_on_failure(&self) -> bool {
+        self.config.execution_owner == RuntimeExecutionOwner::NativeUser
+    }
+
     fn force_terminate(&mut self, session_id: &SessionId) -> Result<(), BridgePortError> {
         let mut state = self
             .shared
             .lock()
             .map_err(|_| BridgePortError::Unavailable)?;
+        if state.active_session.is_none() && state.child.is_none() {
+            return Ok(());
+        }
         if state.active_session.as_ref() != Some(session_id) {
             return Err(BridgePortError::InvalidResponse);
         }
+        if state.child.is_none() {
+            state.clear();
+            return Ok(());
+        }
+        // EOF tells the Python owner to keep the official Playwright context
+        // alive until Firefox releases the profile lock and writes its final
+        // checkpoint. Never kill a NativeUser sidecar: that could kill the
+        // user's browser along with the SDK driver.
         state.stdin = None;
-        let child = state
-            .child
-            .as_mut()
-            .ok_or(BridgePortError::InvalidResponse)?;
-        if child
-            .try_wait()
-            .map_err(|_| BridgePortError::Unavailable)?
-            .is_none()
+        let already_exited = {
+            let child = state
+                .child
+                .as_mut()
+                .ok_or(BridgePortError::InvalidResponse)?;
+            child
+                .try_wait()
+                .map_err(|_| BridgePortError::Unavailable)?
+                .is_some()
+        };
+        if already_exited {
+            state.clear();
+            return Ok(());
+        }
+
+        if self.config.execution_owner == RuntimeExecutionOwner::NativeUser {
+            {
+                let child = state
+                    .child
+                    .as_mut()
+                    .ok_or(BridgePortError::InvalidResponse)?;
+                let _ = wait_for_child_exit(child, std::time::Duration::from_millis(750));
+            }
+            let exited = {
+                let child = state
+                    .child
+                    .as_mut()
+                    .ok_or(BridgePortError::InvalidResponse)?;
+                child
+                    .try_wait()
+                    .map_err(|_| BridgePortError::Unavailable)?
+                    .is_some()
+            };
+            if exited {
+                state.clear();
+                return Ok(());
+            }
+            return Err(BridgePortError::Unavailable);
+        }
+
         {
+            let child = state
+                .child
+                .as_mut()
+                .ok_or(BridgePortError::InvalidResponse)?;
             child.kill().map_err(|_| BridgePortError::Unavailable)?;
         }
-        wait_for_child_exit(child, FORCE_EXIT_TIMEOUT)?;
+        {
+            let child = state
+                .child
+                .as_mut()
+                .ok_or(BridgePortError::InvalidResponse)?;
+            wait_for_child_exit(child, FORCE_EXIT_TIMEOUT)?;
+        }
         state.clear();
         Ok(())
     }
@@ -645,6 +773,25 @@ impl CamouhostPort for ManagedCamouhostIpc {
     ) -> Result<CamouhostMessage, BridgePortError> {
         match message {
             CamouhostMessage::Launch { session_id } => {
+                #[cfg(windows)]
+                if self.execution_owner == RuntimeExecutionOwner::NativeUser {
+                    // User Open uses the SDK-owned persistent context, but is
+                    // never attached to page-inspecting automation and cannot
+                    // be turned into an automation job.
+                    let state = self
+                        .shared
+                        .lock()
+                        .map_err(|_| BridgePortError::Unavailable)?;
+                    if state.active_session.as_ref() != Some(session_id)
+                        || state.navigation_target.is_some()
+                    {
+                        return Err(BridgePortError::InvalidResponse);
+                    }
+                    drop(state);
+                    return exchange_shared(&self.shared, message);
+                }
+                // A one-time C09 probe is a distinct, isolated automation-owned
+                // browser context. Only that context may use SDK/Playwright.
                 launch_with_browser_visible_admission(&self.shared, self.display_mode, session_id)
             }
             _ => exchange_shared(&self.shared, message),
@@ -842,6 +989,16 @@ fn exchange_shared(
     parsed
         .validate_version()
         .map_err(|_| BridgePortError::InvalidResponse)?;
+    if matches!(message, CamouhostMessage::ObserveClose { .. })
+        && matches!(
+            &parsed,
+            CamouhostMessage::Error {
+                kind: CamouhostErrorKind::Runtime,
+            }
+        )
+    {
+        return Ok(parsed);
+    }
     if matches!(parsed, CamouhostMessage::Error { .. }) {
         return Err(BridgePortError::InvalidResponse);
     }
@@ -1093,7 +1250,12 @@ fn allowlisted_camouhost_diagnostic(line: &[u8]) -> Option<&str> {
                 || (phase == "launch"
                     && matches!(
                         step,
-                        "before_browser_enter" | "browser_entered" | "network_blocked" | "ready"
+                        "before_browser_enter"
+                            | "options_ready"
+                            | "sdk_enter"
+                            | "browser_entered"
+                            | "network_blocked"
+                            | "ready"
                     ))
         });
     let allowed_pages = message
@@ -1430,8 +1592,9 @@ fn inherit_runtime_environment(command: &mut Command) {
 #[cfg(test)]
 mod tests {
     use super::{
-        FINGERPRINT_SOURCE_PREFIX, RuntimeBindingBrowserLaunchPreflight, RuntimeBindingSlot,
-        allowlisted_camouhost_diagnostic, decode_hex, hex_encode, receive_response, sha256_hex,
+        FINGERPRINT_CONFIG_SOURCE_PREFIX, RuntimeBindingBrowserLaunchPreflight, RuntimeBindingSlot,
+        allowlisted_camouhost_diagnostic, decode_hex, hex_encode, native_close_observation_result,
+        receive_response, sha256_hex,
     };
     use crate::browser_execution::persist_materialization_binding;
     use crate::browser_preflight::{BrowserRuntimeObservation, BrowserRuntimeObservationPort};
@@ -1671,6 +1834,11 @@ mod tests {
         let entries = {
             let mut entries = entries;
             entries.push(InventoryEntry::new(
+                BundleRelativePath::parse(super::NATIVE_ENTRYPOINT)?,
+                10,
+                digest('8')?,
+            ));
+            entries.push(InventoryEntry::new(
                 BundleRelativePath::parse(super::WINDOWS_BROWSER_EXECUTABLE)?,
                 10,
                 digest('f')?,
@@ -1728,7 +1896,7 @@ mod tests {
         config_sha256: String,
         probe_sha256: &str,
     ) -> Result<MaterializationBinding, Box<dyn std::error::Error>> {
-        let fingerprint_source = format!("{FINGERPRINT_SOURCE_PREFIX}{probe_sha256}");
+        let fingerprint_source = format!("{FINGERPRINT_CONFIG_SOURCE_PREFIX}{probe_sha256}");
         let browser_identity = browser_identity_fixture(
             approved.manifest().runtime_version(),
             approved.manifest().inventory_sha256().as_str(),
@@ -1871,6 +2039,18 @@ mod tests {
             }
             .to_frame()?,
             "close_observed|session_01JAR10CLOSE|true"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn runtime_error_during_close_observation_is_typed_unclean_exit()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let session_id = SessionId::parse("session_01JAR10CLOSE")?;
+        let response = CamouhostMessage::parse("error|runtime")?;
+        assert_eq!(
+            native_close_observation_result(response, &session_id),
+            Err(BridgePortError::UncleanBrowserExit)
         );
         Ok(())
     }
