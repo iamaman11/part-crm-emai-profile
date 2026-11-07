@@ -10,7 +10,7 @@ use crate::browser_preflight::{BoundBrowserLaunchPreflight, BrowserRuntimeObserv
 use crate::local_profile::GenerationWorkspace;
 use crate::operator_flow::BrowserLaunchPreflightPort;
 use crate::runtime_bundle::ApprovedRuntimeBundle;
-use bridge_domain::{BridgePortError, CamouhostMessage, CamouhostPort};
+use bridge_domain::{BridgePortError, CamouhostErrorKind, CamouhostMessage, CamouhostPort};
 use browser_execution_domain::host_compatibility::{
     HostArchitecture, HostCompatibilityDecision, HostCompatibilityObservation,
     HostCompatibilityPolicy, HostExecutionMode, HostPlatformClass, HostRuntimeClass,
@@ -437,6 +437,22 @@ impl ManagedCamouhostColdProbeObserver {
     }
 }
 
+fn native_close_observation_result(
+    response: CamouhostMessage,
+    session_id: &SessionId,
+) -> Result<bool, BridgePortError> {
+    match response {
+        CamouhostMessage::CloseObserved {
+            session_id: observed,
+            controlled,
+        } if observed == *session_id => Ok(controlled),
+        CamouhostMessage::Error {
+            kind: CamouhostErrorKind::Runtime,
+        } => Err(BridgePortError::UncleanBrowserExit),
+        _ => Err(BridgePortError::InvalidResponse),
+    }
+}
+
 impl ManagedCamouhostCloseObserver {
     pub fn observe_controlled_close(
         &mut self,
@@ -448,13 +464,7 @@ impl ManagedCamouhostCloseObserver {
                 session_id: session_id.clone(),
             },
         )?;
-        match response {
-            CamouhostMessage::CloseObserved {
-                session_id: observed,
-                controlled,
-            } if observed == *session_id => Ok(controlled),
-            _ => Err(BridgePortError::InvalidResponse),
-        }
+        native_close_observation_result(response, session_id)
     }
 }
 
@@ -916,6 +926,16 @@ fn exchange_shared(
     parsed
         .validate_version()
         .map_err(|_| BridgePortError::InvalidResponse)?;
+    if matches!(message, CamouhostMessage::ObserveClose { .. })
+        && matches!(
+            &parsed,
+            CamouhostMessage::Error {
+                kind: CamouhostErrorKind::Runtime,
+            }
+        )
+    {
+        return Ok(parsed);
+    }
     if matches!(parsed, CamouhostMessage::Error { .. }) {
         return Err(BridgePortError::InvalidResponse);
     }
@@ -1950,6 +1970,18 @@ mod tests {
             }
             .to_frame()?,
             "close_observed|session_01JAR10CLOSE|true"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn runtime_error_during_close_observation_is_typed_unclean_exit()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let session_id = SessionId::parse("session_01JAR10CLOSE")?;
+        let response = CamouhostMessage::parse("error|runtime")?;
+        assert_eq!(
+            native_close_observation_result(response, &session_id),
+            Err(BridgePortError::UncleanBrowserExit)
         );
         Ok(())
     }
