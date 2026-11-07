@@ -1024,10 +1024,22 @@ mod tests {
         let (path, root, tenant, profile, generation) = fixture()?;
         let workspace = root.create_generation(&tenant, &profile, &generation)?;
         std::fs::write(workspace.path().join("camoufox-config.json"), b"{}\\n")?;
-        std::fs::write(workspace.path().join("user_data").join("cookies.sqlite"), vec![5_u8; 8192])?;
-        assert_eq!(workspace.metadata_total_bytes()?, workspace.inventory()?.total_bytes());
-        std::fs::write(workspace.path().join("user_data").join("cookies.sqlite"), vec![9_u8; 8192])?;
-        assert_eq!(workspace.metadata_total_bytes()?, workspace.inventory()?.total_bytes());
+        std::fs::write(
+            workspace.path().join("user_data").join("cookies.sqlite"),
+            vec![5_u8; 8192],
+        )?;
+        assert_eq!(
+            workspace.metadata_total_bytes()?,
+            workspace.inventory()?.total_bytes()
+        );
+        std::fs::write(
+            workspace.path().join("user_data").join("cookies.sqlite"),
+            vec![9_u8; 8192],
+        )?;
+        assert_eq!(
+            workspace.metadata_total_bytes()?,
+            workspace.inventory()?.total_bytes()
+        );
         let _ = crate::test_support::remove_test_root(&path);
         Ok(())
     }

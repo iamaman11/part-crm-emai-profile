@@ -1298,11 +1298,8 @@ where
                 &workspace,
             ));
         }
-        let mut local_record = LocalGenerationRecord::new(
-            enrollment.generation_id().clone(),
-            local_bytes,
-            now,
-        );
+        let mut local_record =
+            LocalGenerationRecord::new(enrollment.generation_id().clone(), local_bytes, now);
         if local_record.set_locked(true).is_err() || local_record.begin_use(now).is_err() {
             return Err(self.fail_with_lock_before_use(
                 OperatorFailureStage::LocalLifecycle,
