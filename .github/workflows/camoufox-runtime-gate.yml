@@ -12,7 +12,8 @@ permissions:
   pull-requests: read
 
 concurrency:
-  group: camoufox-runtime-gate-${{ github.workflow }}-${{ github.ref }}
+  # A stale queued proof for an earlier PR head must not block exact-head validation.
+  group: camoufox-runtime-gate-${{ github.workflow }}-${{ github.ref }}-${{ github.event.pull_request.head.sha || github.sha }}
   cancel-in-progress: true
 
 jobs:
