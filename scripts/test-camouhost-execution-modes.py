@@ -12,6 +12,7 @@ import io
 import os
 from pathlib import Path
 import sys
+import tempfile
 from unittest.mock import patch
 
 SOURCE = Path(__file__).resolve().parents[1] / "runtime" / "camouhost" / "real.py"
@@ -32,7 +33,7 @@ def verify_embedded_python_path_configuration():
     assert spec is not None and spec.loader is not None
     builder = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(builder)
-    with __import__("tempfile").TemporaryDirectory() as directory:
+    with tempfile.TemporaryDirectory() as directory:
         python_root = Path(directory) / "python"
         python_root.mkdir()
         path_file = python_root / "python312._pth"
