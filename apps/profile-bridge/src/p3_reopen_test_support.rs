@@ -651,7 +651,8 @@ impl BackendState {
             request.coordinator_session_id(),
             request.coordinator_fencing_token(),
             request.coordinator_epoch(),
-        )?;
+        )
+        .inspect_err(|_| eprintln!("P3_REOPEN_FIXTURE_REJECT=stale_coordinator_witness"))?;
         let object = self
             .object
             .as_ref()
@@ -661,17 +662,23 @@ impl BackendState {
         let prelude = object
             .get(..inspected.prelude_bytes())
             .ok_or(BridgePortError::InvalidResponse)?;
-        if request.metadata_prelude_hex() != lower_hex(prelude)
-            || inspected.metadata().generation_id() != &self.active_generation
-            || inspected.metadata().object_key()
-                != canonical_generation_object_key(
-                    &TenantId::parse(TENANT.to_owned())
-                        .map_err(|_| BridgePortError::InvalidResponse)?,
-                    &ProfileId::parse(PROFILE.to_owned())
-                        .map_err(|_| BridgePortError::InvalidResponse)?,
-                    &self.active_generation,
-                )
-        {
+        let prelude_matches = request.metadata_prelude_hex() == lower_hex(prelude);
+        let generation_matches = inspected.metadata().generation_id() == &self.active_generation;
+        let object_key_matches = inspected.metadata().object_key()
+            == canonical_generation_object_key(
+                &TenantId::parse(TENANT.to_owned())
+                    .map_err(|_| BridgePortError::InvalidResponse)?,
+                &ProfileId::parse(PROFILE.to_owned())
+                    .map_err(|_| BridgePortError::InvalidResponse)?,
+                &self.active_generation,
+            );
+        if !prelude_matches || !generation_matches || !object_key_matches {
+            // Fixture-only, fixed-vocabulary evidence: never print the
+            // metadata prelude, profile data, DEK or encrypted object.
+            eprintln!(
+                "P3_REOPEN_FIXTURE_REJECT prelude={} generation={} object_key={}",
+                prelude_matches, generation_matches, object_key_matches
+            );
             return Err(BridgePortError::InvalidResponse);
         }
         self.events.push(format!(
@@ -682,9 +689,15 @@ impl BackendState {
         // object's metadata. Never substitute the currently active root.
         let opening_key = match inspected.metadata().key_id().as_str() {
             ROOT_KEY_ID if self.historical_root_available => [7_u8; 32],
-            ROOT_KEY_ID => return Err(BridgePortError::InvalidResponse),
+            ROOT_KEY_ID => {
+                eprintln!("P3_REOPEN_FIXTURE_REJECT=historical_root_unavailable");
+                return Err(BridgePortError::InvalidResponse);
+            }
             ROTATED_ROOT_KEY_ID => [9_u8; 32],
-            _ => return Err(BridgePortError::InvalidResponse),
+            _ => {
+                eprintln!("P3_REOPEN_FIXTURE_REJECT=unknown_root_key_version");
+                return Err(BridgePortError::InvalidResponse);
+            }
         };
         json_response(&BridgeGenerationOpeningMaterialResponse::new(
             inspected.metadata().key_id().as_str(),
