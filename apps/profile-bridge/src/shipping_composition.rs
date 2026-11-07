@@ -52,6 +52,9 @@ impl core::fmt::Display for ShippingCompositionError {
             }
             Self::Operator(_) => "shipping Profile Bridge operator flow failed",
             Self::ActiveSessionMissing => "shipping Profile Bridge active session is missing",
+            Self::CloseObservation(bridge_domain::BridgePortError::UncleanBrowserExit) => {
+                "Camoufox exited without a clean shutdown checkpoint; local recovery is required"
+            }
             Self::CloseObservation(_) => "shipping Profile Bridge close observation failed",
             Self::Initialization(_) => "profile first-open preparation failed",
             Self::HeartbeatAuthorityUncertain => {
@@ -68,20 +71,24 @@ impl std::error::Error for ShippingCompositionError {}
 
 #[cfg(any(windows, test))]
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-enum ConfirmedSaveTrigger {
+enum CloseObservationDisposition {
     ContinueRuntime,
     BeginConfirmedSave,
+    RecoverUncleanExit,
 }
 
 #[cfg(any(windows, test))]
-fn confirmed_save_trigger<E>(observation: Result<bool, E>) -> Result<ConfirmedSaveTrigger, E> {
-    observation.map(|controlled| {
-        if controlled {
-            ConfirmedSaveTrigger::BeginConfirmedSave
-        } else {
-            ConfirmedSaveTrigger::ContinueRuntime
+fn close_observation_disposition(
+    observation: Result<bool, bridge_domain::BridgePortError>,
+) -> Result<CloseObservationDisposition, bridge_domain::BridgePortError> {
+    match observation {
+        Ok(true) => Ok(CloseObservationDisposition::BeginConfirmedSave),
+        Ok(false) => Ok(CloseObservationDisposition::ContinueRuntime),
+        Err(bridge_domain::BridgePortError::UncleanBrowserExit) => {
+            Ok(CloseObservationDisposition::RecoverUncleanExit)
         }
-    })
+        Err(error) => Err(error),
+    }
 }
 
 /// The existing pending-recovery observation is read-only. Preserve an
@@ -250,8 +257,8 @@ pub fn run_delivery_command(
 #[cfg(windows)]
 mod windows {
     use super::{
-        ConfirmedSaveTrigger, ShippingCompositionError, ShippingDeliveryCommand,
-        confirmed_save_trigger, open_with_one_fresh_claim, pending_recovery_failure_disposition,
+        CloseObservationDisposition, ShippingCompositionError, ShippingDeliveryCommand,
+        close_observation_disposition, open_with_one_fresh_claim, pending_recovery_failure_disposition,
         recovery_next_safe_step, retire_historical_probe_only_after_proof,
         retryable_reconnect_observation,
     };
@@ -1028,12 +1035,19 @@ mod windows {
                 .active_session_id()
                 .cloned()
                 .ok_or(ShippingCompositionError::ActiveSessionMissing)?;
-            let save_trigger = confirmed_save_trigger(
-                close_observer
-                    .observe_controlled_close(&session_id)
-                    .map_err(ShippingCompositionError::CloseObservation),
-            )?;
-            if save_trigger == ConfirmedSaveTrigger::BeginConfirmedSave {
+            let close_disposition = close_observation_disposition(
+                close_observer.observe_controlled_close(&session_id),
+            )
+            .map_err(ShippingCompositionError::CloseObservation)?;
+            if close_disposition == CloseObservationDisposition::RecoverUncleanExit {
+                operator
+                    .abort(now()?)
+                    .map_err(ShippingCompositionError::Operator)?;
+                return Err(ShippingCompositionError::CloseObservation(
+                    bridge_domain::BridgePortError::UncleanBrowserExit,
+                ));
+            }
+            if close_disposition == CloseObservationDisposition::BeginConfirmedSave {
                 operator
                     .close_with_durable_local_intent(&materialization_root, now()?)
                     .map_err(ShippingCompositionError::Operator)?;
@@ -1643,7 +1657,7 @@ mod windows {
 #[cfg(test)]
 mod tests {
     use super::{
-        ConfirmedSaveTrigger, ShippingCompositionError, confirmed_save_trigger,
+        CloseObservationDisposition, ShippingCompositionError, close_observation_disposition,
         open_with_one_fresh_claim, pending_recovery_failure_disposition, recovery_next_safe_step,
         retire_historical_probe_only_after_proof, retryable_reconnect_observation,
     };
@@ -1929,22 +1943,22 @@ mod tests {
     }
 
     #[test]
-    fn confirmed_save_requires_positive_controlled_close_witness() {
+    fn only_verified_clean_shutdown_starts_save_and_unclean_exit_recovers() {
         assert_eq!(
-            confirmed_save_trigger::<ShippingCompositionError>(Ok(false)),
-            Ok(ConfirmedSaveTrigger::ContinueRuntime)
+            close_observation_disposition(Ok(false)),
+            Ok(CloseObservationDisposition::ContinueRuntime)
         );
         assert_eq!(
-            confirmed_save_trigger::<ShippingCompositionError>(Ok(true)),
-            Ok(ConfirmedSaveTrigger::BeginConfirmedSave)
+            close_observation_disposition(Ok(true)),
+            Ok(CloseObservationDisposition::BeginConfirmedSave)
         );
         assert_eq!(
-            confirmed_save_trigger(Err(ShippingCompositionError::CloseObservation(
-                bridge_domain::BridgePortError::Unavailable,
-            ))),
-            Err(ShippingCompositionError::CloseObservation(
-                bridge_domain::BridgePortError::Unavailable,
-            ))
+            close_observation_disposition(Err(bridge_domain::BridgePortError::UncleanBrowserExit)),
+            Ok(CloseObservationDisposition::RecoverUncleanExit)
+        );
+        assert_eq!(
+            close_observation_disposition(Err(bridge_domain::BridgePortError::Unavailable)),
+            Err(bridge_domain::BridgePortError::Unavailable)
         );
     }
 
