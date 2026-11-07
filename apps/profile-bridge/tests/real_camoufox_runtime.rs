@@ -563,12 +563,6 @@ fn run_managed_cold_launch_cycle() -> Result<ApprovedRuntimeBundle, Box<dyn std:
     let mut close_observer = camouhost.close_observer();
     let mut camouhost = StageTracingCamouhost::new(camouhost);
     let session = SessionId::parse("session_01JAR10REAL")?;
-    let browser_launch_started = Instant::now();
-    RuntimeSessionOrchestrator::launch(&bundle, &session, &mut process, &mut camouhost)?;
-    eprintln!(
-        "AR10_COLD_CYCLE_PHASE=native_launch;elapsed_ms={}",
-        browser_launch_started.elapsed().as_millis()
-    );
     let checkpoint_path = workspace
         .path()
         .join("user_data")
@@ -576,6 +570,12 @@ fn run_managed_cold_launch_cycle() -> Result<ApprovedRuntimeBundle, Box<dyn std:
     let checkpoint_baseline = fs::metadata(&checkpoint_path)
         .and_then(|metadata| metadata.modified())
         .ok();
+    let browser_launch_started = Instant::now();
+    RuntimeSessionOrchestrator::launch(&bundle, &session, &mut process, &mut camouhost)?;
+    eprintln!(
+        "AR10_COLD_CYCLE_PHASE=native_launch;elapsed_ms={}",
+        browser_launch_started.elapsed().as_millis()
+    );
     let startup_deadline = Instant::now() + Duration::from_secs(30);
     loop {
         assert!(
