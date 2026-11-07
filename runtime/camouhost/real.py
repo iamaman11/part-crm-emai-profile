@@ -2052,6 +2052,11 @@ def main() -> int:
     # device/tenant/generation admission. An environment flag is *not* a lease.
     mode = os.environ.get(EXECUTION_MODE_ENV)
     if mode == USER_NATIVE_MODE:
+        # A user's native Firefox never accepts a Python execution inbox,
+        # including direct adapter invocation outside a packaged Rust build.
+        if os.environ.get(AGENT_DIRECTORY_ENV):
+            print("native user browser rejects executable agent directory", file=sys.stderr)
+            return 2
         if os.environ.get(HEADLESS_MODE_ENV, "false") != "false":
             print("native user browser requires headful mode", file=sys.stderr)
             return 2
