@@ -176,6 +176,57 @@ def main():
     assert orphan_crash_result == 3, orphan_crash_result
     assert orphaned_crash.detached_after_exit == 1
 
+    # The original user-native regression: Playwright's asyncio dispatcher must
+    # remain runnable while Rust has not sent the next IPC command. A sync
+    # sys.stdin.readline() on the owner thread starves this ticker completely.
+    class DelayedFrames:
+        def __init__(self):
+            self.lines = [
+                f"hello|{runtime.IPC_VERSION}\\n",
+                f"launch|{SESSION}\\n",
+                f"observe_close|{SESSION}\\n",
+                f"close|{SESSION}\\n",
+            ]
+            self.index = 0
+
+        def readline(self):
+            import time as wallclock
+            if self.index == 2:
+                wallclock.sleep(0.25)
+            line = self.lines[self.index] if self.index < len(self.lines) else ""
+            self.index += 1
+            return line
+
+    dispatched = []
+    idle_session = UserSession([
+        "PROFILE_BUSY", "CLEAN_SHUTDOWN_VERIFIED", "CLEAN_SHUTDOWN_VERIFIED",
+    ])
+
+    async def launch_with_idle_dispatch(**_kwargs):
+        async def event_ticker():
+            for _ in range(12):
+                await asyncio.sleep(0.02)
+                dispatched.append(True)
+
+        asyncio.create_task(event_ticker())
+        return idle_session
+
+    native.launch_native_camoufox = launch_with_idle_dispatch
+    with patch.dict(sys.modules, {"native_process": native}), patch.multiple(runtime, **old), \\
+         patch.dict(os.environ, {runtime.EXPECTED_PROBE_SHA256_ENV: "b" * 64}), \\
+         patch.object(sys, "stdin", DelayedFrames()), \\
+         contextlib.redirect_stdout(io.TextIOWrapper(io.BytesIO(), encoding="utf-8")) as live_output:
+        idle_result = runtime.run_native_ipc()
+    assert idle_result == 0
+    assert len(dispatched) >= 5, "native Playwright dispatcher was starved during idle IPC"
+    assert idle_session.closed == 1
+    assert live_output.buffer.getvalue().decode("utf-8").splitlines() == [
+        f"hello_ack|{runtime.IPC_VERSION}",
+        f"ready|{SESSION}",
+        f"close_observed|{SESSION}|true",
+        f"closed|{SESSION}|true",
+    ]
+
     print("CAMOUHOST_USER_PLAYWRIGHT_IPC=PASS")
     return 0
 
