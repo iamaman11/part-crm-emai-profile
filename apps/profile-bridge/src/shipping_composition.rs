@@ -258,9 +258,9 @@ pub fn run_delivery_command(
 mod windows {
     use super::{
         CloseObservationDisposition, ShippingCompositionError, ShippingDeliveryCommand,
-        close_observation_disposition, open_with_one_fresh_claim, pending_recovery_failure_disposition,
-        recovery_next_safe_step, retire_historical_probe_only_after_proof,
-        retryable_reconnect_observation,
+        close_observation_disposition, open_with_one_fresh_claim,
+        pending_recovery_failure_disposition, recovery_next_safe_step,
+        retire_historical_probe_only_after_proof, retryable_reconnect_observation,
     };
     use crate::camouhost_process::{
         ManagedCamouhostConfig, ManagedCamouhostProcess, RuntimeBindingSlot, RuntimeDisplayMode,
@@ -1035,10 +1035,9 @@ mod windows {
                 .active_session_id()
                 .cloned()
                 .ok_or(ShippingCompositionError::ActiveSessionMissing)?;
-            let close_disposition = close_observation_disposition(
-                close_observer.observe_controlled_close(&session_id),
-            )
-            .map_err(ShippingCompositionError::CloseObservation)?;
+            let close_disposition =
+                close_observation_disposition(close_observer.observe_controlled_close(&session_id))
+                    .map_err(ShippingCompositionError::CloseObservation)?;
             if close_disposition == CloseObservationDisposition::RecoverUncleanExit {
                 operator
                     .abort(now()?)
