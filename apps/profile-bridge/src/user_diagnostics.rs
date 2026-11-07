@@ -1573,11 +1573,26 @@ mod tests {
             CleanupFailures, OperationalRejectionReason, OperatorFlowError,
         };
         let cases = [
-            (OperationalRejectionReason::ConfigIntegrityMismatch, "BRIDGE_BROWSER_CONFIG_INCOMPATIBLE"),
-            (OperationalRejectionReason::RuntimeCandidateMismatch, "BRIDGE_BROWSER_RUNTIME_MISMATCH"),
-            (OperationalRejectionReason::IdentityObservationMismatch, "BRIDGE_BROWSER_NETWORK_IDENTITY_MISMATCH"),
-            (OperationalRejectionReason::RetryableNetworkRouteChurn, "BRIDGE_BROWSER_ROUTE_UNSTABLE"),
-            (OperationalRejectionReason::FilesystemProcessCapabilityUnavailable, "BRIDGE_LOCAL_WORKSPACE_UNAVAILABLE"),
+            (
+                OperationalRejectionReason::ConfigIntegrityMismatch,
+                "BRIDGE_BROWSER_CONFIG_INCOMPATIBLE",
+            ),
+            (
+                OperationalRejectionReason::RuntimeCandidateMismatch,
+                "BRIDGE_BROWSER_RUNTIME_MISMATCH",
+            ),
+            (
+                OperationalRejectionReason::IdentityObservationMismatch,
+                "BRIDGE_BROWSER_NETWORK_IDENTITY_MISMATCH",
+            ),
+            (
+                OperationalRejectionReason::RetryableNetworkRouteChurn,
+                "BRIDGE_BROWSER_ROUTE_UNSTABLE",
+            ),
+            (
+                OperationalRejectionReason::FilesystemProcessCapabilityUnavailable,
+                "BRIDGE_LOCAL_WORKSPACE_UNAVAILABLE",
+            ),
         ];
         for (reason, code) in cases {
             let diagnostic = UserDiagnostic::Launch(ShippingCompositionError::Operator(
@@ -1588,7 +1603,10 @@ mod tests {
                 },
             ));
             assert_eq!(diagnostic.code(), code);
-            assert!(diagnostic.message().contains("profile") || diagnostic.message().contains("Profile"));
+            assert!(
+                diagnostic.message().contains("profile")
+                    || diagnostic.message().contains("Profile")
+            );
             assert!(!diagnostic.message().contains("mail.ru"));
         }
     }
