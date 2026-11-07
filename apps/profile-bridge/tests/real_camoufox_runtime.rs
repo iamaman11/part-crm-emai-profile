@@ -438,8 +438,18 @@ impl profile_bridge::shipping_control_plane::MachineHttpPort for InitialControl 
                     serde_json::to_vec(&BridgeGenerationUploadCapabilityResponse::verified())
                 }
             }
-            Request::Commit { generation_id, expected_profile_version, container_digest, .. } => {
-                if !object.verified || sha256_hex(&object.container) != container_digest { return Err(error()); }
+            Request::Commit { generation_id, expected_profile_version, metadata_digest, container_digest, container_bytes } => {
+                // Match the real Worker: Commit independently verifies the
+                // exact R2 object before making the generation READY.
+                // No duplicate UploadCapability request is needed after PUT.
+                let inspected = encrypted_generation_domain::inspect_generation_metadata_prelude(&object.container).map_err(|_| error())?;
+                let actual_metadata = inspected.metadata_digest().bytes().iter().map(|b| format!("{b:02x}")).collect::<String>();
+                if actual_metadata != metadata_digest || sha256_hex(&object.container) != container_digest || u64::try_from(object.container.len()).ok() != Some(container_bytes) || inspected.metadata().base_generation_id().is_some() { return Err(error()); }
+                let generation = object.generation.as_ref().ok_or_else(error)?;
+                let dek = encrypted_generation_domain::GenerationDek::new(encrypted_generation_domain::KeyId::parse("profile-generation-root-v1-2").map_err(|_| error())?, [0xab; 32]);
+                let opened = encrypted_generation_domain::open_generation_expected(&object.container, &dek, &TenantId::parse("tenant_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa").map_err(|_| error())?, &ProfileId::parse("profile_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb").map_err(|_| error())?, generation).map_err(|_| error())?;
+                if !opened.plaintext().starts_with(b"BPGW0001") { return Err(error()); }
+                object.verified = true;
                 object.committed = true;
                 serde_json::to_vec(&InitialGenerationCommitted { generation_id, profile_version: expected_profile_version + 1, replayed: false,
                     launch: control_plane_contract::profile_launch_api::ProfileLaunchProjection { launch_uri: "profilebridge://claim/claim_01JAR10_INITIAL_CONFIRMED".to_owned(), expires_at_ms: 1000 } })
