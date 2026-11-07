@@ -184,8 +184,9 @@ class NativeProfileSession:
     """Observe Firefox's native writer lock and current-session shutdown proof.
 
     The native lock alone admits Open/Ready. Save additionally requires this
-    session's startup checkpoint and Firefox's final SessionStore checkpoint;
-    a released lock alone is never evidence of a clean shutdown.
+    session's startup checkpoint and Firefox's final SessionStore checkpoint.
+    Once clean close is witnessed, any later writer or checkpoint change
+    permanently invalidates that witness for this session.
     """
 
     workspace: Path
@@ -193,12 +194,29 @@ class NativeProfileSession:
     startup_checkpoint_mtime_ns: int | None = None
     observed_native_writer: bool = False
     active_session_checkpoint_seen: bool = False
+    clean_shutdown_checkpoint_mtime_ns: int | None = None
+    clean_shutdown_invalidated: bool = False
 
     def profile_state(self) -> str:
         try:
             active = self.writer_active(self.workspace)
         except (OSError, RuntimeError):
+            if self.clean_shutdown_checkpoint_mtime_ns is not None:
+                self.clean_shutdown_invalidated = True
             return "UNKNOWN_PRESERVE_LOCAL"
+
+        if self.clean_shutdown_checkpoint_mtime_ns is not None:
+            if self.clean_shutdown_invalidated or active:
+                self.clean_shutdown_invalidated = True
+                return "CRASH_OR_UNKNOWN_PRESERVE_LOCAL"
+            checkpoint = _read_session_checkpoints(self.workspace)
+            if (
+                checkpoint is None
+                or checkpoint[0] != self.clean_shutdown_checkpoint_mtime_ns
+            ):
+                self.clean_shutdown_invalidated = True
+                return "CRASH_OR_UNKNOWN_PRESERVE_LOCAL"
+            return "CLEAN_SHUTDOWN_VERIFIED"
 
         if active:
             self.observed_native_writer = True
@@ -224,11 +242,12 @@ class NativeProfileSession:
         checkpoint = _read_session_checkpoints(self.workspace)
         if checkpoint is None:
             return "CRASH_OR_UNKNOWN_PRESERVE_LOCAL"
-        _, values = checkpoint
+        checkpoint_mtime_ns, values = checkpoint
         if (
             values.get(SESSION_START_CHECKPOINT) is True
             and values.get(SESSION_CLEAN_CLOSE_CHECKPOINT) is True
         ):
+            self.clean_shutdown_checkpoint_mtime_ns = checkpoint_mtime_ns
             return "CLEAN_SHUTDOWN_VERIFIED"
         return "CRASH_OR_UNKNOWN_PRESERVE_LOCAL"
 
