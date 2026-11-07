@@ -73,6 +73,7 @@ def main():
         "resolve_profile_root": lambda require_bridge_lock: pathlib.Path("/tmp/test-root"),
         "load_generation_config": lambda root: ({"test": True}, "a" * 64),
         "firefox_writer_active": lambda root: False,
+        "resolve_headless_mode": lambda: False,
         "camoufox_launch_options": lambda lock, root, config, isolated=False: {
             "approved": "official-sdk-options",
             "user_data_dir": str(root / "user_data"),

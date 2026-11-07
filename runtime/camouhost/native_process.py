@@ -200,8 +200,10 @@ def launch_native_camoufox(
     """
     if not admission_granted:
         raise NativeLaunchError("authoritative writer admission required")
-    if headless is not False:
-        raise NativeLaunchError("user Camoufox context must be headful")
+    if headless not in (False, "virtual"):
+        raise NativeLaunchError("user Camoufox context must be headful or virtual-headful")
+    if options.get("headless") != headless:
+        raise NativeLaunchError("Camoufox headless mode differs from approved runtime mode")
     if not workspace.is_absolute() or workspace.is_symlink() or not workspace.is_dir():
         raise NativeLaunchError("profile generation workspace unavailable")
     user_data_dir = workspace / "user_data"

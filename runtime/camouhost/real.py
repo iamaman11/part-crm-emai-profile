@@ -2044,7 +2044,7 @@ def run_native_ipc() -> int:
                     options=options,
                     writer_active=firefox_writer_active,
                     admission_granted=True,
-                    headless=False,
+                    headless=resolve_headless_mode(),
                 )
                 report_runtime_stage("launch", "browser_entered")
                 # Ready depends only on Firefox's native writer lock. No page

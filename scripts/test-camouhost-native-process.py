@@ -176,6 +176,17 @@ def main() -> int:
             unknown_session.writer_active = writer_active
             unknown_session.abort_startup()
 
+            virtual_options = dict(options)
+            virtual_options["headless"] = "virtual"
+            virtual = module.launch_native_camoufox(
+                workspace=workspace, options=virtual_options,
+                writer_active=writer_active, admission_granted=True, headless="virtual",
+            )
+            virtual_manager = FakeCamoufox.instances[-1]
+            assert virtual_manager.kwargs["headless"] == "virtual"
+            virtual.abort_startup()
+            assert virtual_manager.exit_calls == 1
+
     print("CAMOUHOST_OFFICIAL_PLAYWRIGHT_CONTEXT=PASS")
     return 0
 
