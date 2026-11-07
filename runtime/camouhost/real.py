@@ -1928,28 +1928,6 @@ def run_ipc() -> int:
                 report_runtime_failure("cleanup", error)
 
 
-def load_native_process_launcher():
-    """Load the signed sibling adapter when running from embedded Windows Python.
-
-    The embeddable distribution's ._pth intentionally limits sys.path to its
-    own runtime and site-packages. The native adapter is a sibling of this
-    entrypoint, not a site-package, so resolve that exact packaged directory
-    explicitly instead of relying on the caller's working directory.
-    """
-    native_directory = Path(__file__).resolve(strict=True).parent
-    native_module = native_directory / "native_process.py"
-    if native_module.is_symlink() or not native_module.is_file():
-        raise RuntimeContractError("native process adapter is missing")
-    native_directory_text = str(native_directory)
-    if native_directory_text not in sys.path:
-        sys.path.insert(0, native_directory_text)
-    try:
-        from native_process import launch_native_camoufox
-    except ImportError as error:
-        raise RuntimeContractError("native process adapter import failed") from error
-    return launch_native_camoufox
-
-
 def run_native_ipc() -> int:
     """Production runtime IPC: launch official Firefox, never inspect its pages.
 
@@ -1960,7 +1938,12 @@ def run_native_ipc() -> int:
     """
     report_runtime_stage("startup", "begin")
     try:
-        launch_native_camoufox = load_native_process_launcher()
+        # native_process is a sibling module included in the embedded
+        # interpreter's generated ._pth search path by the runtime builder.
+        try:
+            from native_process import launch_native_camoufox
+        except ImportError as error:
+            raise RuntimeContractError("native process adapter import failed") from error
         lock, _ = load_runtime_lock()
         verify_python_components(lock)
         root = resolve_profile_root(require_bridge_lock=True)
