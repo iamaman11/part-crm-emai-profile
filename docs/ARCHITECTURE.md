@@ -199,13 +199,14 @@ idempotency workflow or provider-specific business sequencing.
 
 `apps/profile-bridge` owns Windows-native device trust, materialization and typed runtime composition.
 For ordinary user Open, Camoufox remains an independent native process; the Bridge never controls its
-tabs, pages, DOM, navigation or process tree. A clean-close witness requires both the released native
-writer lock and Firefox CrashMonitor's current-session `sessionCheckpoints.json` markers:
-`profile-after-change` must be observed after launch, and
-`sessionstore-final-state-write-complete` must be present after shutdown. Lock release alone means
-quiescence, not clean close. A missing, stale, invalid or ambiguous checkpoint follows the existing
-crash/RecoveryRequired path and preserves local bytes. This is passive observation of browser-owned
-state, not a new process manager.
+tabs, pages, DOM, navigation or process tree. Open/Ready requires only Firefox's native writer lock;
+the startup checkpoint does not delay or gate browser use. A clean-close witness requires both the
+released native writer lock and Firefox CrashMonitor's current-session
+`sessionCheckpoints.json` markers: `profile-after-change` must have changed from the pre-launch
+checkpoint during this session, and `sessionstore-final-state-write-complete` must be present after
+shutdown. Lock release alone means quiescence, not clean close. A missing, stale, invalid or ambiguous
+checkpoint follows the existing crash/RecoveryRequired path and preserves local bytes. This is passive
+observation of browser-owned state, not a new process manager.
 
 Phase 2F makes a verified graceful browser close a retained-ownership transition: the Bridge keeps
 the workspace writer lock and Coordinator lease until immutable dirty-generation publication, exact
@@ -420,7 +421,7 @@ instead of reopening the base. Real browser/kernel-lock/device/provider executio
 Confirmed Save / Reopen further requires an explicit positive controlled-close witness. For native
 user Open, the witness is Firefox's current-session `sessionstore-final-state-write-complete` marker
 together with an absent native writer lock; the current-session `profile-after-change` marker must
-have replaced the pre-launch checkpoint before Ready. Runtime crash, missing/stale/invalid checkpoint,
+have replaced the pre-launch checkpoint before a clean-close witness can be accepted. Runtime crash, missing/stale/invalid checkpoint,
 ambiguous close and IPC disconnect/EOF cannot synthesize one. They enter the existing RecoveryRequired
 path and preserve local bytes. Before backend commit, failure retains the last confirmed generation and
 exact dirty local ownership for retry. After backend commit, the committed
