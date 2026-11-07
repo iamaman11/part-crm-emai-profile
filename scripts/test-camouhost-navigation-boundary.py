@@ -27,6 +27,7 @@ class AdmissionGate:
 
     def __init__(self):
         self.admission_calls = []
+        self.pages = []
 
     def set_offline(self, value):
         self.admission_calls.append(value)
@@ -53,6 +54,55 @@ def main() -> int:
     else:
         raise AssertionError("CRM-directed navigation was accepted")
     assert rejected.admission_calls == [], "failed admission changed the browser"
+
+    # Even an explicitly isolated C09 probe cannot navigate a real website,
+    # credentials URL, redirect URL, local management port or arbitrary path.
+    for target in (
+        "https://example.com/",
+        "http://127.0.0.1/",
+        "http://127.0.0.1:80/",
+        "http://127.0.0.1:8080/admin",
+        "http://127.0.0.1:8080/?redirect=https://example.com",
+        "http://user:pass@127.0.0.1:8080/",
+        "http://localhost:8080/",
+        "http://127.0.0.2:8080/",
+    ):
+        denied = AdmissionGate()
+        try:
+            runtime.admit_navigation(denied, target, isolated_loopback_probe=True)
+        except runtime.RuntimeContractError:
+            pass
+        else:
+            raise AssertionError("isolated probe accepted an unauthorized target")
+        assert denied.admission_calls == []
+
+    class DisposablePage:
+        def __init__(self):
+            self.calls = []
+
+        def goto(self, url, *, wait_until, timeout):
+            self.calls.append((url, wait_until, timeout))
+
+    class DisposableContext(AdmissionGate):
+        def __init__(self):
+            super().__init__()
+            self.page = DisposablePage()
+            self.created = 0
+
+        def new_page(self):
+            self.created += 1
+            return self.page
+
+    disposable = DisposableContext()
+    with contextlib.redirect_stderr(io.StringIO()):
+        runtime.admit_navigation(
+            disposable, "http://127.0.0.1:31987/", isolated_loopback_probe=True
+        )
+    assert disposable.admission_calls == [False]
+    assert disposable.created == 1, "C09 did not create an exclusive disposable tab"
+    assert disposable.page.calls == [
+        ("http://127.0.0.1:31987/", "domcontentloaded", 15_000)
+    ]
 
     print("CAMOUFOX_NATIVE_NAVIGATION_BOUNDARY=PASS")
     return 0

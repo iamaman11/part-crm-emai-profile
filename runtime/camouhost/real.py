@@ -21,6 +21,7 @@ import time
 import traceback
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlsplit
 
 IPC_VERSION = "3"
 MAX_FRAME_LENGTH = 8 * 1024
@@ -675,22 +676,46 @@ def retire_managed_bootstrap_tabs(context: Any) -> None:
         page.close()
 
 
-def admit_navigation(context: Any, target: str | None) -> None:
-    """Admit the isolated Playwright context after Rust identity authorization.
+def disposable_probe_origin(target: str) -> bool:
+    """Only the separately authorized C09 test's own ephemeral loopback origin."""
+    try:
+        parsed = urlsplit(target)
+        port = parsed.port
+    except ValueError:
+        return False
+    return (
+        parsed.scheme == "http"
+        and parsed.hostname == "127.0.0.1"
+        and port is not None
+        and 1024 <= port <= 65535
+        and parsed.netloc == f"127.0.0.1:{port}"
+        and parsed.path == "/"
+        and not parsed.query
+        and not parsed.fragment
+        and parsed.username is None
+        and parsed.password is None
+    )
 
-    This function is never used by NativeUser. In an exclusive automation/probe
-    workspace it may retire only the exact bootstrap tab Camouhost created;
-    Firefox continues to own restored/user tabs, SessionStore and navigation.
+
+def admit_navigation(
+    context: Any, target: str | None, *, isolated_loopback_probe: bool = False
+) -> None:
+    """Admit an already-authorized isolated context, never a NativeUser browser.
+
+    The disposable C09 portable-state fixture may visit only its own exact
+    loopback test origin. Open a NEW tab: never navigate any restored user tab
+    or modify SessionStore ourselves. No user-browser IPC calls this function.
     """
-    if target is not None:
+    if target is not None and not (
+        isolated_loopback_probe and disposable_probe_origin(target)
+    ):
         raise RuntimeContractError("Profile launch cannot navigate the browser")
-    # The Playwright persistent-context launch creates one marked bootstrap
-    # tab so SessionStore can restore normally. Retire only that app-owned tab,
-    # after Rust admission; never guess at or close an ordinary about:blank tab.
+    # Retire only the adapter-created bootstrap, after Rust identity admission.
     retire_managed_bootstrap_tabs(context)
-    # Release the existing pre-admission network isolation boundary only after
-    # identity admission and bootstrap retirement have completed.
     context.set_offline(False)
+    if target is not None:
+        # This is a disposable, separately admitted C09 fixture, not live Open.
+        context.new_page().goto(target, wait_until="domcontentloaded", timeout=15_000)
     print(
         "camouhost_session_restore native_retry_attempts=0 failures=0",
         file=sys.stderr,
@@ -1908,7 +1933,13 @@ def run_ipc() -> int:
             ):
                 try:
                     target = decode_navigation_target(parts[2])
-                    admit_navigation(context, target)
+                    admit_navigation(
+                        context,
+                        target,
+                        isolated_loopback_probe=(
+                            os.environ.get(EXECUTION_MODE_ENV) == ISOLATED_COLD_PROBE_MODE
+                        ),
+                    )
                 except BaseException as error:
                     report_runtime_failure("navigation", error)
                     emit("error|runtime")
