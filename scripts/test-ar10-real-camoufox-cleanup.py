@@ -627,6 +627,19 @@ root = Path(root)
 lock = json.loads(Path(lockfile).read_text(encoding="utf-8"))
 config = json.loads((root / "camoufox-config.json").read_text(encoding="utf-8"))
 urls = [origin + "/prior-first", origin + "/prior-second"]
+expected_title = "Disposable Firefox sessionstore proof"
+
+def retry_as_user(page):
+    # Firefox owns retry/error-page UI. Releasing the isolated context's offline
+    # gate must not cause Camouhost to reload or navigate restored tabs.
+    if page.title() != expected_title:
+        assert page.evaluate("document.documentURI").startswith(
+            "about:neterror?e=netOffline&"
+        ), "restored tab was neither loaded nor Firefox's native offline error page"
+        page.reload(wait_until="domcontentloaded", timeout=15000)
+    assert page.title() == expected_title, (
+        "Firefox's native user retry did not recover the restored tab"
+    )
 
 def enter():
     kwargs = runtime.camoufox_kwargs(lock, root, config)
@@ -767,12 +780,8 @@ try:
     assert not any(
         page.url == runtime.MANAGED_BOOTSTRAP_TAB_URL for page in context.pages
     ), "Camouhost's internal bootstrap tab survived a native SessionStore restore"
-    assert present[urls[0]].title() == "Disposable Firefox sessionstore proof", (
-        "first saved tab did not retry after identity admission"
-    )
-    assert present[urls[1]].title() == "Disposable Firefox sessionstore proof", (
-        "second saved tab did not retry after identity admission"
-    )
+    retry_as_user(present[urls[0]])
+    retry_as_user(present[urls[1]])
     retained = present[urls[0]].evaluate("localStorage.getItem('restore-proof')")
     if retained != "retained":
         raise AssertionError("restored tab lost persistent origin state")
@@ -821,7 +830,7 @@ try:
     assert not any(
         page.url == runtime.MANAGED_BOOTSTRAP_TAB_URL for page in context.pages
     ), "Camouhost's internal bootstrap tab survived a native SessionStore restore"
-    assert present_third[urls[1]].title() == "Disposable Firefox sessionstore proof"
+    retry_as_user(present_third[urls[1]])
     assert present_third[urls[1]].evaluate(
         "localStorage.getItem('restore-proof')"
     ) == "retained", "closing a tab did not preserve its persistent origin storage"
