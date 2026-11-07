@@ -182,10 +182,10 @@ def main():
     class DelayedFrames:
         def __init__(self):
             self.lines = [
-                f"hello|{runtime.IPC_VERSION}\\n",
-                f"launch|{SESSION}\\n",
-                f"observe_close|{SESSION}\\n",
-                f"close|{SESSION}\\n",
+                f"hello|{runtime.IPC_VERSION}\n",
+                f"launch|{SESSION}\n",
+                f"observe_close|{SESSION}\n",
+                f"close|{SESSION}\n",
             ]
             self.index = 0
 
@@ -212,9 +212,9 @@ def main():
         return idle_session
 
     native.launch_native_camoufox = launch_with_idle_dispatch
-    with patch.dict(sys.modules, {"native_process": native}), patch.multiple(runtime, **old), \\
-         patch.dict(os.environ, {runtime.EXPECTED_PROBE_SHA256_ENV: "b" * 64}), \\
-         patch.object(sys, "stdin", DelayedFrames()), \\
+    with patch.dict(sys.modules, {"native_process": native}), patch.multiple(runtime, **old), \
+         patch.dict(os.environ, {runtime.EXPECTED_PROBE_SHA256_ENV: "b" * 64}), \
+         patch.object(sys, "stdin", DelayedFrames()), \
          contextlib.redirect_stdout(io.TextIOWrapper(io.BytesIO(), encoding="utf-8")) as live_output:
         idle_result = runtime.run_native_ipc()
     assert idle_result == 0
