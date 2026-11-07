@@ -181,10 +181,11 @@ def prepare_native_environment(
 
 @dataclass
 class NativeProfileSession:
-    """Observe the native writer lock and Firefox's own shutdown checkpoint.
+    """Observe Firefox's native writer lock and current-session shutdown proof.
 
-    A released lock alone is ambiguous. Save is allowed only after the current
-    session's final SessionStore checkpoint proves a clean Firefox shutdown.
+    The native lock alone admits Open/Ready. Save additionally requires this
+    session's startup checkpoint and Firefox's final SessionStore checkpoint;
+    a released lock alone is never evidence of a clean shutdown.
     """
 
     workspace: Path
