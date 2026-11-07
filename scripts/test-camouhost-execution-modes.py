@@ -135,10 +135,14 @@ def main() -> int:
     assert "&& self.config.execution_owner != RuntimeExecutionOwner::IsolatedHistoricalProbe" in shipping
     composition = (SOURCE.parents[2] /
                    "apps/profile-bridge/src/shipping_composition.rs").read_text(encoding="utf-8")
-    assert composition.count(".for_isolated_historical_probe()") == 1
-    assert composition.index(".for_isolated_historical_probe()") < composition.index(
-        "pub fn run(claim:"
-    ), "ordinary user Open must not request page-inspecting probe admission"
+    # The historical diagnostic has been removed from shipping entirely.
+    # Only disposable CI state tests retain a separately authorized probe.
+    assert ".for_isolated_historical_probe()" not in composition
+    assert "run_historical_candidate_probe" not in composition
+    app = (SOURCE.parents[2] / "apps/profile-bridge/src/main.rs").read_text(
+        encoding="utf-8"
+    )
+    assert "VerifyHistoricalCandidate" not in app
     native_process = (SOURCE.parents[2] / "runtime/camouhost/native_process.py").read_text(encoding="utf-8")
     assert "from_options=dict(options)" in native_process
     assert "persistent_context=True" in native_process
