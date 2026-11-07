@@ -210,7 +210,7 @@ jobs:
             throw 'REAL_SHIPPING_ARCHIVE_READER_NOT_EXECUTED_OR_NOT_PASSED'
           }
 
-      - name: Run Windows Bridge regressions through production crates
+      - name: Run native user Open/Close through production Bridge crates
         if: needs.scope.outputs.heavy == 'true'
         shell: pwsh
         run: |
@@ -223,8 +223,8 @@ jobs:
           $env:AR10_PYTHON = Join-Path $root 'python/python.exe'
           $env:AR10_RUNTIME_ROOT = $root
           $env:AR10_REAL_CAMOUFOX_HEADLESS = 'false'
-          cargo test --locked -p profile-bridge --test real_camoufox_runtime bridge_preflight_launches_real_camoufox_through_managed_ipc -- --exact --nocapture
-          if ($LASTEXITCODE -ne 0) { throw 'production Bridge/Playwright integration failed' }
+          cargo test --locked -p profile-bridge --test real_camoufox_runtime bridge_preflight_launches_real_camoufox_natively_without_page_inspection -- --exact --nocapture
+          if ($LASTEXITCODE -ne 0) { throw 'production native Camoufox Bridge integration failed' }
 
       - name: Prove native state survives encrypted Save and cold Reopen
         if: needs.scope.outputs.heavy == 'true'
