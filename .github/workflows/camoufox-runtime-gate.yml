@@ -130,8 +130,14 @@ jobs:
         if: needs.scope.outputs.heavy == 'true'
         shell: pwsh
         run: |
-          python -m py_compile runtime/camouhost/real.py scripts/camouhost-runtime-build-windows.py scripts/camouhost-runtime-package.py
+          python -m py_compile runtime/camouhost/real.py runtime/camouhost/native_process.py scripts/camouhost-runtime-build-windows.py scripts/camouhost-runtime-package.py scripts/test-camouhost-native-process.py scripts/test-camouhost-native-ipc.py scripts/test-camouhost-execution-modes.py
           if ($LASTEXITCODE -ne 0) { throw 'runtime Python compile failed' }
+          python scripts/test-camouhost-native-process.py
+          if ($LASTEXITCODE -ne 0) { throw 'native Camoufox process boundary regression failed' }
+          python scripts/test-camouhost-native-ipc.py
+          if ($LASTEXITCODE -ne 0) { throw 'native Camouhost IPC regression failed' }
+          python scripts/test-camouhost-execution-modes.py
+          if ($LASTEXITCODE -ne 0) { throw 'Camouhost execution-mode regression failed' }
           python scripts/camouhost-runtime-build-windows.py self-test
           if ($LASTEXITCODE -ne 0) { throw 'official runtime materializer self-test failed' }
           python scripts/camouhost-runtime-package.py self-test
