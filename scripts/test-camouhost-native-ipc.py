@@ -24,14 +24,13 @@ def load_runtime():
     return module
 
 class NativeSession:
-    def __init__(self):
-        self.calls = 0
+    def __init__(self, states):
+        self.states = list(states)
+        self.last = "WRITER_NOT_OBSERVED"
     def profile_state(self):
-        self.calls += 1
-        # Launch succeeds upon first OS-held writer. The first observer sees
-        # Firefox still holding its profile; second sees released profile.
-        return ("PROFILE_BUSY" if self.calls < 3 else
-                "QUIESCENT_REQUIRES_FILE_VALIDATION")
+        if self.states:
+            self.last = self.states.pop(0)
+        return self.last
 
 def main():
     r = load_runtime()
@@ -40,9 +39,19 @@ def main():
         pass
     native.NativeLaunchError = NativeLaunchError
     called = []
+    sessions = [
+        NativeSession([
+            "PROFILE_BUSY", "PROFILE_BUSY",
+            "CLEAN_SHUTDOWN_VERIFIED", "CLEAN_SHUTDOWN_VERIFIED",
+        ]),
+        NativeSession([
+            "PROFILE_BUSY", "CRASH_OR_UNKNOWN_PRESERVE_LOCAL",
+            "CRASH_OR_UNKNOWN_PRESERVE_LOCAL",
+        ]),
+    ]
     def launch_native_camoufox(**kwargs):
         called.append(kwargs)
-        return NativeSession()
+        return sessions.pop(0)
     native.launch_native_camoufox = launch_native_camoufox
     old = {
         "load_runtime_lock": lambda: ({"browser": {"version":"158.0.1-beta.41"}}, "x" * 64),
@@ -74,6 +83,25 @@ def main():
     assert len(called) == 1 and called[0]["admission_granted"] is True
     assert called[0]["identity"] == {"test": True}
     assert called[0]["ff_version"] == 158
+
+    # A native crash releases parent.lock but lacks Firefox's final checkpoint.
+    # The IPC reports an unclean exit and remains alive for Rust's abort/recovery.
+    with patch.dict(sys.modules, {"native_process": native}), patch.multiple(r, **old), \\
+         patch.dict(os.environ, {r.EXPECTED_PROBE_SHA256_ENV: "b" * 64}), \\
+         patch.object(sys, "stdin", io.StringIO(
+             f"hello|{r.IPC_VERSION}\\nlaunch|{SESSION}\\n"
+             f"observe_close|{SESSION}\\nclose|{SESSION}\\n"
+         )), contextlib.redirect_stdout(io.TextIOWrapper(io.BytesIO(), encoding="utf-8")) as crashed:
+        crash_result = r.run_native_ipc()
+    crash_lines = crashed.buffer.getvalue().decode("utf-8").splitlines()
+    assert crash_result == 6, crash_result
+    assert crash_lines == [
+        f"hello_ack|{r.IPC_VERSION}",
+        f"ready|{SESSION}",
+        "error|runtime",
+        f"closed|{SESSION}|false",
+    ], crash_lines
+    assert len(called) == 2
 
     # A missing native writer must NEVER be classified as closed/Saved.
     class MissingWriter:
