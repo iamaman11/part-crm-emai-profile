@@ -201,6 +201,8 @@ fn create_verified_native_candidate(
         return Err(DirtyGenerationError::IdentityMismatch);
     }
 
+    #[cfg(windows)]
+    let native_clone_started = std::time::Instant::now();
     let (candidate_workspace, candidate_inventory) = match RecoveryClone::create(
         source_workspace,
         root,
@@ -228,6 +230,11 @@ fn create_verified_native_candidate(
     {
         return Err(DirtyGenerationError::SourceChanged);
     }
+    #[cfg(windows)]
+    eprintln!(
+        "bridge_save_subphase name=native_clone_and_integrity elapsed_ms={}",
+        native_clone_started.elapsed().as_millis()
+    );
     Ok((candidate_workspace, candidate_inventory))
 }
 
@@ -243,6 +250,8 @@ fn prepare_dirty_generation_candidate_inner<K: GenerationSealingMaterialPort>(
     allow_preexisting_verified_clone: bool,
 ) -> Result<PreparedDirtyGeneration, DirtyGenerationError> {
     let base_generation_id = local_record.generation_id();
+    #[cfg(windows)]
+    let snapshot_started = std::time::Instant::now();
     let (candidate_workspace, candidate_inventory) = create_verified_native_candidate(
         local_record,
         source_workspace,
@@ -260,7 +269,14 @@ fn prepare_dirty_generation_candidate_inner<K: GenerationSealingMaterialPort>(
         return Err(DirtyGenerationError::SourceChanged);
     }
     let plaintext_digest = PlaintextDigest::calculate(&snapshot).bytes();
+    #[cfg(windows)]
+    eprintln!(
+        "bridge_save_subphase name=snapshot_and_verify elapsed_ms={}",
+        snapshot_started.elapsed().as_millis()
+    );
 
+    #[cfg(windows)]
+    let key_material_started = std::time::Instant::now();
     let material = keys
         .material_for(
             tenant_id,
@@ -270,6 +286,13 @@ fn prepare_dirty_generation_candidate_inner<K: GenerationSealingMaterialPort>(
             plaintext_digest,
         )
         .map_err(|_| DirtyGenerationError::KeyUnavailable)?;
+    #[cfg(windows)]
+    eprintln!(
+        "bridge_save_subphase name=sealing_material_request elapsed_ms={}",
+        key_material_started.elapsed().as_millis()
+    );
+    #[cfg(windows)]
+    let sealing_started = std::time::Instant::now();
     let metadata = GenerationMetadata::for_plaintext(
         GenerationIdentity::new(
             tenant_id.clone(),
@@ -287,6 +310,11 @@ fn prepare_dirty_generation_candidate_inner<K: GenerationSealingMaterialPort>(
         .map_err(|_| DirtyGenerationError::EncryptionFailed)?;
     let metadata_digest = digest_hex(sealed.metadata_digest().bytes());
     let container_digest = digest_hex(sealed.container_digest().bytes());
+    #[cfg(windows)]
+    eprintln!(
+        "bridge_save_subphase name=seal_and_digest elapsed_ms={}",
+        sealing_started.elapsed().as_millis()
+    );
 
     Ok(PreparedDirtyGeneration {
         candidate_workspace,
