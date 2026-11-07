@@ -232,6 +232,9 @@ def launch_native_camoufox(
         persistent_context=True,
     )
     try:
+        # Fixed, nonsecret milestone: distinguish SDK startup from time spent
+        # computing pinned options. Never inspect or manipulate user pages.
+        print("camouhost_stage phase=launch step=sdk_enter", file=sys.stderr, flush=True)
         with contextlib.redirect_stdout(sys.stderr):
             context = manager.__enter__()
     except BaseException as error:

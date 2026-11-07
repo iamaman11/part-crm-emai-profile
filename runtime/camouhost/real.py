@@ -1500,6 +1500,8 @@ def report_runtime_stage(phase: str, step: str) -> None:
         ("startup", "begin"),
         ("startup", "ready"),
         ("launch", "before_browser_enter"),
+        ("launch", "options_ready"),
+        ("launch", "sdk_enter"),
         ("launch", "browser_entered"),
         ("launch", "network_blocked"),
         ("launch", "ready"),
@@ -2064,6 +2066,7 @@ def run_native_ipc() -> int:
             try:
                 report_runtime_stage("launch", "before_browser_enter")
                 options = camoufox_launch_options(lock, root, config)
+                report_runtime_stage("launch", "options_ready")
                 user_session = launch_native_camoufox(
                     workspace=root,
                     options=options,
