@@ -1547,14 +1547,32 @@ mod tests {
     fn installed_runtime_refusals_have_distinct_codes_and_do_not_invent_pending_health() {
         use crate::windows_delivery_runtime::WindowsDeliveryRuntimeError as Runtime;
         let cases = [
-            (Runtime::InvalidInstalledLayout, "BRIDGE_INSTALLED_LAYOUT_INVALID"),
+            (
+                Runtime::InvalidInstalledLayout,
+                "BRIDGE_INSTALLED_LAYOUT_INVALID",
+            ),
             (Runtime::PersistedState, "BRIDGE_INSTALLED_STATE_INVALID"),
-            (Runtime::HandoffNotArrived, "BRIDGE_UPDATE_HANDOFF_NOT_ARRIVED"),
-            (Runtime::InterruptedHealthAttempt, "BRIDGE_UPDATE_HEALTH_INTERRUPTED"),
-            (Runtime::NoActiveDelivery, "BRIDGE_INSTALLED_RELEASE_MISSING"),
+            (
+                Runtime::HandoffNotArrived,
+                "BRIDGE_UPDATE_HANDOFF_NOT_ARRIVED",
+            ),
+            (
+                Runtime::InterruptedHealthAttempt,
+                "BRIDGE_UPDATE_HEALTH_INTERRUPTED",
+            ),
+            (
+                Runtime::NoActiveDelivery,
+                "BRIDGE_INSTALLED_RELEASE_MISSING",
+            ),
             (Runtime::StagedDelivery, "BRIDGE_INSTALLED_STAGE_INVALID"),
-            (Runtime::ActiveExecutableMismatch, "BRIDGE_INSTALLED_EXE_MISMATCH"),
-            (Runtime::RuntimeIdentity, "BRIDGE_INSTALLED_RUNTIME_IDENTITY_INVALID"),
+            (
+                Runtime::ActiveExecutableMismatch,
+                "BRIDGE_INSTALLED_EXE_MISMATCH",
+            ),
+            (
+                Runtime::RuntimeIdentity,
+                "BRIDGE_INSTALLED_RUNTIME_IDENTITY_INVALID",
+            ),
         ];
         for (reason, code) in cases {
             let d = UserDiagnostic::Launch(ShippingCompositionError::DeliveryRuntime(reason));
