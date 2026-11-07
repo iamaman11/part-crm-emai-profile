@@ -2,7 +2,8 @@ use crate::browser_execution::{load_materialization_binding, persist_materializa
 use crate::generation_object_spool::VerifiedGenerationObjectFile;
 use crate::generation_reopen::{
     SignedGenerationObjectGetPort, SignedGenerationObjectGetResponse,
-    VerifiedGenerationObjectDownloader,
+    SignedGenerationObjectStreamGetPort, VerifiedGenerationObjectDownloader,
+    VerifiedGenerationObjectStreamDownloader,
 };
 use crate::local_profile::{GenerationWorkspace, LocalGenerationState, MaterializationRoot};
 use crate::operator_flow::{
@@ -839,6 +840,36 @@ impl SignedGenerationObjectGetPort for BackendGet {
             state.events.push(format!("get:{selected}"));
         }
         Ok(SignedGenerationObjectGetResponse::new(200, object))
+    }
+}
+
+// The production shipping cold-R2 owner streams authenticated ciphertext to
+// an unpublished spool. The old Vec-only fixture cannot reopen native Firefox
+// profiles that exceed its 64 MiB legacy cap, even when the encrypted object
+// is valid. Exercise the same bounded stream path here, with no extra memory
+// copy and no relaxation of the production signed capability check.
+impl SignedGenerationObjectStreamGetPort for BackendGet {
+    type Error = BridgePortError;
+
+    fn get_exact_stream(
+        &mut self,
+        signed_url: &str,
+        max_bytes: u64,
+        destination: &mut dyn std::io::Write,
+    ) -> Result<u16, Self::Error> {
+        if signed_url != SIGNED_DOWNLOAD_URL {
+            return Err(BridgePortError::InvalidResponse);
+        }
+        let state = self.state.borrow();
+        let object = state.object.as_ref().ok_or(BridgePortError::InvalidResponse)?;
+        if u64::try_from(object.len()).ok() != Some(max_bytes) {
+            return Err(BridgePortError::InvalidResponse);
+        }
+        destination.write_all(object).map_err(|_| BridgePortError::InvalidResponse)?;
+        let selected = state.active_generation.as_str().to_owned();
+        drop(state);
+        self.state.borrow_mut().events.push(format!("get:{selected}"));
+        Ok(200)
     }
 }
 
