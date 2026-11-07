@@ -353,9 +353,6 @@ impl UserDiagnostic {
                     crate::generation_initialization::InitialProfileError::Upload => {
                         "BRIDGE_FIRST_SAVE_UPLOAD_FAILED"
                     }
-                    crate::generation_initialization::InitialProfileError::Verification => {
-                        "BRIDGE_FIRST_SAVE_VERIFICATION_FAILED"
-                    }
                     crate::generation_initialization::InitialProfileError::Commit => {
                         "BRIDGE_FIRST_SAVE_COMMIT_UNCONFIRMED"
                     }
@@ -545,11 +542,6 @@ impl UserDiagnostic {
                 crate::generation_initialization::InitialProfileError::Upload,
             )) => {
                 "The initial encrypted profile upload did not complete successfully. Preserve local Firefox data and check the current cloud generation before using authorized recovery. No successful Save is confirmed."
-            }
-            Self::Launch(Launch::Initialization(
-                crate::generation_initialization::InitialProfileError::Verification,
-            )) => {
-                "The initial uploaded profile could not be independently verified. Preserve local files and the pending encrypted generation; do not assume that its cloud Save succeeded or start a new generation."
             }
             Self::Launch(Launch::Initialization(
                 crate::generation_initialization::InitialProfileError::Commit,
@@ -1246,10 +1238,6 @@ mod tests {
             (Initial::Snapshot, "BRIDGE_FIRST_OPEN_SNAPSHOT_FAILED"),
             (Initial::Encryption, "BRIDGE_FIRST_OPEN_ENCRYPTION_FAILED"),
             (Initial::Upload, "BRIDGE_FIRST_SAVE_UPLOAD_FAILED"),
-            (
-                Initial::Verification,
-                "BRIDGE_FIRST_SAVE_VERIFICATION_FAILED",
-            ),
             (Initial::Commit, "BRIDGE_FIRST_SAVE_COMMIT_UNCONFIRMED"),
             (
                 Initial::SavedRecovery,
