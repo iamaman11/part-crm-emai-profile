@@ -1,5 +1,6 @@
 import {
   createRoute,
+  Link,
   type AnyRoute,
   useNavigate,
   useParams,
@@ -30,7 +31,9 @@ function ProfileDetailPage() {
   const onSelect = useProfileSelectionNavigation();
   return (
     <div className="page-stack">
-      <ProfileDirectory selectedProfileId={selectedProfileId} onSelect={onSelect} />
+      <div className="action-row">
+        <Link to="/profiles">← All profiles</Link>
+      </div>
       <ProfilesWorkspace selectedProfileId={selectedProfileId} onProfileSelected={onSelect} />
     </div>
   );
