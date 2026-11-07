@@ -2076,7 +2076,12 @@ def prove_shipping_agent_build_boundary() -> None:
     """Release Bridge must never publish an implicit in-browser Python runner."""
     source = (Path(__file__).resolve().parents[1]
               / "apps/profile-bridge/src/camouhost_process.rs").read_text(encoding="utf-8")
-    assert 'let test_agent_enabled = cfg!(any(test, feature = "synthetic-test-bin", debug_assertions));' in source
+    normalized = " ".join(source.split())
+    assert (
+        "let test_agent_enabled = !cfg!(windows) && "
+        "cfg!(any(test, feature = \"synthetic-test-bin\", debug_assertions)) && "
+        "self.config.execution_owner != RuntimeExecutionOwner::IsolatedHistoricalProbe;"
+    ) in normalized
     assert 'test_agent_enabled.then_some(diagnostic_directory.as_path())' in source
     assert 'state.agent_directory = test_agent_enabled.then_some(diagnostic_directory);' in source
     assert 'if let Some(directory) = agent_directory {' in source
