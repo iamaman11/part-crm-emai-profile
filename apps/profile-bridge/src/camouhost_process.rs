@@ -1535,6 +1535,21 @@ fn hex_nibble(value: u8) -> Option<u8> {
     }
 }
 
+// Initial profile materialization still verifies its exact signed bytes.
+// Ordinary user Open checks the already authenticated runtime's file shape
+// via verify_launch_file_shape and does not perform these duplicate hashes.
+fn verify_file_digest(path: &Path, expected: &str) -> Result<(), BridgePortError> {
+    let metadata = fs::symlink_metadata(path).map_err(|_| BridgePortError::Unavailable)?;
+    if metadata.file_type().is_symlink() || !metadata.is_file() {
+        return Err(BridgePortError::InvalidResponse);
+    }
+    let bytes = fs::read(path).map_err(|_| BridgePortError::Unavailable)?;
+    if sha256_hex(&bytes) != expected {
+        return Err(BridgePortError::InvalidResponse);
+    }
+    Ok(())
+}
+
 fn verify_launch_file_shape(path: &Path) -> Result<(), BridgePortError> {
     let metadata = fs::symlink_metadata(path).map_err(|_| BridgePortError::Unavailable)?;
     if metadata.file_type().is_symlink() || !metadata.is_file() || metadata.len() == 0 {
