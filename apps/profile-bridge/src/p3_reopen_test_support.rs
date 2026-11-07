@@ -3,7 +3,6 @@ use crate::generation_object_spool::VerifiedGenerationObjectFile;
 use crate::generation_reopen::{
     SignedGenerationObjectGetPort, SignedGenerationObjectGetResponse,
     SignedGenerationObjectStreamGetPort, VerifiedGenerationObjectDownloader,
-    VerifiedGenerationObjectStreamDownloader,
 };
 use crate::local_profile::{GenerationWorkspace, LocalGenerationState, MaterializationRoot};
 use crate::operator_flow::{
