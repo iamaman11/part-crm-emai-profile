@@ -157,8 +157,8 @@ impl FilesystemRuntimeBundleSelection {
     // Used ONLY after the active signed Release Set, its stage marker and
     // runtime-manifest SHA have been verified by Windows delivery. Installation
     // and repair still use load_bundle() to hash the complete official runtime.
-    // The normal Open trusts the already installed file contents, while checking
-    // the exact installed tree and the five critical launch files on every run.
+    // The normal Open trusts the already installed noncritical contents, while
+    // checking the five critical launch files on every run.
     #[cfg(any(windows, test))]
     pub(crate) fn load_installed_bundle(
         &self,
@@ -196,6 +196,9 @@ impl FilesystemRuntimeBundleSelection {
             }
         }
         let mut runtime_files = if installed_release {
+            // Installation/activation already authenticated the complete signed
+            // tree. A normal Open needs only the exact active manifest and
+            // critical executable/identity files, not 5,000+ filesystem stats.
             check_installed_runtime_files(&self.runtime_root, &packaged.files.files)?
         } else {
             verify_runtime_files(&self.runtime_root, &packaged.files.files, total_bytes)?
@@ -214,10 +217,16 @@ impl FilesystemRuntimeBundleSelection {
                 return Err(RuntimeBundleSelectionError::InvalidRuntime);
             }
         }
-        validate_runtime_tree(&self.runtime_root, &expected_files, &expected_directories)
-            .inspect_err(|error| {
-                eprintln!("RUNTIME_BUNDLE_VALIDATION=tree;error={error:?}");
-            })?;
+        if !installed_release {
+            // The exhaustive tree (including unexpected files) is a setup,
+            // repair and explicit diagnostic responsibility. For an accepted
+            // release the stage owner has already checked its signed marker
+            // and manifest before this fast selector is constructed.
+            validate_runtime_tree(&self.runtime_root, &expected_files, &expected_directories)
+                .inspect_err(|error| {
+                    eprintln!("RUNTIME_BUNDLE_VALIDATION=tree;error={error:?}");
+                })?;
+        }
         eprintln!(
             "bridge_runtime_phase name={} elapsed_ms={} files={} bytes={}",
             if installed_release {
@@ -254,46 +263,58 @@ impl FilesystemRuntimeBundleSelection {
 // An installed Release Set has already passed full SHA/CMS verification
 // at installation/activation. Do not read 2.8 GiB again for every profile Open.
 // The stage owner authenticates the manifest on EVERY Open before this call;
-// file metadata and exact critical launch bytes are checked again here. This
-// does NOT claim that an arbitrary same-size edit to an installed font/module
-// can be discovered without explicit full repair verification.
+// exact critical launch bytes are checked again here. This does NOT claim
+// that an arbitrary change to a noncritical font/module can be discovered
+// without explicit full repair verification.
 fn check_installed_runtime_files(
     root: &Path,
     expected: &[PackagedFileIdentity],
 ) -> Result<Vec<RuntimeFile>, RuntimeBundleSelectionError> {
-    expected
+    // The manifest was authenticated against the exact signed active stage.
+    // Only files that the SDK/Playwright process actually executes or uses
+    // to select its locked identity are revisited on ordinary Open. Allow
+    // upstream Python's generated __pycache__ files without treating them as
+    // a damaged signed installation; a full install/repair audit still
+    // rejects *all* unexpected paths, missing files and noncritical changes.
+    const CRITICAL: [&str; 5] = [
+        SHIPPING_ENTRYPOINT,
+        SHIPPING_RUNTIME_LOCK,
+        SHIPPING_BROWSER_EXECUTABLE,
+        SHIPPING_PYTHON_EXECUTABLE,
+        SHIPPING_RESOLVED_RUNTIME,
+    ];
+    let mut seen = [false; CRITICAL.len()];
+    let files = expected
         .iter()
         .map(|entry| {
-            let relative = BundleRelativePath::parse(&entry.path)
-                .map_err(|_| RuntimeBundleSelectionError::InvalidRuntime)?;
-            let path = root.join(path_from_bundle_relative(&relative));
-            let metadata = fs::symlink_metadata(&path)
-                .map_err(|_| RuntimeBundleSelectionError::MissingRuntimeFile)?;
-            if metadata_is_link_or_reparse(&metadata)
-                || !metadata.is_file()
-                || metadata.len() != entry.size_bytes
-            {
-                return Err(RuntimeBundleSelectionError::InvalidRuntime);
-            }
-            if matches!(
-                entry.path.as_str(),
-                SHIPPING_ENTRYPOINT
-                    | SHIPPING_RUNTIME_LOCK
-                    | SHIPPING_BROWSER_EXECUTABLE
-                    | SHIPPING_PYTHON_EXECUTABLE
-                    | SHIPPING_RESOLVED_RUNTIME
-            ) && sha256_regular_file(&path, entry.size_bytes)? != entry.sha256
-            {
-                return Err(RuntimeBundleSelectionError::InvalidRuntime);
+            if let Some(index) = CRITICAL.iter().position(|name| *name == entry.path) {
+                seen[index] = true;
+                let relative = BundleRelativePath::parse(&entry.path)
+                    .map_err(|_| RuntimeBundleSelectionError::InvalidRuntime)?;
+                let path = root.join(path_from_bundle_relative(&relative));
+                let metadata = fs::symlink_metadata(&path)
+                    .map_err(|_| RuntimeBundleSelectionError::MissingRuntimeFile)?;
+                if metadata_is_link_or_reparse(&metadata)
+                    || !metadata.is_file()
+                    || metadata.len() != entry.size_bytes
+                    || sha256_regular_file(&path, entry.size_bytes)? != entry.sha256
+                {
+                    return Err(RuntimeBundleSelectionError::InvalidRuntime);
+                }
             }
             Ok(RuntimeFile {
-                path: relative,
+                path: BundleRelativePath::parse(&entry.path)
+                    .map_err(|_| RuntimeBundleSelectionError::InvalidRuntime)?,
                 length: entry.size_bytes,
                 sha256: Sha256Digest::parse(entry.sha256.clone())
                     .map_err(|_| RuntimeBundleSelectionError::InvalidRuntime)?,
             })
         })
-        .collect()
+        .collect::<Result<Vec<_>, _>>()?;
+    if !seen.into_iter().all(|found| found) {
+        return Err(RuntimeBundleSelectionError::InvalidRuntime);
+    }
+    Ok(files)
 }
 
 // Hash all bytes of each immutable file against the signed runtime manifest.
@@ -1262,18 +1283,32 @@ mod tests {
         }
         let missing = root.join("browser/fonts/Zeta, Regular.ttf");
         fs::remove_file(&missing)?;
-        assert_eq!(
-            selector.load_installed_bundle(),
+        assert!(selector.load_installed_bundle().is_ok());
+        assert!(matches!(
+            selector.load_bundle(),
             Err(RuntimeBundleSelectionError::MissingRuntimeFile)
-        );
+                | Err(RuntimeBundleSelectionError::InvalidRuntime)
+        ));
         fs::write(&missing, b"font-z")?;
         let extra = root.join("browser/fonts/unexpected.ttf");
         fs::write(&extra, b"unexpected")?;
-        assert_eq!(
-            selector.load_installed_bundle(),
+        assert!(selector.load_installed_bundle().is_ok());
+        assert!(matches!(
+            selector.load_bundle(),
             Err(RuntimeBundleSelectionError::InvalidRuntime)
-        );
+        ));
         fs::remove_file(&extra)?;
+        // A real signed installation can accumulate benign Python bytecode:
+        // normal Open must not classify it as a failed browser update.
+        let bytecode_dir = root.join("python/Lib/site-packages/camoufox/__pycache__");
+        fs::create_dir_all(&bytecode_dir)?;
+        fs::write(bytecode_dir.join("generated.cpython-312.pyc"), b"generated")?;
+        assert!(selector.load_installed_bundle().is_ok());
+        assert!(matches!(
+            selector.load_bundle(),
+            Err(RuntimeBundleSelectionError::InvalidRuntime)
+        ));
+        fs::remove_dir_all(&bytecode_dir)?;
         assert_eq!(selector.load_installed_bundle(), Ok(exact));
         fs::remove_dir_all(root)?;
         Ok(())
