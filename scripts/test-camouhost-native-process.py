@@ -128,6 +128,21 @@ def main() -> int:
             clean_mtime = max(checkpoint.stat().st_mtime_ns, baseline + 1_000_000_000)
             os.utime(checkpoint, ns=(clean_mtime, clean_mtime))
             assert proc.profile_state() == "CLEAN_SHUTDOWN_VERIFIED"
+            clean_mtime = checkpoint.stat().st_mtime_ns
+
+            # A second session can start and exit between observer polls.
+            # Its rewritten checkpoint must invalidate the previous session's
+            # already-observed clean witness, even if its final marker is true.
+            checkpoint.write_text(json.dumps({
+                "profile-after-change": True,
+                "sessionstore-final-state-write-complete": True,
+            }), encoding="utf-8")
+            next_session_mtime = max(
+                checkpoint.stat().st_mtime_ns, clean_mtime + 1_000_000_000
+            )
+            os.utime(checkpoint, ns=(next_session_mtime, next_session_mtime))
+            assert proc.profile_state() == "CRASH_OR_UNKNOWN_PRESERVE_LOCAL"
+            assert proc.profile_state() == "CRASH_OR_UNKNOWN_PRESERVE_LOCAL"
 
             # Reopening after a clean session must clear the old final marker
             # before the native profile is reported Ready.
