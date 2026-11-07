@@ -1,10 +1,17 @@
-# Playwright local test agent — Bridge/Camouhost (#802)
+# Legacy Playwright local test agent — isolated test contexts only
 
-**Built-in local inspection for every browser profile.** The installed Bridge
-always creates a user-local agent inbox and passes it to its existing Camouhost.
-Playwright commands execute on the **same owning thread and BrowserContext**
-as the real running Camoufox. No modes, enable files, environment switches,
-separate browser instances, sidecar services or per-profile limitations.
+**Status: superseded for ordinary user Open (2026-11-07).** The design below
+describes an earlier agent that attached page-inspection commands to the live
+user BrowserContext. That is not the current product contract and must not be
+used for ordinary user profiles. Normal Open uses the official Camoufox SDK
+persistent context but does not expose page, DOM, cookie, storage, navigation
+or JavaScript control to the application.
+
+Any future/remaining local agent use must be restricted to a separately
+authorized disposable test workspace and its own BrowserContext. It must never
+attach to, share, or manipulate the ordinary NativeUser context. The current
+C09 isolated probe is not a general-purpose mailbox/browser automation feature;
+a replacement isolated test-agent workflow requires its own explicit acceptance.
 
 ## Normal workflow on Windows
 

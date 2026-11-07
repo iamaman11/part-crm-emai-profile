@@ -198,18 +198,24 @@ typed result. Ordinary transports do not own D1 mutation construction, authoriza
 idempotency workflow or provider-specific business sequencing.
 
 `apps/profile-bridge` owns Windows-native device trust, materialization and typed runtime composition.
-For ordinary user Open, Camoufox remains an independent native process; the Bridge never controls its
-tabs, pages, DOM, navigation or process tree. Open/Ready requires only Firefox's native writer lock;
-the startup checkpoint does not delay or gate browser use. A clean-close witness requires both the
-released native writer lock and Firefox CrashMonitor's current-session
-`sessionCheckpoints.json` markers: `profile-after-change` must have changed from the pre-launch
-checkpoint during this session, and `sessionstore-final-state-write-complete` must be present after
-shutdown. Lock release alone means quiescence, not clean close. Once a clean-close witness is observed,
-any later native writer or checkpoint change invalidates it for that session; the old witness cannot be
-reused. A missing, stale, invalid or ambiguous checkpoint follows the existing crash/RecoveryRequired
-path and preserves local bytes. This is passive observation of browser-owned state, not a new process
-manager. The separate isolated Playwright automation path may retire only its uniquely marked
-Camouhost bootstrap tab after Rust admission, inside its exclusive job workspace; it never attaches
+For ordinary user Open, Camouhost launches Camoufox through the official SDK and its Playwright
+persistent-context API. The SDK/Playwright owner remains alive for the user session, but the
+application never inspects user pages, evaluates page JavaScript, creates extra tabs or commands
+navigation. Firefox owns windows, tabs, SessionStore and browser data. Rust owns admission, writer
+lease, Save and recovery; the Bridge passively observes Firefox's native writer lock and current-session
+CrashMonitor checkpoint. It does not inspect or kill the Firefox PID/process tree. Open/Ready requires
+the native writer lock; the startup checkpoint does not delay browser use. A clean-close witness requires
+both the released native writer lock and Firefox's current-session
+sessionCheckpoints.json markers: profile-after-change must have changed from the pre-launch checkpoint
+during this session, and sessionstore-final-state-write-complete must be present after shutdown. Lock
+release alone means quiescence, not clean close. Once a clean-close witness is observed, any later native
+writer or checkpoint change invalidates it for that session; the old witness cannot be reused. A missing,
+stale, invalid or ambiguous checkpoint follows the existing crash/RecoveryRequired path and preserves
+local bytes.
+
+The separate isolated Playwright automation path may retire only its uniquely marked Camouhost
+bootstrap tab after Rust admission, inside its own disposable workspace. It never shares or attaches to
+the user persistent context.Camouhost bootstrap tab after Rust admission, inside its exclusive job workspace; it never attaches
 to or manipulates the NativeUser browser.
 
 Phase 2F makes a verified graceful browser close a retained-ownership transition: the Bridge keeps

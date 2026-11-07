@@ -156,7 +156,8 @@ profilebridge://claim/<opaque-code>
 -> open exact materialized generation
 -> acquire local writer lock
 -> validate materialization + runtime + network preflight
--> start the Camouhost IPC sidecar and independent native Camoufox process
+-> start the Camouhost IPC sidecar -> official Camoufox SDK/Playwright persistent context
+-> Firefox browser process
 ```
 
 The claim URI is a bounded one-time handoff, not a local authorization source. Local code does not choose
@@ -258,9 +259,11 @@ claims, profile data or local paths. Close-observation failure never fabricates 
    transport/dependency uncertainty. It is neither a browser-close observer,
    a profile-dirty signal, nor permission to publish an otherwise unverified
    generation. Do not introduce per-file/polling cloud sync or duplicate leases.
-2. Bridge passively observes the native browser lock and Firefox CrashMonitor
-   checkpoint; it does not supervise or drive the user browser. A clean close
-   requires the current session's `profile-after-change` checkpoint (written
+2. Camouhost holds the official Camoufox SDK/Playwright persistent context for
+   the user session, but sends no page, DOM, JavaScript, tab or navigation
+   commands. Bridge passively observes the native browser lock and Firefox
+   CrashMonitor checkpoint; it does not inspect or kill the Firefox PID. A clean
+   close requires the current session's `profile-after-change` checkpoint (written
    after launch), `sessionstore-final-state-write-complete`, and a released
    native writer lock. Lock release alone is not a clean-close witness. This
    positive witness is the **automatic** save trigger: retain the same working
@@ -303,9 +306,10 @@ staging proof remain mandatory to close #802.
 
 While a browser is active:
 
-1. the native browser writer lock remains held for the exact active workspace; the
-   Bridge IPC sidecar is session-bound, but the Bridge does not inspect or monitor
-   the browser PID/process tree;
+1. the native browser writer lock remains held for the exact active workspace;
+   the SDK owner/Bridge IPC sidecar is session-bound. No page-inspection or
+   navigation commands are sent, and the Bridge does not inspect or monitor the
+   Firefox PID/process tree;
 2. the Bridge heartbeats the exact coordinator lease/session/epoch/fence;
 3. heartbeat success preserves ownership;
 4. a released native lock without the current-session final checkpoint is an
