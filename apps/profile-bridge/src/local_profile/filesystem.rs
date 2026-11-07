@@ -1024,6 +1024,7 @@ mod tests {
         let (path, root, tenant, profile, generation) = fixture()?;
         let workspace = root.create_generation(&tenant, &profile, &generation)?;
         std::fs::write(workspace.path().join("camoufox-config.json"), b"{}\\n")?;
+        std::fs::create_dir_all(workspace.path().join("user_data"))?;
         std::fs::write(
             workspace.path().join("user_data").join("cookies.sqlite"),
             vec![5_u8; 8192],

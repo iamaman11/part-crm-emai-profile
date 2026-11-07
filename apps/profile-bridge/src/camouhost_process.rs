@@ -113,13 +113,6 @@ struct RuntimeLaunchBinding {
     fingerprint_config_sha256: String,
     profile_stable_probe_sha256: String,
     profile_stable_identity: Option<ProfileStableIdentity>,
-    entrypoint_sha256: String,
-    #[cfg(windows)]
-    native_entrypoint_sha256: String,
-    #[cfg(windows)]
-    browser_sha256: String,
-    #[cfg(windows)]
-    python_sha256: String,
 }
 
 /// Wraps the already accepted browser preflight and publishes one launch capability only after
@@ -195,13 +188,6 @@ fn validate_runtime_identity(
     if runtime_bundle.manifest().entrypoint().as_str() != REAL_ENTRYPOINT {
         return Err(BrowserLaunchBlocker::MaterializationStale);
     }
-    let entrypoint_sha256 = inventory_digest(runtime_bundle, REAL_ENTRYPOINT)?.to_owned();
-    #[cfg(windows)]
-    let native_entrypoint_sha256 = inventory_digest(runtime_bundle, NATIVE_ENTRYPOINT)?.to_owned();
-    #[cfg(windows)]
-    let browser_sha256 = inventory_digest(runtime_bundle, WINDOWS_BROWSER_EXECUTABLE)?.to_owned();
-    #[cfg(windows)]
-    let python_sha256 = inventory_digest(runtime_bundle, WINDOWS_PYTHON_EXECUTABLE)?.to_owned();
 
     Ok(RuntimeLaunchBinding {
         profile_root: workspace.path().to_path_buf(),
@@ -209,13 +195,6 @@ fn validate_runtime_identity(
         fingerprint_config_sha256: config_sha256,
         profile_stable_probe_sha256: probe_sha256.to_owned(),
         profile_stable_identity: browser_identity.profile_stable_identity().cloned(),
-        entrypoint_sha256,
-        #[cfg(windows)]
-        native_entrypoint_sha256,
-        #[cfg(windows)]
-        browser_sha256,
-        #[cfg(windows)]
-        python_sha256,
     })
 }
 
