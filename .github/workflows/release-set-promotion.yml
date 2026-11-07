@@ -703,13 +703,21 @@ jobs:
           main_sha="$(jq -r '.commit.sha' "$RUNNER_TEMP/protected-main.json")"
           [[ "$main_sha" =~ ^[0-9a-f]{40}$ ]]
           test "$GITHUB_SHA" = "$main_sha"
+          # #266 is a pointer only; #830 is the sole current CRM execution plan.
           gh api "repos/$GITHUB_REPOSITORY/issues/266" > "$RUNNER_TEMP/live-pointer.json"
-          python - "$RUNNER_TEMP/live-pointer.json" "$main_sha" "$RUNNER_TEMP/authorized-intent.json" <<'PY'
+          gh api "repos/$GITHUB_REPOSITORY/issues/830" > "$RUNNER_TEMP/current-plan.json"
+          python - "$RUNNER_TEMP/live-pointer.json" "$RUNNER_TEMP/current-plan.json" "$main_sha" "$RUNNER_TEMP/authorized-intent.json" <<'PY'
           import json, re, sys
-          pointer_path, main_sha, output_path = sys.argv[1:]
-          issue = json.load(open(pointer_path, encoding='utf-8'))
+          pointer_path, current_path, main_sha, output_path = sys.argv[1:]
+          pointer = json.load(open(pointer_path, encoding='utf-8'))
+          pointer_body = pointer.get('body')
+          if not isinstance(pointer_body, str):
+              raise SystemExit('current issue pointer body is missing')
+          if len(re.findall(r'(?m)^CURRENT_STAGE_ISSUE\s*=\s*#830\s*$', pointer_body)) != 1:
+              raise SystemExit('current issue pointer must select only #830')
+          issue = json.load(open(current_path, encoding='utf-8'))
           body = issue.get('body')
-          if not isinstance(body, str): raise SystemExit('live pointer body is missing')
+          if not isinstance(body, str): raise SystemExit('canonical #830 plan body is missing')
           def parse(block):
               fields = {}
               for raw in block.splitlines():
@@ -720,12 +728,6 @@ jobs:
                       fields[key] = value
               return fields
           parsed = [parse(block) for block in re.findall(r'```(?:text)?\s*\n(.*?)```', body, flags=re.S)]
-          current = [item for item in parsed if item.get('CURRENT_STAGE')]
-          if len(current) != 1: raise SystemExit('CURRENT block missing or ambiguous')
-          current = current[0]
-          required_current = {'CURRENT_STAGE':'V2','CURRENT_STAGE_ISSUE':'#584','PROTECTED_MAIN':main_sha,'OPEN_IMPLEMENTATION_PR':'NONE'}
-          for key, expected in required_current.items():
-              if current.get(key) != expected: raise SystemExit(f'live pointer mismatch for {key}: {current.get(key)!r}')
           scoped = [item for item in parsed if re.fullmatch(r'V2_STAGING_WORKER_PROMOTION_V[1-9][0-9]*', item.get('SCOPED_EXCEPTION',''))]
           if len(scoped) != 1: raise SystemExit('active staging promotion exception missing or ambiguous')
           scoped = scoped[0]
@@ -743,9 +745,9 @@ jobs:
           expected_artifact = f'ar11-ready-to-mutate-{target}-{main_sha}'
           if ready_artifact_name != expected_artifact: raise SystemExit('READY artifact identity mismatch')
           if not re.fullmatch(r'[0-9a-f]{64}', ready_evidence_sha256): raise SystemExit('READY evidence digest invalid')
-          match = re.fullmatch(r'#584\s*/\s*([1-9][0-9]*)', scoped.get('AUTHORITY_COMMENT',''))
+          match = re.fullmatch(r'#830\s*/\s*([1-9][0-9]*)', scoped.get('AUTHORITY_COMMENT',''))
           if not match: raise SystemExit('authority comment locator invalid')
-          document = {'schema_version':2,'kind':'WORKER_PROMOTION_AUTHORIZED_INTENT','exception':scoped['SCOPED_EXCEPTION'],'environment':'staging','owner':'.github/workflows/release-set-promotion.yml','operation':'promote','protected_main':main_sha,'release_set_id':target,'expected_current_release_set_id':expected_current,'ready_run_id':int(ready_run_id),'ready_artifact_name':ready_artifact_name,'ready_evidence_sha256':ready_evidence_sha256,'authorization_issue':584,'authorization_comment_id':int(match.group(1)),'excluded_effects':['D1_PHASE_D_0032','ACCESS_MTLS','OTHER_PROVIDER_MUTATION','PRODUCTION']}
+          document = {'schema_version':2,'kind':'WORKER_PROMOTION_AUTHORIZED_INTENT','exception':scoped['SCOPED_EXCEPTION'],'environment':'staging','owner':'.github/workflows/release-set-promotion.yml','operation':'promote','protected_main':main_sha,'release_set_id':target,'expected_current_release_set_id':expected_current,'ready_run_id':int(ready_run_id),'ready_artifact_name':ready_artifact_name,'ready_evidence_sha256':ready_evidence_sha256,'authorization_issue':830,'authorization_comment_id':int(match.group(1)),'excluded_effects':['D1_PHASE_D_0032','ACCESS_MTLS','OTHER_PROVIDER_MUTATION','PRODUCTION']}
           json.dump(document, open(output_path,'w',encoding='utf-8'), sort_keys=True, indent=2); open(output_path,'a',encoding='utf-8').write('\n')
           PY
           release_set_id="$(jq -er '.release_set_id' "$RUNNER_TEMP/authorized-intent.json")"
@@ -761,7 +763,7 @@ jobs:
           import json, os, re, sys
           comment = json.load(open(sys.argv[1], encoding='utf-8'))
           if (comment.get('user') or {}).get('login') != sys.argv[2]: raise SystemExit('authorization is not OWNER-authored')
-          if not str(comment.get('issue_url','')).endswith('/issues/584'): raise SystemExit('authorization not bound to #584')
+          if not str(comment.get('issue_url','')).endswith('/issues/830'): raise SystemExit('authorization not bound to #830')
           blocks = re.findall(r'```(?:text)?\s*\n(.*?)```', comment.get('body') or '', flags=re.S)
           matches=[]
           for block in blocks:
