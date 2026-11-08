@@ -1,6 +1,8 @@
 //! Automatic first-open preparation. Reuses the snapshot, cipher, immutable upload and launch owners.
 use crate::browser_execution::{persist_browser_identity, persist_materialization_binding};
-use crate::generation_snapshot::encode_workspace_snapshot;
+use crate::generation_snapshot::{
+    encode_workspace_snapshot, digest_closed_workspace_streaming, seal_closed_workspace_streaming,
+};
 use crate::local_profile::{BridgeWorkspaceLock, GenerationWorkspace, MaterializationRoot};
 use crate::operator_flow::RuntimeBundleSelectionPort;
 use crate::runtime_bundle::ApprovedRuntimeBundle;
@@ -8,7 +10,7 @@ use crate::shipping_control_plane::{
     MachineHttpMethod, MachineHttpPort, MachineHttpResponse, sealing_material_from_response,
 };
 use crate::shipping_generation_save::{
-    GenerationUploadAuthorization, SignedGenerationObjectPutPort,
+    GenerationUploadAuthorization, SignedGenerationObjectPutPort, SignedGenerationObjectStreamPutPort,
 };
 use crate::shipping_generation_successor_control::decode_upload_authorization;
 use bridge_domain::{BridgePortError, ClaimUri};
@@ -323,7 +325,7 @@ where
 /// The stable local folder is never copied into another browser generation,
 /// deleted or overwritten. A rejected/uncertain server effect leaves dirty
 /// evidence intact; no speculative N+2 is generated.
-pub fn sync_closed_local_draft<T: MachineHttpPort, U: SignedGenerationObjectPutPort>(
+pub fn sync_closed_local_draft<T: MachineHttpPort, U: SignedGenerationObjectStreamPutPort>(
     intent: &InitialProfileOpen,
     actor: &ActorContext,
     device: &DeviceId,
@@ -341,7 +343,6 @@ pub fn sync_closed_local_draft<T: MachineHttpPort, U: SignedGenerationObjectPutP
     {
         return Err(InitialProfileError::Authorization);
     }
-
     let workspace = root
         .open_profile_current(&intent.tenant_id, &intent.profile_id)
         .map_err(|_| InitialProfileError::Snapshot)?;
@@ -351,8 +352,6 @@ pub fn sync_closed_local_draft<T: MachineHttpPort, U: SignedGenerationObjectPutP
         return Err(InitialProfileError::Authorization);
     }
     let dirty = workspace.path().join(".local-unsynced");
-    // This exact marker was created before Firefox was allowed to write.
-    // A missing or foreign marker must never trigger a cloud Save.
     if fs::read(&dirty).map_err(|_| InitialProfileError::Snapshot)? != b"local-unsynced-v2" {
         return Err(InitialProfileError::Snapshot);
     }
@@ -364,29 +363,18 @@ pub fn sync_closed_local_draft<T: MachineHttpPort, U: SignedGenerationObjectPutP
     };
     let writer = BridgeWorkspaceLock::acquire(&workspace, device, stamp()?)
         .map_err(|_| InitialProfileError::Snapshot)?;
-    // Encode only while the native browser has released its writer lock.
-    let captured = (|| {
+    let admission = (|| {
         if !matches!(browser_writer_locks_absent(&workspace), Ok(true)) {
             return Err(InitialProfileError::Snapshot);
         }
-        let inventory = workspace
-            .inventory()
-            .map_err(|_| InitialProfileError::Snapshot)?;
-        let bytes = zeroize::Zeroizing::new(
-            encode_workspace_snapshot(&workspace, &inventory)
-                .map_err(|_| InitialProfileError::Snapshot)?,
-        );
-        if workspace
-            .inventory()
-            .map_err(|_| InitialProfileError::Snapshot)?
-            != inventory
-        {
-            return Err(InitialProfileError::Snapshot);
-        }
-        Ok((bytes, inventory))
+        let inventory = workspace.inventory().map_err(|_| InitialProfileError::Snapshot)?;
+        let (plaintext_bytes, digest) =
+            digest_closed_workspace_streaming(&workspace, &inventory)
+                .map_err(|_| InitialProfileError::Snapshot)?;
+        Ok((inventory, plaintext_bytes, digest))
     })();
     let released = writer.release().map_err(|_| InitialProfileError::Snapshot);
-    let (plaintext, inventory) = captured?;
+    let (inventory, plaintext_bytes, digest) = admission?;
     released?;
 
     let generation = workspace.generation_id().clone();
@@ -411,16 +399,70 @@ pub fn sync_closed_local_draft<T: MachineHttpPort, U: SignedGenerationObjectPutP
             && expected_profile_version == intent.expected_version => {}
         _ => return Err(InitialProfileError::Authorization),
     }
-
-    let (_, receipt) = seal_upload_commit_initial(
-        &intent.tenant_id,
-        &intent.profile_id,
-        &generation,
-        intent.expected_version,
-        &plaintext,
+    let material = sealing_material_from_response(post(
         transport,
-        uploader,
-    )?;
+        &path,
+        &Request::SealingMaterial {
+            generation_id: generation.as_str().to_owned(),
+            expected_profile_version: intent.expected_version,
+            plaintext_digest: hex(&digest),
+        },
+    )?)
+    .map_err(|_| InitialProfileError::Encryption)?;
+
+    // Re-acquire only while sealing the exact ORIGINAL closed folder;
+    // network/Worker waits never hold the Firefox writer admission.
+    let writer = BridgeWorkspaceLock::acquire(&workspace, device, stamp()?)
+        .map_err(|_| InitialProfileError::Snapshot)?;
+    let encrypted = (|| {
+        if !matches!(browser_writer_locks_absent(&workspace), Ok(true)) {
+            return Err(InitialProfileError::Snapshot);
+        }
+        seal_closed_workspace_streaming(
+            &workspace, &inventory, &generation, None, material,
+            plaintext_bytes, digest,
+        )
+        .map_err(|_| InitialProfileError::Snapshot)
+    })();
+    let released = writer.release().map_err(|_| InitialProfileError::Snapshot);
+    let encrypted = encrypted?;
+    released?;
+
+    let metadata_digest = hex(&encrypted.metadata_digest());
+    let container_digest = hex(&encrypted.container_digest());
+    let container_bytes = encrypted.container_bytes();
+    let descriptor = Request::UploadCapability {
+        generation_id: generation.as_str().to_owned(),
+        expected_profile_version: intent.expected_version,
+        metadata_digest: metadata_digest.clone(),
+        container_digest: container_digest.clone(),
+        container_bytes,
+    };
+    let authorization: BridgeGenerationUploadCapabilityResponse =
+        decode(post(transport, &path, &descriptor)?)?;
+    if let GenerationUploadAuthorization::UploadRequired(capability) =
+        decode_upload_authorization::<core::convert::Infallible>(authorization)
+            .map_err(|_| InitialProfileError::Upload)?
+    {
+        let mut sealed_file = encrypted.verified_file()
+            .map_err(|_| InitialProfileError::Upload)?;
+        uploader
+            .put_verified_stream(&capability, &mut sealed_file)
+            .map_err(|_| InitialProfileError::Upload)?;
+    }
+    // Worker re-verifies exact R2 BPGC descriptor before its atomic D1 CAS.
+    let receipt: InitialGenerationCommitted = decode(post(
+        transport,
+        &path,
+        &Request::Commit {
+            generation_id: generation.as_str().to_owned(),
+            expected_profile_version: intent.expected_version,
+            metadata_digest,
+            container_digest,
+            container_bytes,
+        },
+    )?)
+    .map_err(|_| InitialProfileError::Commit)?;
     if receipt.generation_id != generation.as_str()
         || receipt.profile_version != intent.expected_version + 1
     {
@@ -619,6 +661,16 @@ mod tests {
                 Err(())
             }
         }
+        impl SignedGenerationObjectStreamPutPort for NoUpload {
+            fn put_verified_stream(
+                &mut self,
+                _: &crate::shipping_generation_save::SignedGenerationUploadCapability,
+                _: &mut crate::generation_object_spool::VerifiedGenerationObjectFile,
+            ) -> Result<(), Self::Error> {
+                panic!("unverified local DRAFT may never stream")
+            }
+        }
+
 
         let intent = InitialProfileOpen::parse(
             "profilebridge://open/v2/tenant_draft_test/actor_draft_test/profile_draft_test/1/DRAFT",
@@ -681,6 +733,16 @@ mod tests {
                 Err(())
             }
         }
+        impl SignedGenerationObjectStreamPutPort for NoUpload {
+            fn put_verified_stream(
+                &mut self,
+                _: &crate::shipping_generation_save::SignedGenerationUploadCapability,
+                _: &mut crate::generation_object_spool::VerifiedGenerationObjectFile,
+            ) -> Result<(), Self::Error> {
+                panic!("unverified local DRAFT may never stream")
+            }
+        }
+
         use profile_platform_primitives::TenantScope;
         let intent = InitialProfileOpen::parse(
             "profilebridge://open/v2/tenant_reject_test/actor_reject_test/profile_reject_test/1/READY",
@@ -796,6 +858,16 @@ mod tests {
                 Err(())
             }
         }
+        impl SignedGenerationObjectStreamPutPort for NoUpload {
+            fn put_verified_stream(
+                &mut self,
+                _: &crate::shipping_generation_save::SignedGenerationUploadCapability,
+                _: &mut crate::generation_object_spool::VerifiedGenerationObjectFile,
+            ) -> Result<(), Self::Error> {
+                panic!("unverified local DRAFT may never stream")
+            }
+        }
+
         let intent = InitialProfileOpen::parse(
             "profilebridge://open/v2/tenant_draft_sync/actor_draft_sync/profile_draft_sync/1/DRAFT",
         )?;
@@ -894,6 +966,16 @@ mod tests {
                 Err(())
             }
         }
+        impl SignedGenerationObjectStreamPutPort for NoUpload {
+            fn put_verified_stream(
+                &mut self,
+                _: &crate::shipping_generation_save::SignedGenerationUploadCapability,
+                _: &mut crate::generation_object_spool::VerifiedGenerationObjectFile,
+            ) -> Result<(), Self::Error> {
+                panic!("unverified local DRAFT may never stream")
+            }
+        }
+
         let intent = InitialProfileOpen::parse(
             "profilebridge://open/v2/tenant_123/actor_123/profile_123/1/DRAFT",
         )?;
@@ -979,6 +1061,16 @@ mod tests {
                 Err(())
             }
         }
+        impl SignedGenerationObjectStreamPutPort for NoUpload {
+            fn put_verified_stream(
+                &mut self,
+                _: &crate::shipping_generation_save::SignedGenerationUploadCapability,
+                _: &mut crate::generation_object_spool::VerifiedGenerationObjectFile,
+            ) -> Result<(), Self::Error> {
+                panic!("unverified local DRAFT may never stream")
+            }
+        }
+
 
         #[derive(Default)]
         struct CommittingTransport {

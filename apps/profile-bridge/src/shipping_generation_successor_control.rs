@@ -294,6 +294,141 @@ where
     }
 }
 
+/// Streaming successor for the one CLOSED native CURRENT. The request,
+/// signed R2 upload, server verification, Coordinator witness and atomic
+/// D1 CAS are the SAME existing generation-successor contract. Only the
+/// BPGC body source is a verified file instead of an in-memory Vec.
+#[cfg(windows)]
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn publish_closed_streamed_successor<T, U>(
+    tenant: &TenantId,
+    profile: &ProfileId,
+    base: &GenerationId,
+    candidate: &GenerationId,
+    encrypted: &crate::generation_snapshot::ClosedProfileEncryptedStream,
+    lease: &ProfileLease,
+    transport: &mut T,
+    uploader: &mut U,
+) -> Result<(), ShippingControlPlaneError>
+where
+    T: MachineHttpPort,
+    U: SignedGenerationObjectStreamPutPort,
+{
+    if lease.tenant_id() != tenant
+        || lease.profile_id() != profile
+        || lease.epoch() == 0
+        || candidate == base
+        || encrypted.metadata().tenant_id() != tenant
+        || encrypted.metadata().profile_id() != profile
+        || encrypted.metadata().generation_id() != candidate
+        || encrypted.metadata().base_generation_id() != Some(base)
+    {
+        return Err(ShippingControlPlaneError::InvalidResponse);
+    }
+    let metadata_digest = lower_hex_stream(&encrypted.metadata_digest());
+    let container_digest = lower_hex_stream(&encrypted.container_digest());
+    let object_key = encrypted.object_key();
+    let request = BridgeProfileGenerationSuccessorRequest::new(
+        base.as_str(),
+        candidate.as_str(),
+        &object_key,
+        &metadata_digest,
+        &container_digest,
+        encrypted.container_bytes(),
+        lease.session_id().as_str(),
+        lease.fencing_token().as_str(),
+        lease.epoch(),
+    );
+    let post = |transport: &mut T, path: &str, body: &BridgeProfileGenerationSuccessorRequest| {
+        post_json::<T, core::convert::Infallible, _>(transport, path, body)
+            .map_err(|reason| match reason {
+                GenerationSuccessorControlError::ControlPlane(error) => error,
+                GenerationSuccessorControlError::Sealing(never) => match never {},
+            })
+    };
+    let upload_path = successor_path(
+        BRIDGE_PROFILE_GENERATION_UPLOAD_CAPABILITY_PATH_TEMPLATE, tenant, profile,
+    );
+    let authorization = |transport: &mut T|
+        -> Result<GenerationUploadAuthorization, ShippingControlPlaneError> {
+        let response = post(transport, &upload_path, &request)?;
+        if response.len() > MAX_UPLOAD_CAPABILITY_RESPONSE_BYTES {
+            return Err(ShippingControlPlaneError::InvalidResponse);
+        }
+        let parsed: BridgeGenerationUploadCapabilityResponse =
+            serde_json::from_slice(&response)
+                .map_err(|_| ShippingControlPlaneError::InvalidResponse)?;
+        decode_upload_authorization::<core::convert::Infallible>(parsed)
+            .map_err(|reason| match reason {
+                GenerationSuccessorControlError::ControlPlane(error) => error,
+                GenerationSuccessorControlError::Sealing(never) => match never {},
+            })
+    };
+    match authorization(transport)? {
+        GenerationUploadAuthorization::Verified => {}
+        GenerationUploadAuthorization::UploadRequired(capability) => {
+            let mut exact = encrypted
+                .verified_file()
+                .map_err(|_| ShippingControlPlaneError::InvalidResponse)?;
+            uploader
+                .put_verified_stream(&capability, &mut exact)
+                .map_err(|_| ShippingControlPlaneError::Transport)?;
+            // A completed HTTP PUT is NOT verified storage.
+            if !matches!(authorization(transport)?, GenerationUploadAuthorization::Verified) {
+                return Err(ShippingControlPlaneError::HttpServerUncertain);
+            }
+        }
+    }
+    let commit_path = successor_path(
+        BRIDGE_PROFILE_GENERATION_COMMIT_PATH_TEMPLATE, tenant, profile,
+    );
+    let committed = post(transport, &commit_path, &request)
+        .and_then(|response| {
+            if response.len() > MAX_COMMIT_RESPONSE_BYTES {
+                return Err(ShippingControlPlaneError::InvalidResponse);
+            }
+            serde_json::from_slice::<BridgeGenerationSuccessorCommitResponse>(&response)
+                .map_err(|_| ShippingControlPlaneError::InvalidResponse)
+        });
+    if committed.is_ok() {
+        return Ok(());
+    }
+    // Lost reply might follow a real D1 CAS. Only exact read-only D1
+    // ACTIVE_EXACT observation of this original object grants completion.
+    let observation = BridgeGenerationSuccessorObserveRequest {
+        base_generation_id: base.as_str().to_owned(),
+        generation_id: candidate.as_str().to_owned(),
+        object_key,
+        metadata_digest,
+        container_digest,
+        container_bytes: encrypted.container_bytes(),
+    };
+    let bytes = post_json::<T, core::convert::Infallible, _>(
+        transport,
+        &successor_path(BRIDGE_PROFILE_GENERATION_OBSERVE_PATH_TEMPLATE, tenant, profile),
+        &observation,
+    )
+    .map_err(|reason| match reason {
+        GenerationSuccessorControlError::ControlPlane(error) => error,
+        GenerationSuccessorControlError::Sealing(never) => match never {},
+    })?;
+    if bytes.len() > MAX_OBSERVE_RESPONSE_BYTES {
+        return Err(ShippingControlPlaneError::InvalidResponse);
+    }
+    let observed: BridgeGenerationSuccessorObserveResponse =
+        serde_json::from_slice(&bytes)
+            .map_err(|_| ShippingControlPlaneError::InvalidResponse)?;
+    if !observed.active_exact {
+        return Err(ShippingControlPlaneError::HttpServerUncertain);
+    }
+    Ok(())
+}
+
+#[cfg(windows)]
+fn lower_hex_stream(input: &[u8; 32]) -> String {
+    input.iter().map(|byte| format!("{byte:02x}")).collect()
+}
+
 /// Reuse the EXISTING read-only D1 exact-successor observation after an
 /// ambiguous local-first Sync response. This never uploads, commits, retries
 /// an unknown mutation, creates a candidate or changes CURRENT.

@@ -147,6 +147,116 @@ pub(crate) fn encode_workspace_snapshot_streaming(
     })
 }
 
+/// The EXISTING BPGW reader supplies two authenticated passes of the same
+/// closed native CURRENT, without allocating the full plaintext snapshot.
+/// The resulting temporary file holds only BPGC ciphertext and is deleted on
+/// scope exit; it is not a second Firefox workspace or durable profile state.
+pub(crate) struct ClosedProfileEncryptedStream {
+    ciphertext: tempfile::NamedTempFile,
+    report: encrypted_generation_domain::StreamingGenerationReport,
+}
+
+impl ClosedProfileEncryptedStream {
+    pub(crate) fn metadata(&self) -> &encrypted_generation_domain::GenerationMetadata {
+        self.report.metadata()
+    }
+    pub(crate) fn metadata_digest(&self) -> [u8; 32] {
+        self.report.metadata_digest().bytes()
+    }
+    pub(crate) fn container_digest(&self) -> [u8; 32] {
+        self.report.container_digest().bytes()
+    }
+    pub(crate) fn container_bytes(&self) -> u64 {
+        self.report.container_bytes()
+    }
+    pub(crate) fn object_key(&self) -> String {
+        self.report.metadata().object_key()
+    }
+    pub(crate) fn verified_file(
+        &self,
+    ) -> Result<crate::generation_object_spool::VerifiedGenerationObjectFile, GenerationSnapshotError> {
+        crate::generation_object_spool::VerifiedGenerationObjectFile::open(
+            self.ciphertext.path(),
+            self.container_bytes(),
+            self.container_digest(),
+        )
+        .map_err(|_| GenerationSnapshotError::SourceChanged)
+    }
+}
+
+pub(crate) fn digest_closed_workspace_streaming(
+    workspace: &GenerationWorkspace,
+    inventory: &GenerationInventory,
+) -> Result<(u64, [u8; 32]), GenerationSnapshotError> {
+    let mut reader = WorkspaceSnapshotReader::new(workspace, inventory)?;
+    let expected = reader.expected_bytes();
+    let mut hasher = Sha256::new();
+    let mut buffer = [0_u8; 65_536];
+    loop {
+        let count = reader
+            .read(&mut buffer)
+            .map_err(|_| GenerationSnapshotError::SourceChanged)?;
+        if count == 0 {
+            break;
+        }
+        hasher.update(&buffer[..count]);
+    }
+    Ok((expected, hasher.finalize().into()))
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn seal_closed_workspace_streaming(
+    workspace: &GenerationWorkspace,
+    inventory: &GenerationInventory,
+    generation: &GenerationId,
+    base: Option<&GenerationId>,
+    material: crate::dirty_generation::GenerationSealingMaterial,
+    plaintext_bytes: u64,
+    plaintext_digest: [u8; 32],
+) -> Result<ClosedProfileEncryptedStream, GenerationSnapshotError> {
+    use encrypted_generation_domain::{
+        GenerationIdentity, GenerationMetadata, seal_generation_streaming,
+    };
+    let (dek, nonce, chunk_size) = material.into_parts();
+    let metadata = GenerationMetadata::for_prehashed_stream(
+        GenerationIdentity::new(
+            workspace.tenant_id().clone(),
+            workspace.profile_id().clone(),
+            generation.clone(),
+            base.cloned(),
+        ),
+        dek.key_id().clone(),
+        nonce,
+        chunk_size,
+        plaintext_bytes,
+        plaintext_digest,
+    )
+    .map_err(|_| GenerationSnapshotError::InvalidFormat)?;
+    let mut reader = WorkspaceSnapshotReader::new(workspace, inventory)?;
+    if reader.expected_bytes() != plaintext_bytes {
+        return Err(GenerationSnapshotError::SourceChanged);
+    }
+    let mut file = tempfile::NamedTempFile::new()
+        .map_err(|_| GenerationSnapshotError::SourceChanged)?;
+    let report = seal_generation_streaming(
+        &metadata,
+        &dek,
+        &mut reader,
+        file.as_file_mut(),
+    )
+    .map_err(|_| GenerationSnapshotError::SourceChanged)?;
+    file.as_file_mut()
+        .sync_all()
+        .map_err(|_| GenerationSnapshotError::SourceChanged)?;
+    if workspace.inventory().map_err(GenerationSnapshotError::Local)? != *inventory {
+        return Err(GenerationSnapshotError::SourceChanged);
+    }
+    Ok(ClosedProfileEncryptedStream {
+        ciphertext: file,
+        report,
+    })
+}
+
 /// Preflight against the same canonical BPGW0001 layout used by the actual
 /// stream. This avoids writing any staging bytes for oversized input while
 /// retaining 64 KiB bounded file reads for accepted profiles.

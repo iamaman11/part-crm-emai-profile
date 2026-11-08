@@ -138,6 +138,31 @@ impl PreparedDirtyGeneration {
     }
 }
 
+/// Same deterministic N+1 object identity for both bounded-memory and
+/// original-file streaming Sync; a retry may never choose a second successor.
+#[cfg(any(windows, test))]
+pub(crate) fn closed_current_candidate_id(
+    tenant: &TenantId,
+    profile: &ProfileId,
+    base: &GenerationId,
+    digest: [u8; 32],
+) -> Result<GenerationId, DirtyGenerationError> {
+    use sha2::{Digest, Sha256};
+    let mut hash = Sha256::new();
+    hash.update(b"profile-bridge/closed-current-successor/v2\0");
+    for part in [
+        tenant.as_str().as_bytes(),
+        profile.as_str().as_bytes(),
+        base.as_str().as_bytes(),
+        &digest,
+    ] {
+        hash.update((part.len() as u64).to_be_bytes());
+        hash.update(part);
+    }
+    GenerationId::parse(format!("generation_{}", digest_hex(hash.finalize().into())))
+        .map_err(|_| DirtyGenerationError::IdentityMismatch)
+}
+
 /// Reuse the existing encrypted successor format for a CLOSED local-first
 /// CURRENT. Unlike the former generation-folder model, this source folder
 /// remains stable: there is no secondary native browser workspace or second
@@ -153,7 +178,6 @@ pub fn prepare_closed_current_successor<K: GenerationSealingMaterialPort>(
     base: &GenerationId,
     keys: &mut K,
 ) -> Result<PreparedDirtyGeneration, DirtyGenerationError> {
-    use sha2::{Digest, Sha256};
     if source.tenant_id() != tenant
         || source.profile_id() != profile
         || source.base_generation_id() != Some(base)
@@ -162,20 +186,7 @@ pub fn prepare_closed_current_successor<K: GenerationSealingMaterialPort>(
         return Err(DirtyGenerationError::IdentityMismatch);
     }
     let digest = PlaintextDigest::calculate(snapshot).bytes();
-    let mut hash = Sha256::new();
-    hash.update(b"profile-bridge/closed-current-successor/v2\0");
-    for part in [
-        tenant.as_str().as_bytes(),
-        profile.as_str().as_bytes(),
-        base.as_str().as_bytes(),
-        &digest,
-    ] {
-        hash.update((part.len() as u64).to_be_bytes());
-        hash.update(part);
-    }
-    let candidate_id =
-        GenerationId::parse(format!("generation_{}", digest_hex(hash.finalize().into()),))
-            .map_err(|_| DirtyGenerationError::IdentityMismatch)?;
+    let candidate_id = closed_current_candidate_id(tenant, profile, base, digest)?;
     if &candidate_id == base {
         return Err(DirtyGenerationError::CandidateMatchesBase);
     }

@@ -266,7 +266,9 @@ mod windows {
     use crate::camouhost_process::{
         ManagedCamouhostConfig, ManagedCamouhostProcess, RuntimeBindingSlot, RuntimeDisplayMode,
     };
-    use crate::dirty_generation::prepare_closed_current_successor;
+    use crate::dirty_generation::{
+        GenerationSealingMaterialPort, closed_current_candidate_id,
+    };
     use crate::generation_initialization::{
         InitialProfileError, InitialProfileStatus, reauthorize_current_ready_generation,
         sync_closed_local_draft,
@@ -274,7 +276,9 @@ mod windows {
     use crate::generation_reopen::{
         GenerationReopenControlPort, VerifiedGenerationObjectStreamDownloader,
     };
-    use crate::generation_snapshot::encode_workspace_snapshot;
+    use crate::generation_snapshot::{
+        digest_closed_workspace_streaming, seal_closed_workspace_streaming,
+    };
     use crate::local_profile::{DeliveryActivationGuard, MaterializationRoot};
     use crate::operator_flow::EnrollmentPort;
     use crate::operator_flow::{
@@ -284,10 +288,7 @@ mod windows {
         ControlPlaneCoordinator, ControlPlaneEnrollment, ControlPlaneLeaseTiming,
         SharedControlPlaneCoordinator, ShippingControlPlaneError,
     };
-    use crate::shipping_generation_save::publish_verify_and_commit_successor;
-    use crate::shipping_generation_successor_control::{
-        ControlPlaneGenerationSuccessor, observe_closed_current_exact,
-    };
+    use crate::shipping_generation_successor_control::publish_closed_streamed_successor;
     use crate::shipping_generation_successor_control::{
         RestartExactCommitObservation, RestartExactLocalCompletion,
         RestartExactLocalCompletionError, complete_active_exact_after_restart,
@@ -513,23 +514,21 @@ mod windows {
         let device = binding.device_id();
         let lock = BridgeWorkspaceLock::acquire(&workspace, device, now().map_err(|_| ())?.value())
             .map_err(|_| ())?;
-        // The snapshot, not the browser, is the only temporary payload.
         let captured = (|| {
             if !matches!(browser_writer_locks_absent(&workspace), Ok(true)) {
                 return Err(());
             }
             let inventory = workspace.inventory().map_err(|_| ())?;
-            let snapshot = zeroize::Zeroizing::new(
-                encode_workspace_snapshot(&workspace, &inventory).map_err(|_| ())?,
-            );
-            if workspace.inventory().map_err(|_| ())? != inventory {
-                return Err(());
-            }
-            Ok((snapshot, inventory))
+            let (bytes, digest) = digest_closed_workspace_streaming(&workspace, &inventory)
+                .map_err(|_| ())?;
+            Ok((inventory, bytes, digest))
         })();
         let unlock = lock.release().map_err(|_| ());
-        let (snapshot, original_inventory) = captured?;
+        let (original_inventory, plaintext_bytes, digest) = captured?;
         unlock?;
+        let candidate = closed_current_candidate_id(
+            &intent.tenant_id, &intent.profile_id, &base, digest,
+        ).map_err(|_| ())?;
 
         let application = WindowsDeviceApplication::from_system(origin.to_owned(), binding.clone())
             .map_err(|_| ())?;
@@ -540,7 +539,7 @@ mod windows {
             profile_platform_primitives::CorrelationId::parse("corr_closed_ready_sync")
                 .map_err(|_| ())?,
         );
-        // Fresh authorization is acquired for Sync, not for browser Open.
+        // Sync-only fresh Coordinator witness. Native Open uses no lease.
         let claim = reauthorize_current_ready_generation(intent, &actor, device, &mut transport)
             .map_err(|_| ())?;
         let mut enrollment = ControlPlaneEnrollment::new(transport.clone());
@@ -554,7 +553,6 @@ mod windows {
         {
             return Err(());
         }
-
         let mut coordinator =
             SharedControlPlaneCoordinator::new(ControlPlaneCoordinator::new(transport.clone()));
         let lease = coordinator
@@ -565,58 +563,43 @@ mod windows {
                 enrolled.launch_intent_id(),
             )
             .map_err(|_| ())?;
-        // The existing heartbeat owner maintains the same fence during long PUT.
         let heartbeat = RetainedSaveHeartbeat::start(coordinator.clone(), lease.clone());
         let outcome = (|| {
             let mut sealer = coordinator.clone();
-            let mut observation_transport = transport.clone();
-            let mut control = ControlPlaneGenerationSuccessor::new(transport, &mut sealer);
-            let prepared = prepare_closed_current_successor(
-                &workspace,
-                &original_inventory,
-                &snapshot,
-                &intent.tenant_id,
-                &intent.profile_id,
-                &base,
-                &mut control,
-            )
-            .map_err(|_| ())?;
-            let mut upload = WindowsSignedGenerationObjectPut::from_system().map_err(|_| ())?;
-            if !heartbeat.is_healthy() {
-                return Err(());
-            }
-            let committed = match publish_verify_and_commit_successor(
-                &intent.tenant_id,
-                &intent.profile_id,
-                &base,
-                &prepared,
-                &lease,
-                &mut control,
-                &mut upload,
-            ) {
-                Ok(receipt) => receipt.generation_id().clone(),
-                Err(_) => {
-                    // An HTTP reply may be lost *after* D1 committed.
-                    // Observe the EXACT originally sealed object read-only;
-                    // negative/uncertain observation never replays a PUT.
-                    if !observe_closed_current_exact(
-                        &intent.tenant_id,
-                        &intent.profile_id,
-                        &base,
-                        &prepared,
-                        &mut observation_transport,
-                    )
-                    .map_err(|_| ())?
-                    {
-                        return Err(());
-                    }
-                    prepared.sealed().metadata().generation_id().clone()
+            let material = sealer
+                .material_for(
+                    &intent.tenant_id, &intent.profile_id, &base, &candidate, digest,
+                )
+                .map_err(|_| ())?;
+            // Network/key service does not hold the local admission. Only the
+            // ORIGINAL closed folder is read for the streaming BPGC seal.
+            let lock = BridgeWorkspaceLock::acquire(
+                &workspace, device, now().map_err(|_| ())?.value(),
+            ).map_err(|_| ())?;
+            let encrypted = (|| {
+                if !matches!(browser_writer_locks_absent(&workspace), Ok(true)) {
+                    return Err(());
                 }
-            };
+                seal_closed_workspace_streaming(
+                    &workspace, &original_inventory, &candidate, Some(&base), material,
+                    plaintext_bytes, digest,
+                ).map_err(|_| ())
+            })();
+            let unlock = lock.release().map_err(|_| ());
+            let encrypted = encrypted?;
+            unlock?;
             if !heartbeat.is_healthy() {
                 return Err(());
             }
-            Ok(committed)
+            let mut upload = WindowsSignedGenerationObjectPut::from_system().map_err(|_| ())?;
+            publish_closed_streamed_successor(
+                &intent.tenant_id, &intent.profile_id, &base, &candidate,
+                &encrypted, &lease, &mut transport, &mut upload,
+            ).map_err(|_| ())?;
+            if !heartbeat.is_healthy() {
+                return Err(());
+            }
+            Ok(candidate.clone())
         })();
         drop(heartbeat);
         if outcome.is_ok() {
