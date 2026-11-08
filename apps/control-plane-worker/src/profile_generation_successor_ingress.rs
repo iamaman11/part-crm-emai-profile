@@ -1090,7 +1090,11 @@ async fn retire_one_old_generation(
 /// Some(None) is read-only CURRENT restoration. Every other generation
 /// request retains its original live coordinator witness.
 fn reopen_selection_witness(
-    session: &str, token: &str, epoch: u64, local_restore: bool, historical: bool,
+    session: &str,
+    token: &str,
+    epoch: u64,
+    local_restore: bool,
+    historical: bool,
 ) -> Option<Option<(SessionId, FencingToken, u64)>> {
     if local_restore {
         return (!historical && session.is_empty() && token.is_empty() && epoch == 0)
@@ -1151,16 +1155,21 @@ async fn dispatch_download_capability(
             profile_id,
             actor,
             device_id,
-            witness.as_ref().expect("historical requires witness").0.clone(),
-            witness.as_ref().expect("historical requires witness").1.clone(),
+            witness
+                .as_ref()
+                .expect("historical requires witness")
+                .0
+                .clone(),
+            witness
+                .as_ref()
+                .expect("historical requires witness")
+                .1
+                .clone(),
             body.coordinator_epoch(),
         )
         .await
     } else {
-        authoritative_reopen_descriptor(
-            env, profile_id, actor, device_id, witness,
-        )
-        .await
+        authoritative_reopen_descriptor(env, profile_id, actor, device_id, witness).await
     };
     let (reference, descriptor) = match selected {
         Ok(value) => value,
@@ -1246,16 +1255,21 @@ async fn dispatch_opening_material(
             profile_id,
             actor,
             device_id,
-            witness.as_ref().expect("historical requires witness").0.clone(),
-            witness.as_ref().expect("historical requires witness").1.clone(),
+            witness
+                .as_ref()
+                .expect("historical requires witness")
+                .0
+                .clone(),
+            witness
+                .as_ref()
+                .expect("historical requires witness")
+                .1
+                .clone(),
             body.coordinator_epoch(),
         )
         .await
     } else {
-        authoritative_reopen_descriptor(
-            env, profile_id, actor, device_id, witness,
-        )
-        .await
+        authoritative_reopen_descriptor(env, profile_id, actor, device_id, witness).await
     };
     let (reference, descriptor) = match selected {
         Ok(value) => value,

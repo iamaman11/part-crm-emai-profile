@@ -154,8 +154,15 @@ where
     D::Error: Into<GenerationObjectDownloadError>,
 {
     ensure_authoritative_generation_to(
-        root, tenant_id, profile_id, generation_id, device_id, workspace_epoch,
-        control, downloader, None,
+        root,
+        tenant_id,
+        profile_id,
+        generation_id,
+        device_id,
+        workspace_epoch,
+        control,
+        downloader,
+        None,
     )
 }
 
@@ -184,8 +191,15 @@ where
         return Err(AuthoritativeGenerationMaterializationError::InvalidLocalEvidence);
     }
     ensure_authoritative_generation_to(
-        root, tenant_id, profile_id, generation_id, device_id, workspace_epoch,
-        control, downloader, Some(profile_version),
+        root,
+        tenant_id,
+        profile_id,
+        generation_id,
+        device_id,
+        workspace_epoch,
+        control,
+        downloader,
+        Some(profile_version),
     )
 }
 
@@ -219,43 +233,46 @@ where
         }
     } else {
         match root.open_generation(tenant_id, profile_id, generation_id) {
-        Ok(workspace) => {
-            match load_materialization_binding(&workspace, tenant_id, profile_id, generation_id) {
-                Ok(binding) => {
-                    if workspace
-                        .materialization_inventory_digest()
-                        .map_err(|_| AuthoritativeGenerationMaterializationError::Local)?
-                        != binding.materialized_inventory_digest()
-                    {
+            Ok(workspace) => {
+                match load_materialization_binding(&workspace, tenant_id, profile_id, generation_id)
+                {
+                    Ok(binding) => {
+                        if workspace
+                            .materialization_inventory_digest()
+                            .map_err(|_| AuthoritativeGenerationMaterializationError::Local)?
+                            != binding.materialized_inventory_digest()
+                        {
+                            return Err(
+                                AuthoritativeGenerationMaterializationError::InvalidLocalEvidence,
+                            );
+                        }
+                        #[cfg(windows)]
+                        eprintln!(
+                            "bridge_open_subphase name=ready_local_reuse elapsed_ms={}",
+                            local_evidence_started.elapsed().as_millis()
+                        );
+                        return Ok(());
+                    }
+                    Err(BrowserLaunchBlocker::LocalProfile(LocalProfileError::Io(
+                        std::io::ErrorKind::NotFound,
+                    ))) => Some(workspace),
+                    Err(BrowserLaunchBlocker::LocalProfile(LocalProfileError::Io(
+                        std::io::ErrorKind::PermissionDenied,
+                    ))) => {
+                        return Err(AuthoritativeGenerationMaterializationError::LocalAccessDenied);
+                    }
+                    Err(BrowserLaunchBlocker::LocalProfile(_)) => {
+                        return Err(AuthoritativeGenerationMaterializationError::Local);
+                    }
+                    Err(_) => {
                         return Err(
                             AuthoritativeGenerationMaterializationError::InvalidLocalEvidence,
                         );
                     }
-                    #[cfg(windows)]
-                    eprintln!(
-                        "bridge_open_subphase name=ready_local_reuse elapsed_ms={}",
-                        local_evidence_started.elapsed().as_millis()
-                    );
-                    return Ok(());
-                }
-                Err(BrowserLaunchBlocker::LocalProfile(LocalProfileError::Io(
-                    std::io::ErrorKind::NotFound,
-                ))) => Some(workspace),
-                Err(BrowserLaunchBlocker::LocalProfile(LocalProfileError::Io(
-                    std::io::ErrorKind::PermissionDenied,
-                ))) => {
-                    return Err(AuthoritativeGenerationMaterializationError::LocalAccessDenied);
-                }
-                Err(BrowserLaunchBlocker::LocalProfile(_)) => {
-                    return Err(AuthoritativeGenerationMaterializationError::Local);
-                }
-                Err(_) => {
-                    return Err(AuthoritativeGenerationMaterializationError::InvalidLocalEvidence);
                 }
             }
-        }
-        Err(LocalProfileError::Io(std::io::ErrorKind::NotFound)) => None,
-        Err(_) => return Err(AuthoritativeGenerationMaterializationError::Local),
+            Err(LocalProfileError::Io(std::io::ErrorKind::NotFound)) => None,
+            Err(_) => return Err(AuthoritativeGenerationMaterializationError::Local),
         }
     };
 
@@ -426,17 +443,32 @@ where
             return require_native_camoufox_config(workspace);
         }
         restore_materialization_binding_after_authoritative_open(
-            workspace, tenant_id, profile_id, generation_id, &source_container_sha256,
+            workspace,
+            tenant_id,
+            profile_id,
+            generation_id,
+            &source_container_sha256,
         )
         .map(|_| ())
         .map_err(|_| GenerationSnapshotError::PrePublish)
     };
     let published = match profile_version {
         Some(version) => materialize_profile_current_snapshot_with_pre_publish(
-            root, tenant_id, profile_id, generation_id, version, opened.plaintext(), bind,
+            root,
+            tenant_id,
+            profile_id,
+            generation_id,
+            version,
+            opened.plaintext(),
+            bind,
         ),
         None => materialize_workspace_snapshot_with_pre_publish(
-            root, tenant_id, profile_id, generation_id, opened.plaintext(), bind,
+            root,
+            tenant_id,
+            profile_id,
+            generation_id,
+            opened.plaintext(),
+            bind,
         ),
     };
     published.map_err(|error| match error {
@@ -579,19 +611,34 @@ where
                 return require_native_camoufox_config(workspace);
             }
             restore_materialization_binding_after_authoritative_open(
-                workspace, tenant_id, profile_id, generation_id, &digest,
+                workspace,
+                tenant_id,
+                profile_id,
+                generation_id,
+                &digest,
             )
             .map(|_| ())
             .map_err(|_| GenerationSnapshotError::PrePublish)
         };
         let published = match profile_version {
             Some(version) => materialize_profile_current_snapshot_streaming_with_pre_publish(
-                root, tenant_id, profile_id, generation_id, version,
-                &mut plaintext, expected, bind,
+                root,
+                tenant_id,
+                profile_id,
+                generation_id,
+                version,
+                &mut plaintext,
+                expected,
+                bind,
             ),
             None => materialize_workspace_snapshot_streaming_with_pre_publish(
-                root, tenant_id, profile_id, generation_id,
-                &mut plaintext, expected, bind,
+                root,
+                tenant_id,
+                profile_id,
+                generation_id,
+                &mut plaintext,
+                expected,
+                bind,
             ),
         };
         published.map_err(|error| match error {
@@ -617,8 +664,7 @@ fn require_native_camoufox_config(
     workspace: &GenerationWorkspace,
 ) -> Result<(), GenerationSnapshotError> {
     let path = workspace.path().join("camoufox-config.json");
-    let metadata = fs::symlink_metadata(&path)
-        .map_err(|_| GenerationSnapshotError::PrePublish)?;
+    let metadata = fs::symlink_metadata(&path).map_err(|_| GenerationSnapshotError::PrePublish)?;
     if metadata.file_type().is_symlink() || !metadata.is_file() || metadata.len() == 0 {
         return Err(GenerationSnapshotError::PrePublish);
     }

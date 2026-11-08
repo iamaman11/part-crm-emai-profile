@@ -361,7 +361,9 @@ impl UserDiagnostic {
                     }
                 },
                 ShippingCompositionError::Clock => "BRIDGE_CLOCK_UNAVAILABLE",
-                ShippingCompositionError::RestoreUnavailable => "BRIDGE_LOCAL_CURRENT_RESTORE_FAILED",
+                ShippingCompositionError::RestoreUnavailable => {
+                    "BRIDGE_LOCAL_CURRENT_RESTORE_FAILED"
+                }
                 ShippingCompositionError::ControlPlane => "BRIDGE_SESSION_NOT_AUTHORIZED",
                 ShippingCompositionError::HeartbeatAuthorityUncertain => {
                     "BRIDGE_HEARTBEAT_RECOVERY_REQUIRED"

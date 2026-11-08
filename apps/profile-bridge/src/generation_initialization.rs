@@ -264,8 +264,13 @@ where
             return Err(InitialProfileError::Snapshot);
         }
         let (container_digest, receipt) = seal_upload_commit_initial(
-            &intent.tenant_id, &intent.profile_id, &generation,
-            expected_profile_version, &plaintext, transport, uploader,
+            &intent.tenant_id,
+            &intent.profile_id,
+            &generation,
+            expected_profile_version,
+            &plaintext,
+            transport,
+            uploader,
         )?;
         committed = true;
         let binding = MaterializationBinding::new(
@@ -332,9 +337,7 @@ pub fn sync_closed_local_draft<T: MachineHttpPort, U: SignedGenerationObjectPutP
     let dirty = workspace.path().join(".local-unsynced");
     // This exact marker was created before Firefox was allowed to write.
     // A missing or foreign marker must never trigger a cloud Save.
-    if fs::read(&dirty).map_err(|_| InitialProfileError::Snapshot)?
-        != b"local-unsynced-v2"
-    {
+    if fs::read(&dirty).map_err(|_| InitialProfileError::Snapshot)? != b"local-unsynced-v2" {
         return Err(InitialProfileError::Snapshot);
     }
     let stamp = || -> Result<u64, InitialProfileError> {
@@ -350,12 +353,18 @@ pub fn sync_closed_local_draft<T: MachineHttpPort, U: SignedGenerationObjectPutP
         if !matches!(browser_writer_locks_absent(&workspace), Ok(true)) {
             return Err(InitialProfileError::Snapshot);
         }
-        let inventory = workspace.inventory().map_err(|_| InitialProfileError::Snapshot)?;
+        let inventory = workspace
+            .inventory()
+            .map_err(|_| InitialProfileError::Snapshot)?;
         let bytes = zeroize::Zeroizing::new(
             encode_workspace_snapshot(&workspace, &inventory)
                 .map_err(|_| InitialProfileError::Snapshot)?,
         );
-        if workspace.inventory().map_err(|_| InitialProfileError::Snapshot)? != inventory {
+        if workspace
+            .inventory()
+            .map_err(|_| InitialProfileError::Snapshot)?
+            != inventory
+        {
             return Err(InitialProfileError::Snapshot);
         }
         Ok((bytes, inventory))
@@ -367,24 +376,34 @@ pub fn sync_closed_local_draft<T: MachineHttpPort, U: SignedGenerationObjectPutP
     let generation = workspace.generation_id().clone();
     let path = format!(
         "/bridge/v1/tenants/{}/profiles/{}/generation-initialization",
-        intent.tenant_id.as_str(), intent.profile_id.as_str(),
+        intent.tenant_id.as_str(),
+        intent.profile_id.as_str(),
     );
     let prepared: InitialGenerationPrepared = decode(post(
-        transport, &path, &Request::Prepare {
+        transport,
+        &path,
+        &Request::Prepare {
             generation_id: generation.as_str().to_owned(),
             expected_profile_version: intent.expected_version,
         },
     )?)?;
     match prepared {
-        InitialGenerationPrepared::Initialize { generation_id, expected_profile_version }
-            if generation_id == generation.as_str()
-                && expected_profile_version == intent.expected_version => {}
+        InitialGenerationPrepared::Initialize {
+            generation_id,
+            expected_profile_version,
+        } if generation_id == generation.as_str()
+            && expected_profile_version == intent.expected_version => {}
         _ => return Err(InitialProfileError::Authorization),
     }
 
     let (_, receipt) = seal_upload_commit_initial(
-        &intent.tenant_id, &intent.profile_id, &generation, intent.expected_version,
-        &plaintext, transport, uploader,
+        &intent.tenant_id,
+        &intent.profile_id,
+        &generation,
+        intent.expected_version,
+        &plaintext,
+        transport,
+        uploader,
     )?;
     if receipt.generation_id != generation.as_str()
         || receipt.profile_version != intent.expected_version + 1
@@ -394,7 +413,8 @@ pub fn sync_closed_local_draft<T: MachineHttpPort, U: SignedGenerationObjectPutP
 
     // Commit was confirmed, but another browser may already have reopened.
     // A busy writer means recovery of local receipt is pending, never Saved.
-    let current = root.open_profile_current(&intent.tenant_id, &intent.profile_id)
+    let current = root
+        .open_profile_current(&intent.tenant_id, &intent.profile_id)
         .map_err(|_| InitialProfileError::SavedRecovery)?;
     let guard = BridgeWorkspaceLock::acquire(&current, device, stamp()?)
         .map_err(|_| InitialProfileError::SavedRecovery)?;
@@ -406,16 +426,16 @@ pub fn sync_closed_local_draft<T: MachineHttpPort, U: SignedGenerationObjectPutP
         {
             return Err(InitialProfileError::SavedRecovery);
         }
-        let unchanged = current.inventory()
-            .map_err(|_| InitialProfileError::SavedRecovery)? == inventory;
-        root.update_profile_current_sync_base(
-            &current, &generation, receipt.profile_version,
-        )
-        .map_err(|_| InitialProfileError::SavedRecovery)?;
+        let unchanged = current
+            .inventory()
+            .map_err(|_| InitialProfileError::SavedRecovery)?
+            == inventory;
+        root.update_profile_current_sync_base(&current, &generation, receipt.profile_version)
+            .map_err(|_| InitialProfileError::SavedRecovery)?;
         // Never clear a dirty marker if user data changed during R2 upload.
         if unchanged {
-            let metadata = fs::symlink_metadata(&dirty)
-                .map_err(|_| InitialProfileError::SavedRecovery)?;
+            let metadata =
+                fs::symlink_metadata(&dirty).map_err(|_| InitialProfileError::SavedRecovery)?;
             if metadata.file_type().is_symlink()
                 || !metadata.is_file()
                 || fs::read(&dirty).map_err(|_| InitialProfileError::SavedRecovery)?
@@ -427,7 +447,9 @@ pub fn sync_closed_local_draft<T: MachineHttpPort, U: SignedGenerationObjectPutP
         }
         Ok(())
     })();
-    let unlocked = guard.release().map_err(|_| InitialProfileError::SavedRecovery);
+    let unlocked = guard
+        .release()
+        .map_err(|_| InitialProfileError::SavedRecovery);
     applied?;
     unlocked
 }
@@ -446,7 +468,8 @@ fn seal_upload_commit_initial<T: MachineHttpPort, U: SignedGenerationObjectPutPo
 ) -> Result<(String, InitialGenerationCommitted), InitialProfileError> {
     let path = format!(
         "/bridge/v1/tenants/{}/profiles/{}/generation-initialization",
-        tenant.as_str(), profile.as_str()
+        tenant.as_str(),
+        profile.as_str()
     );
     let generation_id = generation.as_str().to_owned();
     let expected_profile_version = version;
@@ -466,20 +489,15 @@ fn seal_upload_commit_initial<T: MachineHttpPort, U: SignedGenerationObjectPutPo
     let (dek, nonce_prefix, chunk_size) = material.into_parts();
     // First generation has no base. Never fabricate a source generation or container digest.
     let metadata = GenerationMetadata::for_plaintext(
-        GenerationIdentity::new(
-            tenant.clone(),
-            profile.clone(),
-            generation.clone(),
-            None,
-        ),
+        GenerationIdentity::new(tenant.clone(), profile.clone(), generation.clone(), None),
         dek.key_id().clone(),
         nonce_prefix,
         chunk_size,
         plaintext,
     )
     .map_err(|_| InitialProfileError::Encryption)?;
-    let sealed = seal_generation(&metadata, &dek, plaintext)
-        .map_err(|_| InitialProfileError::Encryption)?;
+    let sealed =
+        seal_generation(&metadata, &dek, plaintext).map_err(|_| InitialProfileError::Encryption)?;
     if PlaintextDigest::calculate(plaintext).bytes() != digest {
         return Err(InitialProfileError::Snapshot);
     }
@@ -565,8 +583,11 @@ mod tests {
         impl MachineHttpPort for NoTransport {
             type Error = ();
             fn request(
-                &mut self, _: MachineHttpMethod, _: &str,
-                _: &CorrelationId, _: Option<&[u8]>,
+                &mut self,
+                _: MachineHttpMethod,
+                _: &str,
+                _: &CorrelationId,
+                _: Option<&[u8]>,
             ) -> Result<MachineHttpResponse, ()> {
                 panic!("DRAFT Sync must not contact the server before local evidence admission")
             }
@@ -575,7 +596,9 @@ mod tests {
         impl SignedGenerationObjectPutPort for NoUpload {
             type Error = ();
             fn put_exact(
-                &mut self, _: &SignedGenerationUploadCapability, _: &[u8],
+                &mut self,
+                _: &SignedGenerationUploadCapability,
+                _: &[u8],
             ) -> Result<(), ()> {
                 panic!("DRAFT Sync must not upload an unverified local folder")
             }
@@ -585,7 +608,8 @@ mod tests {
             "profilebridge://open/v2/tenant_draft_test/actor_draft_test/profile_draft_test/1/DRAFT",
         )?;
         let actor = ActorContext::new(
-            TenantScope::new(intent.tenant_id.clone()), intent.actor_id.clone(),
+            TenantScope::new(intent.tenant_id.clone()),
+            intent.actor_id.clone(),
             CorrelationId::parse("corr_draft_test")?,
         );
         let device = DeviceId::parse("device_draft_test")?;
@@ -596,17 +620,20 @@ mod tests {
         ));
         let root = MaterializationRoot::open_or_create(&path)?;
         let local_id = GenerationId::parse("generation_draft_test")?;
-        let workspace = root.create_profile_current(
-            &intent.tenant_id, &intent.profile_id, &local_id, 1,
-        )?;
+        let workspace =
+            root.create_profile_current(&intent.tenant_id, &intent.profile_id, &local_id, 1)?;
         let sync = |transport: &mut NoTransport, uploader: &mut NoUpload| {
-            sync_closed_local_draft(
-                &intent, &actor, &device, &root, transport, uploader,
-            )
+            sync_closed_local_draft(&intent, &actor, &device, &root, transport, uploader)
         };
-        assert_eq!(sync(&mut NoTransport, &mut NoUpload), Err(InitialProfileError::Snapshot));
+        assert_eq!(
+            sync(&mut NoTransport, &mut NoUpload),
+            Err(InitialProfileError::Snapshot)
+        );
         std::fs::write(workspace.path().join(".local-unsynced"), b"invalid-marker")?;
-        assert_eq!(sync(&mut NoTransport, &mut NoUpload), Err(InitialProfileError::Snapshot));
+        assert_eq!(
+            sync(&mut NoTransport, &mut NoUpload),
+            Err(InitialProfileError::Snapshot)
+        );
         std::fs::remove_dir_all(&path)?;
         Ok(())
     }
@@ -618,8 +645,11 @@ mod tests {
         impl MachineHttpPort for NoTransport {
             type Error = ();
             fn request(
-                &mut self, _: MachineHttpMethod, _: &str,
-                _: &CorrelationId, _: Option<&[u8]>,
+                &mut self,
+                _: MachineHttpMethod,
+                _: &str,
+                _: &CorrelationId,
+                _: Option<&[u8]>,
             ) -> Result<MachineHttpResponse, ()> {
                 panic!("unauthorized sync contacted control plane")
             }
@@ -628,7 +658,8 @@ mod tests {
         impl SignedGenerationObjectPutPort for NoUpload {
             type Error = ();
             fn put_exact(
-                &mut self, _: &crate::shipping_generation_save::SignedGenerationUploadCapability,
+                &mut self,
+                _: &crate::shipping_generation_save::SignedGenerationUploadCapability,
                 _: &[u8],
             ) -> Result<(), ()> {
                 panic!("unauthorized sync uploaded a snapshot")
@@ -639,7 +670,8 @@ mod tests {
             "profilebridge://open/v2/tenant_reject_test/actor_reject_test/profile_reject_test/1/READY",
         )?;
         let actor = ActorContext::new(
-            TenantScope::new(intent.tenant_id.clone()), intent.actor_id.clone(),
+            TenantScope::new(intent.tenant_id.clone()),
+            intent.actor_id.clone(),
             CorrelationId::parse("corr_reject_test")?,
         );
         let device = DeviceId::parse("device_reject_test")?;
@@ -650,7 +682,14 @@ mod tests {
         ));
         let root = MaterializationRoot::open_or_create(&path)?;
         assert_eq!(
-            sync_closed_local_draft(&intent, &actor, &device, &root, &mut NoTransport, &mut NoUpload),
+            sync_closed_local_draft(
+                &intent,
+                &actor,
+                &device,
+                &root,
+                &mut NoTransport,
+                &mut NoUpload
+            ),
             Err(InitialProfileError::Authorization)
         );
         std::fs::remove_dir_all(&path)?;
@@ -667,16 +706,24 @@ mod tests {
         };
         use control_plane_contract::profile_generation_api::BridgeGenerationUploadCapabilityResponse;
         use profile_platform_primitives::TenantScope;
-        struct VerifiedTransport { operations: Vec<&'static str> }
+        struct VerifiedTransport {
+            operations: Vec<&'static str>,
+        }
         impl MachineHttpPort for VerifiedTransport {
             type Error = ();
             fn request(
-                &mut self, _: MachineHttpMethod, _: &str,
-                _: &CorrelationId, body: Option<&[u8]>,
+                &mut self,
+                _: MachineHttpMethod,
+                _: &str,
+                _: &CorrelationId,
+                body: Option<&[u8]>,
             ) -> Result<MachineHttpResponse, ()> {
                 let input: Request = serde_json::from_slice(body.ok_or(())?).map_err(|_| ())?;
                 let reply = match input {
-                    Request::Prepare { generation_id, expected_profile_version } => {
+                    Request::Prepare {
+                        generation_id,
+                        expected_profile_version,
+                    } => {
                         self.operations.push("prepare");
                         serde_json::json!({
                             "state": "initialize",
@@ -688,16 +735,22 @@ mod tests {
                         self.operations.push("seal");
                         serde_json::to_value(BridgeGenerationSealingMaterialResponse::new(
                             "profile-generation-root-v1-7",
-                            "37".repeat(32), "71".repeat(16),
+                            "37".repeat(32),
+                            "71".repeat(16),
                             GENERATION_SEALING_CHUNK_BYTES,
-                        )).map_err(|_| ())?
+                        ))
+                        .map_err(|_| ())?
                     }
                     Request::UploadCapability { .. } => {
                         self.operations.push("verify-upload");
                         serde_json::to_value(BridgeGenerationUploadCapabilityResponse::verified())
                             .map_err(|_| ())?
                     }
-                    Request::Commit { generation_id, expected_profile_version, .. } => {
+                    Request::Commit {
+                        generation_id,
+                        expected_profile_version,
+                        ..
+                    } => {
                         self.operations.push("commit");
                         serde_json::json!({
                             "generationId": generation_id,
@@ -710,14 +763,19 @@ mod tests {
                         })
                     }
                 };
-                Ok(MachineHttpResponse::new(200, serde_json::to_vec(&reply).map_err(|_| ())?))
+                Ok(MachineHttpResponse::new(
+                    200,
+                    serde_json::to_vec(&reply).map_err(|_| ())?,
+                ))
             }
         }
         struct NoUpload;
         impl SignedGenerationObjectPutPort for NoUpload {
             type Error = ();
             fn put_exact(
-                &mut self, _: &SignedGenerationUploadCapability, _: &[u8],
+                &mut self,
+                _: &SignedGenerationUploadCapability,
+                _: &[u8],
             ) -> Result<(), ()> {
                 panic!("server already verified this immutable snapshot")
             }
@@ -726,7 +784,8 @@ mod tests {
             "profilebridge://open/v2/tenant_draft_sync/actor_draft_sync/profile_draft_sync/1/DRAFT",
         )?;
         let actor = ActorContext::new(
-            TenantScope::new(intent.tenant_id.clone()), intent.actor_id.clone(),
+            TenantScope::new(intent.tenant_id.clone()),
+            intent.actor_id.clone(),
             CorrelationId::parse("corr_draft_sync")?,
         );
         let device = DeviceId::parse("device_draft_sync")?;
@@ -737,18 +796,33 @@ mod tests {
         ));
         let root = MaterializationRoot::open_or_create(&path)?;
         let local_id = GenerationId::parse("generation_local_draft_sync")?;
-        let workspace = root.create_profile_current(
-            &intent.tenant_id, &intent.profile_id, &local_id, 1,
-        )?;
+        let workspace =
+            root.create_profile_current(&intent.tenant_id, &intent.profile_id, &local_id, 1)?;
         std::fs::create_dir(workspace.path().join("user_data"))?;
-        std::fs::write(workspace.path().join("user_data/cookies.sqlite"), b"persistent-cookie-data")?;
-        std::fs::write(workspace.path().join("camoufox-config.json"), b"{}")?;
-        std::fs::write(workspace.path().join(".local-unsynced"), b"local-unsynced-v2")?;
-        let mut transport = VerifiedTransport { operations: Vec::new() };
-        sync_closed_local_draft(
-            &intent, &actor, &device, &root, &mut transport, &mut NoUpload,
+        std::fs::write(
+            workspace.path().join("user_data/cookies.sqlite"),
+            b"persistent-cookie-data",
         )?;
-        assert_eq!(transport.operations, ["prepare", "seal", "verify-upload", "commit"]);
+        std::fs::write(workspace.path().join("camoufox-config.json"), b"{}")?;
+        std::fs::write(
+            workspace.path().join(".local-unsynced"),
+            b"local-unsynced-v2",
+        )?;
+        let mut transport = VerifiedTransport {
+            operations: Vec::new(),
+        };
+        sync_closed_local_draft(
+            &intent,
+            &actor,
+            &device,
+            &root,
+            &mut transport,
+            &mut NoUpload,
+        )?;
+        assert_eq!(
+            transport.operations,
+            ["prepare", "seal", "verify-upload", "commit"]
+        );
         let confirmed = root.open_profile_current(&intent.tenant_id, &intent.profile_id)?;
         assert_eq!(confirmed.path(), workspace.path());
         assert_eq!(confirmed.base_generation_id(), Some(&local_id));

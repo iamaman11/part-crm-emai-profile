@@ -804,9 +804,9 @@ where
         }
 
         let request = if self.local_current_restore {
-            BridgeGenerationOpeningMaterialRequest::local_restore(
-                encode_lower_hex(metadata_prelude),
-            )
+            BridgeGenerationOpeningMaterialRequest::local_restore(encode_lower_hex(
+                metadata_prelude,
+            ))
         } else {
             let cursor = self.exact_reopen_cursor(tenant_id, profile_id)?;
             BridgeGenerationOpeningMaterialRequest::new(

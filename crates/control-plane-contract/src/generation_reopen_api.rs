@@ -11,7 +11,9 @@ pub const BRIDGE_PROFILE_GENERATION_PREDECESSOR_DOWNLOAD_PATH_TEMPLATE: &str = "
 pub const BRIDGE_PROFILE_GENERATION_PREDECESSOR_OPENING_PATH_TEMPLATE: &str = "/bridge/v1/tenants/{tenantId}/profiles/{profileId}/generation-working-candidate/opening-material";
 pub const GENERATION_DOWNLOAD_CAPABILITY_MAX_EXPIRES_SECONDS: u32 = 300;
 
-fn false_value(value: &bool) -> bool { !*value }
+fn false_value(value: &bool) -> bool {
+    !*value
+}
 
 pub const BRIDGE_PROFILE_GENERATION_WORKING_PROOF_PATH_TEMPLATE: &str =
     "/bridge/v1/tenants/{tenantId}/profiles/{profileId}/generation-working-candidate/certify";
@@ -409,8 +411,7 @@ mod tests {
         assert_eq!(value["coordinatorEpoch"], 0);
         assert!(value.get("generationId").is_none());
         assert!(value.get("objectKey").is_none());
-        let decoded: BridgeGenerationDownloadCapabilityRequest =
-            serde_json::from_value(value)?;
+        let decoded: BridgeGenerationDownloadCapabilityRequest = serde_json::from_value(value)?;
         assert!(decoded.is_local_restore());
 
         let opening = BridgeGenerationOpeningMaterialRequest::local_restore("cafe");
@@ -418,14 +419,16 @@ mod tests {
         assert_eq!(value["localRestore"], true);
         assert_eq!(value["metadataPreludeHex"], "cafe");
         assert!(value.get("generationId").is_none());
-        let decoded: BridgeGenerationOpeningMaterialRequest =
-            serde_json::from_value(value)?;
+        let decoded: BridgeGenerationOpeningMaterialRequest = serde_json::from_value(value)?;
         assert!(decoded.is_local_restore());
 
-        let original = BridgeGenerationDownloadCapabilityRequest::new(
-            "session_original", "fence_original", 2,
+        let original =
+            BridgeGenerationDownloadCapabilityRequest::new("session_original", "fence_original", 2);
+        assert!(
+            serde_json::to_value(original)?
+                .get("localRestore")
+                .is_none()
         );
-        assert!(serde_json::to_value(original)?.get("localRestore").is_none());
         Ok(())
     }
 

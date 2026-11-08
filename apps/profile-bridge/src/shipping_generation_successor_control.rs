@@ -307,7 +307,12 @@ pub(crate) fn observe_closed_current_exact<T: MachineHttpPort>(
 ) -> Result<bool, ShippingControlPlaneError> {
     let request = BridgeGenerationSuccessorObserveRequest {
         base_generation_id: base.as_str().to_owned(),
-        generation_id: prepared.sealed().metadata().generation_id().as_str().to_owned(),
+        generation_id: prepared
+            .sealed()
+            .metadata()
+            .generation_id()
+            .as_str()
+            .to_owned(),
         object_key: prepared.object_key(),
         metadata_digest: prepared.metadata_digest().to_owned(),
         container_digest: prepared.container_digest().to_owned(),
@@ -317,7 +322,9 @@ pub(crate) fn observe_closed_current_exact<T: MachineHttpPort>(
     let bytes = post_json::<T, core::convert::Infallible, _>(
         transport,
         &successor_path(
-            BRIDGE_PROFILE_GENERATION_OBSERVE_PATH_TEMPLATE, tenant, profile,
+            BRIDGE_PROFILE_GENERATION_OBSERVE_PATH_TEMPLATE,
+            tenant,
+            profile,
         ),
         &request,
     )

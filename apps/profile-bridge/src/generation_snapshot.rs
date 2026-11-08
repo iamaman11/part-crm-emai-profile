@@ -507,7 +507,14 @@ pub(crate) fn materialize_workspace_snapshot_streaming_with_pre_publish(
     before_publish: impl FnMut(&GenerationWorkspace) -> Result<(), GenerationSnapshotError>,
 ) -> Result<GenerationWorkspace, GenerationSnapshotError> {
     materialize_workspace_snapshot_streaming_to(
-        root, tenant_id, profile_id, generation_id, source, expected, None, before_publish,
+        root,
+        tenant_id,
+        profile_id,
+        generation_id,
+        source,
+        expected,
+        None,
+        before_publish,
     )
 }
 
@@ -525,8 +532,14 @@ pub(crate) fn materialize_profile_current_snapshot_streaming_with_pre_publish(
     before_publish: impl FnMut(&GenerationWorkspace) -> Result<(), GenerationSnapshotError>,
 ) -> Result<GenerationWorkspace, GenerationSnapshotError> {
     materialize_workspace_snapshot_streaming_to(
-        root, tenant_id, profile_id, generation_id, source, expected,
-        Some(profile_version), before_publish,
+        root,
+        tenant_id,
+        profile_id,
+        generation_id,
+        source,
+        expected,
+        Some(profile_version),
+        before_publish,
     )
 }
 
@@ -683,7 +696,13 @@ fn materialize_stream_into_staging(
 
     // Identical no-replace atomic publish boundary to the in-memory reader.
     let workspace = publish_verified_staging(
-        root, staging, staging_path, tenant, profile, generation, profile_version,
+        root,
+        staging,
+        staging_path,
+        tenant,
+        profile,
+        generation,
+        profile_version,
     )?;
     verify_streamed_workspace(&workspace, &entries)?;
     Ok(workspace)
@@ -779,7 +798,13 @@ pub(crate) fn materialize_workspace_snapshot_with_pre_publish(
     before_publish: impl FnMut(&GenerationWorkspace) -> Result<(), GenerationSnapshotError>,
 ) -> Result<GenerationWorkspace, GenerationSnapshotError> {
     materialize_workspace_snapshot_to(
-        root, tenant_id, profile_id, generation_id, snapshot, None, before_publish,
+        root,
+        tenant_id,
+        profile_id,
+        generation_id,
+        snapshot,
+        None,
+        before_publish,
     )
 }
 
@@ -795,7 +820,13 @@ pub(crate) fn materialize_profile_current_snapshot_with_pre_publish(
     before_publish: impl FnMut(&GenerationWorkspace) -> Result<(), GenerationSnapshotError>,
 ) -> Result<GenerationWorkspace, GenerationSnapshotError> {
     materialize_workspace_snapshot_to(
-        root, tenant_id, profile_id, generation_id, snapshot, Some(profile_version), before_publish,
+        root,
+        tenant_id,
+        profile_id,
+        generation_id,
+        snapshot,
+        Some(profile_version),
+        before_publish,
     )
 }
 
@@ -885,7 +916,13 @@ fn materialize_into_staging(
     before_publish(&staging)?;
 
     let workspace = publish_verified_staging(
-        root, staging, staging_path, tenant_id, profile_id, generation_id, profile_version,
+        root,
+        staging,
+        staging_path,
+        tenant_id,
+        profile_id,
+        generation_id,
+        profile_version,
     )?;
     verify_materialized_snapshot(&workspace, entries)?;
     Ok(workspace)
@@ -1242,14 +1279,23 @@ mod tests {
         let fixture = Fixture::new()?;
         let source_id = GenerationId::parse("generation_snapshot_source")?;
         let cloud_id = GenerationId::parse("generation_snapshot_confirmed")?;
-        let source = fixture.root.create_generation(
-            &fixture.tenant_id, &fixture.profile_id, &source_id,
+        let source =
+            fixture
+                .root
+                .create_generation(&fixture.tenant_id, &fixture.profile_id, &source_id)?;
+        fs::write(
+            source.path().join("browser-state.bin"),
+            b"original verified browser files",
         )?;
-        fs::write(source.path().join("browser-state.bin"), b"original verified browser files")?;
         let snapshot = encode_workspace_snapshot(&source, &source.inventory()?)?;
         let saved = super::materialize_profile_current_snapshot_with_pre_publish(
-            &fixture.root, &fixture.tenant_id, &fixture.profile_id,
-            &cloud_id, 9, &snapshot, |_| Ok(()),
+            &fixture.root,
+            &fixture.tenant_id,
+            &fixture.profile_id,
+            &cloud_id,
+            9,
+            &snapshot,
+            |_| Ok(()),
         )?;
         assert!(saved.path().ends_with("current"));
         assert_eq!(saved.generation_id(), &cloud_id);
@@ -1261,12 +1307,23 @@ mod tests {
         );
         // The local working CURRENT is never overwritten, even by an
         // otherwise well-formed verified snapshot with the same cloud ID.
-        fs::write(saved.path().join("browser-state.bin"), b"local unsynced edits")?;
+        fs::write(
+            saved.path().join("browser-state.bin"),
+            b"local unsynced edits",
+        )?;
         let attempt = super::materialize_profile_current_snapshot_with_pre_publish(
-            &fixture.root, &fixture.tenant_id, &fixture.profile_id,
-            &cloud_id, 9, &snapshot, |_| Ok(()),
+            &fixture.root,
+            &fixture.tenant_id,
+            &fixture.profile_id,
+            &cloud_id,
+            9,
+            &snapshot,
+            |_| Ok(()),
         );
-        assert!(matches!(attempt, Err(GenerationSnapshotError::TargetAlreadyExists)));
+        assert!(matches!(
+            attempt,
+            Err(GenerationSnapshotError::TargetAlreadyExists)
+        ));
         assert_eq!(
             fs::read(saved.path().join("browser-state.bin"))?,
             b"local unsynced edits",
@@ -1281,23 +1338,35 @@ mod tests {
         let fixture = Fixture::new()?;
         let source_id = GenerationId::parse("generation_stream_source")?;
         let cloud_id = GenerationId::parse("generation_stream_confirmed")?;
-        let source = fixture.root.create_generation(
-            &fixture.tenant_id, &fixture.profile_id, &source_id,
+        let source =
+            fixture
+                .root
+                .create_generation(&fixture.tenant_id, &fixture.profile_id, &source_id)?;
+        fs::write(
+            source.path().join("cookies.sqlite"),
+            b"persistent native state",
         )?;
-        fs::write(source.path().join("cookies.sqlite"), b"persistent native state")?;
         let snapshot = encode_workspace_snapshot(&source, &source.inventory()?)?;
         let mut reader = snapshot.as_slice();
         let restored = super::materialize_profile_current_snapshot_streaming_with_pre_publish(
-            &fixture.root, &fixture.tenant_id, &fixture.profile_id,
-            &cloud_id, 3, &mut reader,
+            &fixture.root,
+            &fixture.tenant_id,
+            &fixture.profile_id,
+            &cloud_id,
+            3,
+            &mut reader,
             StreamedWorkspaceSnapshot {
                 plaintext_bytes: snapshot.len() as u64,
                 plaintext_digest: sha2::Sha256::digest(&snapshot).into(),
-            }, |_| Ok(()),
+            },
+            |_| Ok(()),
         )?;
         assert_eq!(restored.base_generation_id(), Some(&cloud_id));
         assert_eq!(restored.profile_version(), 3);
-        assert_eq!(fs::read(restored.path().join("cookies.sqlite"))?, b"persistent native state");
+        assert_eq!(
+            fs::read(restored.path().join("cookies.sqlite"))?,
+            b"persistent native state"
+        );
         fixture.cleanup();
         Ok(())
     }

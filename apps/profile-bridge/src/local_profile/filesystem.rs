@@ -527,11 +527,7 @@ impl GenerationWorkspace {
         self.rebind_staging_generation(generation_id)?;
         replace_generation_marker(
             &self.path().join(GENERATION_MARKER),
-            &render_generation_marker(
-                generation_id,
-                Some(generation_id),
-                profile_version,
-            )?,
+            &render_generation_marker(generation_id, Some(generation_id), profile_version)?,
         )?;
         self.base_generation_id = Some(generation_id.clone());
         self.profile_version = profile_version;

@@ -242,30 +242,31 @@ mod windows {
         close_observation_disposition, pending_recovery_failure_disposition,
         recovery_next_safe_step, retryable_reconnect_observation,
     };
+    use crate::authoritative_generation::ensure_authoritative_current;
     use crate::camouhost_process::{
         ManagedCamouhostConfig, ManagedCamouhostProcess, RuntimeBindingSlot, RuntimeDisplayMode,
     };
-    use crate::authoritative_generation::ensure_authoritative_current;
-    use crate::generation_initialization::{
-        InitialProfileError, InitialProfileStatus,
-        reauthorize_current_ready_generation, sync_closed_local_draft,
-    };
     use crate::dirty_generation::prepare_closed_current_successor;
-    use crate::generation_snapshot::encode_workspace_snapshot;
-    use crate::shipping_generation_save::publish_verify_and_commit_successor;
-    use crate::shipping_generation_successor_control::{
-        ControlPlaneGenerationSuccessor, observe_closed_current_exact,
+    use crate::generation_initialization::{
+        InitialProfileError, InitialProfileStatus, reauthorize_current_ready_generation,
+        sync_closed_local_draft,
     };
     use crate::generation_reopen::{
         GenerationReopenControlPort, VerifiedGenerationObjectStreamDownloader,
     };
+    use crate::generation_snapshot::encode_workspace_snapshot;
     use crate::local_profile::{DeliveryActivationGuard, MaterializationRoot};
+    use crate::operator_flow::EnrollmentPort;
     use crate::operator_flow::{
         OperatorFailureStage, OperatorFlowError, PendingSaveRecovery, ProfileBridgeOperator,
     };
     use crate::shipping_control_plane::{
         ControlPlaneCoordinator, ControlPlaneEnrollment, ControlPlaneLeaseTiming,
         SharedControlPlaneCoordinator, ShippingControlPlaneError,
+    };
+    use crate::shipping_generation_save::publish_verify_and_commit_successor;
+    use crate::shipping_generation_successor_control::{
+        ControlPlaneGenerationSuccessor, observe_closed_current_exact,
     };
     use crate::shipping_generation_successor_control::{
         RestartExactCommitObservation, RestartExactLocalCompletion,
@@ -287,7 +288,6 @@ mod windows {
     use crate::windows_generation_put::WindowsSignedGenerationObjectPut;
     use crate::windows_native::WindowsDeviceIdentity;
     use application_ports::{ProfileCoordinatorPort, ProfileCoordinatorRuntimePort};
-    use crate::operator_flow::EnrollmentPort;
     use bridge_domain::ClaimUri;
     use profile_platform_primitives::UnixMillis;
     use session_domain::ProfileLease;
@@ -444,7 +444,8 @@ mod windows {
         use crate::local_profile::BridgeWorkspaceLock;
         use std::fs;
 
-        let workspace = root.open_profile_current(&intent.tenant_id, &intent.profile_id)
+        let workspace = root
+            .open_profile_current(&intent.tenant_id, &intent.profile_id)
             .map_err(|_| ())?;
         let Some(base) = workspace.base_generation_id().cloned() else {
             return Err(());
@@ -465,7 +466,7 @@ mod windows {
             }
             let inventory = workspace.inventory().map_err(|_| ())?;
             let snapshot = zeroize::Zeroizing::new(
-                encode_workspace_snapshot(&workspace, &inventory).map_err(|_| ())?
+                encode_workspace_snapshot(&workspace, &inventory).map_err(|_| ())?,
             );
             if workspace.inventory().map_err(|_| ())? != inventory {
                 return Err(());
@@ -486,11 +487,11 @@ mod windows {
                 .map_err(|_| ())?,
         );
         // Fresh authorization is acquired for Sync, not for browser Open.
-        let claim = reauthorize_current_ready_generation(
-            intent, &actor, device, &mut transport,
-        ).map_err(|_| ())?;
+        let claim = reauthorize_current_ready_generation(intent, &actor, device, &mut transport)
+            .map_err(|_| ())?;
         let mut enrollment = ControlPlaneEnrollment::new(transport.clone());
-        let enrolled = enrollment.redeem_claim(&claim, device, now().map_err(|_| ())?)
+        let enrolled = enrollment
+            .redeem_claim(&claim, device, now().map_err(|_| ())?)
             .map_err(|_| ())?;
         if enrolled.actor().actor_id() != actor.actor_id()
             || enrolled.actor().tenant_scope().tenant_id() != actor.tenant_scope().tenant_id()
@@ -500,31 +501,44 @@ mod windows {
             return Err(());
         }
 
-        let mut coordinator = SharedControlPlaneCoordinator::new(
-            ControlPlaneCoordinator::new(transport.clone()),
-        );
-        let lease = coordinator.claim_launch_intent(
-            enrolled.actor(), &intent.profile_id, device, enrolled.launch_intent_id(),
-        ).map_err(|_| ())?;
+        let mut coordinator =
+            SharedControlPlaneCoordinator::new(ControlPlaneCoordinator::new(transport.clone()));
+        let lease = coordinator
+            .claim_launch_intent(
+                enrolled.actor(),
+                &intent.profile_id,
+                device,
+                enrolled.launch_intent_id(),
+            )
+            .map_err(|_| ())?;
         // The existing heartbeat owner maintains the same fence during long PUT.
         let heartbeat = RetainedSaveHeartbeat::start(coordinator.clone(), lease.clone());
         let outcome = (|| {
             let mut sealer = coordinator.clone();
             let mut observation_transport = transport.clone();
-            let mut control = ControlPlaneGenerationSuccessor::new(
-                transport, &mut sealer,
-            );
+            let mut control = ControlPlaneGenerationSuccessor::new(transport, &mut sealer);
             let prepared = prepare_closed_current_successor(
-                &workspace, &original_inventory, &snapshot,
-                &intent.tenant_id, &intent.profile_id, &base, &mut control,
-            ).map_err(|_| ())?;
+                &workspace,
+                &original_inventory,
+                &snapshot,
+                &intent.tenant_id,
+                &intent.profile_id,
+                &base,
+                &mut control,
+            )
+            .map_err(|_| ())?;
             let mut upload = WindowsSignedGenerationObjectPut::from_system().map_err(|_| ())?;
             if !heartbeat.is_healthy() {
                 return Err(());
             }
             let committed = match publish_verify_and_commit_successor(
-                &intent.tenant_id, &intent.profile_id, &base,
-                &prepared, &lease, &mut control, &mut upload,
+                &intent.tenant_id,
+                &intent.profile_id,
+                &base,
+                &prepared,
+                &lease,
+                &mut control,
+                &mut upload,
             ) {
                 Ok(receipt) => receipt.generation_id().clone(),
                 Err(_) => {
@@ -532,9 +546,14 @@ mod windows {
                     // Observe the EXACT originally sealed object read-only;
                     // negative/uncertain observation never replays a PUT.
                     if !observe_closed_current_exact(
-                        &intent.tenant_id, &intent.profile_id,
-                        &base, &prepared, &mut observation_transport,
-                    ).map_err(|_| ())? {
+                        &intent.tenant_id,
+                        &intent.profile_id,
+                        &base,
+                        &prepared,
+                        &mut observation_transport,
+                    )
+                    .map_err(|_| ())?
+                    {
                         return Err(());
                     }
                     prepared.sealed().metadata().generation_id().clone()
@@ -555,7 +574,8 @@ mod windows {
 
         // Apply only the confirmed server revision; if another local browser
         // already holds the writer, do not touch its bytes or clear dirty.
-        let active = root.open_profile_current(&intent.tenant_id, &intent.profile_id)
+        let active = root
+            .open_profile_current(&intent.tenant_id, &intent.profile_id)
             .map_err(|_| ())?;
         let guard = BridgeWorkspaceLock::acquire(&active, device, now().map_err(|_| ())?.value())
             .map_err(|_| ())?;
@@ -568,9 +588,11 @@ mod windows {
             }
             let unchanged = active.inventory().map_err(|_| ())? == original_inventory;
             root.update_profile_current_sync_base(
-                &active, &committed,
+                &active,
+                &committed,
                 intent.expected_version.checked_add(1).ok_or(())?,
-            ).map_err(|_| ())?;
+            )
+            .map_err(|_| ())?;
             if unchanged {
                 let dirty = active.path().join(".local-unsynced");
                 let metadata = fs::symlink_metadata(&dirty).map_err(|_| ())?;
@@ -597,38 +619,39 @@ mod windows {
         root: &MaterializationRoot,
         origin: &str,
     ) {
-    if intent.status == InitialProfileStatus::Ready {
-        if let Err(()) = sync_closed_ready(
-            intent, binding, root, origin,
-        ) {
-            eprintln!("bridge_closed_ready_sync_pending;NEXT_SAFE_STEP=PRESERVE_LOCAL_BYTES");
+        if intent.status == InitialProfileStatus::Ready {
+            if let Err(()) = sync_closed_ready(intent, binding, root, origin) {
+                eprintln!("bridge_closed_ready_sync_pending;NEXT_SAFE_STEP=PRESERVE_LOCAL_BYTES");
+            }
+        } else if intent.status == InitialProfileStatus::Draft {
+            let sync = (|| -> Result<(), InitialProfileError> {
+                let application =
+                    WindowsDeviceApplication::from_system(origin.to_owned(), binding.clone())
+                        .map_err(|_| InitialProfileError::Authorization)?;
+                let mut transport = application.transport();
+                let mut uploader = WindowsSignedGenerationObjectPut::from_system()
+                    .map_err(|_| InitialProfileError::Upload)?;
+                let actor = profile_platform_primitives::ActorContext::new(
+                    profile_platform_primitives::TenantScope::new(intent.tenant_id.clone()),
+                    intent.actor_id.clone(),
+                    profile_platform_primitives::CorrelationId::parse("corr_local_draft_sync")
+                        .map_err(|_| InitialProfileError::Authorization)?,
+                );
+                sync_closed_local_draft(
+                    intent,
+                    &actor,
+                    binding.device_id(),
+                    &root,
+                    &mut transport,
+                    &mut uploader,
+                )
+            })();
+            if let Err(reason) = sync {
+                // Diagnostic classification only. A network outage,
+                // lost response or local conflict is NOT a Save receipt.
+                eprintln!("bridge_closed_draft_sync_pending reason={reason:?}");
+            }
         }
-    } else if intent.status == InitialProfileStatus::Draft {
-        let sync = (|| -> Result<(), InitialProfileError> {
-            let application = WindowsDeviceApplication::from_system(
-                origin.to_owned(), binding.clone(),
-            )
-            .map_err(|_| InitialProfileError::Authorization)?;
-            let mut transport = application.transport();
-            let mut uploader = WindowsSignedGenerationObjectPut::from_system()
-                .map_err(|_| InitialProfileError::Upload)?;
-            let actor = profile_platform_primitives::ActorContext::new(
-                profile_platform_primitives::TenantScope::new(intent.tenant_id.clone()),
-                intent.actor_id.clone(),
-                profile_platform_primitives::CorrelationId::parse("corr_local_draft_sync")
-                    .map_err(|_| InitialProfileError::Authorization)?,
-            );
-            sync_closed_local_draft(
-                intent, &actor, binding.device_id(), &root,
-                &mut transport, &mut uploader,
-            )
-        })();
-        if let Err(reason) = sync {
-            // Diagnostic classification only. A network outage,
-            // lost response or local conflict is NOT a Save receipt.
-            eprintln!("bridge_closed_draft_sync_pending reason={reason:?}");
-        }
-    }
     }
 
     pub fn run_initial(
@@ -653,23 +676,26 @@ mod windows {
         let root = MaterializationRoot::open_or_create(&config.materialization_root)
             .map_err(|_| ShippingCompositionError::Configuration)?;
         match crate::local_browser_open::open(
-            &root, intent, binding.device_id(), delivery.runtime_root(),
+            &root,
+            intent,
+            binding.device_id(),
+            delivery.runtime_root(),
         ) {
             Ok(()) => {
                 sync_after_native_close(intent, &binding, &root, &config.control_plane_origin);
                 Ok(())
-            },
+            }
             Err(crate::local_browser_open::LocalOpenError::RestoreRequired) => {
                 // Only a missing READY local folder crosses the cloud boundary.
                 // Ordinary Open/Close never requires a network request.
                 let device = binding.device_id().clone();
                 let application = WindowsDeviceApplication::from_system(
-                    config.control_plane_origin.clone(), binding.clone(),
+                    config.control_plane_origin.clone(),
+                    binding.clone(),
                 )
                 .map_err(|_| ShippingCompositionError::RestoreUnavailable)?;
-                let mut remote = ControlPlaneCoordinator::for_local_current_restore(
-                    application.transport(),
-                );
+                let mut remote =
+                    ControlPlaneCoordinator::for_local_current_restore(application.transport());
                 // Worker selects CURRENT; neither the browser URI nor local files
                 // may choose a cloud generation or an historical fallback.
                 let selected = remote
@@ -680,17 +706,21 @@ mod windows {
                 let mut downloader = VerifiedGenerationObjectStreamDownloader::new(reader);
                 let epoch = now()?.value();
                 ensure_authoritative_current(
-                    &root, &intent.tenant_id, &intent.profile_id,
-                    selected.generation_id(), intent.expected_version,
-                    &device, epoch, &mut remote, &mut downloader,
+                    &root,
+                    &intent.tenant_id,
+                    &intent.profile_id,
+                    selected.generation_id(),
+                    intent.expected_version,
+                    &device,
+                    epoch,
+                    &mut remote,
+                    &mut downloader,
                 )
                 .map_err(|_| ShippingCompositionError::RestoreUnavailable)?;
                 // Re-enter the SAME local native Open; no managed Camoufox path
                 // and no Coordinator lease are introduced by recovery.
-                crate::local_browser_open::open(
-                    &root, intent, &device, delivery.runtime_root(),
-                )
-                .map_err(ShippingCompositionError::LocalOpen)?;
+                crate::local_browser_open::open(&root, intent, &device, delivery.runtime_root())
+                    .map_err(ShippingCompositionError::LocalOpen)?;
                 sync_after_native_close(intent, &binding, &root, &config.control_plane_origin);
                 Ok(())
             }

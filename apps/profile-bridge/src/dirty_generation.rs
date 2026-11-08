@@ -173,10 +173,9 @@ pub fn prepare_closed_current_successor<K: GenerationSealingMaterialPort>(
         hash.update((part.len() as u64).to_be_bytes());
         hash.update(part);
     }
-    let candidate_id = GenerationId::parse(format!(
-        "generation_{}", digest_hex(hash.finalize().into()),
-    ))
-    .map_err(|_| DirtyGenerationError::IdentityMismatch)?;
+    let candidate_id =
+        GenerationId::parse(format!("generation_{}", digest_hex(hash.finalize().into()),))
+            .map_err(|_| DirtyGenerationError::IdentityMismatch)?;
     if &candidate_id == base {
         return Err(DirtyGenerationError::CandidateMatchesBase);
     }
@@ -185,7 +184,10 @@ pub fn prepare_closed_current_successor<K: GenerationSealingMaterialPort>(
         .map_err(|_| DirtyGenerationError::KeyUnavailable)?;
     let metadata = GenerationMetadata::for_plaintext(
         GenerationIdentity::new(
-            tenant.clone(), profile.clone(), candidate_id, Some(base.clone()),
+            tenant.clone(),
+            profile.clone(),
+            candidate_id,
+            Some(base.clone()),
         ),
         material.dek.key_id().clone(),
         material.nonce_prefix,
@@ -512,22 +514,36 @@ mod tests {
     -> Result<(), Box<dyn std::error::Error>> {
         let fixture = Fixture::new()?;
         let raw = fixture.root.create_profile_current(
-            &fixture.tenant_id, &fixture.profile_id, &fixture.base_generation_id, 1,
+            &fixture.tenant_id,
+            &fixture.profile_id,
+            &fixture.base_generation_id,
+            1,
         )?;
         fs::write(raw.path().join("cookies.sqlite"), b"cookie data")?;
-        let source = fixture.root.update_profile_current_sync_base(
-            &raw, &fixture.base_generation_id, 2,
-        )?;
+        let source =
+            fixture
+                .root
+                .update_profile_current_sync_base(&raw, &fixture.base_generation_id, 2)?;
         let before = source.inventory()?;
         let plaintext = encode_workspace_snapshot(&source, &before)?;
         let mut keys = FakeKeys::default();
         let first = prepare_closed_current_successor(
-            &source, &before, &plaintext, &fixture.tenant_id,
-            &fixture.profile_id, &fixture.base_generation_id, &mut keys,
+            &source,
+            &before,
+            &plaintext,
+            &fixture.tenant_id,
+            &fixture.profile_id,
+            &fixture.base_generation_id,
+            &mut keys,
         )?;
         let second = prepare_closed_current_successor(
-            &source, &before, &plaintext, &fixture.tenant_id,
-            &fixture.profile_id, &fixture.base_generation_id, &mut keys,
+            &source,
+            &before,
+            &plaintext,
+            &fixture.tenant_id,
+            &fixture.profile_id,
+            &fixture.base_generation_id,
+            &mut keys,
         )?;
         assert_eq!(
             first.sealed().metadata().generation_id(),
@@ -545,12 +561,20 @@ mod tests {
         fs::write(source.path().join("cookies.sqlite"), b"new local change")?;
         assert!(matches!(
             prepare_closed_current_successor(
-                &source, &before, &plaintext, &fixture.tenant_id,
-                &fixture.profile_id, &fixture.base_generation_id, &mut keys,
+                &source,
+                &before,
+                &plaintext,
+                &fixture.tenant_id,
+                &fixture.profile_id,
+                &fixture.base_generation_id,
+                &mut keys,
             ),
             Err(DirtyGenerationError::IdentityMismatch),
         ));
-        assert_eq!(fs::read(source.path().join("cookies.sqlite"))?, b"new local change");
+        assert_eq!(
+            fs::read(source.path().join("cookies.sqlite"))?,
+            b"new local change"
+        );
         fixture.cleanup();
         Ok(())
     }
