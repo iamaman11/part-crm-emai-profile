@@ -267,7 +267,6 @@ where
         persist_browser_identity(&workspace, &browser_identity)
             .map_err(|_| InitialProfileError::Snapshot)?;
         #[cfg(windows)]
-        let sealing_started = std::time::Instant::now();
         let inventory = workspace
             .inventory()
             .map_err(|_| InitialProfileError::Snapshot)?;

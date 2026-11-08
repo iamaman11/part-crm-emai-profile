@@ -157,6 +157,12 @@ pub(crate) struct ClosedProfileEncryptedStream {
 }
 
 impl ClosedProfileEncryptedStream {
+    pub(crate) fn metadata(&self) -> &encrypted_generation_domain::GenerationMetadata {
+        self.report.metadata()
+    }
+    pub(crate) fn object_key(&self) -> String {
+        self.report.metadata().object_key()
+    }
     pub(crate) fn metadata_digest(&self) -> [u8; 32] {
         self.report.metadata_digest().bytes()
     }
