@@ -7,7 +7,8 @@ use crate::local_profile::{BridgeWorkspaceLock, LocalProfileError, Materializati
 use profile_platform_primitives::{DeviceId, GenerationId};
 use sha2::{Digest, Sha256};
 use std::fmt;
-use std::fs;
+use std::fs::{self, OpenOptions};
+use std::io::Write;
 use std::path::Path;
 use std::process::{Command, Stdio};
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -16,6 +17,8 @@ const PYTHON: &str = "python/python.exe";
 const ENTRYPOINT: &str = "camouhost/real.py";
 const LOCK: &str = "camouhost/runtime-lock.json";
 const CONFIG: &str = "camoufox-config.json";
+const LOCAL_UNSYNCED: &str = ".local-unsynced";
+const LOCAL_UNSYNCED_CONTENT: &[u8] = b"local-unsynced-v2\\n";
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum LocalOpenError {
@@ -80,6 +83,37 @@ fn run_python(runtime_root: &Path, folder: &Path, action: &str) -> Result<bool, 
     Ok(completed.success())
 }
 
+fn mark_local_unsynced(folder: &Path) -> Result<(), LocalOpenError> {
+    // This is NOT a cloud Save receipt. Persist the pending-sync evidence
+    // before any user bytes can change, including on interrupted/dirty close.
+    // No background service, online/offline mode or retry state machine.
+    let file = folder.join(LOCAL_UNSYNCED);
+    match OpenOptions::new().create_new(true).write(true).open(&file) {
+        Ok(mut stream) => {
+            stream
+                .write_all(LOCAL_UNSYNCED_CONTENT)
+                .map_err(|_| LocalOpenError::InvalidLocalWorkspace)?;
+            stream
+                .sync_all()
+                .map_err(|_| LocalOpenError::InvalidLocalWorkspace)
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
+            let metadata = fs::symlink_metadata(&file)
+                .map_err(|_| LocalOpenError::InvalidLocalWorkspace)?;
+            if metadata.file_type().is_symlink()
+                || !metadata.is_file()
+                || metadata.len() != LOCAL_UNSYNCED_CONTENT.len() as u64
+                || fs::read(&file).map_err(|_| LocalOpenError::InvalidLocalWorkspace)?
+                    != LOCAL_UNSYNCED_CONTENT
+            {
+                return Err(LocalOpenError::InvalidLocalWorkspace);
+            }
+            Ok(())
+        }
+        Err(_) => Err(LocalOpenError::InvalidLocalWorkspace),
+    }
+}
+
 pub fn open(
     root: &MaterializationRoot,
     intent: &InitialProfileOpen,
@@ -115,6 +149,7 @@ pub fn open(
             return Err(LocalOpenError::IdentityPreparation);
         }
     }
+    mark_local_unsynced(workspace.path())?;
     if !run_python(runtime_root, workspace.path(), "--local-open")? {
         // An abnormal exit leaves the durable lock marker as crash evidence.
         // Never erase the user's cookies/WAL/session to make a retry pass.
@@ -127,7 +162,7 @@ pub fn open(
 
 #[cfg(test)]
 mod tests {
-    use super::{LocalOpenError, local_generation};
+    use super::{LocalOpenError, local_generation, mark_local_unsynced};
     use crate::generation_initialization::InitialProfileOpen;
     use profile_platform_primitives::{ActorId, ProfileId, TenantId};
 
@@ -139,6 +174,22 @@ mod tests {
             expected_version: 1,
         }
     }
+    #[test]
+    fn pending_local_data_is_not_a_cloud_save_receipt() {
+        let folder = tempfile::tempdir().unwrap();
+        mark_local_unsynced(folder.path()).unwrap();
+        assert_eq!(
+            std::fs::read(folder.path().join(".local-unsynced")).unwrap(),
+            b"local-unsynced-v2\\n"
+        );
+        mark_local_unsynced(folder.path()).unwrap();
+        std::fs::write(folder.path().join(".local-unsynced"), b"corrupt").unwrap();
+        assert_eq!(
+            mark_local_unsynced(folder.path()),
+            Err(LocalOpenError::InvalidLocalWorkspace)
+        );
+    }
+
     #[test]
     fn same_profile_uses_one_local_folder_without_cloud_versions_or_transport() {
         let mut selected = intent();
