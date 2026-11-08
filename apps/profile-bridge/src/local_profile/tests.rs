@@ -111,7 +111,6 @@ fn compact_workspace_binds_every_id_and_preserves_existing_user_directories()
     Ok(())
 }
 
-
 #[test]
 fn profile_current_has_one_stable_path_and_only_advances_base_after_receipt()
 -> Result<(), Box<dyn std::error::Error>> {
@@ -126,7 +125,12 @@ fn profile_current_has_one_stable_path_and_only_advances_base_after_receipt()
     fs::write(stable_path.join(".local-unsynced"), b"local-unsynced-v2")?;
 
     let inventory = draft.workspace().inventory()?;
-    assert!(inventory.entries().iter().any(|entry| entry.relative_path() == "browser-state.bin"));
+    assert!(
+        inventory
+            .entries()
+            .iter()
+            .any(|entry| entry.relative_path() == "browser-state.bin")
+    );
     assert!(inventory.entries().iter().all(|entry| {
         entry.relative_path() != ".profile-current-state"
             && entry.relative_path() != ".local-unsynced"
@@ -142,7 +146,10 @@ fn profile_current_has_one_stable_path_and_only_advances_base_after_receipt()
     let reopened = root.open_profile_current(&tenant, &profile)?;
     assert_eq!(reopened.workspace().path(), stable_path);
     assert_eq!(reopened.state(), synced.state());
-    assert_eq!(fs::read(stable_path.join("browser-state.bin"))?, b"local browser data");
+    assert_eq!(
+        fs::read(stable_path.join("browser-state.bin"))?,
+        b"local browser data"
+    );
     fs::remove_dir_all(path)?;
     Ok(())
 }
@@ -157,7 +164,10 @@ fn corrupt_profile_current_sidecar_fails_closed_without_touching_browser_data()
     let current = root.create_profile_current(&tenant, &profile, &local_id, 1)?;
     let data = current.workspace().path().join("browser-state.bin");
     fs::write(&data, b"preserve")?;
-    fs::write(current.workspace().path().join(".profile-current-state"), b"corrupt")?;
+    fs::write(
+        current.workspace().path().join(".profile-current-state"),
+        b"corrupt",
+    )?;
 
     assert_eq!(
         root.open_profile_current(&tenant, &profile),
