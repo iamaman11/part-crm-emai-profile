@@ -333,17 +333,6 @@ impl MaterializationRoot {
         generation: &GenerationId,
     ) -> PathBuf {
         let mut digest = Sha256::new();
-        digest.update(b"profile-platform/workspace-scope/v2\0");
-        for id in [tenant.as_str(), profile.as_str()] {
-            digest.update(id.as_bytes());
-            digest.update([0]);
-        }
-        let scope: String = digest
-            .finalize()
-            .iter()
-            .map(|byte| format!("{byte:02x}"))
-            .collect();
-        let mut digest = Sha256::new();
         digest.update(b"profile-platform/workspace-generation/v2\0");
         digest.update(generation.as_str().as_bytes());
         let generation: String = digest
@@ -351,10 +340,7 @@ impl MaterializationRoot {
             .iter()
             .map(|byte| format!("{byte:02x}"))
             .collect();
-        self.canonical_path
-            .join(&scope[..32])
-            .join(&scope[32..])
-            .join(generation)
+        self.profile_scope_path(tenant, profile).join(generation)
     }
 
     fn existing_generation_path(
