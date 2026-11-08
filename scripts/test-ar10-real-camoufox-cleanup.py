@@ -108,147 +108,58 @@ def prove_managed_bootstrap_tab_contract(runtime: ModuleType) -> None:
     assert not untouched.closed and not untouched.navigations
 
 
-def prove_controlled_close_dispatch_contract(runtime: ModuleType) -> None:
-    """Regression: stdin observer must pump real registered callbacks, not infer process death."""
-
-    class Page:
-        def __init__(self) -> None:
-            self.listeners: dict[str, object] = {}
-
-        def on(self, name: str, listener: object) -> None:
-            self.listeners[name] = listener
-
-        def fire(self, name: str) -> None:
-            self.listeners[name](self)
+def prove_official_context_close_event_contract(runtime: ModuleType) -> None:
+    """A Playwright context close event is the only adapter close signal."""
 
     class Context:
-        def __init__(self, pages: list[Page]) -> None:
-            self.pages = pages
+        def __init__(self) -> None:
             self.listeners: dict[str, object] = {}
-            self.next_observation = lambda: None
-            self.pumps = 0
+            self.closed = False
 
         def on(self, name: str, listener: object) -> None:
             self.listeners[name] = listener
 
-        def wait_for_event(self, event: str, timeout: int) -> None:
-            assert event == "page" and 0 < timeout <= 250
-            self.pumps += 1
-            self.next_observation()
-            raise TimeoutError("expected bounded callback dispatch")
-
-    first, second = Page(), Page()
-    context = Context([first, second])
-    witness = runtime.install_controlled_close_observation(context)
-    assert not runtime.observe_controlled_close(context, witness)
-    context.next_observation = lambda: first.fire("close")
-    assert not runtime.observe_controlled_close(context, witness)
-    context.next_observation = lambda: second.fire("close")
-    assert runtime.observe_controlled_close(context, witness)
-    assert context.pumps == 3
-
-    class AbnormalBrowser:
-        def safely_exited(self) -> bool:
-            return False
-
-        def has_exited(self) -> bool:
-            return False
-
-    exited_without_normal_status = Page()
-    context = Context([exited_without_normal_status])
-    witness = runtime.install_controlled_close_observation(context)
-    witness["browser_exit"] = AbnormalBrowser()
-    context.next_observation = lambda: exited_without_normal_status.fire("close")
-    assert not runtime.observe_controlled_close(context, witness), (
-        "browser process failure was accepted as a controlled page-close"
-    )
-
-    crashed = Page()
-    context = Context([crashed])
-    witness = runtime.install_controlled_close_observation(context)
-    context.next_observation = lambda: (crashed.fire("crash"), crashed.fire("close"))
-    assert not runtime.observe_controlled_close(context, witness)
-
-    class RestoredPage(Page):
-        def __init__(self) -> None:
-            super().__init__()
-            self.url = "https://example.invalid/restore"
-            self.document_uri = "about:tabcrashed"
-
         def is_closed(self) -> bool:
-            return False
+            return self.closed
 
-        def evaluate(self, script: str) -> dict[str, str]:
-            assert "document.documentURI" in script
-            return {"uri": self.document_uri, "ready": "complete"}
+        def close(self) -> None:
+            self.closed = True
+            callback = self.listeners.get("close")
+            assert callable(callback)
+            callback(self)
 
-    # Firefox's crash reporter is not a recovered document, even if a load
-    # event is reported. The page must be the exact original crashed page.
-    recoverable, unrelated = RestoredPage(), RestoredPage()
-    context = Context([recoverable, unrelated])
-    witness = runtime.install_controlled_close_observation(context)
-    context.next_observation = lambda: recoverable.fire("crash")
-    observed_crash = io.StringIO()
-    with contextlib.redirect_stderr(observed_crash):
-        assert not runtime.observe_controlled_close(context, witness)
-    assert observed_crash.getvalue() == (
-        "camouhost_page_event kind=crash tracked=2 unresolved=1\n"
-    ), "browser crash callback did not emit a safe immediate witness"
-    context.next_observation = lambda: unrelated.fire("load")
-    assert not runtime.observe_controlled_close(context, witness)
-    context.next_observation = lambda: recoverable.fire("load")
-    assert not runtime.observe_controlled_close(context, witness), (
-        "native crash reporter became a false recovery witness"
+        def crash(self) -> None:
+            # Playwright reports browser application crash as context closure.
+            self.close()
+
+    normal = Context()
+    state = runtime.install_context_close_observation(normal)
+    assert runtime.context_close_observed(normal, state) is False
+    normal.close()
+    assert runtime.context_close_observed(normal, state) is True
+    assert state["event_count"] == 1
+
+    crashed = Context()
+    crash_state = runtime.install_context_close_observation(crashed)
+    crashed.crash()
+    assert runtime.context_close_observed(crashed, crash_state) is True
+    assert crash_state["event_count"] == 1
+
+    source = (Path(__file__).resolve().parents[1] / "runtime/camouhost/real.py").read_text(
+        encoding="utf-8"
     )
-    recoverable.document_uri = recoverable.url
-    context.next_observation = lambda: None
-    observed_recovery = io.StringIO()
-    with contextlib.redirect_stderr(observed_recovery):
-        assert not runtime.observe_controlled_close(context, witness)
-    assert observed_recovery.getvalue() == (
-        "camouhost_page_event kind=recovered tracked=2 unresolved=0\n"
-    ), "same-page verified restore did not emit a safe recovery witness"
-    assert not witness["unresolved_crashes"], "same-page verified load did not clear crash"
-    assert witness["crashed"], "historical crash evidence was erased"
-    context.next_observation = lambda: (recoverable.fire("close"), unrelated.fire("close"))
-    assert runtime.observe_controlled_close(context, witness), (
-        "native restored tab and normal full-context close failed to save"
-    )
-
-    # An exited native browser with incomplete callbacks or an unresolved crash
-    # must not make Bridge heartbeat forever. It is a typed terminal failure.
-    class ExitedRoot:
-        def safely_exited(self) -> bool:
-            return False
-
-        def has_exited(self) -> bool:
-            return True
-
-    stopped = Page()
-    context = Context([stopped])
-    witness = runtime.install_controlled_close_observation(context)
-    witness["browser_exit"] = ExitedRoot()
-    try:
-        runtime.observe_controlled_close(context, witness)
-    except runtime.RuntimeContractError:
-        pass
-    else:
-        raise AssertionError("exited root without page close kept infinite heartbeat")
-
-    unexpected = Page()
-    context = Context([unexpected])
-    witness = runtime.install_controlled_close_observation(context)
-
-    def disconnect_without_close() -> None:
-        raise RuntimeError("no page close witness")
-
-    context.next_observation = disconnect_without_close
-    try:
-        runtime.observe_controlled_close(context, witness)
-    except RuntimeError:
-        pass
-    else:
-        raise AssertionError("browser disconnection without callback became controlled close")
+    for forbidden in (
+        "WindowsBrowserExitWitness",
+        "firefox_writer_active",
+        "wait_for_browser_quiescence",
+        "EnumWindows",
+        "CreateToolhelp32Snapshot",
+        "WM_CLOSE",
+        "PostMessage",
+        "install_controlled_close_observation",
+        "observe_controlled_close",
+    ):
+        assert forbidden not in source, f"retired browser observer remains: {forbidden}"
 
 
 def runtime_env(runtime_lock: Path, headless: str) -> dict[str, str]:
@@ -1939,7 +1850,7 @@ def prove_failure_observation_contract() -> None:
     prove_ipc_timeout_contract()
     source_root = Path(__file__).resolve().parents[1]
     runtime = load_runtime(source_root / "runtime/camouhost/real.py")
-    prove_controlled_close_dispatch_contract(runtime)
+    prove_official_context_close_event_contract(runtime)
     prove_managed_bootstrap_tab_contract(runtime)
     proof = load_runtime(source_root / "scripts/test-ar10-real-camoufox.py")
     proof.prove_managed_environment_projection(runtime)
@@ -1977,10 +1888,10 @@ def prove_failure_observation_contract() -> None:
             "load_runtime_lock": Mock(return_value=({}, "0" * 64)),
             "verify_python_components": Mock(),
             "resolve_profile_root": Mock(return_value=source_root),
-            "firefox_writer_active": Mock(return_value=False),
             "load_generation_config": Mock(return_value=({}, "0" * 64)),
             "launch_verified_context": Mock(return_value=(object(), SimpleNamespace(pages=[object()]))),
-            "install_controlled_close_observation": Mock(return_value={}),
+            "install_context_close_observation": Mock(return_value={"closed": False, "event_count": 0}),
+            "context_close_observed": Mock(return_value=False),
             "browser_visible_observation": Mock(return_value={}),
             "emit_browser_visible": Mock(),
             "decode_navigation_target": Mock(return_value="http://127.0.0.1/"),
