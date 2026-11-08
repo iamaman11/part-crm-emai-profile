@@ -9,7 +9,6 @@ profile writer lock and Firefox's current-session shutdown checkpoint.
 """
 from __future__ import annotations
 
-import asyncio
 import contextlib
 import json
 import stat
@@ -95,7 +94,6 @@ class NativeProfileSession:
     active_session_checkpoint_seen: bool = False
     clean_shutdown_checkpoint_mtime_ns: int | None = None
     clean_shutdown_invalidated: bool = False
-    browser_closed: asyncio.Event = field(default_factory=asyncio.Event, repr=False)
 
     def profile_state(self) -> str:
         try:
@@ -147,12 +145,6 @@ class NativeProfileSession:
             self.clean_shutdown_checkpoint_mtime_ns = checkpoint_mtime_ns
             return "CLEAN_SHUTDOWN_VERIFIED"
         return "CRASH_OR_UNKNOWN_PRESERVE_LOCAL"
-
-    async def wait_for_browser_close(self) -> None:
-        """Wait for the official persistent context's native close event."""
-        if self.context is None:
-            raise NativeLaunchError("Playwright context is unavailable")
-        await self.browser_closed.wait()
 
     async def _release_playwright(self) -> None:
         manager = self.manager
@@ -247,28 +239,12 @@ async def launch_native_camoufox(
             context = await manager.__aenter__()
     except BaseException as error:
         raise NativeLaunchError("official Camoufox Playwright launch failed") from error
-    browser_closed = asyncio.Event()
-
-    def observe_context_close(*_args: Any) -> None:
-        browser_closed.set()
-
-    try:
-        # Register before returning the visible context so a fast user Close
-        # cannot race past the observer. This is observation only; it never
-        # closes, navigates or inspects a browser page.
-        context.on("close", observe_context_close)
-    except BaseException as error:
-        with contextlib.suppress(BaseException):
-            await manager.__aexit__(None, None, None)
-        raise NativeLaunchError("Playwright native close observation unavailable") from error
-
     return NativeProfileSession(
         workspace=workspace,
         writer_active=writer_active,
         manager=manager,
         context=context,
         startup_checkpoint_mtime_ns=startup_checkpoint_mtime_ns,
-        browser_closed=browser_closed,
     )
 
 

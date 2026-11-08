@@ -168,12 +168,45 @@ fn close_native_camoufox_window() -> Result<(), Box<dyn std::error::Error>> {
 $ErrorActionPreference = 'Stop'
 Add-Type -TypeDefinition @'
 using System;
+using System.Collections.Generic;
 using System.Runtime.InteropServices;
+
+public sealed class NativeCamoufoxWindowInfo {
+    public IntPtr Handle { get; set; }
+    public uint ProcessId { get; set; }
+}
+
 public static class NativeCamoufoxWindow {
+    public delegate bool EnumWindowsCallback(IntPtr hWnd, IntPtr lParam);
     [DllImport("user32.dll", SetLastError = true)]
     public static extern bool IsWindow(IntPtr hWnd);
     [DllImport("user32.dll", SetLastError = true)]
+    public static extern bool IsWindowVisible(IntPtr hWnd);
+    [DllImport("user32.dll", SetLastError = true)]
     public static extern bool PostMessage(IntPtr hWnd, uint msg, IntPtr wParam, IntPtr lParam);
+    [DllImport("user32.dll", SetLastError = true)]
+    public static extern bool EnumWindows(EnumWindowsCallback callback, IntPtr lParam);
+    [DllImport("user32.dll", SetLastError = true)]
+    public static extern uint GetWindowThreadProcessId(IntPtr hWnd, out uint processId);
+
+    public static List<NativeCamoufoxWindowInfo> FindVisibleWindows(uint[] processIds) {
+        var wanted = new HashSet<uint>(processIds);
+        var result = new List<NativeCamoufoxWindowInfo>();
+        bool completed = EnumWindows((hWnd, lParam) => {
+            if (!IsWindowVisible(hWnd)) return true;
+            uint processId = 0;
+            GetWindowThreadProcessId(hWnd, out processId);
+            if (wanted.Contains(processId)) {
+                result.Add(new NativeCamoufoxWindowInfo {
+                    Handle = hWnd,
+                    ProcessId = processId
+                });
+            }
+            return true;
+        }, IntPtr.Zero);
+        if (!completed) throw new InvalidOperationException("EnumWindows failed");
+        return result;
+    }
 }
 '@
 $deadline = [DateTime]::UtcNow.AddSeconds(30)
@@ -181,43 +214,65 @@ $posted = $false
 $observed = $false
 do {
     $browserProcesses = @(Get-Process -Name 'camoufox' -ErrorAction SilentlyContinue)
-    $browserWindows = @()
-    foreach ($process in $browserProcesses) {
-        $process.Refresh()
-        $handle = $process.MainWindowHandle
-        if ($handle -ne [IntPtr]::Zero -and [NativeCamoufoxWindow]::IsWindow($handle)) {
-            $observed = $true
-            $browserWindows += [pscustomobject]@{ Process = $process; Handle = $handle }
+    $browserPids = [uint32[]]@($browserProcesses | ForEach-Object { [uint32]$_.Id })
+    if ($browserPids.Length -eq 0) {
+        if ($observed) {
+            Write-Output 'NATIVE_CAMOUFOX_WM_CLOSE=ALREADY_CLOSED'
+            break
         }
+        Start-Sleep -Milliseconds 100
+        continue
     }
+    $browserWindows = [NativeCamoufoxWindow]::FindVisibleWindows($browserPids)
     if ($browserWindows.Count -gt 1) {
-        throw "expected one native Camoufox window, found $($browserWindows.Count)"
+        $details = ($browserWindows | ForEach-Object {
+            "pid=$($_.ProcessId),hwnd=$($_.Handle)"
+        }) -join ';'
+        throw "expected one visible native Camoufox window, found $($browserWindows.Count): $details"
     }
     if ($browserWindows.Count -eq 1) {
-        $handle = $browserWindows[0].Handle
+        $observed = $true
+        $target = $browserWindows[0]
+        if (-not [NativeCamoufoxWindow]::IsWindow($target.Handle)) {
+            Start-Sleep -Milliseconds 100
+            continue
+        }
         if ([NativeCamoufoxWindow]::PostMessage(
-            $handle, 0x0010, [IntPtr]::Zero, [IntPtr]::Zero
+            $target.Handle, 0x0010, [IntPtr]::Zero, [IntPtr]::Zero
         )) {
             $posted = $true
+            Write-Output "NATIVE_CAMOUFOX_WM_CLOSE=POSTED;PID=$($target.ProcessId);HWND=$($target.Handle)"
             break
         }
         $errorCode = [Runtime.InteropServices.Marshal]::GetLastWin32Error()
         if ($errorCode -ne 1400) {
             throw "WM_CLOSE failed: $errorCode"
         }
-        # The HWND was destroyed between IsWindow and PostMessage. Re-read
-        # the process/window pair instead of treating a stale handle as a
-        # browser lifecycle failure.
     }
     Start-Sleep -Milliseconds 100
 } while ([DateTime]::UtcNow -lt $deadline)
 if ($posted) {
-    Write-Output 'NATIVE_CAMOUFOX_WM_CLOSE=POSTED'
-} elseif ($observed -and @(Get-Process -Name 'camoufox' -ErrorAction SilentlyContinue).Count -eq 0) {
-    # The browser closed naturally during the observation race. The caller
-    # still joins the Bridge thread and requires its clean-close receipt.
-    Write-Output 'NATIVE_CAMOUFOX_WM_CLOSE=ALREADY_CLOSED'
-} else {
+    $closeDeadline = [DateTime]::UtcNow.AddSeconds(20)
+    $noVisibleWindows = $false
+    do {
+        $browserProcesses = @(Get-Process -Name 'camoufox' -ErrorAction SilentlyContinue)
+        $browserPids = [uint32[]]@($browserProcesses | ForEach-Object { [uint32]$_.Id })
+        $remaining = if ($browserPids.Length -eq 0) {
+            @()
+        } else {
+            [NativeCamoufoxWindow]::FindVisibleWindows($browserPids)
+        }
+        if ($remaining.Count -eq 0) {
+            $noVisibleWindows = $true
+            break
+        }
+        Start-Sleep -Milliseconds 100
+    } while ([DateTime]::UtcNow -lt $closeDeadline)
+    if (-not $noVisibleWindows) {
+        throw "WM_CLOSE was posted but $($remaining.Count) visible Camoufox window(s) remain"
+    }
+    Write-Output 'NATIVE_CAMOUFOX_WINDOW_DESTROYED=YES'
+} elseif (-not $observed) {
     throw 'native Camoufox window remained unavailable for WM_CLOSE'
 }
 "#;
@@ -236,12 +291,15 @@ if ($posted) {
     if !output.status.success()
         || !(stdout.contains("NATIVE_CAMOUFOX_WM_CLOSE=POSTED")
             || stdout.contains("NATIVE_CAMOUFOX_WM_CLOSE=ALREADY_CLOSED"))
+        || (stdout.contains("NATIVE_CAMOUFOX_WM_CLOSE=POSTED")
+            && !stdout.contains("NATIVE_CAMOUFOX_WINDOW_DESTROYED=YES"))
     {
         return Err(format!(
             "native Camoufox WM_CLOSE failed: stdout={stdout:?}; stderr={stderr:?}"
         )
         .into());
     }
+    eprintln!("{}", stdout.trim());
     Ok(())
 }
 

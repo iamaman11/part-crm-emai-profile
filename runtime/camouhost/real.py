@@ -1567,12 +1567,11 @@ def report_runtime_stage(phase: str, step: str) -> None:
         ("launch", "browser_entered"),
         ("launch", "network_blocked"),
         ("launch", "ready"),
-        ("close", "waiting_for_context_close"),
-        ("close", "context_closed"),
-        ("close", "native_writer_released"),
-        ("close", "clean_shutdown_verified"),
+        ("close", "last_native_window_closed"),
         ("close", "playwright_release_begin"),
         ("close", "playwright_release_complete"),
+        ("close", "native_writer_released"),
+        ("close", "clean_shutdown_verified"),
     }
     if (phase, step) in allowed:
         print(f"camouhost_stage phase={phase} step={step}", file=sys.stderr, flush=True)
@@ -2217,6 +2216,7 @@ async def run_local_profile(root: Path) -> int:
     from native_process import launch_native_camoufox
 
     session = None
+    browser_exit = None
     waiting_for_close = False
     try:
         lock, _ = load_runtime_lock()
@@ -2243,46 +2243,96 @@ async def run_local_profile(root: Path) -> int:
             admission_granted=True,
             headless=False,
         )
-        report_runtime_stage("launch", "ready")
+        # Reuse the existing native process witness. It observes only the
+        # browser's top-level OS window; no user page, tab, DOM or navigation.
+        if os.name == "nt":
+            browser_exit = WindowsBrowserExitWitness(os.getpid())
 
-        # The user closes the native browser window. Playwright reports the
-        # persistent BrowserContext close event; the application does not send
-        # close commands, poll HWNDs, or run a competing browser lifecycle loop.
-        waiting_for_close = True
-        report_runtime_stage("close", "waiting_for_context_close")
-        await session.wait_for_browser_close()
-        report_runtime_stage("close", "context_closed")
+        # A cold Camoufox startup is not an abnormal exit. The browser OS
+        # writer handle and native window can appear after SDK __aenter__ returns.
+        deadline = time.monotonic() + 30.0
+        window_seen = browser_exit is None
+        while True:
+            state = session.profile_state()
+            if state == "CLEAN_SHUTDOWN_VERIFIED":
+                report_runtime_stage("close", "clean_shutdown_verified")
+                report_runtime_stage("close", "playwright_release_begin")
+                await session.close()
+                report_runtime_stage("close", "playwright_release_complete")
+                if browser_exit is not None and not browser_exit.safely_exited(250):
+                    return 6
+                return 0
+            if state == "PROFILE_BUSY":
+                if browser_exit is None:
+                    window_seen = True
+                else:
+                    try:
+                        window_seen = window_seen or browser_exit.has_visible_window()
+                    except RuntimeContractError as error:
+                        report_runtime_failure("close", error)
+                if window_seen:
+                    report_runtime_stage("launch", "ready")
+                    waiting_for_close = True
+                    break
+            if state in ("CRASH_OR_UNKNOWN_PRESERVE_LOCAL", "UNKNOWN_PRESERVE_LOCAL"):
+                report_runtime_failure("close", RuntimeContractError("Firefox shutdown was not cleanly verified"))
+                await session.close_after_browser_exit()
+                return 6
+            if time.monotonic() >= deadline:
+                await session.abort_startup()
+                return 5
+            await asyncio.sleep(0.05)
 
-        # The existing Firefox writer-lock and SessionStore checkpoint remain
-        # the data-integrity proof. The event is only the native lifecycle signal.
-        await asyncio.to_thread(wait_for_browser_quiescence, root)
-        report_runtime_stage("close", "native_writer_released")
-        state = session.profile_state()
-        if state == "CLEAN_SHUTDOWN_VERIFIED":
-            report_runtime_stage("close", "clean_shutdown_verified")
-            report_runtime_stage("close", "playwright_release_begin")
-            await session.close()
-            report_runtime_stage("close", "playwright_release_complete")
-            return 0
-
-        report_runtime_failure(
-            "close", RuntimeContractError("Firefox clean shutdown was not verified")
-        )
-        report_runtime_stage("close", "playwright_release_begin")
-        await session.close_after_browser_exit()
-        report_runtime_stage("close", "playwright_release_complete")
-        return 6
+        while True:
+            state = session.profile_state()
+            if state == "CLEAN_SHUTDOWN_VERIFIED":
+                report_runtime_stage("close", "clean_shutdown_verified")
+                report_runtime_stage("close", "playwright_release_begin")
+                await session.close()
+                report_runtime_stage("close", "playwright_release_complete")
+                if browser_exit is not None and not browser_exit.safely_exited(250):
+                    return 6
+                return 0
+            if state in ("CRASH_OR_UNKNOWN_PRESERVE_LOCAL", "UNKNOWN_PRESERVE_LOCAL"):
+                report_runtime_failure("close", RuntimeContractError("Firefox shutdown was not cleanly verified"))
+                await session.close_after_browser_exit()
+                return 6
+            if browser_exit is not None and window_seen:
+                try:
+                    window_open = browser_exit.has_visible_window()
+                except RuntimeContractError as error:
+                    report_runtime_failure("close", error)
+                    window_open = True
+                if not window_open:
+                    report_runtime_stage("close", "last_native_window_closed")
+                    report_runtime_stage("close", "playwright_release_begin")
+                    # The user's last native window is already gone. Release
+                    # the persistent SDK context so Firefox can finish its
+                    # normal SessionStore shutdown and release the writer lock.
+                    # Reuse the existing SDK-release path only after the
+                    # native OS witness confirms the last browser window is gone.
+                    await session.abort_startup()
+                    report_runtime_stage("close", "playwright_release_complete")
+                    wait_for_browser_quiescence(root)
+                    report_runtime_stage("close", "native_writer_released")
+                    if (
+                        session.profile_state() == "CLEAN_SHUTDOWN_VERIFIED"
+                        and browser_exit.safely_exited(250)
+                    ):
+                        report_runtime_stage("close", "clean_shutdown_verified")
+                        return 0
+                    report_runtime_failure("close", RuntimeContractError("Firefox clean shutdown was not verified"))
+                    return 6
+            await asyncio.sleep(0.25)
     except BaseException as error:
         report_runtime_failure("close" if waiting_for_close else "launch", error)
         if session is not None:
             with contextlib.suppress(BaseException):
-                if waiting_for_close:
-                    # This path is permitted only if Firefox no longer owns the
-                    # profile. It never asks Playwright to close a live user browser.
-                    await session.close_after_browser_exit()
-                else:
-                    await session.abort_startup()
+                await session.abort_startup()
         return 5
+    finally:
+        if browser_exit is not None:
+            browser_exit.close()
 
 
 def run_native_ipc() -> int:

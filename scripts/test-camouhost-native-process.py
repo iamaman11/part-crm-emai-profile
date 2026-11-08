@@ -39,14 +39,7 @@ async def verify() -> int:
 
     class FakeContext:
         # Deliberately no page/DOM/navigation APIs: the adapter must not call them.
-        def __init__(self):
-            self.listeners = {}
-
-        def on(self, event, callback):
-            self.listeners[event] = callback
-
-        def fire(self, event):
-            self.listeners[event]()
+        pass
 
     class FakeAsyncCamoufox:
         instances = []
@@ -122,12 +115,6 @@ async def verify() -> int:
                 "persistent_context": True,
             }
             assert session.context is manager.context
-            assert set(manager.context.listeners) == {"close"}
-            close_waiter = asyncio.create_task(session.wait_for_browser_close())
-            await asyncio.sleep(0)
-            assert not close_waiter.done(), "native close wait returned before Playwright event"
-            manager.context.fire("close")
-            await close_waiter
             assert session.profile_state() == "WRITER_NOT_OBSERVED"
 
             active = True
