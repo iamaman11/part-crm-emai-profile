@@ -810,10 +810,16 @@ mod tests {
             "1/draft",
             "1/DRAFT/extra",
         ] {
-            assert!(InitialProfileOpen::parse(&format!(
-                "profilebridge://open/v2/tenant_123/actor_123/profile_123/{suffix}"
-            )).is_err());
+            assert!(
+                InitialProfileOpen::parse(&format!(
+                    "profilebridge://open/v2/tenant_123/actor_123/profile_123/{suffix}"
+                ))
+                .is_err()
+            );
         }
-        assert!(InitialProfileOpen::parse("profilebridge://open/v1/tenant_123/actor_123/profile_123/1").is_err());
+        assert!(
+            InitialProfileOpen::parse("profilebridge://open/v1/tenant_123/actor_123/profile_123/1")
+                .is_err()
+        );
     }
 }
