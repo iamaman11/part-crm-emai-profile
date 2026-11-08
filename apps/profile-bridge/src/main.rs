@@ -1,7 +1,6 @@
 #![forbid(unsafe_code)]
 #![cfg_attr(windows, windows_subsystem = "windows")]
 
-use bridge_domain::ClaimUri;
 use profile_bridge::device_pairing::{
     DevicePairingBootstrapError, DevicePairingCompleteUri, DevicePairingStartUri,
     PAIRING_COMPLETE_URI_PREFIX, PAIRING_START_URI_PREFIX, run_pairing_complete, run_pairing_start,
@@ -11,7 +10,7 @@ use profile_bridge::installed_connection::ControlPlaneOrigin;
 use profile_bridge::shipping_composition::{
     ShippingCompositionError, ShippingDeliveryCommand, run_delivery_command,
 };
-use profile_bridge::shipping_composition::{run_claim, run_closed_profile_sync};
+use profile_bridge::shipping_composition::run_closed_profile_sync;
 use profile_bridge::user_diagnostics::UserDiagnostic;
 use profile_bridge::user_diagnostics::report::{self, Cause, Cloud, Outcome, Stage};
 use std::time::Instant;
@@ -74,7 +73,7 @@ where
         BridgeCommand::PrepareInstallation(..) | BridgeCommand::ReadOnlyS1(..) => {
             Stage::InstallPrepare
         }
-        BridgeCommand::InitialProfile(_) | BridgeCommand::Claim(_) => Stage::OpenRequested,
+        BridgeCommand::InitialProfile(_) => Stage::OpenRequested,
         BridgeCommand::SyncClosed(_) => Stage::CloudSaveAttempt,
         BridgeCommand::PairingStart(_) | BridgeCommand::PairingComplete(_) => Stage::Pairing,
         BridgeCommand::DeliveryActivateStaged => Stage::InstallActivate,
@@ -146,7 +145,6 @@ where
         BridgeCommand::SyncClosed(intent) => {
             run_closed_profile_sync(&intent).map_err(BridgeCliError::LaunchFailed)
         }
-        BridgeCommand::Claim(claim) => run_claim(&claim).map_err(BridgeCliError::LaunchFailed),
         BridgeCommand::PairingStart(uri) => {
             run_pairing_start(&uri).map_err(BridgeCliError::PairingFailed)
         }
@@ -266,7 +264,6 @@ fn copy_diagnostics() -> Result<(), BridgeCliError> {
 enum BridgeCommand {
     PrepareInstallation(PathBuf, PathBuf),
     ReadOnlyS1(PathBuf, PathBuf, Option<PathBuf>),
-    Claim(ClaimUri),
     InitialProfile(InitialProfileOpen),
     SyncClosed(InitialProfileOpen),
     PairingStart(DevicePairingStartUri),
@@ -368,9 +365,9 @@ where
                 .map(BridgeCommand::PairingComplete)
                 .map_err(|_| BridgeCliError::InvalidPairingUri)
         }
-        _ => ClaimUri::parse(&argument)
-            .map(BridgeCommand::Claim)
-            .map_err(|_| BridgeCliError::InvalidClaimUri),
+        // A user URI can only open v2 local CURRENT. The older one-time
+        // claim/managed Save lifecycle is not an application launch mode.
+        _ => Err(BridgeCliError::InvalidClaimUri),
     }
 }
 
@@ -487,16 +484,16 @@ mod tests {
     }
 
     #[test]
-    fn valid_claim_crosses_only_the_cli_boundary() -> Result<(), Box<dyn std::error::Error>> {
-        let BridgeCommand::Claim(claim) = parse_command([
-            "profile-bridge".to_owned(),
-            "profilebridge://claim/claim_01JBRIDGE_FEASIBILITY".to_owned(),
-        ])?
-        else {
-            return Err("expected claim command".into());
-        };
-        assert!(!format!("{claim:?}").contains("claim_01JBRIDGE_FEASIBILITY"));
-        Ok(())
+    fn old_claim_and_v1_user_open_are_not_supported_application_modes() {
+        for obsolete in [
+            "profilebridge://claim/claim_01JBRIDGE_FEASIBILITY",
+            "profilebridge://open/v1/tenant_01JBRIDGE/actor_01JBRIDGE/profile_01JBRIDGE/1",
+        ] {
+            assert_eq!(
+                parse_command(["profile-bridge".to_owned(), obsolete.to_owned()]).err(),
+                Some(BridgeCliError::InvalidClaimUri),
+            );
+        }
     }
 
     #[test]
