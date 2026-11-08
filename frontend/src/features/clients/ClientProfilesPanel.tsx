@@ -1,5 +1,5 @@
 import { ApiProblem } from '../../shared/api/openapi-runtime';
-import { useInfiniteQuery, useQuery, useQueryClient } from '@tanstack/react-query';
+import { useInfiniteQuery, useQueryClient } from '@tanstack/react-query';
 import { useState, type FormEvent } from 'react';
 import {
   assignProfile,
@@ -30,7 +30,7 @@ export function ClientProfilesPanel({
   const queryClient = useQueryClient();
   const [detachReason, setDetachReason] = useState('');
   const [launchError, setLaunchError] = useState<Error | null>(null);
-  const [launchIntentTarget, setLaunchIntentTarget] = useState<{ profileId: string; version: number; status: string } | null>(null);
+  const [launchingProfileId, setLaunchingProfileId] = useState<string | null>(null);
   const queryKey = ['client-registry', tenantId, clientId, 'profiles'] as const;
 
   const profiles = useInfiniteQuery({
@@ -40,17 +40,14 @@ export function ClientProfilesPanel({
     getNextPageParam: (lastPage) => lastPage.nextCursor ?? undefined,
   });
 
-  const launchIntent = useQuery({
-    queryKey: ['operator-query', tenantId, 'profile-launch', launchIntentTarget?.profileId, launchIntentTarget?.version],
-    queryFn: () => {
-      if (!launchIntentTarget) throw new Error('A profile must be selected before preparing local access.');
-      return launchProfile(tenantId, launchIntentTarget.profileId, newIdempotencyKey());
-    },
-    enabled: launchIntentTarget !== null && ['DRAFT', 'READY'].includes(launchIntentTarget.status),
+  // One existing query cache owns the permitted launch response. Hover/focus
+  // may warm it, but a first click also completes the SAME request without
+  // requiring a second click or introducing another launch authority.
+  const launchQuery = (profile: { profileId: string; version: number }) => ({
+    queryKey: ['operator-query', tenantId, 'profile-launch', profile.profileId, profile.version] as const,
+    queryFn: () => launchProfile(tenantId, profile.profileId, newIdempotencyKey()),
     staleTime: 60_000,
     retry: false,
-    refetchOnWindowFocus: false,
-    refetchOnReconnect: false,
   });
 
   const refreshRelationship = async () => {
@@ -99,32 +96,22 @@ export function ClientProfilesPanel({
 
   const prepareLaunch = (profile: { profileId: string; version: number; status: string }) => {
     if (!['DRAFT', 'READY'].includes(profile.status)) return;
-    const sameTarget = launchIntentTarget?.profileId === profile.profileId
-      && launchIntentTarget.version === profile.version;
-    if (sameTarget && launchIntent.isError) {
-      void launchIntent.refetch();
-      return;
-    }
-    if (!sameTarget) {
-      setLaunchError(null);
-      setLaunchIntentTarget(profile);
-    }
+    void queryClient.prefetchQuery(launchQuery(profile));
   };
 
-  const requestLaunch = (profile: { profileId: string; version: number; status: string }) => {
-    const intent = launchIntentTarget?.profileId === profile.profileId
-      && launchIntentTarget.version === profile.version
-      ? launchIntent.data
-      : undefined;
-    if (!intent) {
-      prepareLaunch(profile);
-      return;
-    }
+  const requestLaunch = async (profile: { profileId: string; version: number; status: string }) => {
+    if (!['DRAFT', 'READY'].includes(profile.status) || launchingProfileId !== null) return;
     setLaunchError(null);
+    setLaunchingProfileId(profile.profileId);
     try {
+      // If prefetch was successful there is no request on click. Otherwise
+      // fetchQuery reuses its in-flight request and still completes this click.
+      const intent = await queryClient.fetchQuery(launchQuery(profile));
       dispatchBrowserProfileOpen(intent.launchUri);
     } catch (error) {
       setLaunchError(error instanceof ApiProblem ? error : new Error('Profile launch failed. Retry from this profile.'));
+    } finally {
+      setLaunchingProfileId(null);
     }
   };
 
@@ -144,7 +131,6 @@ export function ClientProfilesPanel({
         state={
           profiles.error
           ?? launchError
-          ?? (launchIntent.error ? new Error('Profile launch failed. Retry from this profile.') : null)
           ?? assign.error
           ?? detach.error
           ?? (profiles.isPending ? 'Loading attached profiles…' : null)
@@ -179,14 +165,14 @@ export function ClientProfilesPanel({
                 <div className="row-actions">
                   <button
                     type="button"
-                    disabled={!['DRAFT', 'READY'].includes(profile.status)}
+                    disabled={!['DRAFT', 'READY'].includes(profile.status) || launchingProfileId !== null}
                     aria-label={`Launch profile ${profile.profileId}`}
-                    aria-busy={launchIntentTarget?.profileId === profile.profileId && launchIntent.isPending}
+                    aria-busy={launchingProfileId === profile.profileId}
                     onMouseEnter={() => prepareLaunch(profile)}
                     onFocus={() => prepareLaunch(profile)}
-                    onClick={() => requestLaunch(profile)}
+                    onClick={() => { void requestLaunch(profile); }}
                   >
-                    {launchIntentTarget?.profileId === profile.profileId && launchIntent.isPending ? 'Preparing…' : 'Launch'}
+                    {launchingProfileId === profile.profileId ? 'Opening…' : 'Launch'}
                   </button>
                   <ConfirmAction
                     label="detach profile"

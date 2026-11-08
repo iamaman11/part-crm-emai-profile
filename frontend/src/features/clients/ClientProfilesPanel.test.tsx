@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { render, screen, waitFor } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import {
@@ -134,6 +134,21 @@ describe('ClientProfilesPanel P1 relationship and P2 launch workflow', () => {
     expect(screen.queryByText(/claim_0123456789abcdef/u)).toBeNull();
   });
 
+  it('completes a cold first click without a hover or a second click', async () => {
+    const profileId = 'profile_01JCLIENTPROFILES_LAUNCH';
+    mockedListClientProfiles.mockResolvedValue({
+      profiles: [profileItem(profileId, 4)],
+      nextCursor: null,
+    });
+    renderPanel();
+    expect(await screen.findByText(profileId)).toBeTruthy();
+
+    // fireEvent.click deliberately does not prefetch through hover/focus.
+    fireEvent.click(screen.getByRole('button', { name: `Launch profile ${profileId}` }));
+    await waitFor(() => expect(mockedDispatchBrowserProfileOpen).toHaveBeenCalledTimes(1));
+    expect(mockedLaunchProfile).toHaveBeenCalledTimes(1);
+  });
+
   it('surfaces a neutral launch failure without exposing bearer material', async () => {
     const profileId = 'profile_01JCLIENTPROFILES_LAUNCH_FAIL';
     mockedListClientProfiles.mockResolvedValue({
@@ -148,6 +163,7 @@ describe('ClientProfilesPanel P1 relationship and P2 launch workflow', () => {
     expect(await screen.findByText(profileId)).toBeTruthy();
     const launchButton = screen.getByRole('button', { name: `Launch profile ${profileId}` });
     await user.hover(launchButton);
+    await user.click(launchButton);
     expect(await screen.findByText('Profile launch failed. Retry from this profile.')).toBeTruthy();
     expect(screen.queryByText(/secret-claim-must-not-render/u)).toBeNull();
     expect(mockedDispatchBrowserProfileOpen).not.toHaveBeenCalled();

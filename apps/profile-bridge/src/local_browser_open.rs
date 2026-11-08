@@ -69,13 +69,21 @@ fn open_or_create_workspace(
         Err(LocalProfileError::Io(std::io::ErrorKind::NotFound))
             if intent.status == InitialProfileStatus::Draft =>
         {
-            root.create_profile_current(
+            match root.create_profile_current(
                 &intent.tenant_id,
                 &intent.profile_id,
                 generation,
                 intent.expected_version,
-            )
-            .map_err(|_| LocalOpenError::InvalidLocalWorkspace)
+            ) {
+                Ok(workspace) => Ok(workspace),
+                // Another ordinary Open may have created CURRENT since our
+                // first lookup. Reuse only a fully admitted existing folder;
+                // the existing OS writer lock resolves competing launches.
+                Err(LocalProfileError::TargetAlreadyExists) => root
+                    .open_profile_current(&intent.tenant_id, &intent.profile_id)
+                    .map_err(|_| LocalOpenError::InvalidLocalWorkspace),
+                Err(_) => Err(LocalOpenError::InvalidLocalWorkspace),
+            }
         }
         Err(LocalProfileError::Io(std::io::ErrorKind::NotFound))
             if intent.status == InitialProfileStatus::Ready =>
