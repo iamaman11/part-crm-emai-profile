@@ -419,6 +419,7 @@ impl UserDiagnostic {
                         Local::BrowserNotClosedCleanly => "BRIDGE_LOCAL_CLOSE_UNVERIFIED",
                     }
                 }
+                ShippingCompositionError::SyncUnconfirmed => "BRIDGE_CLOUD_SYNC_UNCONFIRMED",
                 ShippingCompositionError::Operator(error) => operator_code(error),
                 ShippingCompositionError::ActiveSessionMissing => "BRIDGE_ACTIVE_SESSION_MISSING",
                 ShippingCompositionError::CloseObservation(_) => "BRIDGE_CLOSE_OBSERVATION_FAILED",
@@ -861,6 +862,9 @@ impl UserDiagnostic {
             }
             Self::Launch(Launch::CommittedRecoveryRequired) => {
                 "The new profile state was confirmed by the server, but local cleanup needs recovery. Return to the application to review the session. Keep local profile files."
+            }
+            Self::Launch(Launch::SyncUnconfirmed) => {
+                "The browser closed locally and its files are intact, but cloud synchronization is not confirmed. Local pending-sync evidence was retained for a later exact retry."
             }
         }
     }
