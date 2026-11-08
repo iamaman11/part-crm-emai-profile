@@ -1463,9 +1463,6 @@ def materialize_candidate_identity(root: Path) -> dict[str, str]:
     if config_path.exists() or config_path.is_symlink() or user_data_dir.is_symlink():
         raise RuntimeContractError("candidate identity already exists or path is unsafe")
     user_data_dir.mkdir(exist_ok=True)
-    if firefox_writer_active(root):
-        raise RuntimeContractError("candidate generation has an active/ambiguous Firefox writer")
-
     browser_selector = camoufox_browser_selector(lock)
     browser_env = browser_environment()
     headless_mode = resolve_headless_mode()
