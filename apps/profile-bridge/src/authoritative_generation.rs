@@ -163,6 +163,7 @@ where
         control,
         downloader,
         None,
+        false,
     )
 }
 
@@ -200,6 +201,38 @@ where
         control,
         downloader,
         Some(profile_version),
+        false,
+    )
+}
+
+/// Reconcile a lost first-DRAFT Commit reply without an extra cloud state
+/// or a second snapshot owner. The Worker still selects ONLY VERIFIED CURRENT,
+/// the existing R2/AEAD/BPGW reader proves full byte equality under the local
+/// OS writer lock, and the original working files are never replaced.
+#[allow(clippy::too_many_arguments)]
+pub fn reconcile_closed_draft_with_confirmed_current<C, D>(
+    root: &MaterializationRoot,
+    tenant_id: &TenantId,
+    profile_id: &ProfileId,
+    generation_id: &GenerationId,
+    profile_version: u64,
+    device_id: &DeviceId,
+    workspace_epoch: u64,
+    control: &mut C,
+    downloader: &mut D,
+) -> Result<(), AuthoritativeGenerationMaterializationError>
+where
+    C: GenerationReopenControlPort,
+    <C as GenerationReopenControlPort>::Error: Into<GenerationReopenControlError>,
+    D: GenerationObjectDownloadPort,
+    D::Error: Into<GenerationObjectDownloadError>,
+{
+    if profile_version == 0 {
+        return Err(AuthoritativeGenerationMaterializationError::InvalidLocalEvidence);
+    }
+    ensure_authoritative_generation_to(
+        root, tenant_id, profile_id, generation_id, device_id,
+        workspace_epoch, control, downloader, Some(profile_version), true,
     )
 }
 
@@ -214,6 +247,7 @@ fn ensure_authoritative_generation_to<C, D>(
     control: &mut C,
     downloader: &mut D,
     profile_version: Option<u64>,
+    reconcile_existing: bool,
 ) -> Result<(), AuthoritativeGenerationMaterializationError>
 where
     C: GenerationReopenControlPort,
@@ -225,10 +259,18 @@ where
     let local_evidence_started = std::time::Instant::now();
     // Restore must never interpret an existing local CURRENT as an old cloud
     // generation or repair/replace potentially dirty native Firefox files.
-    let incomplete_local = if profile_version.is_some() {
+    let incomplete_local = if let Some(version) = profile_version {
         match root.open_profile_current(tenant_id, profile_id) {
+            Ok(workspace)
+                if reconcile_existing
+                    && workspace.base_generation_id().is_none()
+                    && workspace.generation_id() == generation_id
+                    && workspace.profile_version() < version =>
+            {
+                Some(workspace)
+            }
             Ok(_) => return Err(AuthoritativeGenerationMaterializationError::InvalidLocalEvidence),
-            Err(LocalProfileError::Io(std::io::ErrorKind::NotFound)) => None,
+            Err(LocalProfileError::Io(std::io::ErrorKind::NotFound)) if !reconcile_existing => None,
             Err(_) => return Err(AuthoritativeGenerationMaterializationError::Local),
         }
     } else {
@@ -421,14 +463,17 @@ where
             verify_workspace_matches_snapshot(&workspace, opened.plaintext()).map_err(|_| {
                 AuthoritativeGenerationMaterializationError::IncompleteLocalEvidence
             })?;
-            restore_materialization_binding_after_authoritative_open(
-                &workspace,
-                tenant_id,
-                profile_id,
-                generation_id,
-                &source_container_sha256,
-            )
-            .map_err(|_| AuthoritativeGenerationMaterializationError::InvalidLocalEvidence)?;
+            if let Some(version) = profile_version {
+                confirm_closed_draft_current_matches_cloud(
+                    root, &workspace, generation_id, version,
+                )
+                .map_err(|_| AuthoritativeGenerationMaterializationError::InvalidLocalEvidence)?;
+            } else {
+                restore_materialization_binding_after_authoritative_open(
+                    &workspace, tenant_id, profile_id, generation_id, &source_container_sha256,
+                )
+                .map_err(|_| AuthoritativeGenerationMaterializationError::InvalidLocalEvidence)?;
+            }
             Ok(())
         })();
         let released = lock
@@ -588,18 +633,33 @@ where
                 },
             )
             .map_err(|_| Error::IncompleteLocalEvidence)?;
-            restore_materialization_binding_after_authoritative_open(
-                &workspace,
-                tenant_id,
-                profile_id,
-                generation_id,
-                &digest,
-            )
-            .map_err(|_| Error::InvalidLocalEvidence)?;
+            if let Some(version) = profile_version {
+                confirm_closed_draft_current_matches_cloud(
+                    root, &workspace, generation_id, version,
+                )
+                .map_err(|_| Error::InvalidLocalEvidence)?;
+            } else {
+                restore_materialization_binding_after_authoritative_open(
+                    &workspace, tenant_id, profile_id, generation_id, &digest,
+                )
+                .map_err(|_| Error::InvalidLocalEvidence)?;
+            }
             Ok(())
         })();
         let released = lock.release().map_err(|_| Error::InvalidLocalEvidence);
-        verified?;
+        if let Err(reason) = verified {
+            if profile_version.is_some() {
+                // These two create-new temporary files belong to this exact
+                // read-only equality attempt. A changed local profile is an
+                // ordinary conflict, not a reason to block every future
+                // retry with an abandoned ciphertext spool.
+                drop(plaintext);
+                drop(ciphertext);
+                fs::remove_file(&plaintext_path).map_err(|_| Error::Local)?;
+                fs::remove_file(ciphertext_path).map_err(|_| Error::Local)?;
+            }
+            return Err(reason);
+        }
         released?;
     } else {
         let expected = StreamedWorkspaceSnapshot {
@@ -654,6 +714,36 @@ where
     drop(ciphertext);
     fs::remove_file(&plaintext_path).map_err(|_| Error::Local)?;
     fs::remove_file(ciphertext_path).map_err(|_| Error::Local)?;
+    Ok(())
+}
+
+/// Called exclusively after full BPGW equality with the Worker-confirmed
+/// CURRENT inside the already-held OS writer lock. This is also the only
+/// automatic local receipt reconciliation for a lost DRAFT Commit reply.
+fn confirm_closed_draft_current_matches_cloud(
+    root: &MaterializationRoot,
+    workspace: &GenerationWorkspace,
+    confirmed_id: &GenerationId,
+    profile_version: u64,
+) -> Result<(), ()> {
+    if workspace.base_generation_id().is_some()
+        || workspace.generation_id() != confirmed_id
+        || workspace.profile_version() >= profile_version
+    {
+        return Err(());
+    }
+    let path = workspace.path().join(".local-unsynced");
+    let meta = fs::symlink_metadata(&path).map_err(|_| ())?;
+    if meta.file_type().is_symlink()
+        || !meta.is_file()
+        || fs::read(&path).map_err(|_| ())? != b"local-unsynced-v2"
+    {
+        return Err(());
+    }
+    root.update_profile_current_sync_base(workspace, confirmed_id, profile_version)
+        .map_err(|_| ())?;
+    // Failure to retire the exact local marker leaves it dirty, never Saved.
+    fs::remove_file(path).map_err(|_| ())?;
     Ok(())
 }
 
@@ -1152,6 +1242,114 @@ mod tests {
             fs::read(workspace.path().join("user_data/storage/state.bin"))?,
             b"changed"
         );
+        fixture.cleanup();
+        Ok(())
+    }
+
+    #[test]
+    fn lost_draft_commit_reconciles_only_exact_cloud_current_without_second_browser()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let fixture = Fixture::without_browser_identity()?;
+        let workspace = fixture.root.create_profile_current(
+            &fixture.tenant_id, &fixture.profile_id, &fixture.generation_id, 1,
+        )?;
+        fs::create_dir_all(workspace.path().join("user_data/storage"))?;
+        fs::write(workspace.path().join("prefs.js"), b"authoritative-prefs")?;
+        fs::write(
+            workspace.path().join("user_data/storage/state.bin"),
+            b"authoritative-state",
+        )?;
+        fs::write(workspace.path().join("camoufox-config.json"), &fixture.config_bytes)?;
+        fs::write(workspace.path().join(".local-unsynced"), b"local-unsynced-v2")?;
+        let mut control = fixture.control();
+        let mut downloader = FakeStreamDownloader {
+            container: fixture.container.clone(),
+            calls: 0,
+        };
+        super::reconcile_closed_draft_with_confirmed_current(
+            &fixture.root, &fixture.tenant_id, &fixture.profile_id,
+            &fixture.generation_id, 2,
+            &DeviceId::parse("device_draft_confirmed")?,
+            11, &mut control, &mut downloader,
+        )?;
+        let confirmed = fixture.root.open_profile_current(
+            &fixture.tenant_id, &fixture.profile_id,
+        )?;
+        assert_eq!(confirmed.path(), workspace.path());
+        assert_eq!(confirmed.base_generation_id(), Some(&fixture.generation_id));
+        assert_eq!(confirmed.profile_version(), 2);
+        assert!(!confirmed.path().join(".local-unsynced").exists());
+        assert_eq!(
+            fs::read(confirmed.path().join("user_data/storage/state.bin"))?,
+            b"authoritative-state",
+        );
+        assert_eq!(downloader.calls, 1);
+        fixture.cleanup();
+        Ok(())
+    }
+
+    #[test]
+    fn lost_draft_commit_rejects_different_native_bytes_and_preserves_dirty()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let fixture = Fixture::without_browser_identity()?;
+        let workspace = fixture.root.create_profile_current(
+            &fixture.tenant_id, &fixture.profile_id, &fixture.generation_id, 1,
+        )?;
+        fs::create_dir_all(workspace.path().join("user_data/storage"))?;
+        fs::write(workspace.path().join("prefs.js"), b"authoritative-prefs")?;
+        fs::write(
+            workspace.path().join("user_data/storage/state.bin"),
+            b"NEW LOCAL USER DATA",
+        )?;
+        fs::write(workspace.path().join("camoufox-config.json"), &fixture.config_bytes)?;
+        fs::write(workspace.path().join(".local-unsynced"), b"local-unsynced-v2")?;
+        let mut control = fixture.control();
+        let mut downloader = FakeStreamDownloader {
+            container: fixture.container.clone(),
+            calls: 0,
+        };
+        let outcome = super::reconcile_closed_draft_with_confirmed_current(
+            &fixture.root, &fixture.tenant_id, &fixture.profile_id,
+            &fixture.generation_id, 2,
+            &DeviceId::parse("device_draft_diverged")?,
+            12, &mut control, &mut downloader,
+        );
+        assert_eq!(
+            outcome, Err(AuthoritativeGenerationMaterializationError::IncompleteLocalEvidence),
+        );
+        let still_local = fixture.root.open_profile_current(
+            &fixture.tenant_id, &fixture.profile_id,
+        )?;
+        assert_eq!(still_local.base_generation_id(), None);
+        assert_eq!(still_local.profile_version(), 1);
+        assert_eq!(
+            fs::read(still_local.path().join("user_data/storage/state.bin"))?,
+            b"NEW LOCAL USER DATA",
+        );
+        assert_eq!(
+            fs::read(still_local.path().join(".local-unsynced"))?,
+            b"local-unsynced-v2",
+        );
+        let digest = encode_sha256(fixture.container_digest);
+        assert!(!fixture.root.path().join(format!(".pending-r2-{digest}")).exists());
+        assert!(!fixture.root.path().join(format!(".pending-bpgw-{digest}")).exists());
+        // A subsequent exact retry can reconcile once the local files equal
+        // the immutable cloud snapshot, with no second generation or reset.
+        fs::write(
+            still_local.path().join("user_data/storage/state.bin"),
+            b"authoritative-state",
+        )?;
+        super::reconcile_closed_draft_with_confirmed_current(
+            &fixture.root, &fixture.tenant_id, &fixture.profile_id,
+            &fixture.generation_id, 2,
+            &DeviceId::parse("device_draft_diverged")?,
+            13, &mut control, &mut downloader,
+        )?;
+        let confirmed = fixture.root.open_profile_current(
+            &fixture.tenant_id, &fixture.profile_id,
+        )?;
+        assert_eq!(confirmed.profile_version(), 2);
+        assert_eq!(confirmed.base_generation_id(), Some(&fixture.generation_id));
         fixture.cleanup();
         Ok(())
     }

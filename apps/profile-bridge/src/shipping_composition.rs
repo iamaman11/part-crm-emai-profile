@@ -242,7 +242,9 @@ mod windows {
         close_observation_disposition, pending_recovery_failure_disposition,
         recovery_next_safe_step, retryable_reconnect_observation,
     };
-    use crate::authoritative_generation::ensure_authoritative_current;
+    use crate::authoritative_generation::{
+        ensure_authoritative_current, reconcile_closed_draft_with_confirmed_current,
+    };
     use crate::camouhost_process::{
         ManagedCamouhostConfig, ManagedCamouhostProcess, RuntimeBindingSlot, RuntimeDisplayMode,
     };
@@ -448,7 +450,36 @@ mod windows {
             .open_profile_current(&intent.tenant_id, &intent.profile_id)
             .map_err(|_| ())?;
         let Some(base) = workspace.base_generation_id().cloned() else {
-            return Err(());
+            // First DRAFT -> READY committed in D1, but our HTTP response or
+            // local receipt update was lost. Admit only the expected single
+            // Profile-version increment and exact native-byte equality with
+            // the verified, server-selected CURRENT. No overwrite or N+2.
+            if workspace.profile_version().checked_add(1) != Some(intent.expected_version)
+                || fs::read(workspace.path().join(".local-unsynced")).map_err(|_| ())?
+                    != b"local-unsynced-v2"
+            {
+                return Err(());
+            }
+            let application = WindowsDeviceApplication::from_system(
+                origin.to_owned(), binding.clone(),
+            ).map_err(|_| ())?;
+            let mut control = ControlPlaneCoordinator::for_local_current_restore(
+                application.transport(),
+            );
+            let confirmed = control.download_capability(
+                &intent.tenant_id, &intent.profile_id,
+            ).map_err(|_| ())?;
+            if confirmed.generation_id() != workspace.generation_id() {
+                return Err(());
+            }
+            let reader = WindowsSignedGenerationObjectGet::from_system().map_err(|_| ())?;
+            let mut downloader = VerifiedGenerationObjectStreamDownloader::new(reader);
+            return reconcile_closed_draft_with_confirmed_current(
+                root, &intent.tenant_id, &intent.profile_id,
+                confirmed.generation_id(), intent.expected_version,
+                binding.device_id(), now().map_err(|_| ())?.value(),
+                &mut control, &mut downloader,
+            ).map_err(|_| ());
         };
         if workspace.profile_version() != intent.expected_version
             || fs::read(workspace.path().join(".local-unsynced")).map_err(|_| ())?
