@@ -126,8 +126,7 @@ fn run_python(runtime_root: &Path, folder: &Path, action: &str) -> Result<bool, 
             // Runtime stderr can contain upstream/library detail. Forward only
             // the fixed, redacted milestones and typed failure categories.
             if cfg!(debug_assertions)
-                && (line.starts_with("camouhost_stage ")
-                    || line.starts_with("camouhost_failure "))
+                && (line.starts_with("camouhost_stage ") || line.starts_with("camouhost_failure "))
             {
                 let _ = writeln!(std::io::stderr().lock(), "{line}");
             }
