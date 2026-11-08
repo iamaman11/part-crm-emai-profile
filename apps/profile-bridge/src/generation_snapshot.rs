@@ -174,7 +174,8 @@ impl ClosedProfileEncryptedStream {
     }
     pub(crate) fn verified_file(
         &self,
-    ) -> Result<crate::generation_object_spool::VerifiedGenerationObjectFile, GenerationSnapshotError> {
+    ) -> Result<crate::generation_object_spool::VerifiedGenerationObjectFile, GenerationSnapshotError>
+    {
         crate::generation_object_spool::VerifiedGenerationObjectFile::open(
             self.ciphertext.path(),
             self.container_bytes(),
@@ -236,19 +237,18 @@ pub(crate) fn seal_closed_workspace_streaming(
     if reader.expected_bytes() != plaintext_bytes {
         return Err(GenerationSnapshotError::SourceChanged);
     }
-    let mut file = tempfile::NamedTempFile::new()
+    let mut file =
+        tempfile::NamedTempFile::new().map_err(|_| GenerationSnapshotError::SourceChanged)?;
+    let report = seal_generation_streaming(&metadata, &dek, &mut reader, file.as_file_mut())
         .map_err(|_| GenerationSnapshotError::SourceChanged)?;
-    let report = seal_generation_streaming(
-        &metadata,
-        &dek,
-        &mut reader,
-        file.as_file_mut(),
-    )
-    .map_err(|_| GenerationSnapshotError::SourceChanged)?;
     file.as_file_mut()
         .sync_all()
         .map_err(|_| GenerationSnapshotError::SourceChanged)?;
-    if workspace.inventory().map_err(GenerationSnapshotError::Local)? != *inventory {
+    if workspace
+        .inventory()
+        .map_err(GenerationSnapshotError::Local)?
+        != *inventory
+    {
         return Err(GenerationSnapshotError::SourceChanged);
     }
     Ok(ClosedProfileEncryptedStream {

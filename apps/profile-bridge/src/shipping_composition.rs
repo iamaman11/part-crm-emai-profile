@@ -267,9 +267,7 @@ mod windows {
     use crate::camouhost_process::{
         ManagedCamouhostConfig, ManagedCamouhostProcess, RuntimeBindingSlot, RuntimeDisplayMode,
     };
-    use crate::dirty_generation::{
-        GenerationSealingMaterialPort, closed_current_candidate_id,
-    };
+    use crate::dirty_generation::{GenerationSealingMaterialPort, closed_current_candidate_id};
     use crate::generation_initialization::{
         InitialProfileError, InitialProfileStatus, reauthorize_current_ready_generation,
         sync_closed_local_draft,
@@ -520,32 +518,29 @@ mod windows {
                 return Err(());
             }
             let inventory = workspace.inventory().map_err(|_| ())?;
-            let (bytes, digest) = digest_closed_workspace_streaming(&workspace, &inventory)
-                .map_err(|_| ())?;
+            let (bytes, digest) =
+                digest_closed_workspace_streaming(&workspace, &inventory).map_err(|_| ())?;
             Ok((inventory, bytes, digest))
         })();
         let unlock = lock.release().map_err(|_| ());
         let (original_inventory, plaintext_bytes, digest) = captured?;
         unlock?;
-        let candidate = closed_current_candidate_id(
-            &intent.tenant_id, &intent.profile_id, &base, digest,
-        ).map_err(|_| ())?;
+        let candidate =
+            closed_current_candidate_id(&intent.tenant_id, &intent.profile_id, &base, digest)
+                .map_err(|_| ())?;
 
         // A lost READY N+1 Commit reply cannot authorize a fresh N+2.
         // Read exact server-selected CURRENT first; a newer candidate must
         // match the ORIGINAL closed local bytes before the local marker moves.
-        let reader_app = WindowsDeviceApplication::from_system(
-            origin.to_owned(), binding.clone(),
-        ).map_err(|_| ())?;
-        let mut read_only = ControlPlaneCoordinator::for_local_current_restore(
-            reader_app.transport(),
-        );
+        let reader_app = WindowsDeviceApplication::from_system(origin.to_owned(), binding.clone())
+            .map_err(|_| ())?;
+        let mut read_only =
+            ControlPlaneCoordinator::for_local_current_restore(reader_app.transport());
         let current = read_only
             .download_capability(&intent.tenant_id, &intent.profile_id)
             .map_err(|_| ())?;
         if current.generation_id() == &candidate {
-            let reader = WindowsSignedGenerationObjectGet::from_system()
-                .map_err(|_| ())?;
+            let reader = WindowsSignedGenerationObjectGet::from_system().map_err(|_| ())?;
             let mut downloader = VerifiedGenerationObjectStreamDownloader::new(reader);
             return reconcile_closed_ready_with_confirmed_current(
                 root,
@@ -558,7 +553,8 @@ mod windows {
                 now().map_err(|_| ())?.value(),
                 &mut read_only,
                 &mut downloader,
-            ).map_err(|_| ());
+            )
+            .map_err(|_| ());
         }
         if current.generation_id() != &base {
             return Err(());
@@ -602,22 +598,32 @@ mod windows {
             let mut sealer = coordinator.clone();
             let material = sealer
                 .material_for(
-                    &intent.tenant_id, &intent.profile_id, &base, &candidate, digest,
+                    &intent.tenant_id,
+                    &intent.profile_id,
+                    &base,
+                    &candidate,
+                    digest,
                 )
                 .map_err(|_| ())?;
             // Network/key service does not hold the local admission. Only the
             // ORIGINAL closed folder is read for the streaming BPGC seal.
-            let lock = BridgeWorkspaceLock::acquire(
-                &workspace, device, now().map_err(|_| ())?.value(),
-            ).map_err(|_| ())?;
+            let lock =
+                BridgeWorkspaceLock::acquire(&workspace, device, now().map_err(|_| ())?.value())
+                    .map_err(|_| ())?;
             let encrypted = (|| {
                 if !matches!(browser_writer_locks_absent(&workspace), Ok(true)) {
                     return Err(());
                 }
                 seal_closed_workspace_streaming(
-                    &workspace, &original_inventory, &candidate, Some(&base), material,
-                    plaintext_bytes, digest,
-                ).map_err(|_| ())
+                    &workspace,
+                    &original_inventory,
+                    &candidate,
+                    Some(&base),
+                    material,
+                    plaintext_bytes,
+                    digest,
+                )
+                .map_err(|_| ())
             })();
             let unlock = lock.release().map_err(|_| ());
             let encrypted = encrypted?;
@@ -627,9 +633,16 @@ mod windows {
             }
             let mut upload = WindowsSignedGenerationObjectPut::from_system().map_err(|_| ())?;
             publish_closed_streamed_successor(
-                &intent.tenant_id, &intent.profile_id, &base, &candidate,
-                &encrypted, &lease, &mut transport, &mut upload,
-            ).map_err(|_| ())?;
+                &intent.tenant_id,
+                &intent.profile_id,
+                &base,
+                &candidate,
+                &encrypted,
+                &lease,
+                &mut transport,
+                &mut upload,
+            )
+            .map_err(|_| ())?;
             if !heartbeat.is_healthy() {
                 return Err(());
             }
@@ -722,7 +735,8 @@ mod windows {
                     // reconcile it; no blind second PUT or generation is made.
                     let mut proof = intent.clone();
                     proof.status = InitialProfileStatus::Ready;
-                    proof.expected_version = proof.expected_version
+                    proof.expected_version = proof
+                        .expected_version
                         .checked_add(1)
                         .ok_or(ShippingCompositionError::Initialization(error))?;
                     sync_closed_ready(&proof, binding, root, origin)
@@ -767,9 +781,8 @@ mod windows {
                 effective.status = InitialProfileStatus::Ready;
                 effective.expected_version = workspace.profile_version();
             }
-            let outcome = sync_after_native_close(
-                &effective, &binding, &root, &config.control_plane_origin,
-            );
+            let outcome =
+                sync_after_native_close(&effective, &binding, &root, &config.control_plane_origin);
             if outcome.is_ok()
                 && matches!(
                     std::fs::symlink_metadata(&dirty),

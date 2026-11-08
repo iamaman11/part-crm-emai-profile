@@ -7,10 +7,10 @@ use profile_bridge::device_pairing::{
 };
 use profile_bridge::generation_initialization::{INITIAL_OPEN_URI_PREFIX, InitialProfileOpen};
 use profile_bridge::installed_connection::ControlPlaneOrigin;
+use profile_bridge::shipping_composition::run_closed_profile_sync;
 use profile_bridge::shipping_composition::{
     ShippingCompositionError, ShippingDeliveryCommand, run_delivery_command,
 };
-use profile_bridge::shipping_composition::run_closed_profile_sync;
 use profile_bridge::user_diagnostics::UserDiagnostic;
 use profile_bridge::user_diagnostics::report::{self, Cause, Cloud, Outcome, Stage};
 use std::time::Instant;

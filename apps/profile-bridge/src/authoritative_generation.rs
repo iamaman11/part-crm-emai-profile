@@ -274,8 +274,17 @@ where
         return Err(AuthoritativeGenerationMaterializationError::InvalidLocalEvidence);
     }
     ensure_authoritative_generation_to(
-        root, tenant_id, profile_id, generation_id, device_id, workspace_epoch,
-        control, downloader, Some(profile_version), true, Some(previous_base),
+        root,
+        tenant_id,
+        profile_id,
+        generation_id,
+        device_id,
+        workspace_epoch,
+        control,
+        downloader,
+        Some(profile_version),
+        true,
+        Some(previous_base),
     )
 }
 
@@ -309,8 +318,7 @@ where
                 if reconcile_existing
                     && workspace.base_generation_id() == expected_previous_base
                     && (match expected_previous_base {
-                        Some(base) => workspace.generation_id() == base
-                            && generation_id != base,
+                        Some(base) => workspace.generation_id() == base && generation_id != base,
                         None => workspace.generation_id() == generation_id,
                     })
                     && workspace.profile_version().checked_add(1) == Some(version) =>

@@ -340,30 +340,34 @@ where
         lease.epoch(),
     );
     let post = |transport: &mut T, path: &str, body: &BridgeProfileGenerationSuccessorRequest| {
-        post_json::<T, core::convert::Infallible, _>(transport, path, body)
-            .map_err(|reason| match reason {
+        post_json::<T, core::convert::Infallible, _>(transport, path, body).map_err(|reason| {
+            match reason {
                 GenerationSuccessorControlError::ControlPlane(error) => error,
                 GenerationSuccessorControlError::Sealing(never) => match never {},
-            })
+            }
+        })
     };
     let upload_path = successor_path(
-        BRIDGE_PROFILE_GENERATION_UPLOAD_CAPABILITY_PATH_TEMPLATE, tenant, profile,
+        BRIDGE_PROFILE_GENERATION_UPLOAD_CAPABILITY_PATH_TEMPLATE,
+        tenant,
+        profile,
     );
-    let authorization = |transport: &mut T|
-        -> Result<GenerationUploadAuthorization, ShippingControlPlaneError> {
-        let response = post(transport, &upload_path, &request)?;
-        if response.len() > MAX_UPLOAD_CAPABILITY_RESPONSE_BYTES {
-            return Err(ShippingControlPlaneError::InvalidResponse);
-        }
-        let parsed: BridgeGenerationUploadCapabilityResponse =
-            serde_json::from_slice(&response)
-                .map_err(|_| ShippingControlPlaneError::InvalidResponse)?;
-        decode_upload_authorization::<core::convert::Infallible>(parsed)
-            .map_err(|reason| match reason {
-                GenerationSuccessorControlError::ControlPlane(error) => error,
-                GenerationSuccessorControlError::Sealing(never) => match never {},
+    let authorization =
+        |transport: &mut T| -> Result<GenerationUploadAuthorization, ShippingControlPlaneError> {
+            let response = post(transport, &upload_path, &request)?;
+            if response.len() > MAX_UPLOAD_CAPABILITY_RESPONSE_BYTES {
+                return Err(ShippingControlPlaneError::InvalidResponse);
+            }
+            let parsed: BridgeGenerationUploadCapabilityResponse =
+                serde_json::from_slice(&response)
+                    .map_err(|_| ShippingControlPlaneError::InvalidResponse)?;
+            decode_upload_authorization::<core::convert::Infallible>(parsed).map_err(|reason| {
+                match reason {
+                    GenerationSuccessorControlError::ControlPlane(error) => error,
+                    GenerationSuccessorControlError::Sealing(never) => match never {},
+                }
             })
-    };
+        };
     match authorization(transport)? {
         GenerationUploadAuthorization::Verified => {}
         GenerationUploadAuthorization::UploadRequired(capability) => {
@@ -374,22 +378,26 @@ where
                 .put_verified_stream(&capability, &mut exact)
                 .map_err(|_| ShippingControlPlaneError::Transport)?;
             // A completed HTTP PUT is NOT verified storage.
-            if !matches!(authorization(transport)?, GenerationUploadAuthorization::Verified) {
+            if !matches!(
+                authorization(transport)?,
+                GenerationUploadAuthorization::Verified
+            ) {
                 return Err(ShippingControlPlaneError::HttpServerUncertain);
             }
         }
     }
     let commit_path = successor_path(
-        BRIDGE_PROFILE_GENERATION_COMMIT_PATH_TEMPLATE, tenant, profile,
+        BRIDGE_PROFILE_GENERATION_COMMIT_PATH_TEMPLATE,
+        tenant,
+        profile,
     );
-    let committed = post(transport, &commit_path, &request)
-        .and_then(|response| {
-            if response.len() > MAX_COMMIT_RESPONSE_BYTES {
-                return Err(ShippingControlPlaneError::InvalidResponse);
-            }
-            serde_json::from_slice::<BridgeGenerationSuccessorCommitResponse>(&response)
-                .map_err(|_| ShippingControlPlaneError::InvalidResponse)
-        });
+    let committed = post(transport, &commit_path, &request).and_then(|response| {
+        if response.len() > MAX_COMMIT_RESPONSE_BYTES {
+            return Err(ShippingControlPlaneError::InvalidResponse);
+        }
+        serde_json::from_slice::<BridgeGenerationSuccessorCommitResponse>(&response)
+            .map_err(|_| ShippingControlPlaneError::InvalidResponse)
+    });
     if committed.is_ok() {
         return Ok(());
     }
@@ -405,7 +413,11 @@ where
     };
     let bytes = post_json::<T, core::convert::Infallible, _>(
         transport,
-        &successor_path(BRIDGE_PROFILE_GENERATION_OBSERVE_PATH_TEMPLATE, tenant, profile),
+        &successor_path(
+            BRIDGE_PROFILE_GENERATION_OBSERVE_PATH_TEMPLATE,
+            tenant,
+            profile,
+        ),
         &observation,
     )
     .map_err(|reason| match reason {
@@ -416,8 +428,7 @@ where
         return Err(ShippingControlPlaneError::InvalidResponse);
     }
     let observed: BridgeGenerationSuccessorObserveResponse =
-        serde_json::from_slice(&bytes)
-            .map_err(|_| ShippingControlPlaneError::InvalidResponse)?;
+        serde_json::from_slice(&bytes).map_err(|_| ShippingControlPlaneError::InvalidResponse)?;
     if !observed.active_exact {
         return Err(ShippingControlPlaneError::HttpServerUncertain);
     }

@@ -1,7 +1,7 @@
 //! Automatic first-open preparation. Reuses the snapshot, cipher, immutable upload and launch owners.
 use crate::browser_execution::{persist_browser_identity, persist_materialization_binding};
 use crate::generation_snapshot::{
-    encode_workspace_snapshot, digest_closed_workspace_streaming, seal_closed_workspace_streaming,
+    digest_closed_workspace_streaming, encode_workspace_snapshot, seal_closed_workspace_streaming,
 };
 use crate::local_profile::{BridgeWorkspaceLock, GenerationWorkspace, MaterializationRoot};
 use crate::operator_flow::RuntimeBundleSelectionPort;
@@ -10,7 +10,8 @@ use crate::shipping_control_plane::{
     MachineHttpMethod, MachineHttpPort, MachineHttpResponse, sealing_material_from_response,
 };
 use crate::shipping_generation_save::{
-    GenerationUploadAuthorization, SignedGenerationObjectPutPort, SignedGenerationObjectStreamPutPort,
+    GenerationUploadAuthorization, SignedGenerationObjectPutPort,
+    SignedGenerationObjectStreamPutPort,
 };
 use crate::shipping_generation_successor_control::decode_upload_authorization;
 use bridge_domain::{BridgePortError, ClaimUri};
@@ -367,10 +368,11 @@ pub fn sync_closed_local_draft<T: MachineHttpPort, U: SignedGenerationObjectStre
         if !matches!(browser_writer_locks_absent(&workspace), Ok(true)) {
             return Err(InitialProfileError::Snapshot);
         }
-        let inventory = workspace.inventory().map_err(|_| InitialProfileError::Snapshot)?;
-        let (plaintext_bytes, digest) =
-            digest_closed_workspace_streaming(&workspace, &inventory)
-                .map_err(|_| InitialProfileError::Snapshot)?;
+        let inventory = workspace
+            .inventory()
+            .map_err(|_| InitialProfileError::Snapshot)?;
+        let (plaintext_bytes, digest) = digest_closed_workspace_streaming(&workspace, &inventory)
+            .map_err(|_| InitialProfileError::Snapshot)?;
         Ok((inventory, plaintext_bytes, digest))
     })();
     let released = writer.release().map_err(|_| InitialProfileError::Snapshot);
@@ -419,8 +421,13 @@ pub fn sync_closed_local_draft<T: MachineHttpPort, U: SignedGenerationObjectStre
             return Err(InitialProfileError::Snapshot);
         }
         seal_closed_workspace_streaming(
-            &workspace, &inventory, &generation, None, material,
-            plaintext_bytes, digest,
+            &workspace,
+            &inventory,
+            &generation,
+            None,
+            material,
+            plaintext_bytes,
+            digest,
         )
         .map_err(|_| InitialProfileError::Snapshot)
     })();
@@ -444,7 +451,8 @@ pub fn sync_closed_local_draft<T: MachineHttpPort, U: SignedGenerationObjectStre
         decode_upload_authorization::<core::convert::Infallible>(authorization)
             .map_err(|_| InitialProfileError::Upload)?
     {
-        let mut sealed_file = encrypted.verified_file()
+        let mut sealed_file = encrypted
+            .verified_file()
             .map_err(|_| InitialProfileError::Upload)?;
         uploader
             .put_verified_stream(&capability, &mut sealed_file)
@@ -670,7 +678,6 @@ mod tests {
                 panic!("unverified local DRAFT may never stream")
             }
         }
-
 
         let intent = InitialProfileOpen::parse(
             "profilebridge://open/v2/tenant_draft_test/actor_draft_test/profile_draft_test/1/DRAFT",
@@ -1070,7 +1077,6 @@ mod tests {
                 panic!("unverified local DRAFT may never stream")
             }
         }
-
 
         #[derive(Default)]
         struct CommittingTransport {
