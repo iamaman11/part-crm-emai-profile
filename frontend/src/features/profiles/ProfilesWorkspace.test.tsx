@@ -2,11 +2,11 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { TenantProvider } from '../../app/TenantContext';
-import { changeGenerationActivation, getCoordinator, getGeneration, getProfile, launchProfile, openBrowserProfile } from './api';
+import { changeGenerationActivation, dispatchBrowserProfileOpen, getCoordinator, getGeneration, getProfile, launchProfile } from './api';
 import { ProfilesWorkspace } from './ProfilesWorkspace';
 
 vi.mock('./api', () => ({
-  openBrowserProfile: vi.fn(),
+  dispatchBrowserProfileOpen: vi.fn(),
   launchProfile: vi.fn(),
   changeGenerationActivation: vi.fn(),
   commandCoordinator: vi.fn(),
@@ -25,7 +25,7 @@ const generationLookup = vi.mocked(getGeneration);
 const coordinatorLookup = vi.mocked(getCoordinator);
 const activation = vi.mocked(changeGenerationActivation);
 const launchIntent = vi.mocked(launchProfile);
-const localOpen = vi.mocked(openBrowserProfile);
+const localOpen = vi.mocked(dispatchBrowserProfileOpen);
 
 describe('ProfilesWorkspace generation refresh (#802 F06)', () => {
   it('prefetches the authorized launch intent before click and dispatches locally without a click-time API call', async () => {
