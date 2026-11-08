@@ -194,12 +194,8 @@ impl MaterializationRoot {
             .existing_profile_current_path(tenant_id, profile_id)?
             .ok_or(LocalProfileError::Io(std::io::ErrorKind::NotFound))?;
         let state = read_profile_current_state(&path.join(PROFILE_CURRENT_STATE_FILE))?;
-        let workspace = GenerationWorkspace::open(
-            path,
-            tenant_id,
-            profile_id,
-            &state.generation_id,
-        )?;
+        let workspace =
+            GenerationWorkspace::open(path, tenant_id, profile_id, &state.generation_id)?;
         Ok(ProfileCurrentWorkspace { workspace, state })
     }
 
@@ -246,7 +242,10 @@ impl MaterializationRoot {
         tenant: &TenantId,
         profile: &ProfileId,
     ) -> Result<PathBuf, LocalProfileError> {
-        if self.existing_profile_current_path(tenant, profile)?.is_some() {
+        if self
+            .existing_profile_current_path(tenant, profile)?
+            .is_some()
+        {
             return Err(LocalProfileError::TargetAlreadyExists);
         }
         let path = self.profile_current_path(tenant, profile);
@@ -595,7 +594,10 @@ impl ProfileCurrentState {
         })
     }
 
-    fn synced(generation_id: GenerationId, profile_version: u64) -> Result<Self, LocalProfileError> {
+    fn synced(
+        generation_id: GenerationId,
+        profile_version: u64,
+    ) -> Result<Self, LocalProfileError> {
         validate_profile_version(profile_version)?;
         Ok(Self {
             base_generation_id: Some(generation_id.clone()),
@@ -1018,15 +1020,14 @@ fn read_profile_current_state(path: &Path) -> Result<ProfileCurrentState, LocalP
     if lines.next() != Some(PROFILE_CURRENT_STATE_HEADER) {
         return Err(LocalProfileError::InvalidPolicy);
     }
-    let generation_id = GenerationId::parse(
-        lines.next().ok_or(LocalProfileError::InvalidPolicy)?,
-    )
-    .map_err(|_| LocalProfileError::InvalidPolicy)?;
+    let generation_id =
+        GenerationId::parse(lines.next().ok_or(LocalProfileError::InvalidPolicy)?)
+            .map_err(|_| LocalProfileError::InvalidPolicy)?;
     let base_generation_id = match lines.next() {
         Some("-") => None,
-        Some(value) => Some(
-            GenerationId::parse(value).map_err(|_| LocalProfileError::InvalidPolicy)?,
-        ),
+        Some(value) => {
+            Some(GenerationId::parse(value).map_err(|_| LocalProfileError::InvalidPolicy)?)
+        }
         None => return Err(LocalProfileError::InvalidPolicy),
     };
     let profile_version = lines
