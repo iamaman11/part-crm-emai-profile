@@ -1020,9 +1020,8 @@ fn read_profile_current_state(path: &Path) -> Result<ProfileCurrentState, LocalP
     if lines.next() != Some(PROFILE_CURRENT_STATE_HEADER) {
         return Err(LocalProfileError::InvalidPolicy);
     }
-    let generation_id =
-        GenerationId::parse(lines.next().ok_or(LocalProfileError::InvalidPolicy)?)
-            .map_err(|_| LocalProfileError::InvalidPolicy)?;
+    let generation_id = GenerationId::parse(lines.next().ok_or(LocalProfileError::InvalidPolicy)?)
+        .map_err(|_| LocalProfileError::InvalidPolicy)?;
     let base_generation_id = match lines.next() {
         Some("-") => None,
         Some(value) => {
