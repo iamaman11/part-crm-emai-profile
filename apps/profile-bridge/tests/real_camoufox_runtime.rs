@@ -166,37 +166,58 @@ fn sha256_hex(bytes: &[u8]) -> String {
 fn close_native_camoufox_window() -> Result<(), Box<dyn std::error::Error>> {
     let script = r#"
 $ErrorActionPreference = 'Stop'
-$deadline = [DateTime]::UtcNow.AddSeconds(30)
-$browser = $null
-do {
-    $browserWindows = @(Get-Process -Name 'camoufox' -ErrorAction SilentlyContinue |
-        Where-Object { $_.MainWindowHandle -ne [IntPtr]::Zero })
-    if ($browserWindows.Count -gt 1) {
-        throw "expected one native Camoufox window, found $($browserWindows.Count)"
-    }
-    if ($browserWindows.Count -eq 1) {
-        $browser = $browserWindows[0]
-        break
-    }
-    Start-Sleep -Milliseconds 100
-} while ([DateTime]::UtcNow -lt $deadline)
-if ($null -eq $browser) {
-    throw 'native Camoufox window was not found'
-}
 Add-Type -TypeDefinition @'
 using System;
 using System.Runtime.InteropServices;
 public static class NativeCamoufoxWindow {
     [DllImport("user32.dll", SetLastError = true)]
+    public static extern bool IsWindow(IntPtr hWnd);
+    [DllImport("user32.dll", SetLastError = true)]
     public static extern bool PostMessage(IntPtr hWnd, uint msg, IntPtr wParam, IntPtr lParam);
 }
 '@
-if (-not [NativeCamoufoxWindow]::PostMessage(
-    $browser.MainWindowHandle, 0x0010, [IntPtr]::Zero, [IntPtr]::Zero
-)) {
-    throw "WM_CLOSE failed: $([Runtime.InteropServices.Marshal]::GetLastWin32Error())"
+$deadline = [DateTime]::UtcNow.AddSeconds(30)
+$posted = $false
+do {
+    $browserProcesses = @(Get-Process -Name 'camoufox' -ErrorAction SilentlyContinue)
+    $browserWindows = @()
+    foreach ($process in $browserProcesses) {
+        $process.Refresh()
+        $handle = $process.MainWindowHandle
+        if ($handle -ne [IntPtr]::Zero -and [NativeCamoufoxWindow]::IsWindow($handle)) {
+            $browserWindows += [pscustomobject]@{ Process = $process; Handle = $handle }
+        }
+    }
+    if ($browserWindows.Count -gt 1) {
+        throw "expected one native Camoufox window, found $($browserWindows.Count)"
+    }
+    if ($browserWindows.Count -eq 1) {
+        $handle = $browserWindows[0].Handle
+        if ([NativeCamoufoxWindow]::PostMessage(
+            $handle, 0x0010, [IntPtr]::Zero, [IntPtr]::Zero
+        )) {
+            $posted = $true
+            break
+        }
+        $errorCode = [Runtime.InteropServices.Marshal]::GetLastWin32Error()
+        if ($errorCode -ne 1400) {
+            throw "WM_CLOSE failed: $errorCode"
+        }
+        # The HWND was destroyed between IsWindow and PostMessage. Re-read
+        # the process/window pair instead of treating a stale handle as a
+        # browser lifecycle failure.
+    }
+    Start-Sleep -Milliseconds 100
+} while ([DateTime]::UtcNow -lt $deadline)
+if ($posted) {
+    Write-Output 'NATIVE_CAMOUFOX_WM_CLOSE=POSTED'
+} elseif (@(Get-Process -Name 'camoufox' -ErrorAction SilentlyContinue).Count -eq 0) {
+    # The browser closed naturally during the observation race. The caller
+    # still joins the Bridge thread and requires its clean-close receipt.
+    Write-Output 'NATIVE_CAMOUFOX_WM_CLOSE=ALREADY_CLOSED'
+} else {
+    throw 'native Camoufox window remained unavailable for WM_CLOSE'
 }
-Write-Output 'NATIVE_CAMOUFOX_WM_CLOSE=POSTED'
 "#;
     let output = Command::new("powershell.exe")
         .args([
@@ -210,7 +231,10 @@ Write-Output 'NATIVE_CAMOUFOX_WM_CLOSE=POSTED'
         .output()?;
     let stdout = String::from_utf8_lossy(&output.stdout);
     let stderr = String::from_utf8_lossy(&output.stderr);
-    if !output.status.success() || !stdout.contains("NATIVE_CAMOUFOX_WM_CLOSE=POSTED") {
+    if !output.status.success()
+        || !(stdout.contains("NATIVE_CAMOUFOX_WM_CLOSE=POSTED")
+            || stdout.contains("NATIVE_CAMOUFOX_WM_CLOSE=ALREADY_CLOSED"))
+    {
         return Err(format!(
             "native Camoufox WM_CLOSE failed: stdout={stdout:?}; stderr={stderr:?}"
         )
