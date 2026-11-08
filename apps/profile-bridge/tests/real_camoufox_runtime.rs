@@ -11,10 +11,12 @@ use runtime_bundle_domain::{
 };
 use sha2::{Digest, Sha256};
 use std::env;
-use std::fs::{self, OpenOptions};
-use std::path::{Path, PathBuf};
+use std::fs;
+#[cfg(windows)]
+use std::fs::OpenOptions;
 #[cfg(windows)]
 use std::os::windows::fs::{MetadataExt, OpenOptionsExt};
+use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
@@ -165,6 +167,7 @@ fn sha256_hex(bytes: &[u8]) -> String {
     encoded
 }
 
+#[cfg(windows)]
 fn native_profile_writer_active(folder: &Path) -> Result<bool, Box<dyn std::error::Error>> {
     let path = folder.join("user_data").join("parent.lock");
     let metadata = match fs::symlink_metadata(&path) {
@@ -185,6 +188,7 @@ fn native_profile_writer_active(folder: &Path) -> Result<bool, Box<dyn std::erro
     }
 }
 
+#[cfg(windows)]
 fn wait_for_native_profile_writer(
     folder: &Path,
     deadline: Instant,
@@ -200,6 +204,7 @@ fn wait_for_native_profile_writer(
     }
 }
 
+#[cfg(windows)]
 fn send_user_alt_f4() -> Result<(), Box<dyn std::error::Error>> {
     // Test harness only: simulate a user pressing Alt+F4 in the foreground
     // browser. No window lookup, process enumeration or window-message dispatch.
@@ -238,15 +243,13 @@ Write-Output 'NATIVE_CAMOUFOX_USER_CLOSE=ALT_F4_SENT'
     let stdout = String::from_utf8_lossy(&output.stdout);
     let stderr = String::from_utf8_lossy(&output.stderr);
     if !output.status.success() || !stdout.contains("NATIVE_CAMOUFOX_USER_CLOSE=ALT_F4_SENT") {
-        return Err(format!(
-            "user Alt+F4 input failed: stdout={stdout:?}; stderr={stderr:?}"
-        )
-        .into());
+        return Err(
+            format!("user Alt+F4 input failed: stdout={stdout:?}; stderr={stderr:?}").into(),
+        );
     }
     eprintln!("{}", stdout.trim());
     Ok(())
 }
-
 
 #[cfg(not(windows))]
 fn digest_file(path: &Path) -> Result<(u64, String), Box<dyn std::error::Error>> {
@@ -411,10 +414,7 @@ fn run_native_cold_launch_cycle() -> Result<ApprovedRuntimeBundle, Box<dyn std::
 
         // Wait for the Firefox-owned profile file lock, not a window or
         // process. Then simulate the user's ordinary Alt+F4 action.
-        wait_for_native_profile_writer(
-            folder.path(),
-            Instant::now() + Duration::from_secs(90),
-        )?;
+        wait_for_native_profile_writer(folder.path(), Instant::now() + Duration::from_secs(90))?;
         let begin_close = Instant::now();
         send_user_alt_f4()?;
         let (sender, receiver) = std::sync::mpsc::sync_channel(1);

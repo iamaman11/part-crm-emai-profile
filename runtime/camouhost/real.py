@@ -2063,10 +2063,8 @@ async def run_local_profile(root: Path) -> int:
         root = root.resolve(strict=True)
         # Rust holds exclusive local writer admission until Python exits.
         require_bridge_writer_lock(root)
-        config, raw = load_canonical_json(root / CONFIG_NAME, MAX_CONFIG_BYTES)
+        config, _ = load_canonical_json(root / CONFIG_NAME, MAX_CONFIG_BYTES)
         generation_webgl2_enabled(config)
-        os.environ[EXPECTED_CONFIG_SHA256_ENV] = sha256_bytes(raw)
-        config, _ = load_generation_config(root)
         options = camoufox_launch_options(lock, root, config)
         session = await launch_native_camoufox(
             workspace=root,
