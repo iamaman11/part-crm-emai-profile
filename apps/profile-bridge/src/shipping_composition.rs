@@ -772,7 +772,10 @@ mod windows {
                 .open_profile_current(&intent.tenant_id, &intent.profile_id)
                 .map_err(|_| ShippingCompositionError::SyncUnconfirmed)?;
             let dirty = workspace.path().join(".local-unsynced");
-            if !dirty.exists() {
+            if matches!(
+                std::fs::symlink_metadata(&dirty),
+                Err(ref error) if error.kind() == std::io::ErrorKind::NotFound
+            ) {
                 return Ok(());
             }
             // If Camouhost exited before Playwright could deliver its close
