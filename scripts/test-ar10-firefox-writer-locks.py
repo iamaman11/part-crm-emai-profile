@@ -42,6 +42,9 @@ class RustFirefoxWriterLockOwnershipTests(unittest.TestCase):
         self.assertIn("sync_after_native_close", shipping)
         self.assertIn("start_sync_after_close", shipping)
         self.assertIn("--sync-closed", shipping)
+        abnormal = shipping.index("BrowserNotClosedCleanly")
+        self.assertIn("start_sync_after_close(intent)", shipping[abnormal : abnormal + 900])
+        self.assertIn("BrowserNotClosedCleanly", shipping)
 
     def test_camouhost_contains_no_native_file_lock_or_process_window_observer(self) -> None:
         for path in (REAL_RUNTIME, NATIVE_PROCESS):
