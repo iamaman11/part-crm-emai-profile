@@ -905,8 +905,6 @@ def launch_verified_context(
 
     if not valid_sha256(expected_probe_sha256):
         raise RuntimeContractError("profile-stable probe digest is invalid")
-    if firefox_writer_active(root):
-        raise RuntimeContractError("Firefox writer is already active")
     options = camoufox_launch_options(lock, root, config, isolated=True)
     manager = Camoufox(
         from_options=options,
@@ -929,522 +927,46 @@ def launch_verified_context(
         with contextlib.suppress(BaseException):
             with contextlib.redirect_stdout(sys.stderr):
                 manager.__exit__(*sys.exc_info())
-        with contextlib.suppress(BaseException):
-            wait_for_browser_quiescence(root)
         raise
 
 
-def firefox_writer_locks(root: Path) -> tuple[Path, Path | None]:
-    """Return the platform's primary Firefox lock and optional legacy marker.
+def install_context_close_observation(context: Any) -> dict[str, Any]:
+    """Subscribe to Playwright's public context-close event; no process/window probes."""
+    state: dict[str, Any] = {"closed": False, "event_count": 0}
 
-    Firefox uses `parent.lock` on Windows, `.parentlock` plus historical `lock`
-    symlink semantics on Linux/other Unix, and `.parentlock` plus historical
-    `parent.lock` on macOS.  These are markers plus OS-lock carriers; existence
-    alone is never writer liveness.
-    """
-    user_data_dir = root / USER_DATA_NAME
-    if os.name == "nt":
-        return user_data_dir / "parent.lock", None
-    if os.name == "posix":
-        legacy = user_data_dir / ("parent.lock" if sys.platform == "darwin" else "lock")
-        return user_data_dir / ".parentlock", legacy
-    raise RuntimeContractError("unsupported Firefox lock-probe platform")
+    def on_close(_context: Any = None) -> None:
+        state["closed"] = True
+        state["event_count"] += 1
 
-
-def unix_parent_lock_is_active(path: Path) -> bool:
-    import errno
-    import fcntl
-
-    if path.is_symlink():
-        raise RuntimeContractError("Firefox primary lock has unsupported symlink shape")
+    context.on("close", on_close)
     try:
-        descriptor = os.open(path, os.O_RDWR)
-    except FileNotFoundError:
-        return False
-    except OSError as error:
-        raise RuntimeContractError("Firefox parent-lock probe failed") from error
-    try:
-        try:
-            fcntl.lockf(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
-        except OSError as error:
-            if error.errno in (errno.EACCES, errno.EAGAIN):
-                return True
-            raise RuntimeContractError("Firefox parent-lock probe failed") from error
-        fcntl.lockf(descriptor, fcntl.LOCK_UN)
-        return False
-    finally:
-        os.close(descriptor)
-
-
-def windows_parent_lock_is_active(path: Path) -> bool:
-    import ctypes
-    from ctypes import wintypes
-
-    if path.is_symlink():
-        raise RuntimeContractError("Firefox primary lock has unsupported symlink shape")
-    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
-    create_file = kernel32.CreateFileW
-    create_file.argtypes = [
-        wintypes.LPCWSTR,
-        wintypes.DWORD,
-        wintypes.DWORD,
-        wintypes.LPVOID,
-        wintypes.DWORD,
-        wintypes.DWORD,
-        wintypes.HANDLE,
-    ]
-    create_file.restype = wintypes.HANDLE
-    close_handle = kernel32.CloseHandle
-    close_handle.argtypes = [wintypes.HANDLE]
-    close_handle.restype = wintypes.BOOL
-
-    generic_read_write = 0x80000000 | 0x40000000
-    open_existing = 3
-    handle = create_file(str(path), generic_read_write, 0, None, open_existing, 0, None)
-    invalid_handle = ctypes.c_void_p(-1).value
-    if handle == invalid_handle:
-        error = ctypes.get_last_error()
-        if error in (2, 3):
-            return False
-        if error in (32, 33):
-            return True
-        raise RuntimeContractError("Firefox parent-lock probe failed")
-    if not close_handle(handle):
-        raise RuntimeContractError("Firefox parent-lock probe cleanup failed")
-    return False
-
-
-def modern_unix_legacy_lock_is_stale(path: Path) -> bool:
-    """Recognize Firefox's obsolete +PID symlink only after the fcntl lock is free."""
-    if not path.is_symlink():
-        return False
-    try:
-        target = os.readlink(path)
-    except OSError as error:
-        raise RuntimeContractError("Firefox legacy-lock probe failed") from error
-    _host, separator, pid = target.rpartition(":")
-    return separator == ":" and pid.startswith("+") and pid[1:].isdigit()
-
-
-def firefox_writer_active(root: Path) -> bool:
-    """Probe real OS ownership; stale marker files are not writer liveness.
-
-    Ambiguous/unsupported states raise RuntimeContractError and therefore fail closed.
-    No lock artifact is ever removed by Camouhost.
-    """
-    primary_lock, legacy_lock = firefox_writer_locks(root)
-    primary_present = os.path.lexists(primary_lock)
-    legacy_present = legacy_lock is not None and os.path.lexists(legacy_lock)
-
-    if primary_present:
-        if os.name == "nt":
-            if windows_parent_lock_is_active(primary_lock):
-                return True
-        elif os.name == "posix":
-            if unix_parent_lock_is_active(primary_lock):
-                return True
-        else:
-            raise RuntimeContractError("unsupported Firefox lock-probe platform")
-    elif legacy_present:
-        return True
-
-    if not legacy_present or legacy_lock is None:
-        return False
-    if os.name == "posix" and modern_unix_legacy_lock_is_stale(legacy_lock):
-        return False
-    return True
-
-
-def wait_for_browser_quiescence(root: Path) -> None:
-    """Wait for Firefox to release its OS profile lock; never remove lock artifacts."""
-    deadline = time.monotonic() + BROWSER_CLOSE_QUIESCENCE_SECONDS
-    while firefox_writer_active(root):
-        if time.monotonic() >= deadline:
-            raise RuntimeContractError("Firefox writer lock remained active after clean close")
-        time.sleep(BROWSER_CLOSE_POLL_SECONDS)
-
-
-def close_context(manager: Any, _context: Any, root: Path) -> None:
-    with contextlib.redirect_stdout(sys.stderr):
-        manager.__exit__(None, None, None)
-    wait_for_browser_quiescence(root)
-
-
-class WindowsBrowserExitWitness:
-    """Native Windows browser-PID exit witness; held handles defeat PID reuse.
-
-    The real Camoufox browser is a descendant of this Camouhost's Playwright
-    driver. Only its root process (not worker/content children) determines
-    whether all user windows ended with a normal browser process exit.
-    """
-
-    def __init__(self, owner_pid: int) -> None:
-        if os.name != "nt":
-            raise RuntimeContractError("Windows browser exit witness requested on non-Windows host")
-        import ctypes
-        from ctypes import wintypes
-
-        self.ctypes = ctypes
-        self.kernel = ctypes.WinDLL("kernel32", use_last_error=True)
-
-        class ProcessEntry(ctypes.Structure):
-            _fields_ = [
-                ("dwSize", wintypes.DWORD),
-                ("cntUsage", wintypes.DWORD),
-                ("th32ProcessID", wintypes.DWORD),
-                ("th32DefaultHeapID", ctypes.c_void_p),
-                ("th32ModuleID", wintypes.DWORD),
-                ("cntThreads", wintypes.DWORD),
-                ("th32ParentProcessID", wintypes.DWORD),
-                ("pcPriClassBase", wintypes.LONG),
-                ("dwFlags", wintypes.DWORD),
-                ("szExeFile", wintypes.WCHAR * 260),
-            ]
-
-        snapshot_api = self.kernel.CreateToolhelp32Snapshot
-        snapshot_api.argtypes = [wintypes.DWORD, wintypes.DWORD]
-        snapshot_api.restype = wintypes.HANDLE
-        first = self.kernel.Process32FirstW
-        next_entry = self.kernel.Process32NextW
-        first.argtypes = next_entry.argtypes = [wintypes.HANDLE, ctypes.POINTER(ProcessEntry)]
-        first.restype = next_entry.restype = wintypes.BOOL
-        self.close_handle = self.kernel.CloseHandle
-        self.close_handle.argtypes = [wintypes.HANDLE]
-        self.close_handle.restype = wintypes.BOOL
-
-        snapshot = snapshot_api(0x00000002, 0)  # TH32CS_SNAPPROCESS
-        if snapshot == ctypes.c_void_p(-1).value:
-            raise RuntimeContractError("Windows process snapshot unavailable")
-        entries: dict[int, tuple[int, str]] = {}
-        try:
-            entry = ProcessEntry()
-            entry.dwSize = ctypes.sizeof(entry)
-            if not first(snapshot, ctypes.byref(entry)):
-                raise RuntimeContractError("Windows process enumeration unavailable")
-            while True:
-                entries[int(entry.th32ProcessID)] = (
-                    int(entry.th32ParentProcessID), str(entry.szExeFile).lower()
-                )
-                if not next_entry(snapshot, ctypes.byref(entry)):
-                    break
-        finally:
-            self.close_handle(snapshot)
-
-        def belongs_to_camouhost(pid: int) -> bool:
-            visited: set[int] = set()
-            while pid in entries and pid not in visited:
-                visited.add(pid)
-                parent = entries[pid][0]
-                if parent == owner_pid:
-                    return True
-                pid = parent
-            return False
-
-        browser_names = {"camoufox.exe", "firefox.exe"}
-        # Expose the exact disposable process tree to the *hosted fixture*.
-        # Shipping code does not terminate any browser/driver descendants.
-        self.owned_pids = sorted(
-            pid for pid in entries if pid != owner_pid and belongs_to_camouhost(pid)
-        )
-        descendants = {
-            pid for pid, (_parent, executable) in entries.items()
-            if executable in browser_names and belongs_to_camouhost(pid)
-        }
-        roots = sorted(pid for pid in descendants if entries[pid][0] not in descendants)
-        if len(roots) != 1:
-            raise RuntimeContractError("Camoufox browser main PID is missing or ambiguous")
-
-        open_process = self.kernel.OpenProcess
-        open_process.argtypes = [wintypes.DWORD, wintypes.BOOL, wintypes.DWORD]
-        open_process.restype = wintypes.HANDLE
-        self.wait = self.kernel.WaitForSingleObject
-        self.wait.argtypes = [wintypes.HANDLE, wintypes.DWORD]
-        self.wait.restype = wintypes.DWORD
-        self.get_exit = self.kernel.GetExitCodeProcess
-        self.get_exit.argtypes = [wintypes.HANDLE, ctypes.POINTER(wintypes.DWORD)]
-        self.get_exit.restype = wintypes.BOOL
-        self.pids = roots
-        self.handles = []
-        for pid in roots:
-            handle = open_process(0x00101000, False, pid)  # SYNCHRONIZE | QUERY_LIMITED
-            if not handle:
-                self.close()
-                raise RuntimeContractError("Cannot retain Camoufox browser process witness")
-            self.handles.append(handle)
-
-    def safely_exited(self, wait_millis: int = 0) -> bool:
-        # A page-close callback is NOT proof. The exact browser root must have
-        # finished with exit code zero, never STILL_ACTIVE, killed or unknown.
-        # A bounded wait is permitted only after a normal close indication:
-        # managed page-close callbacks or native window disappearance followed
-        # by SDK-context release. No synthetic exit proof.
-        if not 0 <= wait_millis <= 250:
-            raise ValueError("browser close witness wait exceeds safe limit")
-        for handle in self.handles:
-            if self.wait(handle, wait_millis) != 0:
-                return False
-            code = self.ctypes.wintypes.DWORD()
-            if not self.get_exit(handle, self.ctypes.byref(code)) or code.value != 0:
-                return False
-        return bool(self.handles)
-
-    def has_exited(self) -> bool:
-        """Independently witness native browser death; never infer clean Save."""
-        return bool(self.handles) and all(self.wait(handle, 0) == 0 for handle in self.handles)
-
-    def has_visible_window(self) -> bool:
-        """Observe top-level native windows in the exact browser process tree."""
-        from ctypes import wintypes
-
-        user32 = self.ctypes.WinDLL("user32", use_last_error=True)
-        enum_windows = user32.EnumWindows
-        is_window_visible = user32.IsWindowVisible
-        get_window_thread_process_id = user32.GetWindowThreadProcessId
-
-        callback_type = self.ctypes.WINFUNCTYPE(
-            wintypes.BOOL, wintypes.HWND, wintypes.LPARAM
-        )
-        enum_windows.argtypes = [callback_type, wintypes.LPARAM]
-        enum_windows.restype = wintypes.BOOL
-        is_window_visible.argtypes = [wintypes.HWND]
-        is_window_visible.restype = wintypes.BOOL
-        get_window_thread_process_id.argtypes = [
-            wintypes.HWND, self.ctypes.POINTER(wintypes.DWORD)
-        ]
-        get_window_thread_process_id.restype = wintypes.DWORD
-
-        browser_processes = set(self.owned_pids)
-        found = False
-
-        @callback_type
-        def inspect_window(hwnd: Any, _parameter: Any) -> bool:
-            nonlocal found
-            if not is_window_visible(hwnd):
-                return True
-            process_id = wintypes.DWORD()
-            if (
-                get_window_thread_process_id(hwnd, self.ctypes.byref(process_id))
-                and int(process_id.value) in browser_processes
-            ):
-                found = True
-                return False
-            return True
-
-        completed = bool(enum_windows(inspect_window, 0))
-        if not completed and not found:
-            raise RuntimeContractError("Windows browser window enumeration failed")
-        return found
-
-    def close(self) -> None:
-        for handle in getattr(self, "handles", []):
-            self.close_handle(handle)
-        self.handles = []
-
-
-def record_close_callback(state: dict[str, Any], event: str) -> None:
-    """Keep the latest bounded close witness sequence with an exact event count."""
-    state["callback_event_count"] += 1
-    events = state["callback_events"]
-    events.append(event)
-    if len(events) > 64:
-        del events[:-64]
-    if event in ("crash", "recovered"):
-        # Emit immediately while the original managed IPC is still alive:
-        # later Close can fail without a useful exception/receipt. Only
-        # bounded counters and a fixed event kind, never URL, credential,
-        # fingerprint, session, path, cookie or page content.
-        print(
-            "camouhost_page_event "
-            f"kind={event} tracked={len(state['tracked_pages'])} "
-            f"unresolved={len(state['unresolved_crashes'])}",
-            file=sys.stderr,
-            flush=True,
-        )
-
-
-def install_controlled_close_observation(context: Any, owner_pid: int | None = None) -> dict[str, Any]:
-    """Observe user page/window closure without mutating browser lifecycle.
-
-    A candidate is publishable only when every tracked page closes normally and
-    any crashed page has independently completed a usable same-page document reload.
-    Process loss and IPC EOF cannot manufacture a controlled-close witness.
-    """
-    state: dict[str, Any] = {
-        "tracked_pages": set(),
-        "closed_pages": set(),
-        "crashed": False,  # Historical fact, never silently erased.
-        "unresolved_crashes": set(),
-        "recovery_candidates": set(),
-        "page_objects": {},
-        # Ordered callback names only: no URL, cookie, profile data or process secrets.
-        "callback_events": [],
-        "callback_event_count": 0,
-        "browser_exit": (
-            WindowsBrowserExitWitness(owner_pid)
-            if os.name == "nt" and owner_pid is not None
-            else None
-        ),
-    }
-
-    def track_page(page: Any) -> None:
-        token = id(page)
-        state["tracked_pages"].add(token)
-        state["page_objects"][token] = page
-        record_close_callback(state, "page")
-        def on_close(_page: Any, page_token: int = token) -> None:
-            state["closed_pages"].add(page_token)
-            record_close_callback(state, "close")
-        def on_crash(_page: Any, page_token: int = token) -> None:
-            state["crashed"] = True
-            state["unresolved_crashes"].add(page_token)
-            state["recovery_candidates"].discard(page_token)
-            record_close_callback(state, "crash")
-        def on_load(_page: Any, page_token: int = token) -> None:
-            # Firefox owns Restore This Tab. This callback is only a candidate:
-            # the observer must verify the live same-page document separately.
-            if page_token in state["unresolved_crashes"]:
-                state["recovery_candidates"].add(page_token)
-                record_close_callback(state, "load_after_crash")
-        page.on("close", on_close)
-        page.on("crash", on_crash)
-        page.on("load", on_load)
-
-    for page in context.pages:
-        track_page(page)
-    context.on("page", track_page)
+        if context.is_closed():
+            state["closed"] = True
+    except Exception:
+        # The event remains authoritative; an unreadable context is not Save proof.
+        pass
     return state
 
 
-def confirm_native_tab_recoveries(state: dict[str, Any]) -> None:
-    """Only the original, still-live page may clear its own crash after reload.
-
-    An unrelated new tab, focus event or elapsed time is never recovery proof.
-    Do not run Playwright calls from its synchronous event callback.
-    """
-    for token in tuple(state["recovery_candidates"]):
-        page = state["page_objects"].get(token)
-        if page is None or token in state["closed_pages"]:
-            continue
-        try:
-            if page.is_closed() or not page.url.startswith(("http://", "https://")):
-                continue
-            document = page.evaluate("({uri: document.documentURI, ready: document.readyState})")
-            if (not isinstance(document, dict)
-                or document.get("ready") != "complete"
-                or not isinstance(document.get("uri"), str)
-                or not document["uri"].startswith(("http://", "https://"))):
-                continue
-        except Exception:
-            # A closed/unresponsive tab, browser crash reporter or lost IPC can
-            # never turn an unresolved crash into a successful Cloud Save.
-            continue
-        state["unresolved_crashes"].discard(token)
-        state["recovery_candidates"].discard(token)
-        record_close_callback(state, "recovered")
-
-
-def controlled_close_candidate(
-    state: dict[str, Any] | None, *, exit_wait_millis: int = 0
-) -> bool:
-    if state is None or state.get("unresolved_crashes", state["crashed"]):
-        return False
-    tracked = state["tracked_pages"]
-    if not tracked or tracked != state["closed_pages"]:
-        return False
-    witness = state.get("browser_exit")
-    # Only the actual retained browser-process handle may attest normal exit;
-    # callback closure and a bounded wait never authorize Save on their own.
-    if witness is None:
-        return True
-    # Keep the existing zero-wait witness API (including supported observers)
-    # unchanged. A timed wait is used only after a TargetClosedError with
-    # complete page-close callbacks and an independently retained native PID.
-    if exit_wait_millis == 0:
-        return witness.safely_exited()
-    return witness.safely_exited(exit_wait_millis)
-
-
-def report_close_observation_detail(state: dict[str, Any] | None, error: BaseException) -> None:
-    """Local failure witness; keep the original OS error code and callback sequence.
-
-    No exception message or Playwright page contents enter the Bridge protocol.
-    """
-    location = 0
-    frame = error.__traceback__
-    while frame is not None:
-        if frame.tb_frame.f_code.co_filename == __file__:
-            location = frame.tb_lineno
-        frame = frame.tb_next
-    data = {
-        "exception_type": type(error).__name__,
-        "line": location,
-        "errno": getattr(error, "errno", None),
-        "winerror": getattr(error, "winerror", None),
-        "tracked": len(state["tracked_pages"]) if state is not None else 0,
-        "closed": len(state["closed_pages"]) if state is not None else 0,
-        "crashed": state["crashed"] if state is not None else False,
-        "callback_events": state["callback_events"] if state is not None else [],
-        "callback_event_count": state["callback_event_count"] if state is not None else 0,
-    }
-    # Retain full on-machine details in the raw diagnostic artifact. Emit one
-    # independently bounded, fixed-shape witness that Bridge's closed stderr
-    # filter can verify. No exception text, URL, path, cookie or raw profile data.
-    print("camouhost_close_observation_detail " + json.dumps(data, ensure_ascii=True),
-          file=sys.stderr, flush=True)
-    name = type(error).__name__
-    if len(name) > 40 or not name or not name[0].isalpha() or not all(
-        char.isascii() and (char.isalnum() or char == "_") for char in name
-    ):
-        name = "OtherError"
-    def number(value: Any) -> str:
-        return str(value) if type(value) is int and 0 <= value <= 1_000_000 else "none"
-    recent = data["callback_events"][-8:]
-    events = ",".join(recent) if recent else "none"
-    print(
-        "camouhost_close_witness "
-        f"exception={name} line={number(location)} "
-        f"errno={number(data['errno'])} winerror={number(data['winerror'])} "
-        f"tracked={number(data['tracked'])} closed={number(data['closed'])} "
-        f"crashed={int(bool(data['crashed']))} "
-        f"count={number(data['callback_event_count'])} events={events}",
-        file=sys.stderr, flush=True,
-    )
-
-
-def observe_controlled_close(context: Any, state: dict[str, Any] | None) -> bool:
-    """Service the sync Playwright event dispatcher before evaluating close callbacks.
-
-    The shipping IPC reader blocks on stdin between observations. Playwright sync callbacks
-    require a yielding sync API call; inspecting sets/context.pages alone never dispatches
-    an external GUI WM_CLOSE. A bounded page wait is observation-only (no page/context
-    teardown) and lets normal page-close/crash events reach the registered witnesses.
-    """
+def context_close_observed(context: Any, state: dict[str, Any] | None) -> bool:
+    """Read the official event state and Playwright's public is_closed property."""
     if state is None:
         return False
+    if state.get("closed") is True:
+        return True
     try:
-        context.wait_for_event("page", timeout=100)
-    except Exception as error:
-        confirm_native_tab_recoveries(state)
-        # A timer expiry is normal when no new window opened. An expected browser close
-        # can reject the pending wait after delivering page-close callbacks. All other
-        # failures may be ignored ONLY if the positive non-crashed witness already exists;
-        # a disappearing process without close callbacks is still an IPC/runtime failure.
-        if type(error).__name__ != "TimeoutError" and not controlled_close_candidate(
-            state, exit_wait_millis=250
-        ):
-            # All page close callbacks plus a verified exit code zero are still
-            # required. Crashes, nonzero exit, missing callback and unknown
-            # Windows process state preserve the original exception.
-            raise
-    confirm_native_tab_recoveries(state)
-    controlled = controlled_close_candidate(state)
-    native_exit = state.get("browser_exit")
-    if not controlled and native_exit is not None and native_exit.has_exited():
-        # The exact held native browser handle has exited, yet normal Close
-        # (or recovery from a crash) was not proved. Stop heartbeating forever:
-        # Bridge must retain unsaved Firefox files and report a terminal error.
-        raise RuntimeContractError("Native Camoufox exited without verified close")
-    return controlled
+        closed = bool(context.is_closed())
+    except Exception:
+        return False
+    if closed:
+        state["closed"] = True
+    return closed
+
+
+def close_context(manager: Any, _context: Any) -> None:
+    """Release an isolated automation context through the official SDK manager."""
+    with contextlib.redirect_stdout(sys.stderr):
+        manager.__exit__(None, None, None)
 
 
 def materialize_candidate_identity(root: Path) -> dict[str, str]:
@@ -1832,8 +1354,6 @@ def run_ipc() -> int:
         lock, _ = load_runtime_lock()
         verify_python_components(lock)
         root = resolve_profile_root(require_bridge_lock=True)
-        if firefox_writer_active(root):
-            raise RuntimeContractError("Firefox writer is already active")
         config, _ = load_generation_config(root)
         expected_probe = os.environ.get(EXPECTED_PROBE_SHA256_ENV)
         if not valid_sha256(expected_probe):
@@ -1848,7 +1368,7 @@ def run_ipc() -> int:
     active_session: str | None = None
     manager: Any | None = None
     context: Any | None = None
-    close_observation: dict[str, Any] | None = None
+    context_close_state: dict[str, Any] | None = None
     browser_visible_observed = False
     navigation_admitted = False
     post_navigation_browser_visible_observed = False
@@ -1904,7 +1424,7 @@ def run_ipc() -> int:
             ):
                 try:
                     manager, context = launch_verified_context(lock, root, config, expected_probe)
-                    close_observation = install_controlled_close_observation(context, owner_pid=os.getpid())
+                    context_close_state = install_context_close_observation(context)
                 except BaseException as error:
                     report_runtime_failure("launch", error)
                     emit("error|runtime")
@@ -2001,9 +1521,8 @@ def run_ipc() -> int:
                 and navigation_admitted
             ):
                 try:
-                    controlled = observe_controlled_close(context, close_observation)
+                    controlled = context_close_observed(context, context_close_state)
                 except BaseException as error:
-                    report_close_observation_detail(close_observation, error)
                     report_runtime_failure("close", error)
                     emit("error|runtime")
                     return 5
@@ -2020,7 +1539,7 @@ def run_ipc() -> int:
                 and navigation_admitted
             ):
                 try:
-                    close_context(manager, context, root)
+                    close_context(manager, context)
                 except BaseException as error:
                     report_runtime_failure("close", error)
                     emit(f"closed|{active_session}|false")
@@ -2037,11 +1556,9 @@ def run_ipc() -> int:
     finally:
         if agent is not None:
             agent.close()
-        if close_observation is not None and close_observation.get("browser_exit") is not None:
-            close_observation["browser_exit"].close()
         if manager is not None and context is not None:
             try:
-                close_context(manager, context, root)
+                close_context(manager, context)
             except BaseException as error:
                 report_runtime_failure("cleanup", error)
 
@@ -2071,8 +1588,8 @@ async def run_local_profile(root: Path) -> int:
         )
         report_runtime_stage("launch", "ready")
 
-        # No WM_CLOSE, window/process enumeration, SessionStore inspection or
-        # page access. Firefox closes itself; Playwright reports the event.
+        # No native window/process inspection or SessionStore access.
+        # Firefox closes itself; Playwright reports the official event.
         await session.wait_for_browser_close()
         context_closed = True
         report_runtime_stage("close", "browser_context_closed")
