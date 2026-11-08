@@ -138,6 +138,75 @@ impl PreparedDirtyGeneration {
     }
 }
 
+/// Reuse the existing encrypted successor format for a CLOSED local-first
+/// CURRENT. Unlike the former generation-folder model, this source folder
+/// remains stable: there is no secondary native browser workspace or second
+/// generation directory to create. Caller snapshots under the same writer lock.
+#[cfg(any(windows, test))]
+#[allow(clippy::too_many_arguments)]
+pub fn prepare_closed_current_successor<K: GenerationSealingMaterialPort>(
+    source: &GenerationWorkspace,
+    original_inventory: &GenerationInventory,
+    snapshot: &[u8],
+    tenant: &TenantId,
+    profile: &ProfileId,
+    base: &GenerationId,
+    keys: &mut K,
+) -> Result<PreparedDirtyGeneration, DirtyGenerationError> {
+    use sha2::{Digest, Sha256};
+    if source.tenant_id() != tenant
+        || source.profile_id() != profile
+        || source.base_generation_id() != Some(base)
+        || source.inventory()? != *original_inventory
+    {
+        return Err(DirtyGenerationError::IdentityMismatch);
+    }
+    let digest = PlaintextDigest::calculate(snapshot).bytes();
+    let mut hash = Sha256::new();
+    hash.update(b"profile-bridge/closed-current-successor/v2\0");
+    for part in [
+        tenant.as_str().as_bytes(),
+        profile.as_str().as_bytes(),
+        base.as_str().as_bytes(),
+        &digest,
+    ] {
+        hash.update((part.len() as u64).to_be_bytes());
+        hash.update(part);
+    }
+    let candidate_id = GenerationId::parse(format!(
+        "generation_{}", digest_hex(hash.finalize().into()),
+    ))
+    .map_err(|_| DirtyGenerationError::IdentityMismatch)?;
+    if &candidate_id == base {
+        return Err(DirtyGenerationError::CandidateMatchesBase);
+    }
+    let material = keys
+        .material_for(tenant, profile, base, &candidate_id, digest)
+        .map_err(|_| DirtyGenerationError::KeyUnavailable)?;
+    let metadata = GenerationMetadata::for_plaintext(
+        GenerationIdentity::new(
+            tenant.clone(), profile.clone(), candidate_id, Some(base.clone()),
+        ),
+        material.dek.key_id().clone(),
+        material.nonce_prefix,
+        material.chunk_size,
+        snapshot,
+    )
+    .map_err(|_| DirtyGenerationError::EncryptionFailed)?;
+    let sealed = seal_generation(&metadata, &material.dek, snapshot)
+        .map_err(|_| DirtyGenerationError::EncryptionFailed)?;
+    if source.inventory()? != *original_inventory {
+        return Err(DirtyGenerationError::SourceChanged);
+    }
+    Ok(PreparedDirtyGeneration {
+        candidate_workspace: source.clone(),
+        candidate_inventory: original_inventory.clone(),
+        metadata_digest: digest_hex(sealed.metadata_digest().bytes()),
+        container_digest: digest_hex(sealed.container_digest().bytes()),
+        sealed,
+    })
+}
+
 #[allow(clippy::too_many_arguments)]
 pub fn prepare_dirty_generation_candidate<K: GenerationSealingMaterialPort>(
     local_record: &LocalGenerationRecord,
@@ -350,8 +419,9 @@ fn digest_hex(bytes: [u8; 32]) -> String {
 mod tests {
     use super::{
         DirtyGenerationError, GenerationSealingMaterial, GenerationSealingMaterialPort, digest_hex,
-        prepare_dirty_generation_candidate,
+        prepare_closed_current_successor, prepare_dirty_generation_candidate,
     };
+    use crate::generation_snapshot::encode_workspace_snapshot;
     use crate::local_profile::{LocalGenerationRecord, MaterializationRoot};
     use encrypted_generation_domain::{
         GenerationDek, KeyId, NoncePrefix, open_generation_expected,
@@ -435,6 +505,54 @@ mod tests {
         record.begin_use(UnixMillis::new(11))?;
         record.graceful_close(UnixMillis::new(12))?;
         Ok(record)
+    }
+
+    #[test]
+    fn closed_current_uses_existing_successor_cipher_and_rejects_mutated_source()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let fixture = Fixture::new()?;
+        let raw = fixture.root.create_profile_current(
+            &fixture.tenant_id, &fixture.profile_id, &fixture.base_generation_id, 1,
+        )?;
+        fs::write(raw.path().join("cookies.sqlite"), b"cookie data")?;
+        let source = fixture.root.update_profile_current_sync_base(
+            &raw, &fixture.base_generation_id, 2,
+        )?;
+        let before = source.inventory()?;
+        let plaintext = encode_workspace_snapshot(&source, &before)?;
+        let mut keys = FakeKeys::default();
+        let first = prepare_closed_current_successor(
+            &source, &before, &plaintext, &fixture.tenant_id,
+            &fixture.profile_id, &fixture.base_generation_id, &mut keys,
+        )?;
+        let second = prepare_closed_current_successor(
+            &source, &before, &plaintext, &fixture.tenant_id,
+            &fixture.profile_id, &fixture.base_generation_id, &mut keys,
+        )?;
+        assert_eq!(
+            first.sealed().metadata().generation_id(),
+            second.sealed().metadata().generation_id(),
+        );
+        assert_eq!(
+            first.sealed().metadata().base_generation_id(),
+            Some(&fixture.base_generation_id),
+        );
+        assert_eq!(
+            keys.observed_base_generation_id.as_ref(),
+            Some(&fixture.base_generation_id),
+        );
+        assert_eq!(source.path(), first.candidate_workspace().path());
+        fs::write(source.path().join("cookies.sqlite"), b"new local change")?;
+        assert!(matches!(
+            prepare_closed_current_successor(
+                &source, &before, &plaintext, &fixture.tenant_id,
+                &fixture.profile_id, &fixture.base_generation_id, &mut keys,
+            ),
+            Err(DirtyGenerationError::IdentityMismatch),
+        ));
+        assert_eq!(fs::read(source.path().join("cookies.sqlite"))?, b"new local change");
+        fixture.cleanup();
+        Ok(())
     }
 
     #[test]

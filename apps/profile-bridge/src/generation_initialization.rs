@@ -208,11 +208,6 @@ where
     let (generation, prepared) = prepare_initial_or_ready_launch(intent, actor, device, transport)?;
     let generation_id = generation.as_str().to_owned();
     let expected_profile_version = intent.expected_version;
-    let path = format!(
-        "/bridge/v1/tenants/{}/profiles/{}/generation-initialization",
-        intent.tenant_id.as_str(),
-        intent.profile_id.as_str()
-    );
     match prepared {
         InitialGenerationPrepared::Launch { launch } => {
             return ClaimUri::parse(&launch.launch_uri)
@@ -268,102 +263,10 @@ where
         {
             return Err(InitialProfileError::Snapshot);
         }
-        let digest = PlaintextDigest::calculate(&plaintext).bytes();
-        let material = sealing_material_from_response(post(
-            transport,
-            &path,
-            &Request::SealingMaterial {
-                generation_id: generation_id.clone(),
-                expected_profile_version,
-                plaintext_digest: hex(&digest),
-            },
-        )?)
-        .map_err(|_| InitialProfileError::Encryption)?;
-        let (dek, nonce_prefix, chunk_size) = material.into_parts();
-        // First generation has no base. Never fabricate a source generation or container digest.
-        let metadata = GenerationMetadata::for_plaintext(
-            GenerationIdentity::new(
-                intent.tenant_id.clone(),
-                intent.profile_id.clone(),
-                generation.clone(),
-                None,
-            ),
-            dek.key_id().clone(),
-            nonce_prefix,
-            chunk_size,
-            &plaintext,
-        )
-        .map_err(|_| InitialProfileError::Encryption)?;
-        let sealed = seal_generation(&metadata, &dek, &plaintext)
-            .map_err(|_| InitialProfileError::Encryption)?;
-        if PlaintextDigest::calculate(&plaintext).bytes() != digest {
-            return Err(InitialProfileError::Snapshot);
-        }
-        let metadata_digest = sealed
-            .metadata_digest()
-            .bytes()
-            .iter()
-            .map(|b| format!("{b:02x}"))
-            .collect::<String>();
-        let container_digest = sealed
-            .container_digest()
-            .bytes()
-            .iter()
-            .map(|b| format!("{b:02x}"))
-            .collect::<String>();
-        let container_bytes =
-            u64::try_from(sealed.container().len()).map_err(|_| InitialProfileError::Encryption)?;
-        #[cfg(windows)]
-        eprintln!(
-            "bridge_initial_phase name=snapshot_and_seal elapsed_ms={}",
-            sealing_started.elapsed().as_millis()
-        );
-        #[cfg(windows)]
-        let upload_started = std::time::Instant::now();
-        let upload = Request::UploadCapability {
-            generation_id: generation_id.clone(),
-            expected_profile_version,
-            metadata_digest: metadata_digest.clone(),
-            container_digest: container_digest.clone(),
-            container_bytes,
-        };
-        let authorization: BridgeGenerationUploadCapabilityResponse =
-            decode(post(transport, &path, &upload)?)?;
-        if let GenerationUploadAuthorization::UploadRequired(capability) =
-            decode_upload_authorization::<core::convert::Infallible>(authorization)
-                .map_err(|_| InitialProfileError::Upload)?
-        {
-            uploader
-                .put_exact(&capability, sealed.container())
-                .map_err(|_| InitialProfileError::Upload)?;
-        }
-        // The authoritative Commit handler verifies the exact encrypted R2
-        // descriptor again *before* persisting READY and issuing a claim.
-        // A second UploadCapability call would repeat the same read, add
-        // another network round trip and still not replace commit validation.
-        // No browser can start unless Commit succeeds with that exact object.
-        let receipt: InitialGenerationCommitted = decode(post(
-            transport,
-            &path,
-            &Request::Commit {
-                generation_id: generation_id.clone(),
-                expected_profile_version,
-                metadata_digest,
-                container_digest: container_digest.clone(),
-                container_bytes,
-            },
-        )?)
-        .map_err(|_| InitialProfileError::Commit)?;
-        if receipt.generation_id != generation_id
-            || receipt.profile_version != expected_profile_version + 1
-        {
-            return Err(InitialProfileError::Commit);
-        }
-        #[cfg(windows)]
-        eprintln!(
-            "bridge_initial_phase name=upload_verify_commit elapsed_ms={}",
-            upload_started.elapsed().as_millis()
-        );
+        let (container_digest, receipt) = seal_upload_commit_initial(
+            &intent.tenant_id, &intent.profile_id, &generation,
+            expected_profile_version, &plaintext, transport, uploader,
+        )?;
         committed = true;
         let binding = MaterializationBinding::new(
             intent.tenant_id.clone(),
@@ -392,9 +295,473 @@ where
     result
 }
 
+/// Retryable first Sync of a CLOSED local DRAFT. This is deliberately not
+/// part of browser Open/Close, and uses the existing generation-initialization
+/// Prepare -> Seal -> signed R2 PUT -> verified D1 Commit contract unchanged.
+///
+/// The stable local folder is never copied into another browser generation,
+/// deleted or overwritten. A rejected/uncertain server effect leaves dirty
+/// evidence intact; no speculative N+2 is generated.
+pub fn sync_closed_local_draft<T: MachineHttpPort, U: SignedGenerationObjectPutPort>(
+    intent: &InitialProfileOpen,
+    actor: &ActorContext,
+    device: &DeviceId,
+    root: &MaterializationRoot,
+    transport: &mut T,
+    uploader: &mut U,
+) -> Result<(), InitialProfileError> {
+    use crate::browser_execution::browser_writer_locks_absent;
+    use std::fs;
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    if intent.status != InitialProfileStatus::Draft
+        || actor.tenant_scope().tenant_id() != &intent.tenant_id
+        || actor.actor_id() != &intent.actor_id
+    {
+        return Err(InitialProfileError::Authorization);
+    }
+
+    let workspace = root
+        .open_profile_current(&intent.tenant_id, &intent.profile_id)
+        .map_err(|_| InitialProfileError::Snapshot)?;
+    if workspace.base_generation_id().is_some()
+        || workspace.profile_version() != intent.expected_version
+    {
+        return Err(InitialProfileError::Authorization);
+    }
+    let dirty = workspace.path().join(".local-unsynced");
+    // This exact marker was created before Firefox was allowed to write.
+    // A missing or foreign marker must never trigger a cloud Save.
+    if fs::read(&dirty).map_err(|_| InitialProfileError::Snapshot)?
+        != b"local-unsynced-v2"
+    {
+        return Err(InitialProfileError::Snapshot);
+    }
+    let stamp = || -> Result<u64, InitialProfileError> {
+        let since_epoch = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map_err(|_| InitialProfileError::Snapshot)?;
+        u64::try_from(since_epoch.as_millis()).map_err(|_| InitialProfileError::Snapshot)
+    };
+    let writer = BridgeWorkspaceLock::acquire(&workspace, device, stamp()?)
+        .map_err(|_| InitialProfileError::Snapshot)?;
+    // Encode only while the native browser has released its writer lock.
+    let captured = (|| {
+        if !matches!(browser_writer_locks_absent(&workspace), Ok(true)) {
+            return Err(InitialProfileError::Snapshot);
+        }
+        let inventory = workspace.inventory().map_err(|_| InitialProfileError::Snapshot)?;
+        let bytes = zeroize::Zeroizing::new(
+            encode_workspace_snapshot(&workspace, &inventory)
+                .map_err(|_| InitialProfileError::Snapshot)?,
+        );
+        if workspace.inventory().map_err(|_| InitialProfileError::Snapshot)? != inventory {
+            return Err(InitialProfileError::Snapshot);
+        }
+        Ok((bytes, inventory))
+    })();
+    let released = writer.release().map_err(|_| InitialProfileError::Snapshot);
+    let (plaintext, inventory) = captured?;
+    released?;
+
+    let generation = workspace.generation_id().clone();
+    let path = format!(
+        "/bridge/v1/tenants/{}/profiles/{}/generation-initialization",
+        intent.tenant_id.as_str(), intent.profile_id.as_str(),
+    );
+    let prepared: InitialGenerationPrepared = decode(post(
+        transport, &path, &Request::Prepare {
+            generation_id: generation.as_str().to_owned(),
+            expected_profile_version: intent.expected_version,
+        },
+    )?)?;
+    match prepared {
+        InitialGenerationPrepared::Initialize { generation_id, expected_profile_version }
+            if generation_id == generation.as_str()
+                && expected_profile_version == intent.expected_version => {}
+        _ => return Err(InitialProfileError::Authorization),
+    }
+
+    let (_, receipt) = seal_upload_commit_initial(
+        &intent.tenant_id, &intent.profile_id, &generation, intent.expected_version,
+        &plaintext, transport, uploader,
+    )?;
+    if receipt.generation_id != generation.as_str()
+        || receipt.profile_version != intent.expected_version + 1
+    {
+        return Err(InitialProfileError::Commit);
+    }
+
+    // Commit was confirmed, but another browser may already have reopened.
+    // A busy writer means recovery of local receipt is pending, never Saved.
+    let current = root.open_profile_current(&intent.tenant_id, &intent.profile_id)
+        .map_err(|_| InitialProfileError::SavedRecovery)?;
+    let guard = BridgeWorkspaceLock::acquire(&current, device, stamp()?)
+        .map_err(|_| InitialProfileError::SavedRecovery)?;
+    let applied = (|| {
+        if current.base_generation_id().is_some()
+            || current.generation_id() != &generation
+            || current.profile_version() != intent.expected_version
+            || !matches!(browser_writer_locks_absent(&current), Ok(true))
+        {
+            return Err(InitialProfileError::SavedRecovery);
+        }
+        let unchanged = current.inventory()
+            .map_err(|_| InitialProfileError::SavedRecovery)? == inventory;
+        root.update_profile_current_sync_base(
+            &current, &generation, receipt.profile_version,
+        )
+        .map_err(|_| InitialProfileError::SavedRecovery)?;
+        // Never clear a dirty marker if user data changed during R2 upload.
+        if unchanged {
+            let metadata = fs::symlink_metadata(&dirty)
+                .map_err(|_| InitialProfileError::SavedRecovery)?;
+            if metadata.file_type().is_symlink()
+                || !metadata.is_file()
+                || fs::read(&dirty).map_err(|_| InitialProfileError::SavedRecovery)?
+                    != b"local-unsynced-v2"
+            {
+                return Err(InitialProfileError::SavedRecovery);
+            }
+            fs::remove_file(&dirty).map_err(|_| InitialProfileError::SavedRecovery)?;
+        }
+        Ok(())
+    })();
+    let unlocked = guard.release().map_err(|_| InitialProfileError::SavedRecovery);
+    applied?;
+    unlocked
+}
+
+/// One existing Initial Generation encryption, signed R2 PUT and verified
+/// Worker Commit owner. Both the legacy initial adapter and the new closed
+/// local DRAFT use it; no second backup format, protocol or cloud writer.
+fn seal_upload_commit_initial<T: MachineHttpPort, U: SignedGenerationObjectPutPort>(
+    tenant: &TenantId,
+    profile: &ProfileId,
+    generation: &GenerationId,
+    version: u64,
+    plaintext: &[u8],
+    transport: &mut T,
+    uploader: &mut U,
+) -> Result<(String, InitialGenerationCommitted), InitialProfileError> {
+    let path = format!(
+        "/bridge/v1/tenants/{}/profiles/{}/generation-initialization",
+        tenant.as_str(), profile.as_str()
+    );
+    let generation_id = generation.as_str().to_owned();
+    let expected_profile_version = version;
+    #[cfg(windows)]
+    let sealing_started = std::time::Instant::now();
+    let digest = PlaintextDigest::calculate(plaintext).bytes();
+    let material = sealing_material_from_response(post(
+        transport,
+        &path,
+        &Request::SealingMaterial {
+            generation_id: generation_id.clone(),
+            expected_profile_version,
+            plaintext_digest: hex(&digest),
+        },
+    )?)
+    .map_err(|_| InitialProfileError::Encryption)?;
+    let (dek, nonce_prefix, chunk_size) = material.into_parts();
+    // First generation has no base. Never fabricate a source generation or container digest.
+    let metadata = GenerationMetadata::for_plaintext(
+        GenerationIdentity::new(
+            tenant.clone(),
+            profile.clone(),
+            generation.clone(),
+            None,
+        ),
+        dek.key_id().clone(),
+        nonce_prefix,
+        chunk_size,
+        plaintext,
+    )
+    .map_err(|_| InitialProfileError::Encryption)?;
+    let sealed = seal_generation(&metadata, &dek, plaintext)
+        .map_err(|_| InitialProfileError::Encryption)?;
+    if PlaintextDigest::calculate(plaintext).bytes() != digest {
+        return Err(InitialProfileError::Snapshot);
+    }
+    let metadata_digest = sealed
+        .metadata_digest()
+        .bytes()
+        .iter()
+        .map(|b| format!("{b:02x}"))
+        .collect::<String>();
+    let container_digest = sealed
+        .container_digest()
+        .bytes()
+        .iter()
+        .map(|b| format!("{b:02x}"))
+        .collect::<String>();
+    let container_bytes =
+        u64::try_from(sealed.container().len()).map_err(|_| InitialProfileError::Encryption)?;
+    #[cfg(windows)]
+    eprintln!(
+        "bridge_initial_phase name=snapshot_and_seal elapsed_ms={}",
+        sealing_started.elapsed().as_millis()
+    );
+    #[cfg(windows)]
+    let upload_started = std::time::Instant::now();
+    let upload = Request::UploadCapability {
+        generation_id: generation_id.clone(),
+        expected_profile_version,
+        metadata_digest: metadata_digest.clone(),
+        container_digest: container_digest.clone(),
+        container_bytes,
+    };
+    let authorization: BridgeGenerationUploadCapabilityResponse =
+        decode(post(transport, &path, &upload)?)?;
+    if let GenerationUploadAuthorization::UploadRequired(capability) =
+        decode_upload_authorization::<core::convert::Infallible>(authorization)
+            .map_err(|_| InitialProfileError::Upload)?
+    {
+        uploader
+            .put_exact(&capability, sealed.container())
+            .map_err(|_| InitialProfileError::Upload)?;
+    }
+    // The authoritative Commit handler verifies the exact encrypted R2
+    // descriptor again *before* persisting READY and issuing a claim.
+    // A second UploadCapability call would repeat the same read, add
+    // another network round trip and still not replace commit validation.
+    // No browser can start unless Commit succeeds with that exact object.
+    let receipt: InitialGenerationCommitted = decode(post(
+        transport,
+        &path,
+        &Request::Commit {
+            generation_id: generation_id.clone(),
+            expected_profile_version,
+            metadata_digest,
+            container_digest: container_digest.clone(),
+            container_bytes,
+        },
+    )?)
+    .map_err(|_| InitialProfileError::Commit)?;
+    if receipt.generation_id != generation_id
+        || receipt.profile_version != expected_profile_version + 1
+    {
+        return Err(InitialProfileError::Commit);
+    }
+    #[cfg(windows)]
+    eprintln!(
+        "bridge_initial_phase name=upload_verify_commit elapsed_ms={}",
+        upload_started.elapsed().as_millis()
+    );
+    Ok((container_digest, receipt))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn closed_draft_sync_refuses_missing_or_false_dirty_evidence_before_network()
+    -> Result<(), Box<dyn std::error::Error>> {
+        use crate::shipping_control_plane::MachineHttpResponse;
+        use crate::shipping_generation_save::SignedGenerationUploadCapability;
+        use profile_platform_primitives::TenantScope;
+
+        struct NoTransport;
+        impl MachineHttpPort for NoTransport {
+            type Error = ();
+            fn request(
+                &mut self, _: MachineHttpMethod, _: &str,
+                _: &CorrelationId, _: Option<&[u8]>,
+            ) -> Result<MachineHttpResponse, ()> {
+                panic!("DRAFT Sync must not contact the server before local evidence admission")
+            }
+        }
+        struct NoUpload;
+        impl SignedGenerationObjectPutPort for NoUpload {
+            type Error = ();
+            fn put_exact(
+                &mut self, _: &SignedGenerationUploadCapability, _: &[u8],
+            ) -> Result<(), ()> {
+                panic!("DRAFT Sync must not upload an unverified local folder")
+            }
+        }
+
+        let intent = InitialProfileOpen::parse(
+            "profilebridge://open/v2/tenant_draft_test/actor_draft_test/profile_draft_test/1/DRAFT",
+        )?;
+        let actor = ActorContext::new(
+            TenantScope::new(intent.tenant_id.clone()), intent.actor_id.clone(),
+            CorrelationId::parse("corr_draft_test")?,
+        );
+        let device = DeviceId::parse("device_draft_test")?;
+        let path = std::env::temp_dir().join(format!(
+            "bridge-sync-draft-{}-{}",
+            std::process::id(),
+            SystemTime::now().duration_since(UNIX_EPOCH)?.as_nanos()
+        ));
+        let root = MaterializationRoot::open_or_create(&path)?;
+        let local_id = GenerationId::parse("generation_draft_test")?;
+        let workspace = root.create_profile_current(
+            &intent.tenant_id, &intent.profile_id, &local_id, 1,
+        )?;
+        let sync = |transport: &mut NoTransport, uploader: &mut NoUpload| {
+            sync_closed_local_draft(
+                &intent, &actor, &device, &root, transport, uploader,
+            )
+        };
+        assert_eq!(sync(&mut NoTransport, &mut NoUpload), Err(InitialProfileError::Snapshot));
+        std::fs::write(workspace.path().join(".local-unsynced"), b"invalid-marker")?;
+        assert_eq!(sync(&mut NoTransport, &mut NoUpload), Err(InitialProfileError::Snapshot));
+        std::fs::remove_dir_all(&path)?;
+        Ok(())
+    }
+
+    #[test]
+    fn closed_draft_sync_rejects_ready_or_foreign_actor_without_network()
+    -> Result<(), Box<dyn std::error::Error>> {
+        struct NoTransport;
+        impl MachineHttpPort for NoTransport {
+            type Error = ();
+            fn request(
+                &mut self, _: MachineHttpMethod, _: &str,
+                _: &CorrelationId, _: Option<&[u8]>,
+            ) -> Result<MachineHttpResponse, ()> {
+                panic!("unauthorized sync contacted control plane")
+            }
+        }
+        struct NoUpload;
+        impl SignedGenerationObjectPutPort for NoUpload {
+            type Error = ();
+            fn put_exact(
+                &mut self, _: &crate::shipping_generation_save::SignedGenerationUploadCapability,
+                _: &[u8],
+            ) -> Result<(), ()> {
+                panic!("unauthorized sync uploaded a snapshot")
+            }
+        }
+        use profile_platform_primitives::TenantScope;
+        let intent = InitialProfileOpen::parse(
+            "profilebridge://open/v2/tenant_reject_test/actor_reject_test/profile_reject_test/1/READY",
+        )?;
+        let actor = ActorContext::new(
+            TenantScope::new(intent.tenant_id.clone()), intent.actor_id.clone(),
+            CorrelationId::parse("corr_reject_test")?,
+        );
+        let device = DeviceId::parse("device_reject_test")?;
+        let path = std::env::temp_dir().join(format!(
+            "bridge-sync-reject-{}-{}",
+            std::process::id(),
+            SystemTime::now().duration_since(UNIX_EPOCH)?.as_nanos()
+        ));
+        let root = MaterializationRoot::open_or_create(&path)?;
+        assert_eq!(
+            sync_closed_local_draft(&intent, &actor, &device, &root, &mut NoTransport, &mut NoUpload),
+            Err(InitialProfileError::Authorization)
+        );
+        std::fs::remove_dir_all(&path)?;
+        Ok(())
+    }
+
+    #[test]
+    fn closed_draft_sync_commits_verified_object_then_clears_only_exact_dirty_marker()
+    -> Result<(), Box<dyn std::error::Error>> {
+        use crate::shipping_control_plane::MachineHttpResponse;
+        use crate::shipping_generation_save::SignedGenerationUploadCapability;
+        use control_plane_contract::generation_key_api::{
+            BridgeGenerationSealingMaterialResponse, GENERATION_SEALING_CHUNK_BYTES,
+        };
+        use control_plane_contract::profile_generation_api::BridgeGenerationUploadCapabilityResponse;
+        use profile_platform_primitives::TenantScope;
+        struct VerifiedTransport { operations: Vec<&'static str> }
+        impl MachineHttpPort for VerifiedTransport {
+            type Error = ();
+            fn request(
+                &mut self, _: MachineHttpMethod, _: &str,
+                _: &CorrelationId, body: Option<&[u8]>,
+            ) -> Result<MachineHttpResponse, ()> {
+                let input: Request = serde_json::from_slice(body.ok_or(())?).map_err(|_| ())?;
+                let reply = match input {
+                    Request::Prepare { generation_id, expected_profile_version } => {
+                        self.operations.push("prepare");
+                        serde_json::json!({
+                            "state": "initialize",
+                            "generationId": generation_id,
+                            "expectedProfileVersion": expected_profile_version,
+                        })
+                    }
+                    Request::SealingMaterial { .. } => {
+                        self.operations.push("seal");
+                        serde_json::to_value(BridgeGenerationSealingMaterialResponse::new(
+                            "profile-generation-root-v1-7",
+                            "37".repeat(32), "71".repeat(16),
+                            GENERATION_SEALING_CHUNK_BYTES,
+                        )).map_err(|_| ())?
+                    }
+                    Request::UploadCapability { .. } => {
+                        self.operations.push("verify-upload");
+                        serde_json::to_value(BridgeGenerationUploadCapabilityResponse::verified())
+                            .map_err(|_| ())?
+                    }
+                    Request::Commit { generation_id, expected_profile_version, .. } => {
+                        self.operations.push("commit");
+                        serde_json::json!({
+                            "generationId": generation_id,
+                            "profileVersion": expected_profile_version + 1,
+                            "replayed": false,
+                            "launch": {
+                                "launchUri": "profilebridge://claim/claim_ready_0123456789abcdef0123456789",
+                                "expiresAtMs": 1000,
+                            },
+                        })
+                    }
+                };
+                Ok(MachineHttpResponse::new(200, serde_json::to_vec(&reply).map_err(|_| ())?))
+            }
+        }
+        struct NoUpload;
+        impl SignedGenerationObjectPutPort for NoUpload {
+            type Error = ();
+            fn put_exact(
+                &mut self, _: &SignedGenerationUploadCapability, _: &[u8],
+            ) -> Result<(), ()> {
+                panic!("server already verified this immutable snapshot")
+            }
+        }
+        let intent = InitialProfileOpen::parse(
+            "profilebridge://open/v2/tenant_draft_sync/actor_draft_sync/profile_draft_sync/1/DRAFT",
+        )?;
+        let actor = ActorContext::new(
+            TenantScope::new(intent.tenant_id.clone()), intent.actor_id.clone(),
+            CorrelationId::parse("corr_draft_sync")?,
+        );
+        let device = DeviceId::parse("device_draft_sync")?;
+        let path = std::env::temp_dir().join(format!(
+            "bridge-sync-success-{}-{}",
+            std::process::id(),
+            SystemTime::now().duration_since(UNIX_EPOCH)?.as_nanos()
+        ));
+        let root = MaterializationRoot::open_or_create(&path)?;
+        let local_id = GenerationId::parse("generation_local_draft_sync")?;
+        let workspace = root.create_profile_current(
+            &intent.tenant_id, &intent.profile_id, &local_id, 1,
+        )?;
+        std::fs::create_dir(workspace.path().join("user_data"))?;
+        std::fs::write(workspace.path().join("user_data/cookies.sqlite"), b"persistent-cookie-data")?;
+        std::fs::write(workspace.path().join("camoufox-config.json"), b"{}")?;
+        std::fs::write(workspace.path().join(".local-unsynced"), b"local-unsynced-v2")?;
+        let mut transport = VerifiedTransport { operations: Vec::new() };
+        sync_closed_local_draft(
+            &intent, &actor, &device, &root, &mut transport, &mut NoUpload,
+        )?;
+        assert_eq!(transport.operations, ["prepare", "seal", "verify-upload", "commit"]);
+        let confirmed = root.open_profile_current(&intent.tenant_id, &intent.profile_id)?;
+        assert_eq!(confirmed.path(), workspace.path());
+        assert_eq!(confirmed.base_generation_id(), Some(&local_id));
+        assert_eq!(confirmed.profile_version(), 2);
+        assert!(!confirmed.path().join(".local-unsynced").exists());
+        assert_eq!(
+            std::fs::read(confirmed.path().join("user_data/cookies.sqlite"))?,
+            b"persistent-cookie-data",
+        );
+        std::fs::remove_dir_all(path)?;
+        Ok(())
+    }
+
     #[test]
     fn existing_profile_goes_directly_to_claim_without_materialization_or_upload()
     -> Result<(), Box<dyn std::error::Error>> {

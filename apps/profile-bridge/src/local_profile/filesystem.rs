@@ -99,31 +99,6 @@ impl MaterializationRoot {
         Ok(Self { canonical_path })
     }
 
-    /// Bind a verified, not-yet-published restore workspace to the exact cloud
-    /// CURRENT and its confirmed Profile version. Uses the one existing marker.
-    /// No existing local CURRENT is ever opened or modified here.
-    pub(crate) fn rebind_staging_current(
-        &mut self,
-        generation_id: &GenerationId,
-        profile_version: u64,
-    ) -> Result<(), LocalProfileError> {
-        if profile_version == 0 {
-            return Err(LocalProfileError::InvalidPolicy);
-        }
-        self.rebind_staging_generation(generation_id)?;
-        replace_generation_marker(
-            &self.path().join(GENERATION_MARKER),
-            &render_generation_marker(
-                generation_id,
-                Some(generation_id),
-                profile_version,
-            )?,
-        )?;
-        self.base_generation_id = Some(generation_id.clone());
-        self.profile_version = profile_version;
-        Ok(())
-    }
-
     #[must_use]
     pub fn path(&self) -> &Path {
         &self.canonical_path
@@ -535,6 +510,31 @@ impl GenerationWorkspace {
         }
         replace_generation_marker(&marker, &render_generation_marker(generation_id, None, 0)?)?;
         self.generation_id = generation_id.clone();
+        Ok(())
+    }
+
+    /// Bind a verified, not-yet-published restore workspace to the exact cloud
+    /// CURRENT and its confirmed Profile version. Uses the one existing marker.
+    /// No existing local CURRENT is ever opened or modified here.
+    pub(crate) fn rebind_staging_current(
+        &mut self,
+        generation_id: &GenerationId,
+        profile_version: u64,
+    ) -> Result<(), LocalProfileError> {
+        if profile_version == 0 {
+            return Err(LocalProfileError::InvalidPolicy);
+        }
+        self.rebind_staging_generation(generation_id)?;
+        replace_generation_marker(
+            &self.path().join(GENERATION_MARKER),
+            &render_generation_marker(
+                generation_id,
+                Some(generation_id),
+                profile_version,
+            )?,
+        )?;
+        self.base_generation_id = Some(generation_id.clone());
+        self.profile_version = profile_version;
         Ok(())
     }
 

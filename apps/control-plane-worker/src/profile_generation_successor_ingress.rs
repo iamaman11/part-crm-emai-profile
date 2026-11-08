@@ -1110,7 +1110,7 @@ async fn authorize_local_current_restore(
         use_cases::generation_initialization::authorize_initial_generation_access(
             actor, role, profile_id, &application,
         ).await,
-        Ok(context) if context.status == application_ports::profiles::ProfileStatus::Ready
+        Ok(context) if context.status == profile_domain::ProfileStatus::Ready
             && context.active_generation_id.is_some()
     ))
 }

@@ -246,6 +246,16 @@ mod windows {
         ManagedCamouhostConfig, ManagedCamouhostProcess, RuntimeBindingSlot, RuntimeDisplayMode,
     };
     use crate::authoritative_generation::ensure_authoritative_current;
+    use crate::generation_initialization::{
+        InitialProfileError, InitialProfileStatus,
+        reauthorize_current_ready_generation, sync_closed_local_draft,
+    };
+    use crate::dirty_generation::prepare_closed_current_successor;
+    use crate::generation_snapshot::encode_workspace_snapshot;
+    use crate::shipping_generation_save::publish_verify_and_commit_successor;
+    use crate::shipping_generation_successor_control::{
+        ControlPlaneGenerationSuccessor, observe_closed_current_exact,
+    };
     use crate::generation_reopen::{
         GenerationReopenControlPort, VerifiedGenerationObjectStreamDownloader,
     };
@@ -276,7 +286,8 @@ mod windows {
     use crate::windows_generation_get::WindowsSignedGenerationObjectGet;
     use crate::windows_generation_put::WindowsSignedGenerationObjectPut;
     use crate::windows_native::WindowsDeviceIdentity;
-    use application_ports::ProfileCoordinatorRuntimePort;
+    use application_ports::{ProfileCoordinatorPort, ProfileCoordinatorRuntimePort};
+    use crate::operator_flow::EnrollmentPort;
     use bridge_domain::ClaimUri;
     use profile_platform_primitives::UnixMillis;
     use session_domain::ProfileLease;
@@ -417,6 +428,209 @@ mod windows {
         }
     }
 
+    /// Reuse the existing authenticated Profile claim/DO fence, encrypted
+    /// successor writer, signed R2 PUT and D1 CAS ONLY after native Close.
+    /// Ordinary browser Open remains local and never acquires this authority.
+    ///
+    /// This does not launch Camoufox, clone Firefox into a generation folder,
+    /// introduce a daemon or replace the stable local current path.
+    fn sync_closed_ready(
+        intent: &crate::generation_initialization::InitialProfileOpen,
+        binding: &WindowsDeviceApplicationBinding,
+        root: &MaterializationRoot,
+        origin: &str,
+    ) -> Result<(), ()> {
+        use crate::browser_execution::browser_writer_locks_absent;
+        use crate::local_profile::BridgeWorkspaceLock;
+        use std::fs;
+
+        let workspace = root.open_profile_current(&intent.tenant_id, &intent.profile_id)
+            .map_err(|_| ())?;
+        let Some(base) = workspace.base_generation_id().cloned() else {
+            return Err(());
+        };
+        if workspace.profile_version() != intent.expected_version
+            || fs::read(workspace.path().join(".local-unsynced")).map_err(|_| ())?
+                != b"local-unsynced-v2"
+        {
+            return Err(());
+        }
+        let device = binding.device_id();
+        let lock = BridgeWorkspaceLock::acquire(&workspace, device, now().map_err(|_| ())?.value())
+            .map_err(|_| ())?;
+        // The snapshot, not the browser, is the only temporary payload.
+        let captured = (|| {
+            if !matches!(browser_writer_locks_absent(&workspace), Ok(true)) {
+                return Err(());
+            }
+            let inventory = workspace.inventory().map_err(|_| ())?;
+            let snapshot = zeroize::Zeroizing::new(
+                encode_workspace_snapshot(&workspace, &inventory).map_err(|_| ())?
+            );
+            if workspace.inventory().map_err(|_| ())? != inventory {
+                return Err(());
+            }
+            Ok((snapshot, inventory))
+        })();
+        let unlock = lock.release().map_err(|_| ());
+        let (snapshot, original_inventory) = captured?;
+        unlock?;
+
+        let application = WindowsDeviceApplication::from_system(origin.to_owned(), binding.clone())
+            .map_err(|_| ())?;
+        let mut transport = application.transport();
+        let actor = profile_platform_primitives::ActorContext::new(
+            profile_platform_primitives::TenantScope::new(intent.tenant_id.clone()),
+            intent.actor_id.clone(),
+            profile_platform_primitives::CorrelationId::parse("corr_closed_ready_sync")
+                .map_err(|_| ())?,
+        );
+        // Fresh authorization is acquired for Sync, not for browser Open.
+        let claim = reauthorize_current_ready_generation(
+            intent, &actor, device, &mut transport,
+        ).map_err(|_| ())?;
+        let mut enrollment = ControlPlaneEnrollment::new(transport.clone());
+        let enrolled = enrollment.redeem_claim(&claim, device, now().map_err(|_| ())?)
+            .map_err(|_| ())?;
+        if enrolled.actor().actor_id() != actor.actor_id()
+            || enrolled.actor().tenant_scope().tenant_id() != actor.tenant_scope().tenant_id()
+            || enrolled.profile_id() != &intent.profile_id
+            || enrolled.generation_id() != &base
+        {
+            return Err(());
+        }
+
+        let mut coordinator = SharedControlPlaneCoordinator::new(
+            ControlPlaneCoordinator::new(transport.clone()),
+        );
+        let lease = coordinator.claim_launch_intent(
+            enrolled.actor(), &intent.profile_id, device, enrolled.launch_intent_id(),
+        ).map_err(|_| ())?;
+        // The existing heartbeat owner maintains the same fence during long PUT.
+        let heartbeat = RetainedSaveHeartbeat::start(coordinator.clone(), lease.clone());
+        let outcome = (|| {
+            let mut sealer = coordinator.clone();
+            let mut observation_transport = transport.clone();
+            let mut control = ControlPlaneGenerationSuccessor::new(
+                transport, &mut sealer,
+            );
+            let prepared = prepare_closed_current_successor(
+                &workspace, &original_inventory, &snapshot,
+                &intent.tenant_id, &intent.profile_id, &base, &mut control,
+            ).map_err(|_| ())?;
+            let mut upload = WindowsSignedGenerationObjectPut::from_system().map_err(|_| ())?;
+            if !heartbeat.is_healthy() {
+                return Err(());
+            }
+            let committed = match publish_verify_and_commit_successor(
+                &intent.tenant_id, &intent.profile_id, &base,
+                &prepared, &lease, &mut control, &mut upload,
+            ) {
+                Ok(receipt) => receipt.generation_id().clone(),
+                Err(_) => {
+                    // An HTTP reply may be lost *after* D1 committed.
+                    // Observe the EXACT originally sealed object read-only;
+                    // negative/uncertain observation never replays a PUT.
+                    if !observe_closed_current_exact(
+                        &intent.tenant_id, &intent.profile_id,
+                        &base, &prepared, &mut observation_transport,
+                    ).map_err(|_| ())? {
+                        return Err(());
+                    }
+                    prepared.sealed().metadata().generation_id().clone()
+                }
+            };
+            if !heartbeat.is_healthy() {
+                return Err(());
+            }
+            Ok(committed)
+        })();
+        drop(heartbeat);
+        if outcome.is_ok() {
+            coordinator.close_confirmed_save(&lease).map_err(|_| ())?;
+        } else {
+            let _ = coordinator.close_lease(&lease);
+        }
+        let committed = outcome?;
+
+        // Apply only the confirmed server revision; if another local browser
+        // already holds the writer, do not touch its bytes or clear dirty.
+        let active = root.open_profile_current(&intent.tenant_id, &intent.profile_id)
+            .map_err(|_| ())?;
+        let guard = BridgeWorkspaceLock::acquire(&active, device, now().map_err(|_| ())?.value())
+            .map_err(|_| ())?;
+        let applied = (|| {
+            if active.base_generation_id() != Some(&base)
+                || active.profile_version() != intent.expected_version
+                || !matches!(browser_writer_locks_absent(&active), Ok(true))
+            {
+                return Err(());
+            }
+            let unchanged = active.inventory().map_err(|_| ())? == original_inventory;
+            root.update_profile_current_sync_base(
+                &active, &committed,
+                intent.expected_version.checked_add(1).ok_or(())?,
+            ).map_err(|_| ())?;
+            if unchanged {
+                let dirty = active.path().join(".local-unsynced");
+                let metadata = fs::symlink_metadata(&dirty).map_err(|_| ())?;
+                if metadata.file_type().is_symlink()
+                    || !metadata.is_file()
+                    || fs::read(&dirty).map_err(|_| ())? != b"local-unsynced-v2"
+                {
+                    return Err(());
+                }
+                fs::remove_file(&dirty).map_err(|_| ())?;
+            }
+            Ok(())
+        })();
+        let unlocked = guard.release().map_err(|_| ());
+        applied?;
+        unlocked
+    }
+
+    /// The SAME post-close handler runs after normal Open and READY restore.
+    /// Neither Firefox closure nor its local bytes depend on the cloud result.
+    fn sync_after_native_close(
+        intent: &crate::generation_initialization::InitialProfileOpen,
+        binding: &WindowsDeviceApplicationBinding,
+        root: &MaterializationRoot,
+        origin: &str,
+    ) {
+    if intent.status == InitialProfileStatus::Ready {
+        if let Err(()) = sync_closed_ready(
+            intent, binding, root, origin,
+        ) {
+            eprintln!("bridge_closed_ready_sync_pending;NEXT_SAFE_STEP=PRESERVE_LOCAL_BYTES");
+        }
+    } else if intent.status == InitialProfileStatus::Draft {
+        let sync = (|| -> Result<(), InitialProfileError> {
+            let application = WindowsDeviceApplication::from_system(
+                origin.to_owned(), binding.clone(),
+            )
+            .map_err(|_| InitialProfileError::Authorization)?;
+            let mut transport = application.transport();
+            let mut uploader = WindowsSignedGenerationObjectPut::from_system()
+                .map_err(|_| InitialProfileError::Upload)?;
+            let actor = profile_platform_primitives::ActorContext::new(
+                profile_platform_primitives::TenantScope::new(intent.tenant_id.clone()),
+                intent.actor_id.clone(),
+                profile_platform_primitives::CorrelationId::parse("corr_local_draft_sync")
+                    .map_err(|_| InitialProfileError::Authorization)?,
+            );
+            sync_closed_local_draft(
+                intent, &actor, binding.device_id(), &root,
+                &mut transport, &mut uploader,
+            )
+        })();
+        if let Err(reason) = sync {
+            // Diagnostic classification only. A network outage,
+            // lost response or local conflict is NOT a Save receipt.
+            eprintln!("bridge_closed_draft_sync_pending reason={reason:?}");
+        }
+    }
+    }
+
     pub fn run_initial(
         intent: &crate::generation_initialization::InitialProfileOpen,
     ) -> Result<(), ShippingCompositionError> {
@@ -441,13 +655,16 @@ mod windows {
         match crate::local_browser_open::open(
             &root, intent, binding.device_id(), delivery.runtime_root(),
         ) {
-            Ok(()) => Ok(()),
+            Ok(()) => {
+                sync_after_native_close(intent, &binding, &root, &config.control_plane_origin);
+                Ok(())
+            },
             Err(crate::local_browser_open::LocalOpenError::RestoreRequired) => {
                 // Only a missing READY local folder crosses the cloud boundary.
                 // Ordinary Open/Close never requires a network request.
                 let device = binding.device_id().clone();
                 let application = WindowsDeviceApplication::from_system(
-                    config.control_plane_origin, binding,
+                    config.control_plane_origin.clone(), binding.clone(),
                 )
                 .map_err(|_| ShippingCompositionError::RestoreUnavailable)?;
                 let mut remote = ControlPlaneCoordinator::for_local_current_restore(
@@ -473,7 +690,9 @@ mod windows {
                 crate::local_browser_open::open(
                     &root, intent, &device, delivery.runtime_root(),
                 )
-                .map_err(ShippingCompositionError::LocalOpen)
+                .map_err(ShippingCompositionError::LocalOpen)?;
+                sync_after_native_close(intent, &binding, &root, &config.control_plane_origin);
+                Ok(())
             }
             Err(error) => Err(ShippingCompositionError::LocalOpen(error)),
         }

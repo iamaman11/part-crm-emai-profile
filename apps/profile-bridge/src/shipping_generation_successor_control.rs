@@ -294,6 +294,45 @@ where
     }
 }
 
+/// Reuse the EXISTING read-only D1 exact-successor observation after an
+/// ambiguous local-first Sync response. This never uploads, commits, retries
+/// an unknown mutation, creates a candidate or changes CURRENT.
+#[cfg(any(windows, test))]
+pub(crate) fn observe_closed_current_exact<T: MachineHttpPort>(
+    tenant: &TenantId,
+    profile: &ProfileId,
+    base: &GenerationId,
+    prepared: &PreparedDirtyGeneration,
+    transport: &mut T,
+) -> Result<bool, ShippingControlPlaneError> {
+    let request = BridgeGenerationSuccessorObserveRequest {
+        base_generation_id: base.as_str().to_owned(),
+        generation_id: prepared.sealed().metadata().generation_id().as_str().to_owned(),
+        object_key: prepared.object_key(),
+        metadata_digest: prepared.metadata_digest().to_owned(),
+        container_digest: prepared.container_digest().to_owned(),
+        container_bytes: u64::try_from(prepared.sealed().container().len())
+            .map_err(|_| ShippingControlPlaneError::InvalidResponse)?,
+    };
+    let bytes = post_json::<T, core::convert::Infallible, _>(
+        transport,
+        &successor_path(
+            BRIDGE_PROFILE_GENERATION_OBSERVE_PATH_TEMPLATE, tenant, profile,
+        ),
+        &request,
+    )
+    .map_err(|error| match error {
+        GenerationSuccessorControlError::ControlPlane(reason) => reason,
+        GenerationSuccessorControlError::Sealing(never) => match never {},
+    })?;
+    if bytes.len() > MAX_OBSERVE_RESPONSE_BYTES {
+        return Err(ShippingControlPlaneError::InvalidResponse);
+    }
+    let observed: BridgeGenerationSuccessorObserveResponse =
+        serde_json::from_slice(&bytes).map_err(|_| ShippingControlPlaneError::InvalidResponse)?;
+    Ok(observed.active_exact)
+}
+
 /// Discover one durable exact checkpoint without requiring a surviving in-memory
 /// successor/lease and observe the server's exact active-generation descriptor.
 /// Only the signed-in machine transport is used; this function NEVER replays the
