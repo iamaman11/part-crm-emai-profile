@@ -1229,7 +1229,7 @@ class WindowsBrowserExitWitness:
         ]
         get_window_thread_process_id.restype = wintypes.DWORD
 
-        browser_roots = set(self.pids)
+        browser_processes = set(self.owned_pids)
         found = False
 
         @callback_type
@@ -1240,7 +1240,7 @@ class WindowsBrowserExitWitness:
             process_id = wintypes.DWORD()
             if (
                 get_window_thread_process_id(hwnd, self.ctypes.byref(process_id))
-                and int(process_id.value) in browser_roots
+                and int(process_id.value) in browser_processes
             ):
                 found = True
                 return False
@@ -2292,7 +2292,9 @@ async def run_local_profile(root: Path) -> int:
                     # The user's last native window is already gone. Release
                     # the persistent SDK context so Firefox can finish its
                     # normal SessionStore shutdown and release the writer lock.
-                    await session.close_after_native_window_closed()
+                    # Reuse the existing SDK-release path only after the
+                    # native OS witness confirms the last browser window is gone.
+                    await session.abort_startup()
                     wait_for_browser_quiescence(root)
                     if (
                         session.profile_state() == "CLEAN_SHUTDOWN_VERIFIED"

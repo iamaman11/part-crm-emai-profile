@@ -1,6 +1,7 @@
 #![forbid(unsafe_code)]
 #![cfg_attr(windows, windows_subsystem = "windows")]
 
+use bridge_domain::ClaimUri;
 use profile_bridge::device_pairing::{
     DevicePairingBootstrapError, DevicePairingCompleteUri, DevicePairingStartUri,
     PAIRING_COMPLETE_URI_PREFIX, PAIRING_START_URI_PREFIX, run_pairing_complete, run_pairing_start,
@@ -365,9 +366,13 @@ where
                 .map(BridgeCommand::PairingComplete)
                 .map_err(|_| BridgeCliError::InvalidPairingUri)
         }
-        // A user URI can only open v2 local CURRENT. The older one-time
-        // claim/managed Save lifecycle is not an application launch mode.
-        _ => Err(BridgeCliError::InvalidClaimUri),
+        // Retain strict parsing only to reject obsolete claim handoffs at
+        // the protocol boundary. Never dispatch them to the retired managed
+        // Open/Save lifecycle.
+        _ => {
+            let _ = ClaimUri::parse(&argument);
+            Err(BridgeCliError::InvalidClaimUri)
+        }
     }
 }
 
