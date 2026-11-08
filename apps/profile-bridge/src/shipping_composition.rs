@@ -689,21 +689,39 @@ mod windows {
                 profile_platform_primitives::CorrelationId::parse("corr_local_draft_sync")
                     .map_err(|_| ShippingCompositionError::SyncUnconfirmed)?,
             );
-            sync_closed_local_draft(
+            match sync_closed_local_draft(
                 intent,
                 &actor,
                 binding.device_id(),
                 root,
                 &mut transport,
                 &mut uploader,
-            )
-            .map_err(ShippingCompositionError::Initialization)
+            ) {
+                Ok(()) => Ok(()),
+                Err(error) => {
+                    // The first exact D1 Commit may have succeeded while its
+                    // HTTP reply was lost. ONLY a verified server-selected
+                    // CURRENT matching the original local native bytes may
+                    // reconcile it; no blind second PUT or generation is made.
+                    let mut proof = intent.clone();
+                    proof.status = InitialProfileStatus::Ready;
+                    proof.expected_version = proof.expected_version
+                        .checked_add(1)
+                        .ok_or(ShippingCompositionError::Initialization(error))?;
+                    sync_closed_ready(&proof, binding, root, origin)
+                        .map_err(|_| ShippingCompositionError::Initialization(error))
+                }
+            }
         }
     }
 
     pub fn run_closed_sync(
         intent: &crate::generation_initialization::InitialProfileOpen,
     ) -> Result<(), ShippingCompositionError> {
+        // The same one-shot Bridge process retries transient offline failure
+        // without requiring the native browser to open again. This has no
+        // additional service, local state file, or independent cloud writer.
+        const RETRY_DELAYS_SECONDS: [u64; 4] = [2, 8, 20, 45];
         let config = ShippingConfig::from_installation()?;
         let binding =
             WindowsDeviceApplicationBinding::open(&config.device_application_binding_path)
@@ -713,7 +731,45 @@ mod windows {
         }
         let root = MaterializationRoot::open_or_create(&config.materialization_root)
             .map_err(|_| ShippingCompositionError::Configuration)?;
-        sync_after_native_close(intent, &binding, &root, &config.control_plane_origin)
+        for (attempt, pause) in RETRY_DELAYS_SECONDS
+            .iter()
+            .copied()
+            .map(Some)
+            .chain(std::iter::once(None))
+            .enumerate()
+        {
+            let workspace = root
+                .open_profile_current(&intent.tenant_id, &intent.profile_id)
+                .map_err(|_| ShippingCompositionError::SyncUnconfirmed)?;
+            let dirty = workspace.path().join(".local-unsynced");
+            // A completed first DRAFT Commit advances the *same* local marker.
+            // Retry the outstanding native edits as READY without creating a
+            // second local folder or replaying the first DRAFT generation.
+            let mut effective = intent.clone();
+            if workspace.base_generation_id().is_some() {
+                effective.status = InitialProfileStatus::Ready;
+                effective.expected_version = workspace.profile_version();
+            }
+            let outcome = sync_after_native_close(
+                &effective, &binding, &root, &config.control_plane_origin,
+            );
+            if outcome.is_ok()
+                && matches!(
+                    std::fs::symlink_metadata(&dirty),
+                    Err(ref error) if error.kind() == std::io::ErrorKind::NotFound
+                )
+            {
+                return Ok(());
+            }
+            if let Some(seconds) = pause {
+                eprintln!("BRIDGE_CLOUD_SYNC_RETRY_PENDING attempt={}", attempt + 1);
+                thread::sleep(Duration::from_secs(seconds));
+            }
+        }
+        // A non-confirmed cloud effect never changes the local success state.
+        // The original dirty marker survives for an explicit independent
+        // --sync-closed retry (which also needs no browser window).
+        Err(ShippingCompositionError::SyncUnconfirmed)
     }
 
     /// The same installed executable handles one ephemeral cloud Sync
