@@ -163,7 +163,8 @@ async def verify() -> int:
 
             # A close racing listener registration is still observed.
             already_closed = FakeContext(closed=True)
-            async def closed_browser(_playwright, **_kwargs):
+            async def closed_browser(playwright, **kwargs):
+                launches.append((playwright, kwargs))
                 return already_closed
             camoufox_api.AsyncNewBrowser = closed_browser
             raced = await module.launch_native_camoufox(
