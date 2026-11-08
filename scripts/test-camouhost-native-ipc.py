@@ -29,9 +29,19 @@ def main() -> int:
     source = SOURCE.read_text(encoding="utf-8")
     local_runtime = source.split("async def run_local_profile", 1)[1].split("\n\ndef main", 1)[0]
     assert "wait_for_browser_close" in local_runtime
-    assert "WindowsBrowserExitWitness" not in local_runtime
+    assert "context.on(\"close\"" in source
     assert "profile_state" not in local_runtime
-    print("CAMOUHOST_USER_NATIVE_IPC_RETIRED=PASS")
+    for forbidden in (
+        "WindowsBrowserExitWitness",
+        "firefox_writer_active",
+        "wait_for_browser_quiescence",
+        "EnumWindows",
+        "CreateToolhelp32Snapshot",
+        "WM_CLOSE",
+        "PostMessage",
+    ):
+        assert forbidden not in source, f"retired browser observer remains: {forbidden}"
+    print("CAMOUHOST_USER_PROFILE_CLOSE_EVENT=PASS")
     return 0
 
 
