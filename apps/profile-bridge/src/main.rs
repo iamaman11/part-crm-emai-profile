@@ -8,7 +8,7 @@ use profile_bridge::device_pairing::{
 };
 use profile_bridge::generation_initialization::{INITIAL_OPEN_URI_PREFIX, InitialProfileOpen};
 use profile_bridge::installed_connection::ControlPlaneOrigin;
-use profile_bridge::shipping_composition::run_claim;
+use profile_bridge::shipping_composition::{run_claim, run_closed_profile_sync};
 use profile_bridge::shipping_composition::{
     ShippingCompositionError, ShippingDeliveryCommand, run_delivery_command,
 };
@@ -31,9 +31,17 @@ use std::process::ExitCode;
 use zeroize::Zeroizing;
 
 fn main() -> ExitCode {
+    let internal_sync = env::args_os().nth(1).is_some_and(|arg| arg == "--sync-closed");
     match run(env::args()) {
         Ok(()) => ExitCode::SUCCESS,
         Err(error) => {
+            // The optional one-shot cloud Sync must never open a desktop dialog
+            // after a successful local Camoufox Close. The original dirty
+            // marker survives all cloud failures.
+            if internal_sync {
+                eprintln!("BRIDGE_CLOUD_SYNC_UNCONFIRMED;{error}");
+                return ExitCode::from(2);
+            }
             // S1 outcomes are machine-readable and fail closed without showing a
             // desktop dialog or writing a normal runtime diagnostic report.
             if matches!(error, BridgeCliError::S1NotReady) {
@@ -65,6 +73,7 @@ where
             Stage::InstallPrepare
         }
         BridgeCommand::InitialProfile(_) | BridgeCommand::Claim(_) => Stage::OpenRequested,
+        BridgeCommand::SyncClosed(_) => Stage::CloudSaveAttempt,
         BridgeCommand::PairingStart(_) | BridgeCommand::PairingComplete(_) => Stage::Pairing,
         BridgeCommand::DeliveryActivateStaged => Stage::InstallActivate,
         BridgeCommand::DeliveryInstallStaged(_) | BridgeCommand::DeliveryHandoffArrived => {
@@ -132,6 +141,9 @@ where
             profile_bridge::shipping_composition::run_initial_profile(&intent)
                 .map_err(BridgeCliError::LaunchFailed)
         }
+        BridgeCommand::SyncClosed(intent) => {
+            run_closed_profile_sync(&intent).map_err(BridgeCliError::LaunchFailed)
+        }
         BridgeCommand::Claim(claim) => run_claim(&claim).map_err(BridgeCliError::LaunchFailed),
         BridgeCommand::PairingStart(uri) => {
             run_pairing_start(&uri).map_err(BridgeCliError::PairingFailed)
@@ -167,6 +179,12 @@ where
             (Err(_), _) => Outcome::Failed,
         };
         observe(outcome, cause, elapsed);
+        if result.is_ok() && stage == Stage::CloudSaveAttempt {
+            report::record_current(
+                Stage::CloudSaveConfirmed, Outcome::Succeeded,
+                Cloud::CommittedExact, Cause::None, elapsed,
+            );
+        }
         if result.is_ok()
             && stage == Stage::InstallPrepare
             && let Some(root) = &installation_root
@@ -245,6 +263,7 @@ enum BridgeCommand {
     ReadOnlyS1(PathBuf, PathBuf, Option<PathBuf>),
     Claim(ClaimUri),
     InitialProfile(InitialProfileOpen),
+    SyncClosed(InitialProfileOpen),
     PairingStart(DevicePairingStartUri),
     PairingComplete(DevicePairingCompleteUri),
     DeliveryActivateStaged,
@@ -314,6 +333,15 @@ where
         return ControlPlaneOrigin::parse(origin)
             .map(BridgeCommand::DeliveryInstallStaged)
             .map_err(|_| BridgeCliError::InvalidInstallationArgument);
+    }
+    if argument.as_str() == "--sync-closed" {
+        let uri = arguments.next().ok_or(BridgeCliError::MissingLaunchArgument)?;
+        if arguments.next().is_some() {
+            return Err(BridgeCliError::UnexpectedArgument);
+        }
+        return InitialProfileOpen::parse(&uri)
+            .map(BridgeCommand::SyncClosed)
+            .map_err(|_| BridgeCliError::InvalidClaimUri);
     }
     if arguments.next().is_some() {
         return Err(BridgeCliError::UnexpectedArgument);
@@ -413,6 +441,28 @@ mod tests {
             super::diagnostic_cause(&Err(uncertain)),
             Cause::CoordinatorUncertain
         );
+    }
+
+    #[test]
+    fn one_shot_sync_admits_only_exact_v2_native_profile() {
+        let uri = "profilebridge://open/v2/tenant_01JSYNC/actor_01JSYNC/profile_01JSYNC/1/DRAFT";
+        assert!(matches!(
+            parse_command(["profile-bridge".to_owned(), "--sync-closed".to_owned(), uri.to_owned()]),
+            Ok(BridgeCommand::SyncClosed(_))
+        ));
+        for invalid in [
+            "profilebridge://open/v1/tenant_01JSYNC/actor_01JSYNC/profile_01JSYNC/1",
+            "profilebridge://open/v2/tenant_01JSYNC/actor_01JSYNC/profile_01JSYNC/1",
+            "profilebridge://claim/claim_01JSYNC",
+        ] {
+            assert!(parse_command([
+                "profile-bridge".to_owned(), "--sync-closed".to_owned(), invalid.to_owned(),
+            ]).is_err());
+        }
+        assert!(parse_command([
+            "profile-bridge".to_owned(), "--sync-closed".to_owned(),
+            uri.to_owned(), "extra".to_owned(),
+        ]).is_err());
     }
 
     #[test]

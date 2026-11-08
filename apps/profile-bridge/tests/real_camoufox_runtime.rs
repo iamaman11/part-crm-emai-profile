@@ -1,15 +1,8 @@
 #![forbid(unsafe_code)]
 
-use bridge_domain::{BridgePortError, CamouhostMessage, CamouhostPort};
-use profile_bridge::browser_execution::load_materialization_binding;
-use profile_bridge::camouhost_process::{
-    ManagedCamouhostConfig, ManagedCamouhostProcess, RuntimeBindingSlot, RuntimeDisplayMode,
-};
-use profile_bridge::local_profile::{BridgeWorkspaceLock, MaterializationRoot};
-use profile_bridge::operator_flow::BrowserLaunchPreflightPort;
-use profile_bridge::runtime_bundle::{ApprovedRuntimeBundle, RuntimeSessionOrchestrator};
-use profile_bridge::shipping_preflight::ShippingBrowserLaunchPreflight;
-use profile_platform_primitives::{DeviceId, GenerationId, ProfileId, SessionId, TenantId};
+use profile_bridge::local_profile::MaterializationRoot;
+use profile_bridge::runtime_bundle::ApprovedRuntimeBundle;
+use profile_platform_primitives::DeviceId;
 #[cfg(not(windows))]
 use runtime_bundle_domain::{
     BundleRelativePath, InventoryEntry, RuntimeInventory, RuntimeManifest, RuntimePlatform,
@@ -28,7 +21,7 @@ const PYTHON_ENV: &str = "AR10_PYTHON";
 const RUNTIME_ROOT_ENV: &str = "AR10_RUNTIME_ROOT";
 const HEADLESS_ENV: &str = "AR10_REAL_CAMOUFOX_HEADLESS";
 const LOWER_HEX: &[u8; 16] = b"0123456789abcdef";
-const MANAGED_COLD_LAUNCH_ATTEMPTS: usize = 3;
+const NATIVE_COLD_LAUNCH_ATTEMPTS: usize = 3;
 
 #[test]
 fn published_windows_runtime_is_consumed_by_shipping_selector()
@@ -159,48 +152,6 @@ fn shipping_windows_runtime_archive_is_readable_by_production_delivery_reader()
     Ok(())
 }
 
-struct StageTracingCamouhost<C> {
-    inner: C,
-}
-
-impl<C> StageTracingCamouhost<C> {
-    const fn new(inner: C) -> Self {
-        Self { inner }
-    }
-}
-
-impl<C> CamouhostPort for StageTracingCamouhost<C>
-where
-    C: CamouhostPort,
-{
-    fn exchange(
-        &mut self,
-        message: &CamouhostMessage,
-    ) -> Result<CamouhostMessage, BridgePortError> {
-        let stage = match message {
-            CamouhostMessage::Hello { .. } => "hello",
-            CamouhostMessage::Launch { .. } => "launch",
-            CamouhostMessage::Close { .. } => "close",
-            _ => "unexpected_request",
-        };
-        let result = self.inner.exchange(message);
-        match &result {
-            Ok(response) => {
-                let outcome = match response {
-                    CamouhostMessage::HelloAck { .. } => "hello_ack",
-                    CamouhostMessage::Ready { .. } => "ready",
-                    CamouhostMessage::Closed { clean: true, .. } => "closed_clean",
-                    CamouhostMessage::Closed { clean: false, .. } => "closed_unclean",
-                    _ => "unexpected_response",
-                };
-                eprintln!("AR10_MANAGED_IPC_STAGE={stage};OUTCOME={outcome}");
-            }
-            Err(error) => eprintln!("AR10_MANAGED_IPC_STAGE={stage};ERROR={error:?}"),
-        }
-        result
-    }
-}
-
 fn sha256_hex(bytes: &[u8]) -> String {
     let digest = Sha256::digest(bytes);
     let mut encoded = String::with_capacity(64);
@@ -209,36 +160,6 @@ fn sha256_hex(bytes: &[u8]) -> String {
         encoded.push(char::from(LOWER_HEX[usize::from(byte & 0x0f)]));
     }
     encoded
-}
-
-fn native_startup_checkpoint_seen(workspace: &Path, baseline: Option<SystemTime>) -> bool {
-    let path = workspace.join("user_data").join("sessionCheckpoints.json");
-    let Ok(metadata) = fs::symlink_metadata(&path) else {
-        return false;
-    };
-    if metadata.file_type().is_symlink() || !metadata.file_type().is_file() {
-        return false;
-    }
-    let Ok(modified) = metadata.modified() else {
-        return false;
-    };
-    if baseline.is_some_and(|before| modified <= before) {
-        return false;
-    }
-    let Ok(bytes) = fs::read(path) else {
-        return false;
-    };
-    let Ok(checkpoints) = serde_json::from_slice::<serde_json::Value>(&bytes) else {
-        return false;
-    };
-    checkpoints
-        .get("profile-after-change")
-        .and_then(serde_json::Value::as_bool)
-        == Some(true)
-        && checkpoints
-            .get("sessionstore-final-state-write-complete")
-            .and_then(serde_json::Value::as_bool)
-            != Some(true)
 }
 
 fn close_native_camoufox_window() -> Result<(), Box<dyn std::error::Error>> {
@@ -386,257 +307,136 @@ fn root_path() -> Result<PathBuf, Box<dyn std::error::Error>> {
     )))
 }
 
-// Synthetic remote ports exercise the real native initializer and cipher without provider writes.
-// The browser/materializer/runtime are real; this is not hosted B7 or device-pairing acceptance.
-#[derive(Default)]
-struct InitialObject {
-    generation: Option<GenerationId>,
-    container: Vec<u8>,
-    verified: bool,
-    committed: bool,
-}
-struct InitialControl(std::rc::Rc<std::cell::RefCell<InitialObject>>);
-impl profile_bridge::shipping_control_plane::MachineHttpPort for InitialControl {
-    type Error = BridgePortError;
-    fn request(
-        &mut self,
-        _: profile_bridge::shipping_control_plane::MachineHttpMethod,
-        _: &str,
-        _: &profile_platform_primitives::CorrelationId,
-        body: Option<&[u8]>,
-    ) -> Result<profile_bridge::shipping_control_plane::MachineHttpResponse, Self::Error> {
-        use control_plane_contract::generation_initialization_api::{
-            InitialGenerationCommitted, InitialGenerationPrepared,
-            InitialGenerationRequest as Request,
-        };
-        use control_plane_contract::generation_key_api::{
-            BridgeGenerationSealingMaterialResponse, GENERATION_SEALING_CHUNK_BYTES,
-        };
-        use control_plane_contract::profile_generation_api::BridgeGenerationUploadCapabilityResponse;
-        let error = || BridgePortError::InvalidResponse;
-        let request =
-            serde_json::from_slice::<Request>(body.ok_or_else(error)?).map_err(|_| error())?;
-        let mut object = self.0.borrow_mut();
-        let response = match request {
-            Request::Prepare { generation_id, expected_profile_version } => {
-                object.generation = Some(GenerationId::parse(&generation_id).map_err(|_| error())?);
-                serde_json::to_vec(&InitialGenerationPrepared::Initialize { generation_id, expected_profile_version })
-            }
-            Request::SealingMaterial {..} => serde_json::to_vec(&BridgeGenerationSealingMaterialResponse::new("profile-generation-root-v1-2", "ab".repeat(32), "cd".repeat(16), GENERATION_SEALING_CHUNK_BYTES)),
-            Request::UploadCapability { metadata_digest, container_digest, container_bytes, .. } => {
-                if object.container.is_empty() {
-                    serde_json::to_vec(&BridgeGenerationUploadCapabilityResponse::upload_required("https://0123456789abcdef0123456789abcdef.r2.cloudflarestorage.com/test/initial?X-Amz-Signature=TEST", &[("if-none-match".to_owned(), "*".to_owned())], 300))
-                } else {
-                    let inspected = encrypted_generation_domain::inspect_generation_metadata_prelude(&object.container).map_err(|_| error())?;
-                    let actual_metadata = inspected.metadata_digest().bytes().iter().map(|b| format!("{b:02x}")).collect::<String>();
-                    if actual_metadata != metadata_digest || sha256_hex(&object.container) != container_digest || u64::try_from(object.container.len()).ok() != Some(container_bytes) || inspected.metadata().base_generation_id().is_some() { return Err(error()); }
-                    let generation = object.generation.as_ref().ok_or_else(error)?;
-                    let dek = encrypted_generation_domain::GenerationDek::new(encrypted_generation_domain::KeyId::parse("profile-generation-root-v1-2").map_err(|_| error())?, [0xab; 32]);
-                    let opened = encrypted_generation_domain::open_generation_expected(&object.container, &dek, &TenantId::parse("tenant_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa").map_err(|_| error())?, &ProfileId::parse("profile_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb").map_err(|_| error())?, generation).map_err(|_| error())?;
-                    if !opened.plaintext().starts_with(b"BPGW0001") { return Err(error()); }
-                    object.verified = true;
-                    serde_json::to_vec(&BridgeGenerationUploadCapabilityResponse::verified())
-                }
-            }
-            Request::Commit { generation_id, expected_profile_version, metadata_digest, container_digest, container_bytes } => {
-                // Match the real Worker: Commit independently verifies the
-                // exact R2 object before making the generation READY.
-                // No duplicate UploadCapability request is needed after PUT.
-                let inspected = encrypted_generation_domain::inspect_generation_metadata_prelude(&object.container).map_err(|_| error())?;
-                let actual_metadata = inspected.metadata_digest().bytes().iter().map(|b| format!("{b:02x}")).collect::<String>();
-                if actual_metadata != metadata_digest || sha256_hex(&object.container) != container_digest || u64::try_from(object.container.len()).ok() != Some(container_bytes) || inspected.metadata().base_generation_id().is_some() { return Err(error()); }
-                let generation = object.generation.as_ref().ok_or_else(error)?;
-                let dek = encrypted_generation_domain::GenerationDek::new(encrypted_generation_domain::KeyId::parse("profile-generation-root-v1-2").map_err(|_| error())?, [0xab; 32]);
-                let opened = encrypted_generation_domain::open_generation_expected(&object.container, &dek, &TenantId::parse("tenant_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa").map_err(|_| error())?, &ProfileId::parse("profile_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb").map_err(|_| error())?, generation).map_err(|_| error())?;
-                if !opened.plaintext().starts_with(b"BPGW0001") { return Err(error()); }
-                object.verified = true;
-                object.committed = true;
-                serde_json::to_vec(&InitialGenerationCommitted { generation_id, profile_version: expected_profile_version + 1, replayed: false,
-                    launch: control_plane_contract::profile_launch_api::ProfileLaunchProjection { launch_uri: "profilebridge://claim/claim_01JAR10_INITIAL_CONFIRMED".to_owned(), expires_at_ms: 1000 } })
-            }
-        }.map_err(|_| error())?;
-        Ok(profile_bridge::shipping_control_plane::MachineHttpResponse::new(200, response))
-    }
-}
-struct InitialUpload(std::rc::Rc<std::cell::RefCell<InitialObject>>);
-impl profile_bridge::shipping_generation_save::SignedGenerationObjectPutPort for InitialUpload {
-    type Error = BridgePortError;
-    fn put_exact(
-        &mut self,
-        capability: &profile_bridge::shipping_generation_save::SignedGenerationUploadCapability,
-        bytes: &[u8],
-    ) -> Result<(), Self::Error> {
-        if capability
-            .headers()
-            .map_err(|_| BridgePortError::InvalidResponse)?
-            != vec![("if-none-match", "*")]
-            || !self.0.borrow().container.is_empty()
-        {
-            return Err(BridgePortError::InvalidResponse);
-        }
-        self.0.borrow_mut().container = bytes.to_vec();
-        Ok(())
-    }
-}
-struct InitialBundle(ApprovedRuntimeBundle);
-impl profile_bridge::operator_flow::RuntimeBundleSelectionPort for InitialBundle {
-    type Error = BridgePortError;
-    fn select_bundle(&mut self) -> Result<ApprovedRuntimeBundle, Self::Error> {
-        Ok(self.0.clone())
-    }
-}
-
-fn run_managed_cold_launch_cycle() -> Result<ApprovedRuntimeBundle, Box<dyn std::error::Error>> {
+// This official Windows gate runs the same native local profile owner as
+// shipping_composition::run_initial. It intentionally has no cloud stub,
+// managed Camouhost IPC, predecessor, synthetic generation or per-page observer.
+#[cfg(windows)]
+fn run_native_cold_launch_cycle() -> Result<ApprovedRuntimeBundle, Box<dyn std::error::Error>> {
     let python = PathBuf::from(env::var(PYTHON_ENV)?).canonicalize()?;
     let runtime_root = PathBuf::from(env::var(RUNTIME_ROOT_ENV)?).canonicalize()?;
-    let root_path = root_path()?;
-    let root = MaterializationRoot::open_or_create(&root_path)?;
-    let tenant =
-        TenantId::parse("tenant_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")?;
-    let profile = ProfileId::parse("profile_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb")?;
-    let device = DeviceId::parse("device_01JAR10REAL")?;
-    let headless = env::var(HEADLESS_ENV).unwrap_or_else(|_| "virtual".to_owned());
-    let display_mode = match headless.as_str() {
-        "false" => RuntimeDisplayMode::Headful,
-        "virtual" => RuntimeDisplayMode::VirtualHeadful,
-        _ => return Err(format!("{HEADLESS_ENV} must be exactly false or virtual").into()),
-    };
-
-    let runtime_selection_started = Instant::now();
+    if python != runtime_root.join("python/python.exe").canonicalize()? {
+        return Err("CI selected a different Python from the verified shipping runtime".into());
+    }
+    if env::var(HEADLESS_ENV).as_deref() != Ok("false") {
+        return Err("native user Camoufox must run headful on Windows".into());
+    }
+    let started = Instant::now();
     let bundle = approved_runtime(&runtime_root)?;
     eprintln!(
         "AR10_COLD_CYCLE_PHASE=runtime_selection;elapsed_ms={}",
-        runtime_selection_started.elapsed().as_millis()
+        started.elapsed().as_millis()
     );
-    let config = ManagedCamouhostConfig::new(
-        python.clone(),
-        runtime_root.clone(),
-        display_mode,
-        None,
-        None,
-    )?;
+
+    let root_path = root_path()?;
+    let root = MaterializationRoot::open_or_create(&root_path)?;
     let intent = profile_bridge::generation_initialization::InitialProfileOpen::parse(
-        "profilebridge://open/v1/tenant_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/actor_01JAR10REAL/profile_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb/1",
+        "profilebridge://open/v2/tenant_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/actor_01JAR10REAL/profile_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb/1/DRAFT",
     )?;
-    let actor = profile_platform_primitives::ActorContext::new(
-        profile_platform_primitives::TenantScope::new(tenant.clone()),
-        profile_platform_primitives::ActorId::parse("actor_01JAR10REAL")?,
-        profile_platform_primitives::CorrelationId::parse("corr_01JAR10REAL")?,
-    );
-    let object = std::rc::Rc::new(std::cell::RefCell::new(InitialObject::default()));
-    let initial_generation_started = Instant::now();
-    profile_bridge::generation_initialization::initialize(
-        &intent,
-        &actor,
-        &device,
-        &root,
-        |workspace, bundle| {
-            config
-                .materialize_initial_identity(workspace, bundle)
-                .map_err(|_| {
-                    profile_bridge::generation_initialization::InitialProfileError::Runtime
-                })
-        },
-        &mut InitialBundle(bundle.clone()),
-        &mut InitialControl(object.clone()),
-        &mut InitialUpload(object.clone()),
-    )
-    .map_err(|error| format!("initial profile preparation failed at {error:?}"))?;
-    eprintln!(
-        "AR10_COLD_CYCLE_PHASE=initial_generation;elapsed_ms={}",
-        initial_generation_started.elapsed().as_millis()
-    );
-    let evidence = object.borrow();
-    if !evidence.committed || !evidence.verified {
-        return Err("initial generation was not confirmed".into());
-    }
-    let generation = evidence
-        .generation
-        .clone()
-        .ok_or("missing committed initial generation")?;
-    let workspace = root.open_generation(&tenant, &profile, &generation)?;
-    let binding = load_materialization_binding(&workspace, &tenant, &profile, &generation)?;
-    if binding.source_container_sha256() != sha256_hex(&evidence.container) {
-        return Err("initial materialization lost exact confirmed container identity".into());
-    }
-    drop(evidence);
-    let lock = BridgeWorkspaceLock::acquire(&workspace, &device, 9)?;
+    let device = DeviceId::parse("device_01JAR10REAL")?;
+    let mut stable_current = None;
+    let mut stable_config = None;
+    for iteration in 0..2 {
+        let target = root_path.clone();
+        let native_runtime = runtime_root.clone();
+        let launch = intent.clone();
+        let device = device.clone();
+        let opened = thread::spawn(move || -> Result<(), String> {
+            let owner = MaterializationRoot::open_or_create(target)
+                .map_err(|error| error.to_string())?;
+            profile_bridge::local_browser_open::open(
+                &owner, &launch, &device, &native_runtime,
+            )
+            .map_err(|error| error.to_string())
+        });
 
-    let slot = RuntimeBindingSlot::new();
-    let mut preflight = ShippingBrowserLaunchPreflight::new(slot.clone());
-    preflight.evaluate_before_launch(&workspace, &device, 9, &bundle)?;
+        // Observe only native filesystem/process readiness; no page/DOM
+        // inspection, synthetic Playwright navigator, or managed browser IPC.
+        let deadline = Instant::now() + Duration::from_secs(90);
+        let folder = loop {
+            if opened.is_finished() {
+                let result = opened.join().map_err(|_| "native Open thread panicked")?;
+                return Err(format!("native Camoufox exited before user Close: {result:?}").into());
+            }
+            if let Ok(folder) = root.open_profile_current(&intent.tenant_id, &intent.profile_id) {
+                if folder.path().join("camoufox-config.json").is_file()
+                    && fs::read(folder.path().join(".local-unsynced")).ok().as_deref()
+                        == Some(&b"local-unsynced-v2"[..])
+                {
+                    break folder;
+                }
+            }
+            if Instant::now() >= deadline {
+                return Err("native current/identity/dirty marker not ready".into());
+            }
+            thread::sleep(Duration::from_millis(100));
+        };
+        // Reusing exactly this one folder is the only valid local Open path.
+        match &stable_current {
+            Some(path) if path != folder.path() => {
+                return Err("cold reopening selected a different local folder".into());
+            }
+            None => stable_current = Some(folder.path().to_path_buf()),
+            _ => {}
+        }
 
-    let config = ManagedCamouhostConfig::new(python, runtime_root, display_mode, None, None)?;
-    let (mut process, camouhost) = ManagedCamouhostProcess::pair(config, slot);
-    // Normal user Open is a native Firefox process. Do not create a Playwright
-    // observer or inspect pages/DOM; the test closes only its disposable window.
-    let mut close_observer = camouhost.close_observer();
-    let mut camouhost = StageTracingCamouhost::new(camouhost);
-    let session = SessionId::parse("session_01JAR10REAL")?;
-    let checkpoint_path = workspace
-        .path()
-        .join("user_data")
-        .join("sessionCheckpoints.json");
-    let checkpoint_baseline = fs::metadata(&checkpoint_path)
-        .and_then(|metadata| metadata.modified())
-        .ok();
-    let browser_launch_started = Instant::now();
-    RuntimeSessionOrchestrator::launch(&bundle, &session, &mut process, &mut camouhost)?;
-    eprintln!(
-        "AR10_COLD_CYCLE_PHASE=native_launch;elapsed_ms={}",
-        browser_launch_started.elapsed().as_millis()
-    );
-    let startup_deadline = Instant::now() + Duration::from_secs(30);
-    loop {
-        assert!(
-            !close_observer.observe_controlled_close(&session)?,
-            "native browser must remain open until the user closes its window"
+        // The current native SDK must create a real browser window that
+        // closes via a normal user WM_CLOSE, not kill/Playwright automation.
+        let begin_close = Instant::now();
+        close_native_camoufox_window()?;
+        let (sender, receiver) = std::sync::mpsc::sync_channel(1);
+        thread::spawn(move || {
+            let result = opened.join().map_err(|_| "native Open thread panicked".to_owned())
+                .and_then(|value| value);
+            let _ = sender.send(result);
+        });
+        let close = receiver.recv_timeout(Duration::from_secs(60))
+            .map_err(|_| "native browser did not finish after WM_CLOSE")?;
+        close.map_err(|error| format!("native browser Close failed: {error}"))?;
+        eprintln!(
+            "AR10_COLD_CYCLE_PHASE=native_open_close;ordinal={};elapsed_ms={}",
+            iteration + 1,
+            begin_close.elapsed().as_millis()
         );
-        if native_startup_checkpoint_seen(workspace.path(), checkpoint_baseline) {
-            assert!(
-                !close_observer.observe_controlled_close(&session)?,
-                "native browser must still hold its profile lock before WM_CLOSE"
-            );
-            break;
+
+        let confirmed = root.open_profile_current(&intent.tenant_id, &intent.profile_id)?;
+        if confirmed.path() != folder.path() {
+            return Err("native Close changed the local CURRENT pathname".into());
         }
-        if Instant::now() >= startup_deadline {
-            return Err(
-                "native Firefox did not write its current-session startup checkpoint".into(),
-            );
+        if fs::read(confirmed.path().join(".local-unsynced"))? != b"local-unsynced-v2" {
+            return Err("local Close lost the pending Sync marker".into());
         }
-        thread::sleep(Duration::from_millis(100));
+        let config = fs::read(confirmed.path().join("camoufox-config.json"))?;
+        if config.is_empty() {
+            return Err("native Camoufox identity was empty".into());
+        }
+        if let Some(original) = &stable_config {
+            if original != &config {
+                return Err("reopening unexpectedly regenerated Camoufox identity".into());
+            }
+            if fs::read(confirmed.path().join("native-local-state-fixture.bin"))?
+                != b"persistent native browser folder bytes"
+            {
+                return Err("native reopen lost working folder state".into());
+            }
+        } else {
+            fs::write(
+                confirmed.path().join("native-local-state-fixture.bin"),
+                b"persistent native browser folder bytes",
+            )?;
+            stable_config = Some(config);
+        }
     }
 
-    let browser_close_started = Instant::now();
-    close_native_camoufox_window()?;
-    let close_deadline = Instant::now() + Duration::from_secs(30);
-    loop {
-        match close_observer.observe_controlled_close(&session) {
-            Ok(true) => break,
-            Ok(false) if Instant::now() < close_deadline => {
-                thread::sleep(Duration::from_millis(100));
-            }
-            Ok(false) => return Err("native Firefox did not produce a clean-close witness".into()),
-            Err(error) => {
-                return Err(format!("native Firefox clean-close proof failed: {error:?}").into());
-            }
-        }
+    // No hidden cloud Save is implied by local browser Close.
+    let folder = root.open_profile_current(&intent.tenant_id, &intent.profile_id)?;
+    if folder.base_generation_id().is_some() {
+        return Err("native Open unexpectedly claimed a cloud generation".into());
     }
-    RuntimeSessionOrchestrator::close(&bundle, &session, &mut process, &mut camouhost)?;
-    eprintln!(
-        "AR10_COLD_CYCLE_PHASE=native_close;elapsed_ms={}",
-        browser_close_started.elapsed().as_millis()
-    );
-
-    // The next cycle re-selects (and fully hashes) the exact runtime before
-    // admission; one final post-run check below guards the last cycle. This
-    // preserves detection of mutation between any two launches without two
-    // redundant multi-GiB hash passes after earlier cycles.
-    lock.release()?;
-    fs::remove_dir_all(&root_path)?;
+    fs::remove_dir_all(root_path)?;
     Ok(bundle)
 }
 
+#[cfg(windows)]
 #[test]
 fn bridge_preflight_launches_real_camoufox_through_official_playwright_without_page_inspection()
 -> Result<(), Box<dyn std::error::Error>> {
@@ -645,17 +445,17 @@ fn bridge_preflight_launches_real_camoufox_through_official_playwright_without_p
     }
 
     let mut last_bundle = None;
-    for attempt in 0..MANAGED_COLD_LAUNCH_ATTEMPTS {
+    for attempt in 0..NATIVE_COLD_LAUNCH_ATTEMPTS {
         let started = Instant::now();
-        last_bundle = Some(run_managed_cold_launch_cycle()?);
+        last_bundle = Some(run_native_cold_launch_cycle()?);
         eprintln!(
             "AR10_COLD_CYCLE_COMPLETED=PASS;ordinal={};elapsed_ms={}",
             attempt + 1,
             started.elapsed().as_millis()
         );
     }
-    // Each next cycle already revalidated exact bytes before touching any
-    // browser state. Recheck after the final cycle for tampering on shutdown.
+    // Each subsequent cold cycle revalidates the packaged official runtime.
+    // The original persistent CURRENT has also been reopened twice per cycle.
     let last_bundle = last_bundle.ok_or("cold-launch attempt count must be nonzero")?;
     assert_eq!(
         approved_runtime(&PathBuf::from(env::var(RUNTIME_ROOT_ENV)?))?,

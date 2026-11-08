@@ -26,6 +26,7 @@ pub enum ShippingCompositionError {
     DeliveryRecoveryRequired,
     /// Cloud CURRENT recovery was required but not proven. Local bytes untouched.
     RestoreUnavailable,
+    SyncUnconfirmed,
     #[cfg(windows)]
     DeliveryRuntime(crate::windows_delivery_runtime::WindowsDeliveryRuntimeError),
     Operator(crate::operator_flow::OperatorFlowError),
@@ -58,6 +59,7 @@ impl core::fmt::Display for ShippingCompositionError {
             Self::RestoreUnavailable => {
                 "Verified cloud CURRENT could not be restored; local profile was not opened or overwritten"
             }
+            Self::SyncUnconfirmed => "Native Close succeeded; cloud Sync not confirmed",
             #[cfg(windows)]
             Self::DeliveryRuntime(error) => return core::fmt::Display::fmt(error, formatter),
             Self::Operator(_) => "shipping Profile Bridge operator flow failed",
@@ -213,6 +215,22 @@ pub fn run_initial_profile(
     #[cfg(windows)]
     {
         windows::run_initial(intent)
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = intent;
+        Err(ShippingCompositionError::UnsupportedPlatform)
+    }
+}
+
+/* Internal one-shot invocation of the SAME installed Bridge executable.
+ * Only the cloud Sync owner runs here; native Camoufox is never relaunched. */
+pub fn run_closed_profile_sync(
+    intent: &crate::generation_initialization::InitialProfileOpen,
+) -> Result<(), ShippingCompositionError> {
+    #[cfg(windows)]
+    {
+        windows::run_closed_sync(intent)
     }
     #[cfg(not(windows))]
     {
@@ -654,39 +672,74 @@ mod windows {
         binding: &WindowsDeviceApplicationBinding,
         root: &MaterializationRoot,
         origin: &str,
-    ) {
+    ) -> Result<(), ShippingCompositionError> {
         if intent.status == InitialProfileStatus::Ready {
-            if let Err(()) = sync_closed_ready(intent, binding, root, origin) {
-                eprintln!("bridge_closed_ready_sync_pending;NEXT_SAFE_STEP=PRESERVE_LOCAL_BYTES");
-            }
-        } else if intent.status == InitialProfileStatus::Draft {
-            let sync = (|| -> Result<(), InitialProfileError> {
-                let application =
-                    WindowsDeviceApplication::from_system(origin.to_owned(), binding.clone())
-                        .map_err(|_| InitialProfileError::Authorization)?;
-                let mut transport = application.transport();
-                let mut uploader = WindowsSignedGenerationObjectPut::from_system()
-                    .map_err(|_| InitialProfileError::Upload)?;
-                let actor = profile_platform_primitives::ActorContext::new(
-                    profile_platform_primitives::TenantScope::new(intent.tenant_id.clone()),
-                    intent.actor_id.clone(),
-                    profile_platform_primitives::CorrelationId::parse("corr_local_draft_sync")
-                        .map_err(|_| InitialProfileError::Authorization)?,
-                );
-                sync_closed_local_draft(
-                    intent,
-                    &actor,
-                    binding.device_id(),
-                    &root,
-                    &mut transport,
-                    &mut uploader,
-                )
-            })();
-            if let Err(reason) = sync {
-                // Diagnostic classification only. A network outage,
-                // lost response or local conflict is NOT a Save receipt.
-                eprintln!("bridge_closed_draft_sync_pending reason={reason:?}");
-            }
+            sync_closed_ready(intent, binding, root, origin)
+                .map_err(|_| ShippingCompositionError::SyncUnconfirmed)
+        } else {
+            let application =
+                WindowsDeviceApplication::from_system(origin.to_owned(), binding.clone())
+                    .map_err(|_| ShippingCompositionError::SyncUnconfirmed)?;
+            let mut transport = application.transport();
+            let mut uploader = WindowsSignedGenerationObjectPut::from_system()
+                .map_err(|_| ShippingCompositionError::SyncUnconfirmed)?;
+            let actor = profile_platform_primitives::ActorContext::new(
+                profile_platform_primitives::TenantScope::new(intent.tenant_id.clone()),
+                intent.actor_id.clone(),
+                profile_platform_primitives::CorrelationId::parse("corr_local_draft_sync")
+                    .map_err(|_| ShippingCompositionError::SyncUnconfirmed)?,
+            );
+            sync_closed_local_draft(
+                intent, &actor, binding.device_id(), root,
+                &mut transport, &mut uploader,
+            )
+            .map_err(ShippingCompositionError::Initialization)
+        }
+    }
+
+    pub fn run_closed_sync(
+        intent: &crate::generation_initialization::InitialProfileOpen,
+    ) -> Result<(), ShippingCompositionError> {
+        let config = ShippingConfig::from_installation()?;
+        let binding =
+            WindowsDeviceApplicationBinding::open(&config.device_application_binding_path)
+                .map_err(|_| ShippingCompositionError::Configuration)?;
+        if binding.tenant_id() != &intent.tenant_id || binding.actor_id() != &intent.actor_id {
+            return Err(ShippingCompositionError::Configuration);
+        }
+        let root = MaterializationRoot::open_or_create(&config.materialization_root)
+            .map_err(|_| ShippingCompositionError::Configuration)?;
+        sync_after_native_close(intent, &binding, &root, &config.control_plane_origin)
+    }
+
+    /// The same installed executable handles one ephemeral cloud Sync
+    /// invocation. No daemon, extra binary or new browser writer is created.
+    /// A failed child start leaves local files and the durable dirty marker.
+    fn start_sync_after_close(intent: &crate::generation_initialization::InitialProfileOpen) {
+        use std::process::{Command, Stdio};
+        let status = match intent.status {
+            InitialProfileStatus::Draft => "DRAFT",
+            InitialProfileStatus::Ready => "READY",
+        };
+        let uri = format!(
+            "profilebridge://open/v2/{}/{}/{}/{}/{}",
+            intent.tenant_id.as_str(),
+            intent.actor_id.as_str(),
+            intent.profile_id.as_str(),
+            intent.expected_version,
+            status,
+        );
+        let result = env::current_exe().and_then(|exe| {
+            Command::new(exe)
+                .arg("--sync-closed")
+                .arg(uri)
+                .stdin(Stdio::null())
+                .stdout(Stdio::null())
+                .stderr(Stdio::null())
+                .spawn()
+        });
+        if result.is_err() {
+            eprintln!("BRIDGE_SYNC_NOT_STARTED;NEXT_SAFE_STEP=PRESERVE_LOCAL_BYTES");
         }
     }
 
@@ -718,7 +771,7 @@ mod windows {
             delivery.runtime_root(),
         ) {
             Ok(()) => {
-                sync_after_native_close(intent, &binding, &root, &config.control_plane_origin);
+                start_sync_after_close(intent);
                 Ok(())
             }
             Err(crate::local_browser_open::LocalOpenError::RestoreRequired) => {
@@ -757,7 +810,7 @@ mod windows {
                 // and no Coordinator lease are introduced by recovery.
                 crate::local_browser_open::open(&root, intent, &device, delivery.runtime_root())
                     .map_err(ShippingCompositionError::LocalOpen)?;
-                sync_after_native_close(intent, &binding, &root, &config.control_plane_origin);
+                start_sync_after_close(intent);
                 Ok(())
             }
             Err(error) => Err(ShippingCompositionError::LocalOpen(error)),
