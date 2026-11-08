@@ -297,7 +297,7 @@ where
 /// Reuse the EXISTING read-only D1 exact-successor observation after an
 /// ambiguous local-first Sync response. This never uploads, commits, retries
 /// an unknown mutation, creates a candidate or changes CURRENT.
-#[cfg(any(windows, test))]
+#[cfg(windows)]
 pub(crate) fn observe_closed_current_exact<T: MachineHttpPort>(
     tenant: &TenantId,
     profile: &ProfileId,

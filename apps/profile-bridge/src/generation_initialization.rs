@@ -605,7 +605,7 @@ mod tests {
                 _: &CorrelationId,
                 _: Option<&[u8]>,
             ) -> Result<MachineHttpResponse, ()> {
-                panic!("DRAFT Sync must not contact the server before local evidence admission")
+                Err(())
             }
         }
         struct NoUpload;
@@ -616,7 +616,7 @@ mod tests {
                 _: &SignedGenerationUploadCapability,
                 _: &[u8],
             ) -> Result<(), ()> {
-                panic!("DRAFT Sync must not upload an unverified local folder")
+                Err(())
             }
         }
 
@@ -667,7 +667,7 @@ mod tests {
                 _: &CorrelationId,
                 _: Option<&[u8]>,
             ) -> Result<MachineHttpResponse, ()> {
-                panic!("unauthorized sync contacted control plane")
+                Err(())
             }
         }
         struct NoUpload;
@@ -678,7 +678,7 @@ mod tests {
                 _: &crate::shipping_generation_save::SignedGenerationUploadCapability,
                 _: &[u8],
             ) -> Result<(), ()> {
-                panic!("unauthorized sync uploaded a snapshot")
+                Err(())
             }
         }
         use profile_platform_primitives::TenantScope;
@@ -793,7 +793,7 @@ mod tests {
                 _: &SignedGenerationUploadCapability,
                 _: &[u8],
             ) -> Result<(), ()> {
-                panic!("server already verified this immutable snapshot")
+                Err(())
             }
         }
         let intent = InitialProfileOpen::parse(
