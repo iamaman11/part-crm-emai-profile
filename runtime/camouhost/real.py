@@ -2177,6 +2177,11 @@ async def run_local_profile(root: Path) -> int:
         # Rust holds the exclusive local OS writer admission until Python
         # exits. Direct invocation without that lock never opens Firefox.
         require_bridge_writer_lock(root)
+        # This local profile's config is its authority; cloud materialization
+        # and a server-provided digest are not prerequisites for browser Open.
+        config, raw = load_canonical_json(root / CONFIG_NAME, MAX_CONFIG_BYTES)
+        generation_webgl2_enabled(config)
+        os.environ[EXPECTED_CONFIG_SHA256_ENV] = sha256_bytes(raw)
         config, _ = load_generation_config(root)
         if firefox_writer_active(root):
             raise RuntimeContractError("Firefox profile already in use")
@@ -2188,7 +2193,21 @@ async def run_local_profile(root: Path) -> int:
             admission_granted=True,
             headless=False,
         )
-        report_runtime_stage("launch", "ready")
+        # A cold Camoufox startup is not an abnormal exit. The browser OS
+        # writer handle can take time to appear after SDK __aenter__ returns.
+        deadline = time.monotonic() + 30.0
+        while True:
+            state = session.profile_state()
+            if state == "PROFILE_BUSY":
+                report_runtime_stage("launch", "ready")
+                break
+            if state in ("CRASH_OR_UNKNOWN_PRESERVE_LOCAL", "UNKNOWN_PRESERVE_LOCAL"):
+                await session.close_after_browser_exit()
+                return 6
+            if time.monotonic() >= deadline:
+                await session.abort_startup()
+                return 5
+            await asyncio.sleep(0.05)
         while True:
             state = session.profile_state()
             if state == "CLEAN_SHUTDOWN_VERIFIED":
@@ -2197,9 +2216,6 @@ async def run_local_profile(root: Path) -> int:
             if state in ("CRASH_OR_UNKNOWN_PRESERVE_LOCAL", "UNKNOWN_PRESERVE_LOCAL"):
                 await session.close_after_browser_exit()
                 return 6
-            if state == "WRITER_NOT_OBSERVED":
-                await session.abort_startup()
-                return 5
             await asyncio.sleep(0.25)
     except BaseException as error:
         report_runtime_failure("launch", error)
