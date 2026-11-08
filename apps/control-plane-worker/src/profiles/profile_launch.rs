@@ -79,7 +79,14 @@ async fn issue_for_operator(
     let status = match &context.status {
         application_ports::profiles::ProfileStatus::Draft => "DRAFT",
         application_ports::profiles::ProfileStatus::Ready => "READY",
-        _ => return problem(actor.correlation_id().as_str(), 409, "invalid_state", "Profile is not ready to open"),
+        _ => {
+            return problem(
+                actor.correlation_id().as_str(),
+                409,
+                "invalid_state",
+                "Profile is not ready to open",
+            );
+        }
     };
     let mut response = Response::from_json(&ProfileLaunchIntentProjectionV2 {
         schema_version: 2,

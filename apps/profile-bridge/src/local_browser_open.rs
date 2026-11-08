@@ -67,11 +67,16 @@ fn open_or_create_workspace(
     match root.open_generation(&intent.tenant_id, &intent.profile_id, generation) {
         Ok(workspace) => Ok(workspace),
         Err(LocalProfileError::Io(std::io::ErrorKind::NotFound))
-            if intent.status == InitialProfileStatus::Draft => root
-                .create_generation(&intent.tenant_id, &intent.profile_id, generation)
-                .map_err(|_| LocalOpenError::InvalidLocalWorkspace),
+            if intent.status == InitialProfileStatus::Draft =>
+        {
+            root.create_generation(&intent.tenant_id, &intent.profile_id, generation)
+                .map_err(|_| LocalOpenError::InvalidLocalWorkspace)
+        }
         Err(LocalProfileError::Io(std::io::ErrorKind::NotFound))
-            if intent.status == InitialProfileStatus::Ready => Err(LocalOpenError::RestoreRequired),
+            if intent.status == InitialProfileStatus::Ready =>
+        {
+            Err(LocalOpenError::RestoreRequired)
+        }
         Err(_) => Err(LocalOpenError::InvalidLocalWorkspace),
     }
 }
@@ -204,26 +209,35 @@ mod tests {
         );
     }
 
-
     #[test]
     fn ready_without_local_copy_fails_closed_instead_of_creating_a_blank_folder() {
         let directory = tempfile::tempdir().unwrap();
-        let root = crate::local_profile::MaterializationRoot::open_or_create(directory.path()).unwrap();
+        let root =
+            crate::local_profile::MaterializationRoot::open_or_create(directory.path()).unwrap();
         let mut intent = intent();
         intent.status = InitialProfileStatus::Ready;
         let generation = local_generation(&intent).unwrap();
-        assert!(matches!(open_or_create_workspace(&root, &intent, &generation), Err(LocalOpenError::RestoreRequired)));
-        assert!(root.open_generation(&intent.tenant_id, &intent.profile_id, &generation).is_err());
+        assert!(matches!(
+            open_or_create_workspace(&root, &intent, &generation),
+            Err(LocalOpenError::RestoreRequired)
+        ));
+        assert!(
+            root.open_generation(&intent.tenant_id, &intent.profile_id, &generation)
+                .is_err()
+        );
     }
 
     #[test]
     fn draft_without_local_copy_creates_one_local_workspace() {
         let directory = tempfile::tempdir().unwrap();
-        let root = crate::local_profile::MaterializationRoot::open_or_create(directory.path()).unwrap();
+        let root =
+            crate::local_profile::MaterializationRoot::open_or_create(directory.path()).unwrap();
         let intent = intent();
         let generation = local_generation(&intent).unwrap();
         let created = open_or_create_workspace(&root, &intent, &generation).unwrap();
-        let reopened = root.open_generation(&intent.tenant_id, &intent.profile_id, &generation).unwrap();
+        let reopened = root
+            .open_generation(&intent.tenant_id, &intent.profile_id, &generation)
+            .unwrap();
         assert_eq!(created.path(), reopened.path());
     }
 

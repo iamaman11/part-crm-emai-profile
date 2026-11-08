@@ -32,7 +32,10 @@ pub const INITIAL_OPEN_URI_PREFIX: &str = "profilebridge://open/v2/";
 static SEQUENCE: AtomicU64 = AtomicU64::new(1);
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum InitialProfileStatus { Draft, Ready }
+pub enum InitialProfileStatus {
+    Draft,
+    Ready,
+}
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct InitialProfileOpen {
@@ -784,12 +787,28 @@ mod tests {
 
     #[test]
     fn first_open_uri_has_typed_locators_version_and_authoritative_status() {
-        assert!(InitialProfileOpen::parse("profilebridge://open/v2/tenant_123/actor_123/profile_123/1/DRAFT").is_ok());
-        assert!(InitialProfileOpen::parse("profilebridge://open/v2/tenant_123/actor_123/profile_123/1/READY").is_ok());
+        assert!(
+            InitialProfileOpen::parse(
+                "profilebridge://open/v2/tenant_123/actor_123/profile_123/1/DRAFT"
+            )
+            .is_ok()
+        );
+        assert!(
+            InitialProfileOpen::parse(
+                "profilebridge://open/v2/tenant_123/actor_123/profile_123/1/READY"
+            )
+            .is_ok()
+        );
         for suffix in [
-            "0/DRAFT", "01/DRAFT", "-1/DRAFT",
-            "1?origin=https://evil.invalid/DRAFT", "1/extra/DRAFT",
-            "9223372036854775807/DRAFT", "1/UNKNOWN", "1/draft", "1/DRAFT/extra",
+            "0/DRAFT",
+            "01/DRAFT",
+            "-1/DRAFT",
+            "1?origin=https://evil.invalid/DRAFT",
+            "1/extra/DRAFT",
+            "9223372036854775807/DRAFT",
+            "1/UNKNOWN",
+            "1/draft",
+            "1/DRAFT/extra",
         ] {
             assert!(InitialProfileOpen::parse(&format!(
                 "profilebridge://open/v2/tenant_123/actor_123/profile_123/{suffix}"
