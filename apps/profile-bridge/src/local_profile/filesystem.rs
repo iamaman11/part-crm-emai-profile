@@ -324,7 +324,6 @@ impl MaterializationRoot {
         self.canonical_path.join(&scope[..32]).join(&scope[32..])
     }
 
-
     /// Physical cache placement is independent of opaque ID lengths. Full scoped identity is
     /// hashed without truncation; three directory levels preserve the root admission boundary.
     pub(crate) fn generation_path(
@@ -934,7 +933,9 @@ fn read_generation_marker(
         return Err(LocalProfileError::GenerationMarkerMismatch);
     }
     let generation_id = GenerationId::parse(
-        lines.next().ok_or(LocalProfileError::GenerationMarkerMismatch)?,
+        lines
+            .next()
+            .ok_or(LocalProfileError::GenerationMarkerMismatch)?,
     )
     .map_err(|_| LocalProfileError::GenerationMarkerMismatch)?;
     let base_generation_id = match lines.next() {
@@ -1228,10 +1229,7 @@ fn normalized_relative_path(relative: &Path) -> Result<String, LocalProfileError
 fn is_bridge_control_file(relative_path: &str) -> bool {
     matches!(
         relative_path,
-        GENERATION_MARKER
-            | BRIDGE_LOCK_FILE
-            | GENERATION_ADMISSION_FILE
-            | ".local-unsynced"
+        GENERATION_MARKER | BRIDGE_LOCK_FILE | GENERATION_ADMISSION_FILE | ".local-unsynced"
     ) || relative_path.starts_with(RECOVERY_MARKER_STAGE_PREFIX)
         || relative_path.starts_with(GENERATION_MARKER_STAGE_PREFIX)
 }

@@ -125,10 +125,14 @@ fn profile_current_uses_one_existing_marker_for_generation_and_cloud_base()
     fs::write(stable_path.join(".local-unsynced"), b"local-unsynced-v2")?;
 
     let inventory = draft.inventory()?;
-    assert!(inventory.entries().iter().any(|entry| entry.relative_path() == "browser-state.bin"));
+    assert!(
+        inventory
+            .entries()
+            .iter()
+            .any(|entry| entry.relative_path() == "browser-state.bin")
+    );
     assert!(inventory.entries().iter().all(|entry| {
-        entry.relative_path() != ".profile-generation"
-            && entry.relative_path() != ".local-unsynced"
+        entry.relative_path() != ".profile-generation" && entry.relative_path() != ".local-unsynced"
     }));
     assert_eq!(draft.base_generation_id(), None);
     assert_eq!(draft.profile_version(), 1);
@@ -144,7 +148,10 @@ fn profile_current_uses_one_existing_marker_for_generation_and_cloud_base()
     assert_eq!(reopened.generation_id(), &cloud_id);
     assert_eq!(reopened.base_generation_id(), Some(&cloud_id));
     assert_eq!(reopened.profile_version(), 2);
-    assert_eq!(fs::read(stable_path.join("browser-state.bin"))?, b"local browser data");
+    assert_eq!(
+        fs::read(stable_path.join("browser-state.bin"))?,
+        b"local browser data"
+    );
     fs::remove_dir_all(path)?;
     Ok(())
 }
