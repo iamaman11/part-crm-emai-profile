@@ -178,6 +178,7 @@ public static class NativeCamoufoxWindow {
 '@
 $deadline = [DateTime]::UtcNow.AddSeconds(30)
 $posted = $false
+$observed = $false
 do {
     $browserProcesses = @(Get-Process -Name 'camoufox' -ErrorAction SilentlyContinue)
     $browserWindows = @()
@@ -185,6 +186,7 @@ do {
         $process.Refresh()
         $handle = $process.MainWindowHandle
         if ($handle -ne [IntPtr]::Zero -and [NativeCamoufoxWindow]::IsWindow($handle)) {
+            $observed = $true
             $browserWindows += [pscustomobject]@{ Process = $process; Handle = $handle }
         }
     }
@@ -211,7 +213,7 @@ do {
 } while ([DateTime]::UtcNow -lt $deadline)
 if ($posted) {
     Write-Output 'NATIVE_CAMOUFOX_WM_CLOSE=POSTED'
-} elseif (@(Get-Process -Name 'camoufox' -ErrorAction SilentlyContinue).Count -eq 0) {
+} elseif ($observed -and @(Get-Process -Name 'camoufox' -ErrorAction SilentlyContinue).Count -eq 0) {
     # The browser closed naturally during the observation race. The caller
     # still joins the Bridge thread and requires its clean-close receipt.
     Write-Output 'NATIVE_CAMOUFOX_WM_CLOSE=ALREADY_CLOSED'
