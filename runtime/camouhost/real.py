@@ -2088,11 +2088,16 @@ async def run_local_profile(root: Path) -> int:
         return 0
     except BaseException as error:
         report_runtime_failure("close" if context_closed else "launch", error)
-        # Never issue a browser-close command for a user session. A failed
-        # launch preserves local dirty evidence; normal Close uses the event.
+        # Never close or detach a launched user browser because of an
+        # application-side error. Keep the SDK connection alive until the
+        # browser itself closes, then release only the driver connection.
         if session is not None and not context_closed:
-            with contextlib.suppress(BaseException):
-                await session.abort_startup()
+            try:
+                await session.wait_for_browser_close()
+                context_closed = True
+                await session.close_after_browser_exit()
+            except BaseException as close_error:
+                report_runtime_failure("close", close_error)
         return 5
 
 

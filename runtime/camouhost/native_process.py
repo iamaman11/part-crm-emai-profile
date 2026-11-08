@@ -86,12 +86,6 @@ class NativeProfileSession:
             raise NativeLaunchError("Firefox still owns the profile")
         await self._release_playwright()
 
-    async def abort_startup(self) -> None:
-        # Used only when startup fails before a user session is admitted.
-        # This stops the Playwright driver; it does not issue browser.close().
-        await self._release_playwright()
-
-
 async def launch_native_camoufox(
     *,
     workspace: Path,

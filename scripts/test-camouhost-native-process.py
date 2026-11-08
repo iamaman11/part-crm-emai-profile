@@ -175,24 +175,40 @@ async def verify() -> int:
             await raced.close_after_browser_exit()
             assert already_closed.close_calls == 0
 
-            # Startup abort releases only the Playwright driver connection.
-            startup = await module.launch_native_camoufox(
-                workspace=workspace, options=options,
-                writer_active=writer_active, admission_granted=True, headless=False,
-            )
-            startup_manager = FakePlaywrightManager.instances[-1]
-            await startup.abort_startup()
-            assert startup_manager.exit_calls == 1
-            assert contexts[-1].close_calls == 0
+            # If the official launch fails before a context is admitted,
+            # only the Playwright driver connection is released.
+            async def failed_browser(_playwright, **_kwargs):
+                raise RuntimeError("synthetic SDK launch failure")
+            camoufox_api.AsyncNewBrowser = failed_browser
+            manager_count = len(FakePlaywrightManager.instances)
+            try:
+                await module.launch_native_camoufox(
+                    workspace=workspace, options=options,
+                    writer_active=writer_active, admission_granted=True, headless=False,
+                )
+            except module.NativeLaunchError:
+                pass
+            else:
+                raise AssertionError("failed SDK launch unexpectedly succeeded")
+            assert len(FakePlaywrightManager.instances) == manager_count + 1
+            assert FakePlaywrightManager.instances[-1].exit_calls == 1
 
             virtual_options = dict(options)
             virtual_options["headless"] = "virtual"
+            async def virtual_browser(playwright, **kwargs):
+                launches.append((playwright, kwargs))
+                virtual_context = FakeContext()
+                contexts.append(virtual_context)
+                return virtual_context
+            camoufox_api.AsyncNewBrowser = virtual_browser
             virtual = await module.launch_native_camoufox(
                 workspace=workspace, options=virtual_options,
                 writer_active=writer_active, admission_granted=True, headless="virtual",
             )
             assert launches[-1][1]["headless"] == "virtual"
-            await virtual.abort_startup()
+            virtual.context.user_close()
+            await virtual.wait_for_browser_close()
+            await virtual.close_after_browser_exit()
 
     print("CAMOUHOST_PASSIVE_PLAYWRIGHT_CLOSE=PASS")
     return 0
