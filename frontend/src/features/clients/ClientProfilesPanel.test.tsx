@@ -73,7 +73,7 @@ describe('ClientProfilesPanel P1 relationship and P2 launch workflow', () => {
       aggregateVersion: 5,
     });
     mockedLaunchProfile.mockResolvedValue({
-      launchUri: 'profilebridge://open/v1/tenant_01JCLIENTPROFILES/actor_01JCLIENTPROFILES/profile_01JCLIENTPROFILES_LAUNCH/4',
+      launchUri: 'profilebridge://open/v2/tenant_01JCLIENTPROFILES/actor_01JCLIENTPROFILES/profile_01JCLIENTPROFILES_LAUNCH/4/READY',
       schemaVersion: 2,
     });
   });
@@ -129,7 +129,7 @@ describe('ClientProfilesPanel P1 relationship and P2 launch workflow', () => {
     expect(idempotencyKey).not.toContain('device');
     expect(idempotencyKey).not.toContain('generation');
     expect(mockedDispatchBrowserProfileOpen).toHaveBeenCalledWith(
-      'profilebridge://open/v1/tenant_01JCLIENTPROFILES/actor_01JCLIENTPROFILES/profile_01JCLIENTPROFILES_LAUNCH/4',
+      'profilebridge://open/v2/tenant_01JCLIENTPROFILES/actor_01JCLIENTPROFILES/profile_01JCLIENTPROFILES_LAUNCH/4/READY',
     );
     expect(screen.queryByText(/claim_0123456789abcdef/u)).toBeNull();
   });

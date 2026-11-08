@@ -409,6 +409,7 @@ impl UserDiagnostic {
                     use crate::local_browser_open::LocalOpenError as Local;
                     match error {
                         Local::InvalidLocalWorkspace => "BRIDGE_LOCAL_FOLDER_UNAVAILABLE",
+                        Local::RestoreRequired => "BRIDGE_LOCAL_RESTORE_REQUIRED",
                         Local::RuntimeUnavailable => "BRIDGE_LOCAL_RUNTIME_UNAVAILABLE",
                         Local::ProfileBusy => "BRIDGE_LOCAL_BROWSER_BUSY",
                         Local::IdentityPreparation => "BRIDGE_LOCAL_IDENTITY_NOT_READY",
@@ -834,6 +835,9 @@ impl UserDiagnostic {
                 match error {
                     Local::InvalidLocalWorkspace => {
                         "The local browser folder is unavailable. Keep the files; no cloud recovery or reset was attempted."
+                    }
+                    Local::RestoreRequired => {
+                        "This READY profile has no local copy. Restore its single confirmed cloud CURRENT before opening. No empty workspace was created and no local data was changed."
                     }
                     Local::RuntimeUnavailable => {
                         "Installed Camoufox cannot be started. Check local installation health. The browser profile was not deleted."

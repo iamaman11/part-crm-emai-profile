@@ -33,7 +33,7 @@ describe('ProfilesWorkspace generation refresh (#802 F06)', () => {
       profileId: 'profile_test', status: 'READY', version: 7, linkedClientId: null,
       activeGenerationId: 'generation_current',
     } as Awaited<ReturnType<typeof getProfile>>);
-    const uri = 'profilebridge://open/v1/tenant_test/actor_test/profile_test/7';
+    const uri = 'profilebridge://open/v2/tenant_test/actor_test/profile_test/7/READY';
     launchIntent.mockResolvedValue({
       schemaVersion: 2,
       launchUri: uri,
@@ -63,7 +63,7 @@ describe('ProfilesWorkspace generation refresh (#802 F06)', () => {
     vi.clearAllMocks();
     launchIntent.mockResolvedValue({
       schemaVersion: 2,
-      launchUri: 'profilebridge://open/v1/tenant_test/actor_test/profile_test/1',
+      launchUri: 'profilebridge://open/v2/tenant_test/actor_test/profile_test/1/DRAFT',
     } as Awaited<ReturnType<typeof launchProfile>>);
     window.history.replaceState(null, '', '/profiles');
   });

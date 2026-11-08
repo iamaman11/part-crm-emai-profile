@@ -28,8 +28,11 @@ use sha2::{Digest, Sha256};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 
-pub const INITIAL_OPEN_URI_PREFIX: &str = "profilebridge://open/v1/";
+pub const INITIAL_OPEN_URI_PREFIX: &str = "profilebridge://open/v2/";
 static SEQUENCE: AtomicU64 = AtomicU64::new(1);
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum InitialProfileStatus { Draft, Ready }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct InitialProfileOpen {
@@ -37,6 +40,7 @@ pub struct InitialProfileOpen {
     pub actor_id: ActorId,
     pub profile_id: ProfileId,
     pub expected_version: u64,
+    pub status: InitialProfileStatus,
 }
 impl InitialProfileOpen {
     pub fn parse(uri: &str) -> Result<Self, BridgePortError> {
@@ -44,7 +48,7 @@ impl InitialProfileOpen {
             .strip_prefix(INITIAL_OPEN_URI_PREFIX)
             .ok_or(BridgePortError::InvalidResponse)?;
         let parts: Vec<_> = rest.split('/').collect();
-        if parts.len() != 4
+        if parts.len() != 5
             || !parts[3].bytes().all(|c| c.is_ascii_digit())
             || parts[3].starts_with('0')
         {
@@ -53,6 +57,11 @@ impl InitialProfileOpen {
         let expected_version = parts[3]
             .parse::<u64>()
             .map_err(|_| BridgePortError::InvalidResponse)?;
+        let status = match parts[4] {
+            "DRAFT" => InitialProfileStatus::Draft,
+            "READY" => InitialProfileStatus::Ready,
+            _ => return Err(BridgePortError::InvalidResponse),
+        };
         if expected_version == 0 || expected_version >= i64::MAX as u64 {
             return Err(BridgePortError::InvalidResponse);
         }
@@ -61,6 +70,7 @@ impl InitialProfileOpen {
             actor_id: ActorId::parse(parts[1]).map_err(|_| BridgePortError::InvalidResponse)?,
             profile_id: ProfileId::parse(parts[2]).map_err(|_| BridgePortError::InvalidResponse)?,
             expected_version,
+            status,
         })
     }
 }
@@ -425,7 +435,7 @@ mod tests {
             }
         }
         let intent = InitialProfileOpen::parse(
-            "profilebridge://open/v1/tenant_123/actor_123/profile_123/1",
+            "profilebridge://open/v2/tenant_123/actor_123/profile_123/1/DRAFT",
         )?;
         let actor = ActorContext::new(
             TenantScope::new(intent.tenant_id.clone()),
@@ -742,7 +752,7 @@ mod tests {
             }
         }
         let intent = InitialProfileOpen::parse(
-            "profilebridge://open/v1/tenant_123/actor_123/profile_123/1",
+            "profilebridge://open/v2/tenant_123/actor_123/profile_123/1/READY",
         )?;
         let actor = ActorContext::new(
             TenantScope::new(intent.tenant_id.clone()),
@@ -773,25 +783,18 @@ mod tests {
     }
 
     #[test]
-    fn first_open_uri_has_only_typed_locators_and_a_canonical_version() {
-        assert!(
-            InitialProfileOpen::parse("profilebridge://open/v1/tenant_123/actor_123/profile_123/1")
-                .is_ok()
-        );
+    fn first_open_uri_has_typed_locators_version_and_authoritative_status() {
+        assert!(InitialProfileOpen::parse("profilebridge://open/v2/tenant_123/actor_123/profile_123/1/DRAFT").is_ok());
+        assert!(InitialProfileOpen::parse("profilebridge://open/v2/tenant_123/actor_123/profile_123/1/READY").is_ok());
         for suffix in [
-            "0",
-            "01",
-            "-1",
-            "1?origin=https://evil.invalid",
-            "1/extra",
-            "9223372036854775807",
+            "0/DRAFT", "01/DRAFT", "-1/DRAFT",
+            "1?origin=https://evil.invalid/DRAFT", "1/extra/DRAFT",
+            "9223372036854775807/DRAFT", "1/UNKNOWN", "1/draft", "1/DRAFT/extra",
         ] {
-            assert!(
-                InitialProfileOpen::parse(&format!(
-                    "profilebridge://open/v1/tenant_123/actor_123/profile_123/{suffix}"
-                ))
-                .is_err()
-            );
+            assert!(InitialProfileOpen::parse(&format!(
+                "profilebridge://open/v2/tenant_123/actor_123/profile_123/{suffix}"
+            )).is_err());
         }
+        assert!(InitialProfileOpen::parse("profilebridge://open/v1/tenant_123/actor_123/profile_123/1").is_err());
     }
 }

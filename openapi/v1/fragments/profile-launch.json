@@ -5,7 +5,7 @@
         "additionalProperties": false,
         "properties": {
           "launchUri": {
-            "pattern": "^profilebridge://open/v1/[A-Za-z0-9_-]{8,96}/[A-Za-z0-9_-]{8,96}/[A-Za-z0-9_-]{8,96}/[1-9][0-9]{0,18}$",
+            "pattern": "^profilebridge://open/v2/[A-Za-z0-9_-]{8,96}/[A-Za-z0-9_-]{8,96}/[A-Za-z0-9_-]{8,96}/[1-9][0-9]{0,18}/(DRAFT|READY)$",
             "type": "string"
           },
           "schemaVersion": {
