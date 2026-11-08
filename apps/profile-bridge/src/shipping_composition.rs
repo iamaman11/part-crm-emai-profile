@@ -234,8 +234,8 @@ pub fn run_delivery_command(
 mod windows {
     use super::{
         CloseObservationDisposition, ShippingCompositionError, ShippingDeliveryCommand,
-        close_observation_disposition, open_with_one_fresh_claim,
-        pending_recovery_failure_disposition, recovery_next_safe_step,
+        close_observation_disposition, pending_recovery_failure_disposition,
+        recovery_next_safe_step,
         retryable_reconnect_observation,
     };
     use crate::camouhost_process::{
@@ -274,8 +274,6 @@ mod windows {
     use profile_platform_primitives::UnixMillis;
     use session_domain::ProfileLease;
     use std::env;
-    use std::fs;
-    use std::os::windows::fs::MetadataExt;
     use std::path::PathBuf;
     use std::sync::atomic::{AtomicBool, Ordering};
     use std::sync::{Arc, mpsc};

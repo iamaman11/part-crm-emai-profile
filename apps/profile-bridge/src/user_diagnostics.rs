@@ -404,6 +404,17 @@ impl UserDiagnostic {
                         Runtime::RuntimeIdentity => "BRIDGE_INSTALLED_RUNTIME_IDENTITY_INVALID",
                     }
                 }
+                #[cfg(windows)]
+                ShippingCompositionError::LocalOpen(error) => {
+                    use crate::local_browser_open::LocalOpenError as Local;
+                    match error {
+                        Local::InvalidLocalWorkspace => "BRIDGE_LOCAL_FOLDER_UNAVAILABLE",
+                        Local::RuntimeUnavailable => "BRIDGE_LOCAL_RUNTIME_UNAVAILABLE",
+                        Local::ProfileBusy => "BRIDGE_LOCAL_BROWSER_BUSY",
+                        Local::IdentityPreparation => "BRIDGE_LOCAL_IDENTITY_NOT_READY",
+                        Local::BrowserNotClosedCleanly => "BRIDGE_LOCAL_CLOSE_UNVERIFIED",
+                    }
+                }
                 ShippingCompositionError::Operator(error) => operator_code(error),
                 ShippingCompositionError::ActiveSessionMissing => "BRIDGE_ACTIVE_SESSION_MISSING",
                 ShippingCompositionError::CloseObservation(_) => "BRIDGE_CLOSE_OBSERVATION_FAILED",
@@ -816,6 +827,27 @@ impl UserDiagnostic {
                 Launch::Operator(_) | Launch::ActiveSessionMissing | Launch::CloseObservation(_),
             ) => {
                 "The profile operation did not complete. Return to the application and check session and save status. Keep local profile files until recovery is confirmed."
+            }
+            #[cfg(windows)]
+            Self::Launch(Launch::LocalOpen(error)) => {
+                use crate::local_browser_open::LocalOpenError as Local;
+                match error {
+                    Local::InvalidLocalWorkspace => {
+                        "The local browser folder is unavailable. Keep the files; no cloud recovery or reset was attempted."
+                    }
+                    Local::RuntimeUnavailable => {
+                        "Installed Camoufox cannot be started. Check local installation health. The browser profile was not deleted."
+                    }
+                    Local::ProfileBusy => {
+                        "This profile is already open, or a previous browser exit needs local recovery. Close the existing Firefox window first."
+                    }
+                    Local::IdentityPreparation => {
+                        "Local Camoufox fingerprint initialization failed. Existing files were retained; review the local diagnostic."
+                    }
+                    Local::BrowserNotClosedCleanly => {
+                        "The native Firefox close was not verified. Local browser data was preserved; no cloud Save receipt was issued."
+                    }
+                }
             }
             Self::Launch(Launch::CommittedRecoveryRequired) => {
                 "The new profile state was confirmed by the server, but local cleanup needs recovery. Return to the application to review the session. Keep local profile files."
