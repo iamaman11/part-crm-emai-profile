@@ -198,10 +198,25 @@ pub fn open(
             return Err(LocalOpenError::IdentityPreparation);
         }
     }
+    // Rust owns the native Firefox file-access proof. Camouhost only uses
+    // the official SDK and reports the Playwright close event.
+    if !matches!(
+        crate::browser_execution::browser_writer_locks_absent(&workspace),
+        Ok(true)
+    ) {
+        return Err(LocalOpenError::ProfileBusy);
+    }
     mark_local_unsynced(workspace.path())?;
     if !run_python(runtime_root, workspace.path(), "--local-open")? {
-        // An abnormal exit leaves the durable lock marker as crash evidence.
-        // Never erase the user's cookies/WAL/session to make a retry pass.
+        // Adapter failure is not proof that the browser released its files.
+        // The caller starts the existing Sync recovery; its Rust file gate
+        // must still block snapshot while Firefox owns the profile.
+        return Err(LocalOpenError::BrowserNotClosedCleanly);
+    }
+    if !matches!(
+        crate::browser_execution::browser_writer_locks_absent(&workspace),
+        Ok(true)
+    ) {
         return Err(LocalOpenError::BrowserNotClosedCleanly);
     }
     writer
