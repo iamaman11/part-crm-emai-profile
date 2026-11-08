@@ -45,6 +45,8 @@ class RustFirefoxWriterLockOwnershipTests(unittest.TestCase):
         self.assertIn("BRIDGE_SYNC_WAITING_FOR_NATIVE_FILE_RELEASE", shipping)
         self.assertIn("browser_writer_locks_absent(&workspace)", shipping)
         self.assertIn("lock_retry_seconds.saturating_mul(2).min(15)", shipping)
+        self.assertIn("BRIDGE_SYNC_INLINE_FALLBACK_PENDING", shipping)
+        self.assertIn("run_closed_sync(intent)", shipping)
         abnormal = shipping.index("BrowserNotClosedCleanly")
         self.assertIn("start_sync_after_close(intent)", shipping[abnormal : abnormal + 900])
         self.assertIn("BrowserNotClosedCleanly", shipping)
