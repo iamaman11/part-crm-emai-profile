@@ -772,6 +772,26 @@ mod windows {
                 .open_profile_current(&intent.tenant_id, &intent.profile_id)
                 .map_err(|_| ShippingCompositionError::SyncUnconfirmed)?;
             let dirty = workspace.path().join(".local-unsynced");
+            if !dirty.exists() {
+                return Ok(());
+            }
+            // If Camouhost exited before Playwright could deliver its close
+            // event, this same one-shot Sync process waits for the native OS
+            // file lock to clear. It never guesses from a PID/window and never
+            // needs the CRM page or a second service to trigger another try.
+            // The probe is repeated until the OS proves the folder is available.
+            let mut lock_retry_seconds = 1_u64;
+            loop {
+                match crate::browser_execution::browser_writer_locks_absent(&workspace) {
+                    Ok(true) => break,
+                    Ok(false) => {
+                        eprintln!("BRIDGE_SYNC_WAITING_FOR_NATIVE_FILE_RELEASE");
+                        thread::sleep(Duration::from_secs(lock_retry_seconds));
+                        lock_retry_seconds = lock_retry_seconds.saturating_mul(2).min(15);
+                    }
+                    Err(_) => return Err(ShippingCompositionError::SyncUnconfirmed),
+                }
+            }
             // A completed first DRAFT Commit advances the *same* local marker.
             // Retry the outstanding native edits as READY without creating a
             // second local folder or replaying the first DRAFT generation.
