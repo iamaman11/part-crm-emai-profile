@@ -67,6 +67,7 @@ async def verify() -> int:
     assert "EnumWindows" not in source and "Get-Process" not in source
     assert "PostMessage" not in source and "WM_CLOSE" not in source
     assert "subprocess" not in module.__dict__
+    assert "writer_active" not in source
 
     contexts = []
     launches = []
@@ -98,35 +99,26 @@ async def verify() -> int:
             "headless": False,
             "env": {"CAMOU_CONFIG_1": "{}"},
         }
-        active = False
-
-        def writer_active(_workspace):
-            return active
-
         with patch.dict(sys.modules, {
             "camoufox": package,
             "camoufox.async_api": camoufox_api,
             "playwright": playwright_package,
             "playwright.async_api": playwright_api,
         }):
-            for admission, writer in ((False, False), (True, True)):
-                active = writer
-                try:
-                    await module.launch_native_camoufox(
-                        workspace=workspace, options=options,
-                        writer_active=writer_active, admission_granted=admission,
-                        headless=False,
-                    )
-                except module.NativeLaunchError:
-                    pass
-                else:
-                    raise AssertionError("unauthorized/already-owned profile launched")
-                assert not launches
+            try:
+                await module.launch_native_camoufox(
+                    workspace=workspace, options=options,
+                    admission_granted=False, headless=False,
+                )
+            except module.NativeLaunchError:
+                pass
+            else:
+                raise AssertionError("unadmitted profile launched")
+            assert not launches
 
-            active = False
             session = await module.launch_native_camoufox(
                 workspace=workspace, options=options,
-                writer_active=writer_active, admission_granted=True, headless=False,
+                admission_granted=True, headless=False,
             )
             manager = FakePlaywrightManager.instances[-1]
             assert launches[-1][0] is manager.playwright
@@ -145,17 +137,6 @@ async def verify() -> int:
             await waiting
             assert session.context_is_closed()
 
-            active = True
-            try:
-                await session.close_after_browser_exit()
-            except module.NativeLaunchError:
-                pass
-            else:
-                raise AssertionError("driver released while Firefox still owns the folder")
-            assert manager.exit_calls == 0
-            assert contexts[-1].close_calls == 0
-
-            active = False
             await session.close_after_browser_exit()
             assert manager.exit_calls == 1
             assert contexts[-1].close_calls == 0
@@ -169,7 +150,7 @@ async def verify() -> int:
             camoufox_api.AsyncNewBrowser = closed_browser
             raced = await module.launch_native_camoufox(
                 workspace=workspace, options=options,
-                writer_active=writer_active, admission_granted=True, headless=False,
+                admission_granted=True, headless=False,
             )
             await asyncio.wait_for(raced.wait_for_browser_close(), timeout=1)
             await raced.close_after_browser_exit()
@@ -184,7 +165,7 @@ async def verify() -> int:
             try:
                 await module.launch_native_camoufox(
                     workspace=workspace, options=options,
-                    writer_active=writer_active, admission_granted=True, headless=False,
+                    admission_granted=True, headless=False,
                 )
             except module.NativeLaunchError:
                 pass
@@ -203,7 +184,7 @@ async def verify() -> int:
             camoufox_api.AsyncNewBrowser = virtual_browser
             virtual = await module.launch_native_camoufox(
                 workspace=workspace, options=virtual_options,
-                writer_active=writer_active, admission_granted=True, headless="virtual",
+                admission_granted=True, headless="virtual",
             )
             assert launches[-1][1]["headless"] == "virtual"
             virtual.context.user_close()
