@@ -157,6 +157,16 @@ async def verify() -> int:
             await reopened.close_after_browser_exit()
             assert reopened_manager.exit_calls == 1
 
+            active = True
+            native_closed = await module.launch_native_camoufox(
+                workspace=workspace, options=options,
+                writer_active=writer_active, admission_granted=True, headless=False,
+            )
+            native_closed_manager = FakeAsyncCamoufox.instances[-1]
+            await native_closed.close_after_native_window_closed()
+            assert native_closed_manager.exit_calls == 1
+            assert native_closed.manager is None and native_closed.context is None
+
             active = False
             startup = await module.launch_native_camoufox(
                 workspace=workspace, options=options,

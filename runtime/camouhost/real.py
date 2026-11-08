@@ -1208,6 +1208,49 @@ class WindowsBrowserExitWitness:
         """Independently witness native browser death; never infer clean Save."""
         return bool(self.handles) and all(self.wait(handle, 0) == 0 for handle in self.handles)
 
+    def has_visible_window(self) -> bool:
+        """Observe only top-level native windows owned by the exact browser root."""
+        from ctypes import wintypes
+
+        user32 = self.ctypes.WinDLL("user32", use_last_error=True)
+        enum_windows = user32.EnumWindows
+        is_window_visible = user32.IsWindowVisible
+        get_window_thread_process_id = user32.GetWindowThreadProcessId
+
+        callback_type = self.ctypes.WINFUNCTYPE(
+            wintypes.BOOL, wintypes.HWND, wintypes.LPARAM
+        )
+        enum_windows.argtypes = [callback_type, wintypes.LPARAM]
+        enum_windows.restype = wintypes.BOOL
+        is_window_visible.argtypes = [wintypes.HWND]
+        is_window_visible.restype = wintypes.BOOL
+        get_window_thread_process_id.argtypes = [
+            wintypes.HWND, self.ctypes.POINTER(wintypes.DWORD)
+        ]
+        get_window_thread_process_id.restype = wintypes.DWORD
+
+        browser_roots = set(self.pids)
+        found = False
+
+        @callback_type
+        def inspect_window(hwnd: Any, _parameter: Any) -> bool:
+            nonlocal found
+            if not is_window_visible(hwnd):
+                return True
+            process_id = wintypes.DWORD()
+            if (
+                get_window_thread_process_id(hwnd, self.ctypes.byref(process_id))
+                and int(process_id.value) in browser_roots
+            ):
+                found = True
+                return False
+            return True
+
+        completed = bool(enum_windows(inspect_window, 0))
+        if not completed and not found:
+            raise RuntimeContractError("Windows browser window enumeration failed")
+        return found
+
     def close(self) -> None:
         for handle in getattr(self, "handles", []):
             self.close_handle(handle)
@@ -2168,6 +2211,7 @@ async def run_local_profile(root: Path) -> int:
     from native_process import launch_native_camoufox
 
     session = None
+    browser_exit = None
     try:
         lock, _ = load_runtime_lock()
         verify_python_components(lock)
@@ -2193,14 +2237,33 @@ async def run_local_profile(root: Path) -> int:
             admission_granted=True,
             headless=False,
         )
+        # Reuse the existing native process witness. It observes only the
+        # browser's top-level OS window; no user page, tab, DOM or navigation.
+        if os.name == "nt":
+            browser_exit = WindowsBrowserExitWitness(os.getpid())
+
         # A cold Camoufox startup is not an abnormal exit. The browser OS
-        # writer handle can take time to appear after SDK __aenter__ returns.
+        # writer handle and native window can appear after SDK __aenter__ returns.
         deadline = time.monotonic() + 30.0
+        window_seen = browser_exit is None
         while True:
             state = session.profile_state()
+            if state == "CLEAN_SHUTDOWN_VERIFIED":
+                await session.close()
+                if browser_exit is not None and not browser_exit.safely_exited(250):
+                    return 6
+                return 0
             if state == "PROFILE_BUSY":
-                report_runtime_stage("launch", "ready")
-                break
+                if browser_exit is None:
+                    window_seen = True
+                else:
+                    try:
+                        window_seen = window_seen or browser_exit.has_visible_window()
+                    except RuntimeContractError as error:
+                        report_runtime_failure("close", error)
+                if window_seen:
+                    report_runtime_stage("launch", "ready")
+                    break
             if state in ("CRASH_OR_UNKNOWN_PRESERVE_LOCAL", "UNKNOWN_PRESERVE_LOCAL"):
                 await session.close_after_browser_exit()
                 return 6
@@ -2208,14 +2271,35 @@ async def run_local_profile(root: Path) -> int:
                 await session.abort_startup()
                 return 5
             await asyncio.sleep(0.05)
+
         while True:
             state = session.profile_state()
             if state == "CLEAN_SHUTDOWN_VERIFIED":
                 await session.close()
+                if browser_exit is not None and not browser_exit.safely_exited(250):
+                    return 6
                 return 0
             if state in ("CRASH_OR_UNKNOWN_PRESERVE_LOCAL", "UNKNOWN_PRESERVE_LOCAL"):
                 await session.close_after_browser_exit()
                 return 6
+            if browser_exit is not None and window_seen:
+                try:
+                    window_open = browser_exit.has_visible_window()
+                except RuntimeContractError as error:
+                    report_runtime_failure("close", error)
+                    window_open = True
+                if not window_open:
+                    # The user's last native window is already gone. Release
+                    # the persistent SDK context so Firefox can finish its
+                    # normal SessionStore shutdown and release the writer lock.
+                    await session.close_after_native_window_closed()
+                    wait_for_browser_quiescence(root)
+                    if (
+                        session.profile_state() == "CLEAN_SHUTDOWN_VERIFIED"
+                        and browser_exit.safely_exited(250)
+                    ):
+                        return 0
+                    return 6
             await asyncio.sleep(0.25)
     except BaseException as error:
         report_runtime_failure("launch", error)
@@ -2223,7 +2307,9 @@ async def run_local_profile(root: Path) -> int:
             with contextlib.suppress(BaseException):
                 await session.abort_startup()
         return 5
-
+    finally:
+        if browser_exit is not None:
+            browser_exit.close()
 
 
 def run_native_ipc() -> int:

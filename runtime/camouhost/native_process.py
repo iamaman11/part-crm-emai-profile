@@ -180,6 +180,10 @@ class NativeProfileSession:
             raise NativeLaunchError("refusing to detach Playwright from a live Firefox profile")
         await self._release_playwright()
 
+    async def close_after_native_window_closed(self) -> None:
+        """Release the persistent context after the native OS window is gone."""
+        await self._release_playwright()
+
     async def abort_startup(self) -> None:
         await self._release_playwright()
 
