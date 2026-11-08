@@ -69,17 +69,22 @@ fn open_or_create_workspace(
     match root.open_profile_current(&intent.tenant_id, &intent.profile_id) {
         Ok(current) => Ok(current.into_workspace()),
         Err(LocalProfileError::Io(std::io::ErrorKind::NotFound))
-            if intent.status == InitialProfileStatus::Draft => root
-                .create_profile_current(
-                    &intent.tenant_id,
-                    &intent.profile_id,
-                    generation,
-                    intent.expected_version,
-                )
-                .map(ProfileCurrentWorkspace::into_workspace)
-                .map_err(|_| LocalOpenError::InvalidLocalWorkspace),
+            if intent.status == InitialProfileStatus::Draft =>
+        {
+            root.create_profile_current(
+                &intent.tenant_id,
+                &intent.profile_id,
+                generation,
+                intent.expected_version,
+            )
+            .map(ProfileCurrentWorkspace::into_workspace)
+            .map_err(|_| LocalOpenError::InvalidLocalWorkspace)
+        }
         Err(LocalProfileError::Io(std::io::ErrorKind::NotFound))
-            if intent.status == InitialProfileStatus::Ready => Err(LocalOpenError::RestoreRequired),
+            if intent.status == InitialProfileStatus::Ready =>
+        {
+            Err(LocalOpenError::RestoreRequired)
+        }
         Err(_) => Err(LocalOpenError::InvalidLocalWorkspace),
     }
 }
