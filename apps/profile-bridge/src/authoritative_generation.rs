@@ -231,8 +231,16 @@ where
         return Err(AuthoritativeGenerationMaterializationError::InvalidLocalEvidence);
     }
     ensure_authoritative_generation_to(
-        root, tenant_id, profile_id, generation_id, device_id,
-        workspace_epoch, control, downloader, Some(profile_version), true,
+        root,
+        tenant_id,
+        profile_id,
+        generation_id,
+        device_id,
+        workspace_epoch,
+        control,
+        downloader,
+        Some(profile_version),
+        true,
     )
 }
 
@@ -465,12 +473,19 @@ where
             })?;
             if let Some(version) = profile_version {
                 confirm_closed_draft_current_matches_cloud(
-                    root, &workspace, generation_id, version,
+                    root,
+                    &workspace,
+                    generation_id,
+                    version,
                 )
                 .map_err(|_| AuthoritativeGenerationMaterializationError::InvalidLocalEvidence)?;
             } else {
                 restore_materialization_binding_after_authoritative_open(
-                    &workspace, tenant_id, profile_id, generation_id, &source_container_sha256,
+                    &workspace,
+                    tenant_id,
+                    profile_id,
+                    generation_id,
+                    &source_container_sha256,
                 )
                 .map_err(|_| AuthoritativeGenerationMaterializationError::InvalidLocalEvidence)?;
             }
@@ -635,12 +650,19 @@ where
             .map_err(|_| Error::IncompleteLocalEvidence)?;
             if let Some(version) = profile_version {
                 confirm_closed_draft_current_matches_cloud(
-                    root, &workspace, generation_id, version,
+                    root,
+                    &workspace,
+                    generation_id,
+                    version,
                 )
                 .map_err(|_| Error::InvalidLocalEvidence)?;
             } else {
                 restore_materialization_binding_after_authoritative_open(
-                    &workspace, tenant_id, profile_id, generation_id, &digest,
+                    &workspace,
+                    tenant_id,
+                    profile_id,
+                    generation_id,
+                    &digest,
                 )
                 .map_err(|_| Error::InvalidLocalEvidence)?;
             }
@@ -1251,7 +1273,10 @@ mod tests {
     -> Result<(), Box<dyn std::error::Error>> {
         let fixture = Fixture::without_browser_identity()?;
         let workspace = fixture.root.create_profile_current(
-            &fixture.tenant_id, &fixture.profile_id, &fixture.generation_id, 1,
+            &fixture.tenant_id,
+            &fixture.profile_id,
+            &fixture.generation_id,
+            1,
         )?;
         fs::create_dir_all(workspace.path().join("user_data/storage"))?;
         fs::write(workspace.path().join("prefs.js"), b"authoritative-prefs")?;
@@ -1259,22 +1284,33 @@ mod tests {
             workspace.path().join("user_data/storage/state.bin"),
             b"authoritative-state",
         )?;
-        fs::write(workspace.path().join("camoufox-config.json"), &fixture.config_bytes)?;
-        fs::write(workspace.path().join(".local-unsynced"), b"local-unsynced-v2")?;
+        fs::write(
+            workspace.path().join("camoufox-config.json"),
+            &fixture.config_bytes,
+        )?;
+        fs::write(
+            workspace.path().join(".local-unsynced"),
+            b"local-unsynced-v2",
+        )?;
         let mut control = fixture.control();
         let mut downloader = FakeStreamDownloader {
             container: fixture.container.clone(),
             calls: 0,
         };
         super::reconcile_closed_draft_with_confirmed_current(
-            &fixture.root, &fixture.tenant_id, &fixture.profile_id,
-            &fixture.generation_id, 2,
+            &fixture.root,
+            &fixture.tenant_id,
+            &fixture.profile_id,
+            &fixture.generation_id,
+            2,
             &DeviceId::parse("device_draft_confirmed")?,
-            11, &mut control, &mut downloader,
+            11,
+            &mut control,
+            &mut downloader,
         )?;
-        let confirmed = fixture.root.open_profile_current(
-            &fixture.tenant_id, &fixture.profile_id,
-        )?;
+        let confirmed = fixture
+            .root
+            .open_profile_current(&fixture.tenant_id, &fixture.profile_id)?;
         assert_eq!(confirmed.path(), workspace.path());
         assert_eq!(confirmed.base_generation_id(), Some(&fixture.generation_id));
         assert_eq!(confirmed.profile_version(), 2);
@@ -1293,7 +1329,10 @@ mod tests {
     -> Result<(), Box<dyn std::error::Error>> {
         let fixture = Fixture::without_browser_identity()?;
         let workspace = fixture.root.create_profile_current(
-            &fixture.tenant_id, &fixture.profile_id, &fixture.generation_id, 1,
+            &fixture.tenant_id,
+            &fixture.profile_id,
+            &fixture.generation_id,
+            1,
         )?;
         fs::create_dir_all(workspace.path().join("user_data/storage"))?;
         fs::write(workspace.path().join("prefs.js"), b"authoritative-prefs")?;
@@ -1301,25 +1340,37 @@ mod tests {
             workspace.path().join("user_data/storage/state.bin"),
             b"NEW LOCAL USER DATA",
         )?;
-        fs::write(workspace.path().join("camoufox-config.json"), &fixture.config_bytes)?;
-        fs::write(workspace.path().join(".local-unsynced"), b"local-unsynced-v2")?;
+        fs::write(
+            workspace.path().join("camoufox-config.json"),
+            &fixture.config_bytes,
+        )?;
+        fs::write(
+            workspace.path().join(".local-unsynced"),
+            b"local-unsynced-v2",
+        )?;
         let mut control = fixture.control();
         let mut downloader = FakeStreamDownloader {
             container: fixture.container.clone(),
             calls: 0,
         };
         let outcome = super::reconcile_closed_draft_with_confirmed_current(
-            &fixture.root, &fixture.tenant_id, &fixture.profile_id,
-            &fixture.generation_id, 2,
+            &fixture.root,
+            &fixture.tenant_id,
+            &fixture.profile_id,
+            &fixture.generation_id,
+            2,
             &DeviceId::parse("device_draft_diverged")?,
-            12, &mut control, &mut downloader,
+            12,
+            &mut control,
+            &mut downloader,
         );
         assert_eq!(
-            outcome, Err(AuthoritativeGenerationMaterializationError::IncompleteLocalEvidence),
+            outcome,
+            Err(AuthoritativeGenerationMaterializationError::IncompleteLocalEvidence),
         );
-        let still_local = fixture.root.open_profile_current(
-            &fixture.tenant_id, &fixture.profile_id,
-        )?;
+        let still_local = fixture
+            .root
+            .open_profile_current(&fixture.tenant_id, &fixture.profile_id)?;
         assert_eq!(still_local.base_generation_id(), None);
         assert_eq!(still_local.profile_version(), 1);
         assert_eq!(
@@ -1331,8 +1382,20 @@ mod tests {
             b"local-unsynced-v2",
         );
         let digest = encode_sha256(fixture.container_digest);
-        assert!(!fixture.root.path().join(format!(".pending-r2-{digest}")).exists());
-        assert!(!fixture.root.path().join(format!(".pending-bpgw-{digest}")).exists());
+        assert!(
+            !fixture
+                .root
+                .path()
+                .join(format!(".pending-r2-{digest}"))
+                .exists()
+        );
+        assert!(
+            !fixture
+                .root
+                .path()
+                .join(format!(".pending-bpgw-{digest}"))
+                .exists()
+        );
         // A subsequent exact retry can reconcile once the local files equal
         // the immutable cloud snapshot, with no second generation or reset.
         fs::write(
@@ -1340,14 +1403,19 @@ mod tests {
             b"authoritative-state",
         )?;
         super::reconcile_closed_draft_with_confirmed_current(
-            &fixture.root, &fixture.tenant_id, &fixture.profile_id,
-            &fixture.generation_id, 2,
+            &fixture.root,
+            &fixture.tenant_id,
+            &fixture.profile_id,
+            &fixture.generation_id,
+            2,
             &DeviceId::parse("device_draft_diverged")?,
-            13, &mut control, &mut downloader,
+            13,
+            &mut control,
+            &mut downloader,
         )?;
-        let confirmed = fixture.root.open_profile_current(
-            &fixture.tenant_id, &fixture.profile_id,
-        )?;
+        let confirmed = fixture
+            .root
+            .open_profile_current(&fixture.tenant_id, &fixture.profile_id)?;
         assert_eq!(confirmed.profile_version(), 2);
         assert_eq!(confirmed.base_generation_id(), Some(&fixture.generation_id));
         fixture.cleanup();

@@ -460,26 +460,31 @@ mod windows {
             {
                 return Err(());
             }
-            let application = WindowsDeviceApplication::from_system(
-                origin.to_owned(), binding.clone(),
-            ).map_err(|_| ())?;
-            let mut control = ControlPlaneCoordinator::for_local_current_restore(
-                application.transport(),
-            );
-            let confirmed = control.download_capability(
-                &intent.tenant_id, &intent.profile_id,
-            ).map_err(|_| ())?;
+            let application =
+                WindowsDeviceApplication::from_system(origin.to_owned(), binding.clone())
+                    .map_err(|_| ())?;
+            let mut control =
+                ControlPlaneCoordinator::for_local_current_restore(application.transport());
+            let confirmed = control
+                .download_capability(&intent.tenant_id, &intent.profile_id)
+                .map_err(|_| ())?;
             if confirmed.generation_id() != workspace.generation_id() {
                 return Err(());
             }
             let reader = WindowsSignedGenerationObjectGet::from_system().map_err(|_| ())?;
             let mut downloader = VerifiedGenerationObjectStreamDownloader::new(reader);
             return reconcile_closed_draft_with_confirmed_current(
-                root, &intent.tenant_id, &intent.profile_id,
-                confirmed.generation_id(), intent.expected_version,
-                binding.device_id(), now().map_err(|_| ())?.value(),
-                &mut control, &mut downloader,
-            ).map_err(|_| ());
+                root,
+                &intent.tenant_id,
+                &intent.profile_id,
+                confirmed.generation_id(),
+                intent.expected_version,
+                binding.device_id(),
+                now().map_err(|_| ())?.value(),
+                &mut control,
+                &mut downloader,
+            )
+            .map_err(|_| ());
         };
         if workspace.profile_version() != intent.expected_version
             || fs::read(workspace.path().join(".local-unsynced")).map_err(|_| ())?
