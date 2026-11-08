@@ -276,6 +276,9 @@ struct CoordinatorCursor {
 pub struct ControlPlaneCoordinator<T> {
     transport: T,
     cursor: Option<CoordinatorCursor>,
+    // Read-only CURRENT restore shares the existing exact R2 GET/decrypt
+    // owner but has no browser session, DO claim or coordinator lease.
+    local_current_restore: bool,
 }
 
 impl<T> ControlPlaneCoordinator<T> {
@@ -284,6 +287,18 @@ impl<T> ControlPlaneCoordinator<T> {
         Self {
             transport,
             cursor: None,
+            local_current_restore: false,
+        }
+    }
+
+    /// Same machine transport and generation reader; this mode cannot claim,
+    /// heartbeat, write a successor, or inspect historical candidates.
+    #[must_use]
+    pub const fn for_local_current_restore(transport: T) -> Self {
+        Self {
+            transport,
+            cursor: None,
+            local_current_restore: true,
         }
     }
 
@@ -439,7 +454,7 @@ where
         device_id: &DeviceId,
         launch_intent_id: &LaunchIntentId,
     ) -> Result<ProfileLease, Self::Error> {
-        if self.cursor.is_some() {
+        if self.local_current_restore || self.cursor.is_some() {
             return Err(Self::Error::InvalidResponse);
         }
         let snapshot = self.snapshot(actor, profile_id)?;
@@ -682,12 +697,19 @@ where
         profile_id: &ProfileId,
         historical: bool,
     ) -> Result<GenerationDownloadCapability, ShippingControlPlaneError> {
-        let cursor = self.exact_reopen_cursor(tenant_id, profile_id)?;
-        let request = BridgeGenerationDownloadCapabilityRequest::new(
-            cursor.session_id.as_str(),
-            cursor.fencing_token.as_str(),
-            cursor.epoch,
-        );
+        let request = if self.local_current_restore {
+            if historical {
+                return Err(ShippingControlPlaneError::InvalidResponse);
+            }
+            BridgeGenerationDownloadCapabilityRequest::local_restore()
+        } else {
+            let cursor = self.exact_reopen_cursor(tenant_id, profile_id)?;
+            BridgeGenerationDownloadCapabilityRequest::new(
+                cursor.session_id.as_str(),
+                cursor.fencing_token.as_str(),
+                cursor.epoch,
+            )
+        };
         let mut body =
             serde_json::to_vec(&request).map_err(|_| ShippingControlPlaneError::InvalidResponse)?;
         let correlation_id = next_correlation_id()?;
@@ -755,7 +777,12 @@ where
         metadata_prelude: &[u8],
         historical: bool,
     ) -> Result<GenerationDek, ShippingControlPlaneError> {
-        let cursor = self.exact_reopen_cursor(tenant_id, profile_id)?;
+        if self.local_current_restore && historical {
+            return Err(ShippingControlPlaneError::InvalidResponse);
+        }
+        if !self.local_current_restore {
+            self.exact_reopen_cursor(tenant_id, profile_id)?;
+        }
         if metadata_prelude.is_empty()
             || metadata_prelude.len() > MAX_GENERATION_METADATA_PRELUDE_BYTES
         {
@@ -776,12 +803,19 @@ where
             return Err(ShippingControlPlaneError::InvalidResponse);
         }
 
-        let request = BridgeGenerationOpeningMaterialRequest::new(
-            encode_lower_hex(metadata_prelude),
-            cursor.session_id.as_str(),
-            cursor.fencing_token.as_str(),
-            cursor.epoch,
-        );
+        let request = if self.local_current_restore {
+            BridgeGenerationOpeningMaterialRequest::local_restore(
+                encode_lower_hex(metadata_prelude),
+            )
+        } else {
+            let cursor = self.exact_reopen_cursor(tenant_id, profile_id)?;
+            BridgeGenerationOpeningMaterialRequest::new(
+                encode_lower_hex(metadata_prelude),
+                cursor.session_id.as_str(),
+                cursor.fencing_token.as_str(),
+                cursor.epoch,
+            )
+        };
         let mut body =
             serde_json::to_vec(&request).map_err(|_| ShippingControlPlaneError::InvalidResponse)?;
         let correlation_id = next_correlation_id()?;

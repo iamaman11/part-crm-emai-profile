@@ -24,6 +24,8 @@ pub enum ShippingCompositionError {
     FirstInstallation(crate::windows_delivery_handoff::DeliveryHandoffError),
     InstalledConnection(crate::installed_connection::InstalledConnectionError),
     DeliveryRecoveryRequired,
+    /// Cloud CURRENT recovery was required but not proven. Local bytes untouched.
+    RestoreUnavailable,
     #[cfg(windows)]
     DeliveryRuntime(crate::windows_delivery_runtime::WindowsDeliveryRuntimeError),
     Operator(crate::operator_flow::OperatorFlowError),
@@ -52,6 +54,9 @@ impl core::fmt::Display for ShippingCompositionError {
             Self::InstalledConnection(_) => "Profile Bridge installed connection is invalid",
             Self::DeliveryRecoveryRequired => {
                 "shipping Profile Bridge delivery recovery is required"
+            }
+            Self::RestoreUnavailable => {
+                "Verified cloud CURRENT could not be restored; local profile was not opened or overwritten"
             }
             #[cfg(windows)]
             Self::DeliveryRuntime(error) => return core::fmt::Display::fmt(error, formatter),
@@ -240,7 +245,10 @@ mod windows {
     use crate::camouhost_process::{
         ManagedCamouhostConfig, ManagedCamouhostProcess, RuntimeBindingSlot, RuntimeDisplayMode,
     };
-    use crate::generation_reopen::VerifiedGenerationObjectStreamDownloader;
+    use crate::authoritative_generation::ensure_authoritative_current;
+    use crate::generation_reopen::{
+        GenerationReopenControlPort, VerifiedGenerationObjectStreamDownloader,
+    };
     use crate::local_profile::{DeliveryActivationGuard, MaterializationRoot};
     use crate::operator_flow::{
         OperatorFailureStage, OperatorFlowError, PendingSaveRecovery, ProfileBridgeOperator,
@@ -430,8 +438,45 @@ mod windows {
         }
         let root = MaterializationRoot::open_or_create(&config.materialization_root)
             .map_err(|_| ShippingCompositionError::Configuration)?;
-        crate::local_browser_open::open(&root, intent, binding.device_id(), delivery.runtime_root())
-            .map_err(ShippingCompositionError::LocalOpen)
+        match crate::local_browser_open::open(
+            &root, intent, binding.device_id(), delivery.runtime_root(),
+        ) {
+            Ok(()) => Ok(()),
+            Err(crate::local_browser_open::LocalOpenError::RestoreRequired) => {
+                // Only a missing READY local folder crosses the cloud boundary.
+                // Ordinary Open/Close never requires a network request.
+                let device = binding.device_id().clone();
+                let application = WindowsDeviceApplication::from_system(
+                    config.control_plane_origin, binding,
+                )
+                .map_err(|_| ShippingCompositionError::RestoreUnavailable)?;
+                let mut remote = ControlPlaneCoordinator::for_local_current_restore(
+                    application.transport(),
+                );
+                // Worker selects CURRENT; neither the browser URI nor local files
+                // may choose a cloud generation or an historical fallback.
+                let selected = remote
+                    .download_capability(&intent.tenant_id, &intent.profile_id)
+                    .map_err(|_| ShippingCompositionError::RestoreUnavailable)?;
+                let reader = WindowsSignedGenerationObjectGet::from_system()
+                    .map_err(|_| ShippingCompositionError::RestoreUnavailable)?;
+                let mut downloader = VerifiedGenerationObjectStreamDownloader::new(reader);
+                let epoch = now()?.value();
+                ensure_authoritative_current(
+                    &root, &intent.tenant_id, &intent.profile_id,
+                    selected.generation_id(), intent.expected_version,
+                    &device, epoch, &mut remote, &mut downloader,
+                )
+                .map_err(|_| ShippingCompositionError::RestoreUnavailable)?;
+                // Re-enter the SAME local native Open; no managed Camoufox path
+                // and no Coordinator lease are introduced by recovery.
+                crate::local_browser_open::open(
+                    &root, intent, &device, delivery.runtime_root(),
+                )
+                .map_err(ShippingCompositionError::LocalOpen)
+            }
+            Err(error) => Err(ShippingCompositionError::LocalOpen(error)),
+        }
     }
 
     pub fn run(claim: &ClaimUri) -> Result<(), ShippingCompositionError> {

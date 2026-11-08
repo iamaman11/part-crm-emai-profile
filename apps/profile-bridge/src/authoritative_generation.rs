@@ -9,6 +9,8 @@ use crate::generation_reopen::{
 };
 use crate::generation_snapshot::{
     GenerationSnapshotError, StreamedWorkspaceSnapshot,
+    materialize_profile_current_snapshot_streaming_with_pre_publish,
+    materialize_profile_current_snapshot_with_pre_publish,
     materialize_workspace_snapshot_streaming_with_pre_publish,
     materialize_workspace_snapshot_with_pre_publish, verify_workspace_matches_snapshot,
     verify_workspace_matches_streamed_snapshot,
@@ -151,9 +153,72 @@ where
     D: GenerationObjectDownloadPort,
     D::Error: Into<GenerationObjectDownloadError>,
 {
+    ensure_authoritative_generation_to(
+        root, tenant_id, profile_id, generation_id, device_id, workspace_epoch,
+        control, downloader, None,
+    )
+}
+
+/// Restore only a Worker-selected, exactly verified CURRENT into the existing
+/// stable local destination. This is the same decrypt/AEAD/BPGW/binding owner
+/// as historical materialization; no alternate snapshot format or engine.
+#[allow(clippy::too_many_arguments)]
+pub fn ensure_authoritative_current<C, D>(
+    root: &MaterializationRoot,
+    tenant_id: &TenantId,
+    profile_id: &ProfileId,
+    generation_id: &GenerationId,
+    profile_version: u64,
+    device_id: &DeviceId,
+    workspace_epoch: u64,
+    control: &mut C,
+    downloader: &mut D,
+) -> Result<(), AuthoritativeGenerationMaterializationError>
+where
+    C: GenerationReopenControlPort,
+    <C as GenerationReopenControlPort>::Error: Into<GenerationReopenControlError>,
+    D: GenerationObjectDownloadPort,
+    D::Error: Into<GenerationObjectDownloadError>,
+{
+    if profile_version == 0 {
+        return Err(AuthoritativeGenerationMaterializationError::InvalidLocalEvidence);
+    }
+    ensure_authoritative_generation_to(
+        root, tenant_id, profile_id, generation_id, device_id, workspace_epoch,
+        control, downloader, Some(profile_version),
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn ensure_authoritative_generation_to<C, D>(
+    root: &MaterializationRoot,
+    tenant_id: &TenantId,
+    profile_id: &ProfileId,
+    generation_id: &GenerationId,
+    device_id: &DeviceId,
+    workspace_epoch: u64,
+    control: &mut C,
+    downloader: &mut D,
+    profile_version: Option<u64>,
+) -> Result<(), AuthoritativeGenerationMaterializationError>
+where
+    C: GenerationReopenControlPort,
+    <C as GenerationReopenControlPort>::Error: Into<GenerationReopenControlError>,
+    D: GenerationObjectDownloadPort,
+    D::Error: Into<GenerationObjectDownloadError>,
+{
     #[cfg(windows)]
     let local_evidence_started = std::time::Instant::now();
-    let incomplete_local = match root.open_generation(tenant_id, profile_id, generation_id) {
+    // Restore must never interpret an existing local CURRENT as an old cloud
+    // generation or repair/replace potentially dirty native Firefox files.
+    let incomplete_local = if profile_version.is_some() {
+        match root.open_profile_current(tenant_id, profile_id) {
+            Ok(_) => return Err(AuthoritativeGenerationMaterializationError::InvalidLocalEvidence),
+            Err(LocalProfileError::Io(std::io::ErrorKind::NotFound)) => None,
+            Err(_) => return Err(AuthoritativeGenerationMaterializationError::Local),
+        }
+    } else {
+        match root.open_generation(tenant_id, profile_id, generation_id) {
         Ok(workspace) => {
             match load_materialization_binding(&workspace, tenant_id, profile_id, generation_id) {
                 Ok(binding) => {
@@ -191,6 +256,7 @@ where
         }
         Err(LocalProfileError::Io(std::io::ErrorKind::NotFound)) => None,
         Err(_) => return Err(AuthoritativeGenerationMaterializationError::Local),
+        }
     };
 
     #[cfg(windows)]
@@ -280,6 +346,7 @@ where
             ciphertext,
             &staged_ciphertext_path,
             incomplete_local,
+            profile_version,
         );
     }
 
@@ -354,25 +421,25 @@ where
         released?;
         return Ok(());
     }
-    materialize_workspace_snapshot_with_pre_publish(
-        root,
-        tenant_id,
-        profile_id,
-        generation_id,
-        opened.plaintext(),
-        |workspace| {
-            restore_materialization_binding_after_authoritative_open(
-                workspace,
-                tenant_id,
-                profile_id,
-                generation_id,
-                &source_container_sha256,
-            )
-            .map(|_| ())
-            .map_err(|_| GenerationSnapshotError::PrePublish)
-        },
-    )
-    .map_err(|error| match error {
+    let bind = |workspace: &GenerationWorkspace| {
+        if profile_version.is_some() {
+            return require_native_camoufox_config(workspace);
+        }
+        restore_materialization_binding_after_authoritative_open(
+            workspace, tenant_id, profile_id, generation_id, &source_container_sha256,
+        )
+        .map(|_| ())
+        .map_err(|_| GenerationSnapshotError::PrePublish)
+    };
+    let published = match profile_version {
+        Some(version) => materialize_profile_current_snapshot_with_pre_publish(
+            root, tenant_id, profile_id, generation_id, version, opened.plaintext(), bind,
+        ),
+        None => materialize_workspace_snapshot_with_pre_publish(
+            root, tenant_id, profile_id, generation_id, opened.plaintext(), bind,
+        ),
+    };
+    published.map_err(|error| match error {
         GenerationSnapshotError::Local(_) => AuthoritativeGenerationMaterializationError::Local,
         GenerationSnapshotError::PrePublish => {
             AuthoritativeGenerationMaterializationError::BrowserIdentity
@@ -395,6 +462,7 @@ fn materialize_streamed_authoritative_generation<C>(
     mut ciphertext: VerifiedGenerationObjectFile,
     ciphertext_path: &std::path::Path,
     incomplete_local: Option<GenerationWorkspace>,
+    profile_version: Option<u64>,
 ) -> Result<(), AuthoritativeGenerationMaterializationError>
 where
     C: GenerationReopenControlPort,
@@ -502,29 +570,31 @@ where
         verified?;
         released?;
     } else {
-        materialize_workspace_snapshot_streaming_with_pre_publish(
-            root,
-            tenant_id,
-            profile_id,
-            generation_id,
-            &mut plaintext,
-            StreamedWorkspaceSnapshot {
-                plaintext_bytes: metadata.plaintext_bytes(),
-                plaintext_digest: metadata.plaintext_digest().bytes(),
-            },
-            |workspace| {
-                restore_materialization_binding_after_authoritative_open(
-                    workspace,
-                    tenant_id,
-                    profile_id,
-                    generation_id,
-                    &digest,
-                )
-                .map(|_| ())
-                .map_err(|_| GenerationSnapshotError::PrePublish)
-            },
-        )
-        .map_err(|error| match error {
+        let expected = StreamedWorkspaceSnapshot {
+            plaintext_bytes: metadata.plaintext_bytes(),
+            plaintext_digest: metadata.plaintext_digest().bytes(),
+        };
+        let bind = |workspace: &GenerationWorkspace| {
+            if profile_version.is_some() {
+                return require_native_camoufox_config(workspace);
+            }
+            restore_materialization_binding_after_authoritative_open(
+                workspace, tenant_id, profile_id, generation_id, &digest,
+            )
+            .map(|_| ())
+            .map_err(|_| GenerationSnapshotError::PrePublish)
+        };
+        let published = match profile_version {
+            Some(version) => materialize_profile_current_snapshot_streaming_with_pre_publish(
+                root, tenant_id, profile_id, generation_id, version,
+                &mut plaintext, expected, bind,
+            ),
+            None => materialize_workspace_snapshot_streaming_with_pre_publish(
+                root, tenant_id, profile_id, generation_id,
+                &mut plaintext, expected, bind,
+            ),
+        };
+        published.map_err(|error| match error {
             GenerationSnapshotError::Local(_) => Error::Local,
             GenerationSnapshotError::PrePublish => Error::BrowserIdentity,
             _ => Error::Snapshot,
@@ -537,6 +607,21 @@ where
     drop(ciphertext);
     fs::remove_file(&plaintext_path).map_err(|_| Error::Local)?;
     fs::remove_file(ciphertext_path).map_err(|_| Error::Local)?;
+    Ok(())
+}
+
+/// Local-first native Camoufox owns fingerprint configuration. Do not require
+/// an obsolete managed-browser identity sidecar in an authenticated CURRENT
+/// snapshot. The official runtime validates the canonical JSON on actual Open.
+fn require_native_camoufox_config(
+    workspace: &GenerationWorkspace,
+) -> Result<(), GenerationSnapshotError> {
+    let path = workspace.path().join("camoufox-config.json");
+    let metadata = fs::symlink_metadata(&path)
+        .map_err(|_| GenerationSnapshotError::PrePublish)?;
+    if metadata.file_type().is_symlink() || !metadata.is_file() || metadata.len() == 0 {
+        return Err(GenerationSnapshotError::PrePublish);
+    }
     Ok(())
 }
 

@@ -361,6 +361,7 @@ impl UserDiagnostic {
                     }
                 },
                 ShippingCompositionError::Clock => "BRIDGE_CLOCK_UNAVAILABLE",
+                ShippingCompositionError::RestoreUnavailable => "BRIDGE_LOCAL_CURRENT_RESTORE_FAILED",
                 ShippingCompositionError::ControlPlane => "BRIDGE_SESSION_NOT_AUTHORIZED",
                 ShippingCompositionError::HeartbeatAuthorityUncertain => {
                     "BRIDGE_HEARTBEAT_RECOVERY_REQUIRED"
@@ -490,6 +491,9 @@ impl UserDiagnostic {
             }
             Self::Pairing(Pairing::CleanupRequired) => {
                 "The connection attempt needs recovery on this computer. Return to the application and review this device. Do not repeatedly reconnect or delete device keys."
+            }
+            Self::Launch(Launch::RestoreUnavailable) => {
+                "The confirmed cloud CURRENT could not be retrieved and verified. No blank READY folder was created. Check connectivity and profile access, then try Open again. Any existing local data was retained."
             }
             Self::Launch(Launch::ControlPlane) => {
                 "The profile session could not be authorized. Return to the application and check your access and the profile's current session."

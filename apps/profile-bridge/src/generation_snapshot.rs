@@ -504,12 +504,55 @@ pub(crate) fn materialize_workspace_snapshot_streaming_with_pre_publish(
     generation_id: &GenerationId,
     source: &mut impl Read,
     expected: StreamedWorkspaceSnapshot,
+    before_publish: impl FnMut(&GenerationWorkspace) -> Result<(), GenerationSnapshotError>,
+) -> Result<GenerationWorkspace, GenerationSnapshotError> {
+    materialize_workspace_snapshot_streaming_to(
+        root, tenant_id, profile_id, generation_id, source, expected, None, before_publish,
+    )
+}
+
+/// Publish one completely verified decrypted CURRENT through the same BPGW
+/// streaming reader and staging owner. Never replace an existing local folder.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn materialize_profile_current_snapshot_streaming_with_pre_publish(
+    root: &MaterializationRoot,
+    tenant_id: &TenantId,
+    profile_id: &ProfileId,
+    generation_id: &GenerationId,
+    profile_version: u64,
+    source: &mut impl Read,
+    expected: StreamedWorkspaceSnapshot,
+    before_publish: impl FnMut(&GenerationWorkspace) -> Result<(), GenerationSnapshotError>,
+) -> Result<GenerationWorkspace, GenerationSnapshotError> {
+    materialize_workspace_snapshot_streaming_to(
+        root, tenant_id, profile_id, generation_id, source, expected,
+        Some(profile_version), before_publish,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn materialize_workspace_snapshot_streaming_to(
+    root: &MaterializationRoot,
+    tenant_id: &TenantId,
+    profile_id: &ProfileId,
+    generation_id: &GenerationId,
+    source: &mut impl Read,
+    expected: StreamedWorkspaceSnapshot,
+    profile_version: Option<u64>,
     mut before_publish: impl FnMut(&GenerationWorkspace) -> Result<(), GenerationSnapshotError>,
 ) -> Result<GenerationWorkspace, GenerationSnapshotError> {
+    if profile_version == Some(0) {
+        return Err(GenerationSnapshotError::InvalidFormat);
+    }
     if expected.plaintext_bytes > MAX_STREAM_WORKSPACE_SNAPSHOT_BYTES {
         return Err(GenerationSnapshotError::SnapshotTooLarge);
     }
-    match root.open_generation(tenant_id, profile_id, generation_id) {
+    let existing = if profile_version.is_some() {
+        root.open_profile_current(tenant_id, profile_id)
+    } else {
+        root.open_generation(tenant_id, profile_id, generation_id)
+    };
+    match existing {
         Ok(_) => return Err(GenerationSnapshotError::TargetAlreadyExists),
         Err(LocalProfileError::Io(std::io::ErrorKind::NotFound)) => {}
         Err(error) => return Err(GenerationSnapshotError::Local(error)),
@@ -525,6 +568,7 @@ pub(crate) fn materialize_workspace_snapshot_streaming_with_pre_publish(
         generation_id,
         source,
         expected,
+        profile_version,
         &mut before_publish,
     );
     if result.is_err() {
@@ -543,6 +587,7 @@ fn materialize_stream_into_staging(
     generation: &GenerationId,
     source: &mut impl Read,
     expected: StreamedWorkspaceSnapshot,
+    profile_version: Option<u64>,
     before_publish: &mut impl FnMut(&GenerationWorkspace) -> Result<(), GenerationSnapshotError>,
 ) -> Result<GenerationWorkspace, GenerationSnapshotError> {
     let mut total = 0_u64;
@@ -628,27 +673,18 @@ fn materialize_stream_into_staging(
     {
         return Err(GenerationSnapshotError::InvalidFormat);
     }
-    staging
-        .rebind_staging_generation(generation)
-        .map_err(GenerationSnapshotError::Local)?;
+    match profile_version {
+        Some(version) => staging.rebind_staging_current(generation, version),
+        None => staging.rebind_staging_generation(generation),
+    }
+    .map_err(GenerationSnapshotError::Local)?;
     verify_streamed_workspace(&staging, &entries)?;
     before_publish(&staging)?;
 
     // Identical no-replace atomic publish boundary to the in-memory reader.
-    let final_path = root
-        .prepare_generation_path(tenant, profile, generation)
-        .map_err(|error| match error {
-            LocalProfileError::TargetAlreadyExists => GenerationSnapshotError::TargetAlreadyExists,
-            error => GenerationSnapshotError::Local(error),
-        })?;
-    if fs::symlink_metadata(&final_path).is_ok() {
-        return Err(GenerationSnapshotError::TargetAlreadyExists);
-    }
-    fs::rename(staging_path, &final_path).map_err(LocalProfileError::from)?;
-    drop(staging);
-    let workspace = root
-        .open_generation(tenant, profile, generation)
-        .map_err(GenerationSnapshotError::Local)?;
+    let workspace = publish_verified_staging(
+        root, staging, staging_path, tenant, profile, generation, profile_version,
+    )?;
     verify_streamed_workspace(&workspace, &entries)?;
     Ok(workspace)
 }
@@ -740,10 +776,49 @@ pub(crate) fn materialize_workspace_snapshot_with_pre_publish(
     profile_id: &ProfileId,
     generation_id: &GenerationId,
     snapshot: &[u8],
+    before_publish: impl FnMut(&GenerationWorkspace) -> Result<(), GenerationSnapshotError>,
+) -> Result<GenerationWorkspace, GenerationSnapshotError> {
+    materialize_workspace_snapshot_to(
+        root, tenant_id, profile_id, generation_id, snapshot, None, before_publish,
+    )
+}
+
+/// In-memory BPGW compatibility uses the identical verified staging/publish path.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn materialize_profile_current_snapshot_with_pre_publish(
+    root: &MaterializationRoot,
+    tenant_id: &TenantId,
+    profile_id: &ProfileId,
+    generation_id: &GenerationId,
+    profile_version: u64,
+    snapshot: &[u8],
+    before_publish: impl FnMut(&GenerationWorkspace) -> Result<(), GenerationSnapshotError>,
+) -> Result<GenerationWorkspace, GenerationSnapshotError> {
+    materialize_workspace_snapshot_to(
+        root, tenant_id, profile_id, generation_id, snapshot, Some(profile_version), before_publish,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn materialize_workspace_snapshot_to(
+    root: &MaterializationRoot,
+    tenant_id: &TenantId,
+    profile_id: &ProfileId,
+    generation_id: &GenerationId,
+    snapshot: &[u8],
+    profile_version: Option<u64>,
     mut before_publish: impl FnMut(&GenerationWorkspace) -> Result<(), GenerationSnapshotError>,
 ) -> Result<GenerationWorkspace, GenerationSnapshotError> {
+    if profile_version == Some(0) {
+        return Err(GenerationSnapshotError::InvalidFormat);
+    }
     let entries = parse_workspace_snapshot(snapshot)?;
-    match root.open_generation(tenant_id, profile_id, generation_id) {
+    let existing = if profile_version.is_some() {
+        root.open_profile_current(tenant_id, profile_id)
+    } else {
+        root.open_generation(tenant_id, profile_id, generation_id)
+    };
+    match existing {
         Ok(_) => return Err(GenerationSnapshotError::TargetAlreadyExists),
         Err(LocalProfileError::Io(std::io::ErrorKind::NotFound)) => {}
         Err(error) => return Err(GenerationSnapshotError::Local(error)),
@@ -759,6 +834,7 @@ pub(crate) fn materialize_workspace_snapshot_with_pre_publish(
         profile_id,
         generation_id,
         &entries,
+        profile_version,
         &mut before_publish,
     );
     if result.is_err() {
@@ -776,6 +852,7 @@ fn materialize_into_staging(
     profile_id: &ProfileId,
     generation_id: &GenerationId,
     entries: &[SnapshotEntry<'_>],
+    profile_version: Option<u64>,
     before_publish: &mut impl FnMut(&GenerationWorkspace) -> Result<(), GenerationSnapshotError>,
 ) -> Result<GenerationWorkspace, GenerationSnapshotError> {
     for entry in entries {
@@ -799,28 +876,54 @@ fn materialize_into_staging(
             return Err(GenerationSnapshotError::SourceChanged);
         }
     }
-    staging
-        .rebind_staging_generation(generation_id)
-        .map_err(GenerationSnapshotError::Local)?;
+    match profile_version {
+        Some(version) => staging.rebind_staging_current(generation_id, version),
+        None => staging.rebind_staging_generation(generation_id),
+    }
+    .map_err(GenerationSnapshotError::Local)?;
     verify_materialized_snapshot(&staging, entries)?;
     before_publish(&staging)?;
 
-    let final_path = root
-        .prepare_generation_path(tenant_id, profile_id, generation_id)
-        .map_err(|error| match error {
-            LocalProfileError::TargetAlreadyExists => GenerationSnapshotError::TargetAlreadyExists,
-            error => GenerationSnapshotError::Local(error),
-        })?;
-    if fs::symlink_metadata(&final_path).is_ok() {
-        return Err(GenerationSnapshotError::TargetAlreadyExists);
+    let workspace = publish_verified_staging(
+        root, staging, staging_path, tenant_id, profile_id, generation_id, profile_version,
+    )?;
+    verify_materialized_snapshot(&workspace, entries)?;
+    Ok(workspace)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn publish_verified_staging(
+    root: &MaterializationRoot,
+    staging: GenerationWorkspace,
+    staging_path: &Path,
+    tenant: &TenantId,
+    profile: &ProfileId,
+    generation: &GenerationId,
+    profile_version: Option<u64>,
+) -> Result<GenerationWorkspace, GenerationSnapshotError> {
+    // Both destinations use the existing MaterializationRoot path admission.
+    // A local CURRENT is never deleted, repaired or overwritten by Restore.
+    let final_path = match profile_version {
+        Some(_) => root.prepare_profile_current_path(tenant, profile),
+        None => root.prepare_generation_path(tenant, profile, generation),
+    }
+    .map_err(|error| match error {
+        LocalProfileError::TargetAlreadyExists => GenerationSnapshotError::TargetAlreadyExists,
+        error => GenerationSnapshotError::Local(error),
+    })?;
+    match fs::symlink_metadata(&final_path) {
+        Ok(_) => return Err(GenerationSnapshotError::TargetAlreadyExists),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+        Err(error) => return Err(GenerationSnapshotError::Local(error.into())),
     }
     fs::rename(staging_path, &final_path).map_err(LocalProfileError::from)?;
     drop(staging);
-    let workspace = root
-        .open_generation(tenant_id, profile_id, generation_id)
-        .map_err(GenerationSnapshotError::Local)?;
-    verify_materialized_snapshot(&workspace, entries)?;
-    Ok(workspace)
+    let opened = if profile_version.is_some() {
+        root.open_profile_current(tenant, profile)
+    } else {
+        root.open_generation(tenant, profile, generation)
+    };
+    opened.map_err(GenerationSnapshotError::Local)
 }
 
 fn create_staging_workspace(
@@ -1131,6 +1234,72 @@ mod tests {
             output.extend_from_slice(content);
         }
         output
+    }
+
+    #[test]
+    fn verified_restore_publishes_exactly_one_stable_current_without_overwrite()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let fixture = Fixture::new()?;
+        let source_id = GenerationId::parse("generation_snapshot_source")?;
+        let cloud_id = GenerationId::parse("generation_snapshot_confirmed")?;
+        let source = fixture.root.create_generation(
+            &fixture.tenant_id, &fixture.profile_id, &source_id,
+        )?;
+        fs::write(source.path().join("browser-state.bin"), b"original verified browser files")?;
+        let snapshot = encode_workspace_snapshot(&source, &source.inventory()?)?;
+        let saved = super::materialize_profile_current_snapshot_with_pre_publish(
+            &fixture.root, &fixture.tenant_id, &fixture.profile_id,
+            &cloud_id, 9, &snapshot, |_| Ok(()),
+        )?;
+        assert!(saved.path().ends_with("current"));
+        assert_eq!(saved.generation_id(), &cloud_id);
+        assert_eq!(saved.base_generation_id(), Some(&cloud_id));
+        assert_eq!(saved.profile_version(), 9);
+        assert_eq!(
+            fs::read(saved.path().join("browser-state.bin"))?,
+            b"original verified browser files",
+        );
+        // The local working CURRENT is never overwritten, even by an
+        // otherwise well-formed verified snapshot with the same cloud ID.
+        fs::write(saved.path().join("browser-state.bin"), b"local unsynced edits")?;
+        let attempt = super::materialize_profile_current_snapshot_with_pre_publish(
+            &fixture.root, &fixture.tenant_id, &fixture.profile_id,
+            &cloud_id, 9, &snapshot, |_| Ok(()),
+        );
+        assert!(matches!(attempt, Err(GenerationSnapshotError::TargetAlreadyExists)));
+        assert_eq!(
+            fs::read(saved.path().join("browser-state.bin"))?,
+            b"local unsynced edits",
+        );
+        fixture.cleanup();
+        Ok(())
+    }
+
+    #[test]
+    fn streamed_verified_restore_uses_same_stable_current_owner()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let fixture = Fixture::new()?;
+        let source_id = GenerationId::parse("generation_stream_source")?;
+        let cloud_id = GenerationId::parse("generation_stream_confirmed")?;
+        let source = fixture.root.create_generation(
+            &fixture.tenant_id, &fixture.profile_id, &source_id,
+        )?;
+        fs::write(source.path().join("cookies.sqlite"), b"persistent native state")?;
+        let snapshot = encode_workspace_snapshot(&source, &source.inventory()?)?;
+        let mut reader = snapshot.as_slice();
+        let restored = super::materialize_profile_current_snapshot_streaming_with_pre_publish(
+            &fixture.root, &fixture.tenant_id, &fixture.profile_id,
+            &cloud_id, 3, &mut reader,
+            StreamedWorkspaceSnapshot {
+                plaintext_bytes: snapshot.len() as u64,
+                plaintext_digest: sha2::Sha256::digest(&snapshot).into(),
+            }, |_| Ok(()),
+        )?;
+        assert_eq!(restored.base_generation_id(), Some(&cloud_id));
+        assert_eq!(restored.profile_version(), 3);
+        assert_eq!(fs::read(restored.path().join("cookies.sqlite"))?, b"persistent native state");
+        fixture.cleanup();
+        Ok(())
     }
 
     #[test]
