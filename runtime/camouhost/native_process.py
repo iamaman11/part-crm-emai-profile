@@ -13,7 +13,7 @@ import contextlib
 import sys
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Callable, Mapping
+from typing import Any, Mapping
 
 
 class NativeLaunchError(RuntimeError):
@@ -24,8 +24,6 @@ class NativeLaunchError(RuntimeError):
 class NativeProfileSession:
     """Hold the Playwright driver connection and observe its native close event."""
 
-    workspace: Path
-    writer_active: Callable[[Path], bool]
     manager: Any = field(repr=False)
     context: Any = field(repr=False)
     _closed: asyncio.Event = field(default_factory=asyncio.Event, repr=False)
@@ -65,32 +63,20 @@ class NativeProfileSession:
             with contextlib.redirect_stdout(sys.stderr):
                 await manager.__aexit__(None, None, None)
         except BaseException as error:
-            try:
-                active = self.writer_active(self.workspace)
-            except (OSError, RuntimeError) as lock_error:
-                raise NativeLaunchError("Playwright driver teardown state is unknown") from lock_error
-            if active:
-                raise NativeLaunchError("Playwright driver teardown failed while Firefox is active") from error
             raise NativeLaunchError("Playwright driver teardown failed") from error
 
     async def close_after_browser_exit(self) -> None:
-        # Never turn this into a close command. The SDK event must already
-        # prove that the context ended, and the OS file lock must be released.
+        # Never turn this into a close command. The official SDK event must
+        # already prove that the context ended. Rust owns the native file-lock
+        # proof before it permits snapshot and Sync.
         if not self.context_is_closed():
             raise NativeLaunchError("browser context is still open")
-        try:
-            active = self.writer_active(self.workspace)
-        except (OSError, RuntimeError) as error:
-            raise NativeLaunchError("Firefox writer state is unknown") from error
-        if active:
-            raise NativeLaunchError("Firefox still owns the profile")
         await self._release_playwright()
 
 async def launch_native_camoufox(
     *,
     workspace: Path,
     options: Mapping[str, Any],
-    writer_active: Callable[[Path], bool],
     admission_granted: bool,
     headless: bool = False,
 ) -> NativeProfileSession:
@@ -121,9 +107,6 @@ async def launch_native_camoufox(
     executable = options.get("executable_path")
     if not isinstance(executable, (str, Path)) or not Path(executable).is_absolute():
         raise NativeLaunchError("approved Camoufox executable missing")
-    if writer_active(workspace):
-        raise NativeLaunchError("Firefox already owns this profile")
-
     from camoufox.async_api import AsyncNewBrowser
     from playwright.async_api import async_playwright
 
@@ -139,12 +122,7 @@ async def launch_native_camoufox(
                 from_options=dict(options),
                 persistent_context=True,
             )
-        return NativeProfileSession(
-            workspace=workspace,
-            writer_active=writer_active,
-            manager=manager,
-            context=context,
-        )
+        return NativeProfileSession(manager=manager, context=context)
     except BaseException as error:
         if playwright is not None:
             with contextlib.suppress(BaseException):
