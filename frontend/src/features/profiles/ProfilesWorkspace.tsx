@@ -1,4 +1,4 @@
-import { launchProfile, openBrowserProfile } from './api';
+import { dispatchBrowserProfileOpen, launchProfile } from './api';
 import { newIdempotencyKey } from '../../shared/api/idempotency';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useEffect, useRef, useState, type FormEvent } from 'react';
@@ -68,9 +68,9 @@ export function ProfilesWorkspace({
     refetchOnReconnect: false,
   });
   const launch = useMutation({
-    mutationFn: () => {
+    mutationFn: async () => {
       if (!launchIntent.data) throw new Error('The local browser open intent is not ready.');
-      openBrowserProfile(launchIntent.data.launchUri);
+      dispatchBrowserProfileOpen(launchIntent.data.launchUri);
     },
   });
   const lookup = useMutation({
