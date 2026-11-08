@@ -81,6 +81,44 @@ def main() -> int:
         assert invoked == called, (env, invoked, called)
         return error.getvalue()
 
+    # The canonical local-first user launch never redeems an online claim.
+    # This is the same official async Playwright path, not a second engine.
+    async def local_open(_folder):
+        invoked.append("local")
+        return 19
+
+    with tempfile.TemporaryDirectory() as folder:
+        for environment, outcome in (
+            ({runtime.EXECUTION_MODE_ENV: runtime.USER_NATIVE_MODE}, 19),
+            ({}, 2),
+            ({runtime.EXECUTION_MODE_ENV: runtime.ISOLATED_COLD_PROBE_MODE}, 2),
+            ({runtime.EXECUTION_MODE_ENV: runtime.USER_NATIVE_MODE,
+              runtime.AGENT_DIRECTORY_ENV: folder}, 2),
+        ):
+            invoked.clear()
+            with (patch.dict(os.environ, environment, clear=True),
+                  patch.object(sys, "argv", ["real.py", "--local-open", folder]),
+                  patch.object(runtime, "run_local_profile", side_effect=local_open),
+                  contextlib.redirect_stderr(io.StringIO())):
+                assert runtime.main() == outcome
+            assert invoked == (["local"] if outcome == 19 else [])
+
+    local_owner = (SOURCE.parents[2] / "apps/profile-bridge/src/local_browser_open.rs").read_text(
+        encoding="utf-8"
+    )
+    assert 'run_python(runtime_root, workspace.path(), "--local-open")' in local_owner
+    assert ".local-unsynced" in local_owner
+    assert "Cloud" not in local_owner and "R2" not in local_owner
+    composition = (SOURCE.parents[2] /
+                   "apps/profile-bridge/src/shipping_composition.rs").read_text(encoding="utf-8")
+    local_first = composition.split("    pub fn run_initial(", 1)[1].split(
+        "    pub fn run(claim:", 1
+    )[0]
+    assert "local_browser_open::open" in local_first
+    assert "generation_initialization::initialize(" not in local_first
+    assert "ControlPlaneEnrollment" not in local_first
+    assert "claim_launch_intent" not in local_first
+
     # No implicit managed browser launch when a mode flag is missing/old/unknown.
     for env in ({}, {"CAMOUHOST_NATIVE_PROFILE": "1"},
                 {runtime.EXECUTION_MODE_ENV: ""},
