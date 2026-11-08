@@ -311,173 +311,6 @@ impl MaterializationRoot {
 
     fn profile_scope_path(&self, tenant: &TenantId, profile: &ProfileId) -> PathBuf {
         let mut digest = Sha256::new();
-        digest.update(b"profile-platform/workspace-scope/v2\\0");
-        for id in [tenant.as_str(), profile.as_str()] {
-            digest.update(id.as_bytes());
-            digest.update([0]);
-        }
-        let scope: String = digest
-            .finalize()
-            .iter()
-            .map(|byte| format!("{byte:02x}"))
-            .collect();
-        self.canonical_path.join(&scope[..32]).join(&scope[32..])
-    }
-
-
-    /// The sidecar records only the logical generation and last cloud base; it is
-    /// excluded from browser snapshots and never contains browser data.
-    pub fn create_profile_current(
-        &self,
-        tenant_id: &TenantId,
-        profile_id: &ProfileId,
-        generation_id: &GenerationId,
-        profile_version: u64,
-    ) -> Result<ProfileCurrentWorkspace, LocalProfileError> {
-        let path = self.prepare_profile_current_path(tenant_id, profile_id)?;
-        fs::create_dir(&path)?;
-        write_new_text(&path.join(GENERATION_MARKER), GENERATION_MARKER_CONTENT)?;
-        let state = ProfileCurrentState::draft(generation_id.clone(), profile_version)?;
-        write_new_text(&path.join(PROFILE_CURRENT_STATE_FILE), &state.encode())?;
-        let workspace = GenerationWorkspace::open(path, tenant_id, profile_id, generation_id)?;
-        Ok(ProfileCurrentWorkspace { workspace, state })
-    }
-
-    /// Open the stable local working directory using its last confirmed cloud base.
-    /// A missing or corrupt sidecar never causes an empty replacement to be created.
-    pub fn open_profile_current(
-        &self,
-        tenant_id: &TenantId,
-        profile_id: &ProfileId,
-    ) -> Result<ProfileCurrentWorkspace, LocalProfileError> {
-        let path = self
-            .existing_profile_current_path(tenant_id, profile_id)?
-            .ok_or(LocalProfileError::Io(std::io::ErrorKind::NotFound))?;
-        let state = read_profile_current_state(&path.join(PROFILE_CURRENT_STATE_FILE))?;
-        let workspace =
-            GenerationWorkspace::open(path, tenant_id, profile_id, &state.generation_id)?;
-        Ok(ProfileCurrentWorkspace { workspace, state })
-    }
-
-    /// Advance the local base only after the Worker has returned a verified Sync receipt.
-    /// The physical working directory never changes when the cloud generation changes.
-    pub fn update_profile_current_sync_base(
-        &self,
-        workspace: &GenerationWorkspace,
-        generation_id: &GenerationId,
-        profile_version: u64,
-    ) -> Result<ProfileCurrentWorkspace, LocalProfileError> {
-        let current_path = self.profile_current_path(workspace.tenant_id(), workspace.profile_id());
-        let metadata = fs::symlink_metadata(&current_path)?;
-        if metadata.file_type().is_symlink() || !metadata.is_dir() {
-            return Err(LocalProfileError::SymbolicLinkRejected);
-        }
-        #[cfg(windows)]
-        {
-            use std::os::windows::fs::MetadataExt;
-            if metadata.file_attributes() & 0x0400 != 0 {
-                return Err(LocalProfileError::SymbolicLinkRejected);
-            }
-        }
-        let current_path = fs::canonicalize(current_path)?;
-        if current_path != workspace.path() {
-            return Err(LocalProfileError::UnsafeRelativePath);
-        }
-        let state = ProfileCurrentState::synced(generation_id.clone(), profile_version)?;
-        write_existing_control_text(
-            &current_path.join(PROFILE_CURRENT_STATE_FILE),
-            &state.encode(),
-        )?;
-        let workspace = GenerationWorkspace::open(
-            current_path,
-            workspace.tenant_id(),
-            workspace.profile_id(),
-            generation_id,
-        )?;
-        Ok(ProfileCurrentWorkspace { workspace, state })
-    }
-
-    fn prepare_profile_current_path(
-        &self,
-        tenant: &TenantId,
-        profile: &ProfileId,
-    ) -> Result<PathBuf, LocalProfileError> {
-        if self
-            .existing_profile_current_path(tenant, profile)?
-            .is_some()
-        {
-            return Err(LocalProfileError::TargetAlreadyExists);
-        }
-        let path = self.profile_current_path(tenant, profile);
-        let mut parent = self.canonical_path.clone();
-        for component in path
-            .strip_prefix(&self.canonical_path)
-            .map_err(|_| LocalProfileError::UnsafeRelativePath)?
-            .components()
-            .take(2)
-        {
-            parent = ensure_directory(
-                &parent,
-                component
-                    .as_os_str()
-                    .to_str()
-                    .ok_or(LocalProfileError::UnsafeRelativePath)?,
-            )?;
-        }
-        Ok(path)
-    }
-
-    fn existing_profile_current_path(
-        &self,
-        tenant: &TenantId,
-        profile: &ProfileId,
-    ) -> Result<Option<PathBuf>, LocalProfileError> {
-        let path = self.profile_current_path(tenant, profile);
-        let mut parent = self.canonical_path.clone();
-        for component in path
-            .strip_prefix(&self.canonical_path)
-            .map_err(|_| LocalProfileError::UnsafeRelativePath)?
-            .components()
-            .take(2)
-        {
-            let value = component
-                .as_os_str()
-                .to_str()
-                .ok_or(LocalProfileError::UnsafeRelativePath)?;
-            match open_directory(&parent, value) {
-                Ok(next) => parent = next,
-                Err(LocalProfileError::Io(std::io::ErrorKind::NotFound)) => return Ok(None),
-                Err(error) => return Err(error),
-            }
-        }
-        match fs::symlink_metadata(&path) {
-            Ok(metadata) if metadata.file_type().is_symlink() => {
-                Err(LocalProfileError::SymbolicLinkRejected)
-            }
-            Ok(metadata) => {
-                #[cfg(windows)]
-                {
-                    use std::os::windows::fs::MetadataExt;
-                    if metadata.file_attributes() & 0x0400 != 0 {
-                        return Err(LocalProfileError::SymbolicLinkRejected);
-                    }
-                }
-                if !metadata.is_dir() {
-                    return Err(LocalProfileError::RootIsNotDirectory);
-                }
-                Ok(Some(path))
-            }
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
-            Err(error) => Err(error.into()),
-        }
-    }
-
-    fn profile_current_path(&self, tenant: &TenantId, profile: &ProfileId) -> PathBuf {
-        self.profile_scope_path(tenant, profile).join("current")
-    }
-
-    fn profile_scope_path(&self, tenant: &TenantId, profile: &ProfileId) -> PathBuf {
-        let mut digest = Sha256::new();
         digest.update(b"profile-platform/workspace-scope/v2\0");
         for id in [tenant.as_str(), profile.as_str()] {
             digest.update(id.as_bytes());
@@ -490,6 +323,7 @@ impl MaterializationRoot {
             .collect();
         self.canonical_path.join(&scope[..32]).join(&scope[32..])
     }
+
 
     /// Physical cache placement is independent of opaque ID lengths. Full scoped identity is
     /// hashed without truncation; three directory levels preserve the root admission boundary.
@@ -1070,7 +904,7 @@ fn render_generation_marker(
         return Err(LocalProfileError::InvalidPolicy);
     }
     Ok(format!(
-        "{GENERATION_MARKER_HEADER}\\n{}\\n{}\\n{}\\n",
+        "{GENERATION_MARKER_HEADER}\n{}\n{}\n{}\n",
         generation_id.as_str(),
         base_generation_id.map_or("-", GenerationId::as_str),
         profile_version,

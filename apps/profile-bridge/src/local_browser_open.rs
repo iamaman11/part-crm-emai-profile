@@ -65,7 +65,7 @@ fn open_or_create_workspace(
     generation: &GenerationId,
 ) -> Result<crate::local_profile::GenerationWorkspace, LocalOpenError> {
     match root.open_profile_current(&intent.tenant_id, &intent.profile_id) {
-        Ok(current) => Ok(current.into_workspace()),
+        Ok(current) => Ok(current),
         Err(LocalProfileError::Io(std::io::ErrorKind::NotFound))
             if intent.status == InitialProfileStatus::Draft =>
         {
