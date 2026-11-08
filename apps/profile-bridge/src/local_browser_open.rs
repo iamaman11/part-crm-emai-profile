@@ -175,7 +175,7 @@ pub fn open(
 
 #[cfg(test)]
 mod tests {
-    use super::{LocalOpenError, local_generation, mark_local_unsynced};
+    use super::{LocalOpenError, local_generation, mark_local_unsynced, open_or_create_workspace};
     use crate::generation_initialization::{InitialProfileOpen, InitialProfileStatus};
     use profile_platform_primitives::{ActorId, ProfileId, TenantId};
 
@@ -185,6 +185,7 @@ mod tests {
             actor_id: ActorId::parse("actor_01JLOCAL").unwrap(),
             profile_id: ProfileId::parse("profile_01JLOCAL").unwrap(),
             expected_version: 1,
+            status: InitialProfileStatus::Draft,
         }
     }
     #[test]
