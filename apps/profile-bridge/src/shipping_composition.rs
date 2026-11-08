@@ -851,7 +851,12 @@ mod windows {
                 .spawn()
         });
         if result.is_err() {
-            eprintln!("BRIDGE_SYNC_NOT_STARTED;NEXT_SAFE_STEP=PRESERVE_LOCAL_BYTES");
+            eprintln!("BRIDGE_SYNC_NOT_STARTED;FALLBACK=RUN_EXISTING_SYNC_INLINE");
+            if let Err(error) = run_closed_sync(intent) {
+                eprintln!(
+                    "BRIDGE_SYNC_INLINE_FALLBACK_PENDING;error={error:?};NEXT_SAFE_STEP=PRESERVE_LOCAL_BYTES"
+                );
+            }
         }
     }
 
