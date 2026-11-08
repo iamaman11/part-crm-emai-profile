@@ -341,12 +341,10 @@ fn run_native_cold_launch_cycle() -> Result<ApprovedRuntimeBundle, Box<dyn std::
         let launch = intent.clone();
         let device = device.clone();
         let opened = thread::spawn(move || -> Result<(), String> {
-            let owner = MaterializationRoot::open_or_create(target)
-                .map_err(|error| error.to_string())?;
-            profile_bridge::local_browser_open::open(
-                &owner, &launch, &device, &native_runtime,
-            )
-            .map_err(|error| error.to_string())
+            let owner =
+                MaterializationRoot::open_or_create(target).map_err(|error| error.to_string())?;
+            profile_bridge::local_browser_open::open(&owner, &launch, &device, &native_runtime)
+                .map_err(|error| error.to_string())
         });
 
         // Observe only native filesystem/process readiness; no page/DOM
@@ -359,7 +357,9 @@ fn run_native_cold_launch_cycle() -> Result<ApprovedRuntimeBundle, Box<dyn std::
             }
             if let Ok(folder) = root.open_profile_current(&intent.tenant_id, &intent.profile_id) {
                 if folder.path().join("camoufox-config.json").is_file()
-                    && fs::read(folder.path().join(".local-unsynced")).ok().as_deref()
+                    && fs::read(folder.path().join(".local-unsynced"))
+                        .ok()
+                        .as_deref()
                         == Some(&b"local-unsynced-v2"[..])
                 {
                     break folder;
@@ -385,11 +385,14 @@ fn run_native_cold_launch_cycle() -> Result<ApprovedRuntimeBundle, Box<dyn std::
         close_native_camoufox_window()?;
         let (sender, receiver) = std::sync::mpsc::sync_channel(1);
         thread::spawn(move || {
-            let result = opened.join().map_err(|_| "native Open thread panicked".to_owned())
+            let result = opened
+                .join()
+                .map_err(|_| "native Open thread panicked".to_owned())
                 .and_then(|value| value);
             let _ = sender.send(result);
         });
-        let close = receiver.recv_timeout(Duration::from_secs(60))
+        let close = receiver
+            .recv_timeout(Duration::from_secs(60))
             .map_err(|_| "native browser did not finish after WM_CLOSE")?;
         close.map_err(|error| format!("native browser Close failed: {error}"))?;
         eprintln!(

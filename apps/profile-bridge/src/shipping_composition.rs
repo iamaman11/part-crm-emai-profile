@@ -690,8 +690,12 @@ mod windows {
                     .map_err(|_| ShippingCompositionError::SyncUnconfirmed)?,
             );
             sync_closed_local_draft(
-                intent, &actor, binding.device_id(), root,
-                &mut transport, &mut uploader,
+                intent,
+                &actor,
+                binding.device_id(),
+                root,
+                &mut transport,
+                &mut uploader,
             )
             .map_err(ShippingCompositionError::Initialization)
         }

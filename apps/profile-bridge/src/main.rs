@@ -8,10 +8,10 @@ use profile_bridge::device_pairing::{
 };
 use profile_bridge::generation_initialization::{INITIAL_OPEN_URI_PREFIX, InitialProfileOpen};
 use profile_bridge::installed_connection::ControlPlaneOrigin;
-use profile_bridge::shipping_composition::{run_claim, run_closed_profile_sync};
 use profile_bridge::shipping_composition::{
     ShippingCompositionError, ShippingDeliveryCommand, run_delivery_command,
 };
+use profile_bridge::shipping_composition::{run_claim, run_closed_profile_sync};
 use profile_bridge::user_diagnostics::UserDiagnostic;
 use profile_bridge::user_diagnostics::report::{self, Cause, Cloud, Outcome, Stage};
 use std::time::Instant;
@@ -31,7 +31,9 @@ use std::process::ExitCode;
 use zeroize::Zeroizing;
 
 fn main() -> ExitCode {
-    let internal_sync = env::args_os().nth(1).is_some_and(|arg| arg == "--sync-closed");
+    let internal_sync = env::args_os()
+        .nth(1)
+        .is_some_and(|arg| arg == "--sync-closed");
     match run(env::args()) {
         Ok(()) => ExitCode::SUCCESS,
         Err(error) => {
@@ -181,8 +183,11 @@ where
         observe(outcome, cause, elapsed);
         if result.is_ok() && stage == Stage::CloudSaveAttempt {
             report::record_current(
-                Stage::CloudSaveConfirmed, Outcome::Succeeded,
-                Cloud::CommittedExact, Cause::None, elapsed,
+                Stage::CloudSaveConfirmed,
+                Outcome::Succeeded,
+                Cloud::CommittedExact,
+                Cause::None,
+                elapsed,
             );
         }
         if result.is_ok()
@@ -335,7 +340,9 @@ where
             .map_err(|_| BridgeCliError::InvalidInstallationArgument);
     }
     if argument.as_str() == "--sync-closed" {
-        let uri = arguments.next().ok_or(BridgeCliError::MissingLaunchArgument)?;
+        let uri = arguments
+            .next()
+            .ok_or(BridgeCliError::MissingLaunchArgument)?;
         if arguments.next().is_some() {
             return Err(BridgeCliError::UnexpectedArgument);
         }
@@ -447,7 +454,11 @@ mod tests {
     fn one_shot_sync_admits_only_exact_v2_native_profile() {
         let uri = "profilebridge://open/v2/tenant_01JSYNC/actor_01JSYNC/profile_01JSYNC/1/DRAFT";
         assert!(matches!(
-            parse_command(["profile-bridge".to_owned(), "--sync-closed".to_owned(), uri.to_owned()]),
+            parse_command([
+                "profile-bridge".to_owned(),
+                "--sync-closed".to_owned(),
+                uri.to_owned()
+            ]),
             Ok(BridgeCommand::SyncClosed(_))
         ));
         for invalid in [
@@ -455,14 +466,24 @@ mod tests {
             "profilebridge://open/v2/tenant_01JSYNC/actor_01JSYNC/profile_01JSYNC/1",
             "profilebridge://claim/claim_01JSYNC",
         ] {
-            assert!(parse_command([
-                "profile-bridge".to_owned(), "--sync-closed".to_owned(), invalid.to_owned(),
-            ]).is_err());
+            assert!(
+                parse_command([
+                    "profile-bridge".to_owned(),
+                    "--sync-closed".to_owned(),
+                    invalid.to_owned(),
+                ])
+                .is_err()
+            );
         }
-        assert!(parse_command([
-            "profile-bridge".to_owned(), "--sync-closed".to_owned(),
-            uri.to_owned(), "extra".to_owned(),
-        ]).is_err());
+        assert!(
+            parse_command([
+                "profile-bridge".to_owned(),
+                "--sync-closed".to_owned(),
+                uri.to_owned(),
+                "extra".to_owned(),
+            ])
+            .is_err()
+        );
     }
 
     #[test]
