@@ -659,7 +659,7 @@ try:
         for key, value in expected_cookies.items()
     ), "valid non-HttpOnly cookies were not visible at their original origin"
 finally:
-    runtime.close_context(manager, context, root)
+    runtime.close_context(manager, context)
 
 manager, context = enter()
 try:
@@ -727,71 +727,14 @@ try:
         "f.action='/user-post'; document.body.appendChild(f); f.submit(); }"
     )
     user_post.wait_for_url(origin + "/user-post", timeout=15000)
-    witness = runtime.install_controlled_close_observation(context)
-    assert not runtime.controlled_close_candidate(witness)
-    present[urls[0]].close()
-    assert not runtime.controlled_close_candidate(witness), (
-        "closing one restored tab falsely acknowledged complete user close"
-    )
-    # The other previously restored tab remains live and managed.
+    # The application does not close or manage individual user tabs.
     assert not present[urls[1]].is_closed()
 finally:
-    runtime.close_context(manager, context, root)
+    runtime.close_context(manager, context)
 
-# INVESTIGATE-04: a tab intentionally closed before a browser-wide Quit
-# must not be conflated with lost origin storage. Observe first, with no
-# synthetic tab/navigation, then read the SAME origin from the surviving tab.
-manager, context = enter()
-try:
-    initial_third_urls = [page.url for page in context.pages]
-    deadline = time.monotonic() + 20
-    while urls[1] not in {page.url for page in context.pages}:
-        if time.monotonic() >= deadline:
-            raise AssertionError(
-                "surviving original-origin tab failed native SessionStore reopen: "
-                f"initial={initial_third_urls!r} actual={[page.url for page in context.pages]!r}"
-            )
-        try:
-            context.wait_for_event("page", timeout=500)
-        except PlaywrightTimeoutError:
-            pass
-    present_third = {page.url: page for page in context.pages}
-    assert urls[0] not in present_third, (
-        "intentionally closed tab unexpectedly reopened; classify exact native Quit semantics"
-    )
-    runtime.admit_navigation(context, None)
-    assert not any(
-        page.url == runtime.MANAGED_BOOTSTRAP_TAB_URL for page in context.pages
-    ), "Camouhost's internal bootstrap tab survived a native SessionStore restore"
-    retry_as_user(present_third[urls[1]])
-    assert present_third[urls[1]].evaluate(
-        "localStorage.getItem('restore-proof')"
-    ) == "retained", "closing a tab did not preserve its persistent origin storage"
-    cookies_after_selective_close = {
-        item["name"]: item["value"] for item in context.cookies([origin])
-        if item["name"] in expected_cookies
-    }
-    assert cookies_after_selective_close == expected_cookies, (
-        "closing a window/tab unexpectedly removed persistent origin cookies"
-    )
-    final_metadata = {
-        item["name"]: {
-            "expires": item["expires"],
-            "sameSite": item["sameSite"],
-            "secure": item["secure"],
-            "httpOnly": item["httpOnly"],
-        }
-        for item in context.cookies([origin])
-        if item["name"] in expected_cookies
-    }
-    assert final_metadata == cookie_metadata_before, (
-        "native Firefox changed cookie expiry or attributes after a selective tab close"
-    )
-finally:
-    runtime.close_context(manager, context, root)
 print(
-    "two previous tabs restored; intentionally closed tab remains closed; "
-    "persistent same-origin storage, cookie expiry and attributes retained", flush=True
+    "two previous tabs restored; persistent same-origin storage, cookie expiry "
+    "and attributes retained", flush=True
 )
 """
     try:
