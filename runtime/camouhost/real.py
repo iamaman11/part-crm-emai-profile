@@ -2162,12 +2162,71 @@ async def run_native_ipc_async() -> int:
 
 
 
+
+async def run_local_profile(root: Path) -> int:
+    """One local Firefox folder; no claim, network, R2 or site-specific API."""
+    from native_process import launch_native_camoufox
+
+    session = None
+    try:
+        lock, _ = load_runtime_lock()
+        verify_python_components(lock)
+        if root.is_symlink() or not root.is_dir():
+            raise RuntimeContractError("local browser folder unavailable")
+        root = root.resolve(strict=True)
+        # Rust holds the exclusive local OS writer admission until Python
+        # exits. Direct invocation without that lock never opens Firefox.
+        require_bridge_writer_lock(root)
+        config, _ = load_generation_config(root)
+        if firefox_writer_active(root):
+            raise RuntimeContractError("Firefox profile already in use")
+        options = camoufox_launch_options(lock, root, config)
+        session = await launch_native_camoufox(
+            workspace=root,
+            options=options,
+            writer_active=firefox_writer_active,
+            admission_granted=True,
+            headless=False,
+        )
+        report_runtime_stage("launch", "ready")
+        while True:
+            state = session.profile_state()
+            if state == "CLEAN_SHUTDOWN_VERIFIED":
+                await session.close()
+                return 0
+            if state in ("CRASH_OR_UNKNOWN_PRESERVE_LOCAL", "UNKNOWN_PRESERVE_LOCAL"):
+                await session.close_after_browser_exit()
+                return 6
+            if state == "WRITER_NOT_OBSERVED":
+                await session.abort_startup()
+                return 5
+            await asyncio.sleep(0.25)
+    except BaseException as error:
+        report_runtime_failure("launch", error)
+        if session is not None:
+            with contextlib.suppress(BaseException):
+                await session.abort_startup()
+        return 5
+
+
+
 def run_native_ipc() -> int:
     """Keep the current IPC entrypoint while the native Playwright loop stays alive."""
     return asyncio.run(run_native_ipc_async())
 
 
 def main() -> int:
+    if len(sys.argv) == 3 and sys.argv[1] == "--local-open":
+        if os.environ.get(EXECUTION_MODE_ENV) != USER_NATIVE_MODE:
+            print("local browser requires native execution", file=sys.stderr)
+            return 2
+        if os.environ.get(AGENT_DIRECTORY_ENV):
+            print("local browser rejects agent directory", file=sys.stderr)
+            return 2
+        if os.environ.get(HEADLESS_MODE_ENV, "false") != "false":
+            print("local browser requires headful mode", file=sys.stderr)
+            return 2
+        return asyncio.run(run_local_profile(Path(sys.argv[2])))
     if len(sys.argv) == 3 and sys.argv[1] == "--materialize-identity":
         try:
             with contextlib.redirect_stdout(sys.stderr):

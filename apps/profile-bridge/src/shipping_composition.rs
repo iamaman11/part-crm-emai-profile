@@ -32,6 +32,8 @@ pub enum ShippingCompositionError {
     CommittedRecoveryRequired,
     HeartbeatAuthorityUncertain,
     Initialization(crate::generation_initialization::InitialProfileError),
+    #[cfg(windows)]
+    LocalOpen(crate::local_browser_open::LocalOpenError),
 }
 
 impl core::fmt::Display for ShippingCompositionError {
@@ -60,6 +62,8 @@ impl core::fmt::Display for ShippingCompositionError {
             }
             Self::CloseObservation(_) => "shipping Profile Bridge close observation failed",
             Self::Initialization(_) => "profile first-open preparation failed",
+            #[cfg(windows)]
+            Self::LocalOpen(error) => return core::fmt::Display::fmt(error, formatter),
             Self::HeartbeatAuthorityUncertain => {
                 "browser closed safely: coordinator heartbeat was not confirmed; local data retained for recovery"
             },
@@ -411,105 +415,31 @@ mod windows {
     pub fn run_initial(
         intent: &crate::generation_initialization::InitialProfileOpen,
     ) -> Result<(), ShippingCompositionError> {
-        use crate::operator_flow::DeviceAuthenticationPort;
-        use bridge_domain::DeviceKeyPort;
-        use profile_platform_primitives::{ActorContext, CorrelationId, TenantScope};
+        // The CRM web page already supplied the selected profile. Opening the
+        // browser is now a local filesystem/process operation, not an R2
+        // initialization or a Coordinator lease. Sync belongs to a different
+        // operation and cannot block a local Firefox window.
         if recover_delivery_before_claim()? {
             return Ok(());
         }
         let config = ShippingConfig::from_installation()?;
-        // First Open of a DRAFT profile is an ordinary browser Open too.
-        // Reuse the verified signed installation and check its critical launch
-        // files; full 2.8 GiB runtime verification belongs to setup/repair.
-        let active = ActiveWindowsDeliveryRuntime::resolve_for_browser_open().map_err(|error| {
-            eprintln!("BRIDGE_DELIVERY_RUNTIME_FAILURE={error:?}");
-            ShippingCompositionError::DeliveryRuntime(error)
-        })?;
-        let pending_health = active.pending_health_confirmation();
-        let runtime_root = active.runtime_root().to_path_buf();
-        let mut bundles = active.into_bundle_selection();
+        let delivery = ActiveWindowsDeliveryRuntime::resolve_for_browser_open()
+            .map_err(ShippingCompositionError::DeliveryRuntime)?;
         let binding =
             WindowsDeviceApplicationBinding::open(&config.device_application_binding_path)
                 .map_err(|_| ShippingCompositionError::Configuration)?;
         if binding.tenant_id() != &intent.tenant_id || binding.actor_id() != &intent.actor_id {
-            return Err(ShippingCompositionError::ControlPlane);
+            return Err(ShippingCompositionError::Configuration);
         }
-        let device = binding.device_id().clone();
-        let actor = ActorContext::new(
-            TenantScope::new(binding.tenant_id().clone()),
-            binding.actor_id().clone(),
-            CorrelationId::parse("corr_initial_profile")
-                .map_err(|_| ShippingCompositionError::Configuration)?,
-        );
-        let mut application =
-            WindowsDeviceApplication::from_system(config.control_plane_origin, binding)
-                .map_err(|_| ShippingCompositionError::Configuration)?;
-        let key = application
-            .ensure_key_handle(&device)
-            .map_err(|_| ShippingCompositionError::ControlPlane)?;
-        application
-            .authenticate(&device, &key)
-            .map_err(|_| ShippingCompositionError::ControlPlane)?;
-        let mut transport = application.transport();
         let root = MaterializationRoot::open_or_create(&config.materialization_root)
             .map_err(|_| ShippingCompositionError::Configuration)?;
-        let runtime = ManagedCamouhostConfig::new(
-            runtime_root.join(PACKAGED_PYTHON_EXECUTABLE),
-            runtime_root,
-            RuntimeDisplayMode::Headful,
-            None,
-            None,
-        )
-        .map_err(|_| ShippingCompositionError::Configuration)?;
-        let mut uploader = WindowsSignedGenerationObjectPut::from_system()
-            .map_err(|_| ShippingCompositionError::Configuration)?;
-        let materialize =
-            |workspace: &crate::local_profile::GenerationWorkspace,
-             bundle: &crate::runtime_bundle::ApprovedRuntimeBundle| {
-                use crate::generation_initialization::InitialProfileError;
-                let started = pending_health
-                    .map(|pending| {
-                        pending
-                            .start_before_runtime_health()
-                            .map_err(|_| InitialProfileError::Runtime)
-                    })
-                    .transpose()?;
-                let identity = runtime
-                    .materialize_initial_identity(workspace, bundle)
-                    .map_err(|_| InitialProfileError::Runtime)?;
-                if let Some(started) = started {
-                    started
-                        .confirm_after_runtime_ready()
-                        .map_err(|_| InitialProfileError::Runtime)?;
-                }
-                Ok(identity)
-            };
-        let claim = crate::generation_initialization::initialize(
-            intent,
-            &actor,
-            &device,
+        crate::local_browser_open::open(
             &root,
-            materialize,
-            &mut bundles,
-            &mut transport,
-            &mut uploader,
+            intent,
+            binding.device_id(),
+            delivery.runtime_root(),
         )
-        .map_err(ShippingCompositionError::Initialization)?;
-        open_with_one_fresh_claim(&claim, run, || {
-            // The browser may have remained open for hours. Never reuse the
-            // old machine session; reauthenticate the existing P-256 key.
-            application
-                .authenticate(&device, &key)
-                .map_err(|_| ShippingCompositionError::ControlPlane)?;
-            let mut fresh_transport = application.transport();
-            crate::generation_initialization::reauthorize_current_ready_generation(
-                intent,
-                &actor,
-                &device,
-                &mut fresh_transport,
-            )
-            .map_err(ShippingCompositionError::Initialization)
-        })
+        .map_err(ShippingCompositionError::LocalOpen)
     }
 
     pub fn run(claim: &ClaimUri) -> Result<(), ShippingCompositionError> {
