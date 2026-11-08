@@ -294,8 +294,19 @@ impl MaterializationRoot {
             Ok(metadata) if metadata.file_type().is_symlink() => {
                 Err(LocalProfileError::SymbolicLinkRejected)
             }
-            Ok(metadata) if !metadata.is_dir() => Err(LocalProfileError::RootIsNotDirectory),
-            Ok(_) => Ok(Some(path)),
+            Ok(metadata) => {
+                #[cfg(windows)]
+                {
+                    use std::os::windows::fs::MetadataExt;
+                    if metadata.file_attributes() & 0x0400 != 0 {
+                        return Err(LocalProfileError::SymbolicLinkRejected);
+                    }
+                }
+                if !metadata.is_dir() {
+                    return Err(LocalProfileError::RootIsNotDirectory);
+                }
+                Ok(Some(path))
+            }
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
             Err(error) => Err(error.into()),
         }
@@ -913,6 +924,13 @@ fn ensure_directory(parent: &Path, safe_segment: &str) -> Result<PathBuf, LocalP
         if metadata.file_type().is_symlink() {
             return Err(LocalProfileError::SymbolicLinkRejected);
         }
+        #[cfg(windows)]
+        {
+            use std::os::windows::fs::MetadataExt;
+            if metadata.file_attributes() & 0x0400 != 0 {
+                return Err(LocalProfileError::SymbolicLinkRejected);
+            }
+        }
         if !metadata.is_dir() {
             return Err(LocalProfileError::RootIsNotDirectory);
         }
@@ -934,6 +952,13 @@ fn open_directory(parent: &Path, safe_segment: &str) -> Result<PathBuf, LocalPro
     let metadata = fs::symlink_metadata(&path)?;
     if metadata.file_type().is_symlink() {
         return Err(LocalProfileError::SymbolicLinkRejected);
+    }
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::MetadataExt;
+        if metadata.file_attributes() & 0x0400 != 0 {
+            return Err(LocalProfileError::SymbolicLinkRejected);
+        }
     }
     if !metadata.is_dir() {
         return Err(LocalProfileError::RootIsNotDirectory);
