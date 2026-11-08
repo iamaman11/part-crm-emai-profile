@@ -916,7 +916,9 @@ mod windows {
                         start_sync_after_close(intent);
                         Ok(())
                     }
-                    Err(error @ crate::local_browser_open::LocalOpenError::BrowserNotClosedCleanly) => {
+                    Err(
+                        error @ crate::local_browser_open::LocalOpenError::BrowserNotClosedCleanly,
+                    ) => {
                         // Adapter failure is not proof that Firefox released
                         // its files. The existing Sync owner must be started;
                         // its native file-lock gate decides whether snapshot
