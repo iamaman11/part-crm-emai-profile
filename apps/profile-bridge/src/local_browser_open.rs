@@ -190,6 +190,14 @@ pub fn open(
         }
         Err(_) => return Err(LocalOpenError::InvalidLocalWorkspace),
     };
+    // Rust owns the native Firefox file-access proof before any
+    // identity materialization or browser launch.
+    if !matches!(
+        crate::browser_execution::browser_writer_locks_absent(&workspace),
+        Ok(true)
+    ) {
+        return Err(LocalOpenError::ProfileBusy);
+    }
     let config = workspace.path().join(CONFIG);
     if !config.exists() {
         // No R2 snapshot, cloud claim or generation initialization. Official
