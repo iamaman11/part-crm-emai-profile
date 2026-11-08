@@ -1,7 +1,7 @@
 use super::{
     BridgeWorkspaceLock, ForgottenWindowAction, ForgottenWindowPolicy, LocalGenerationRecord,
-    LocalGenerationState, LocalProfileError, MaterializationRoot, ProfileCurrentState,
-    QuotaPolicy, RecoveryClone, SupportBundleSummary,
+    LocalGenerationState, LocalProfileError, MaterializationRoot, QuotaPolicy, RecoveryClone,
+    SupportBundleSummary,
 };
 use profile_platform_primitives::{DeviceId, GenerationId, ProfileId, TenantId, UnixMillis};
 use std::fs;

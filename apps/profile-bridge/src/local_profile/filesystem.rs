@@ -210,9 +210,19 @@ impl MaterializationRoot {
         generation_id: &GenerationId,
         profile_version: u64,
     ) -> Result<ProfileCurrentWorkspace, LocalProfileError> {
-        let current_path = fs::canonicalize(
-            self.profile_current_path(workspace.tenant_id(), workspace.profile_id()),
-        )?;
+        let current_path = self.profile_current_path(workspace.tenant_id(), workspace.profile_id());
+        let metadata = fs::symlink_metadata(&current_path)?;
+        if metadata.file_type().is_symlink() || !metadata.is_dir() {
+            return Err(LocalProfileError::SymbolicLinkRejected);
+        }
+        #[cfg(windows)]
+        {
+            use std::os::windows::fs::MetadataExt;
+            if metadata.file_attributes() & 0x0400 != 0 {
+                return Err(LocalProfileError::SymbolicLinkRejected);
+            }
+        }
+        let current_path = fs::canonicalize(current_path)?;
         if current_path != workspace.path() {
             return Err(LocalProfileError::UnsafeRelativePath);
         }
@@ -588,7 +598,7 @@ impl ProfileCurrentState {
             self.generation_id.as_str(),
             self.base_generation_id
                 .as_ref()
-                .map_or("-", GenerationId::as_str),
+                .map_or("-", |id| id.as_str()),
             self.profile_version,
         )
     }
@@ -939,6 +949,13 @@ fn write_existing_control_text(path: &Path, content: &str) -> Result<(), LocalPr
     {
         return Err(LocalProfileError::InvalidPolicy);
     }
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::MetadataExt;
+        if metadata.file_attributes() & 0x0400 != 0 {
+            return Err(LocalProfileError::InvalidPolicy);
+        }
+    }
     let mut file = OpenOptions::new().write(true).truncate(true).open(path)?;
     file.write_all(content.as_bytes())?;
     file.sync_all()?;
@@ -952,6 +969,13 @@ fn read_profile_current_state(path: &Path) -> Result<ProfileCurrentState, LocalP
         || metadata.len() > MAX_PROFILE_CURRENT_STATE_BYTES
     {
         return Err(LocalProfileError::InvalidPolicy);
+    }
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::MetadataExt;
+        if metadata.file_attributes() & 0x0400 != 0 {
+            return Err(LocalProfileError::InvalidPolicy);
+        }
     }
     let content = read_control_text(path)?;
     let mut lines = content.lines();
