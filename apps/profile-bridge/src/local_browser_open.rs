@@ -18,7 +18,7 @@ const ENTRYPOINT: &str = "camouhost/real.py";
 const LOCK: &str = "camouhost/runtime-lock.json";
 const CONFIG: &str = "camoufox-config.json";
 const LOCAL_UNSYNCED: &str = ".local-unsynced";
-const LOCAL_UNSYNCED_CONTENT: &[u8] = b"local-unsynced-v2\\n";
+const LOCAL_UNSYNCED_CONTENT: &[u8] = b"local-unsynced-v2";
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum LocalOpenError {
@@ -180,7 +180,7 @@ mod tests {
         mark_local_unsynced(folder.path()).unwrap();
         assert_eq!(
             std::fs::read(folder.path().join(".local-unsynced")).unwrap(),
-            b"local-unsynced-v2\\n"
+            b"local-unsynced-v2"
         );
         mark_local_unsynced(folder.path()).unwrap();
         std::fs::write(folder.path().join(".local-unsynced"), b"corrupt").unwrap();
