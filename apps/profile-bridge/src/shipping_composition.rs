@@ -235,8 +235,7 @@ mod windows {
     use super::{
         CloseObservationDisposition, ShippingCompositionError, ShippingDeliveryCommand,
         close_observation_disposition, pending_recovery_failure_disposition,
-        recovery_next_safe_step,
-        retryable_reconnect_observation,
+        recovery_next_safe_step, retryable_reconnect_observation,
     };
     use crate::camouhost_process::{
         ManagedCamouhostConfig, ManagedCamouhostProcess, RuntimeBindingSlot, RuntimeDisplayMode,
