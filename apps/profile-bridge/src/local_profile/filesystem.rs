@@ -508,10 +508,7 @@ impl GenerationWorkspace {
         if staged_id != self.generation_id || base_generation_id.is_some() || profile_version != 0 {
             return Err(LocalProfileError::GenerationMarkerMismatch);
         }
-        replace_generation_marker(
-            &marker,
-            &render_generation_marker(generation_id, None, 0)?,
-        )?;
+        replace_generation_marker(&marker, &render_generation_marker(generation_id, None, 0)?)?;
         self.generation_id = generation_id.clone();
         Ok(())
     }
