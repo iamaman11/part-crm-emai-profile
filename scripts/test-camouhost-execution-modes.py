@@ -108,7 +108,8 @@ def main() -> int:
     )
     assert 'run_python(runtime_root, workspace.path(), "--local-open")' in local_owner
     assert ".local-unsynced" in local_owner
-    assert "Cloud" not in local_owner and "R2" not in local_owner
+    assert "ControlPlaneEnrollment" not in local_owner
+    assert "MachineHttpPort" not in local_owner and "SharedControlPlaneCoordinator" not in local_owner
     composition = (SOURCE.parents[2] /
                    "apps/profile-bridge/src/shipping_composition.rs").read_text(encoding="utf-8")
     local_first = composition.split("    pub fn run_initial(", 1)[1].split(
