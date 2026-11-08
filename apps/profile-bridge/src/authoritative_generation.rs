@@ -164,6 +164,7 @@ where
         downloader,
         None,
         false,
+        None,
     )
 }
 
@@ -202,6 +203,7 @@ where
         downloader,
         Some(profile_version),
         false,
+        None,
     )
 }
 
@@ -241,6 +243,39 @@ where
         downloader,
         Some(profile_version),
         true,
+        None,
+    )
+}
+
+/// Read-only recovery for an already-committed READY N+1 whose HTTP
+/// receipt was lost. The verified D1 CURRENT and decrypted exact BPGW must
+/// match the ORIGINAL closed local browser bytes and old confirmed base.
+#[cfg(windows)]
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn reconcile_closed_ready_with_confirmed_current<C, D>(
+    root: &MaterializationRoot,
+    tenant_id: &TenantId,
+    profile_id: &ProfileId,
+    generation_id: &GenerationId,
+    previous_base: &GenerationId,
+    profile_version: u64,
+    device_id: &DeviceId,
+    workspace_epoch: u64,
+    control: &mut C,
+    downloader: &mut D,
+) -> Result<(), AuthoritativeGenerationMaterializationError>
+where
+    C: GenerationReopenControlPort,
+    C::Error: Into<GenerationReopenControlError>,
+    D: GenerationObjectDownloadPort,
+    D::Error: Into<GenerationObjectDownloadError>,
+{
+    if profile_version <= 1 || generation_id == previous_base {
+        return Err(AuthoritativeGenerationMaterializationError::InvalidLocalEvidence);
+    }
+    ensure_authoritative_generation_to(
+        root, tenant_id, profile_id, generation_id, device_id, workspace_epoch,
+        control, downloader, Some(profile_version), true, Some(previous_base),
     )
 }
 
@@ -256,6 +291,7 @@ fn ensure_authoritative_generation_to<C, D>(
     downloader: &mut D,
     profile_version: Option<u64>,
     reconcile_existing: bool,
+    expected_previous_base: Option<&GenerationId>,
 ) -> Result<(), AuthoritativeGenerationMaterializationError>
 where
     C: GenerationReopenControlPort,
@@ -271,9 +307,13 @@ where
         match root.open_profile_current(tenant_id, profile_id) {
             Ok(workspace)
                 if reconcile_existing
-                    && workspace.base_generation_id().is_none()
-                    && workspace.generation_id() == generation_id
-                    && workspace.profile_version() < version =>
+                    && workspace.base_generation_id() == expected_previous_base
+                    && (match expected_previous_base {
+                        Some(base) => workspace.generation_id() == base
+                            && generation_id != base,
+                        None => workspace.generation_id() == generation_id,
+                    })
+                    && workspace.profile_version().checked_add(1) == Some(version) =>
             {
                 Some(workspace)
             }
@@ -414,6 +454,7 @@ where
             &staged_ciphertext_path,
             incomplete_local,
             profile_version,
+            expected_previous_base,
         );
     }
 
@@ -430,6 +471,7 @@ where
         || metadata.generation_id() != generation_id
         || metadata.object_key() != expected_object_key
         || inspected.metadata_digest().bytes() != capability.metadata_digest()
+        || expected_previous_base.is_some_and(|old| metadata.base_generation_id() != Some(old))
     {
         return Err(prewrite_refusal(
             AuthoritativeGenerationPreWriteError::MetadataMismatch,
@@ -472,11 +514,12 @@ where
                 AuthoritativeGenerationMaterializationError::IncompleteLocalEvidence
             })?;
             if let Some(version) = profile_version {
-                confirm_closed_draft_current_matches_cloud(
+                confirm_closed_current_matches_cloud(
                     root,
                     &workspace,
                     generation_id,
                     version,
+                    expected_previous_base,
                 )
                 .map_err(|_| AuthoritativeGenerationMaterializationError::InvalidLocalEvidence)?;
             } else {
@@ -555,6 +598,7 @@ fn materialize_streamed_authoritative_generation<C>(
     ciphertext_path: &std::path::Path,
     incomplete_local: Option<GenerationWorkspace>,
     profile_version: Option<u64>,
+    expected_previous_base: Option<&GenerationId>,
 ) -> Result<(), AuthoritativeGenerationMaterializationError>
 where
     C: GenerationReopenControlPort,
@@ -591,6 +635,7 @@ where
         || metadata.object_key()
             != canonical_generation_object_key(tenant_id, profile_id, generation_id)
         || inspected.metadata_digest().bytes() != capability.metadata_digest()
+        || expected_previous_base.is_some_and(|old| metadata.base_generation_id() != Some(old))
     {
         return Err(prewrite(PreWrite::MetadataMismatch));
     }
@@ -649,11 +694,12 @@ where
             )
             .map_err(|_| Error::IncompleteLocalEvidence)?;
             if let Some(version) = profile_version {
-                confirm_closed_draft_current_matches_cloud(
+                confirm_closed_current_matches_cloud(
                     root,
                     &workspace,
                     generation_id,
                     version,
+                    expected_previous_base,
                 )
                 .map_err(|_| Error::InvalidLocalEvidence)?;
             } else {
@@ -742,15 +788,19 @@ where
 /// Called exclusively after full BPGW equality with the Worker-confirmed
 /// CURRENT inside the already-held OS writer lock. This is also the only
 /// automatic local receipt reconciliation for a lost DRAFT Commit reply.
-fn confirm_closed_draft_current_matches_cloud(
+fn confirm_closed_current_matches_cloud(
     root: &MaterializationRoot,
     workspace: &GenerationWorkspace,
     confirmed_id: &GenerationId,
     profile_version: u64,
+    previous_base: Option<&GenerationId>,
 ) -> Result<(), ()> {
-    if workspace.base_generation_id().is_some()
-        || workspace.generation_id() != confirmed_id
-        || workspace.profile_version() >= profile_version
+    if workspace.base_generation_id() != previous_base
+        || workspace.profile_version().checked_add(1) != Some(profile_version)
+        || match previous_base {
+            Some(base) => workspace.generation_id() != base || confirmed_id == base,
+            None => workspace.generation_id() != confirmed_id,
+        }
     {
         return Err(());
     }
@@ -764,7 +814,6 @@ fn confirm_closed_draft_current_matches_cloud(
     }
     root.update_profile_current_sync_base(workspace, confirmed_id, profile_version)
         .map_err(|_| ())?;
-    // Failure to retire the exact local marker leaves it dirty, never Saved.
     fs::remove_file(path).map_err(|_| ())?;
     Ok(())
 }

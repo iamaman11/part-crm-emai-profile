@@ -262,6 +262,7 @@ mod windows {
     };
     use crate::authoritative_generation::{
         ensure_authoritative_current, reconcile_closed_draft_with_confirmed_current,
+        reconcile_closed_ready_with_confirmed_current,
     };
     use crate::camouhost_process::{
         ManagedCamouhostConfig, ManagedCamouhostProcess, RuntimeBindingSlot, RuntimeDisplayMode,
@@ -529,6 +530,39 @@ mod windows {
         let candidate = closed_current_candidate_id(
             &intent.tenant_id, &intent.profile_id, &base, digest,
         ).map_err(|_| ())?;
+
+        // A lost READY N+1 Commit reply cannot authorize a fresh N+2.
+        // Read exact server-selected CURRENT first; a newer candidate must
+        // match the ORIGINAL closed local bytes before the local marker moves.
+        let reader_app = WindowsDeviceApplication::from_system(
+            origin.to_owned(), binding.clone(),
+        ).map_err(|_| ())?;
+        let mut read_only = ControlPlaneCoordinator::for_local_current_restore(
+            reader_app.transport(),
+        );
+        let current = read_only
+            .download_capability(&intent.tenant_id, &intent.profile_id)
+            .map_err(|_| ())?;
+        if current.generation_id() == &candidate {
+            let reader = WindowsSignedGenerationObjectGet::from_system()
+                .map_err(|_| ())?;
+            let mut downloader = VerifiedGenerationObjectStreamDownloader::new(reader);
+            return reconcile_closed_ready_with_confirmed_current(
+                root,
+                &intent.tenant_id,
+                &intent.profile_id,
+                &candidate,
+                &base,
+                intent.expected_version.checked_add(1).ok_or(())?,
+                binding.device_id(),
+                now().map_err(|_| ())?.value(),
+                &mut read_only,
+                &mut downloader,
+            ).map_err(|_| ());
+        }
+        if current.generation_id() != &base {
+            return Err(());
+        }
 
         let application = WindowsDeviceApplication::from_system(origin.to_owned(), binding.clone())
             .map_err(|_| ())?;
