@@ -106,7 +106,6 @@ impl core::fmt::Display for InitialProfileError {
 
 impl std::error::Error for InitialProfileError {}
 
-
 fn hex(bytes: &[u8]) -> String {
     bytes.iter().map(|b| format!("{b:02x}")).collect()
 }
