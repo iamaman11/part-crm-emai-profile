@@ -369,9 +369,9 @@ impl MaterializationRoot {
             }
         }
         match fs::symlink_metadata(&current) {
-            Ok(_) => return Ok(Some(current)),
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
-            Err(error) => return Err(error.into()),
+            Ok(_) => Ok(Some(current)),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
+            Err(error) => Err(error.into()),
         }
     }
 

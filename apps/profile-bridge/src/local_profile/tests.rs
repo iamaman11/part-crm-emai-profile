@@ -106,7 +106,10 @@ fn compact_workspace_binds_every_id_and_preserves_existing_user_directories()
     ));
     let new_workspace = root.create_generation(&tenant, &profile, &legacy_id)?;
     assert_ne!(new_workspace.path(), legacy);
-    assert_eq!(fs::read(legacy.join("unsaved.bin"))?, b"test-only-stale-data");
+    assert_eq!(
+        fs::read(legacy.join("unsaved.bin"))?,
+        b"test-only-stale-data"
+    );
     fs::remove_dir_all(path)?;
     Ok(())
 }
