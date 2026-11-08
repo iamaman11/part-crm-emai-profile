@@ -373,20 +373,6 @@ impl MaterializationRoot {
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
             Err(error) => return Err(error.into()),
         }
-        // Existing user/recovery data has a durable obligation. Lookup only: every new write
-        // uses the compact layout, and an old generation must never be silently shadowed.
-        let legacy = (|| {
-            let tenant = open_directory(&self.canonical_path, tenant.as_str())?;
-            let profile = open_directory(&tenant, profile.as_str())?;
-            let path = profile.join(generation.as_str());
-            fs::symlink_metadata(&path)?;
-            Ok(path)
-        })();
-        match legacy {
-            Ok(path) => Ok(Some(path)),
-            Err(LocalProfileError::Io(std::io::ErrorKind::NotFound)) => Ok(None),
-            Err(error) => Err(error),
-        }
     }
 
     /// Destructive local-loss test fixture only, never a shipping recovery operation.
@@ -900,17 +886,17 @@ fn read_generation_marker(
     path: &Path,
 ) -> Result<(GenerationId, Option<GenerationId>, u64), LocalProfileError> {
     let metadata = fs::symlink_metadata(path)?;
-    if metadata.file_type().is_symlink()
-        || !metadata.is_file()
-        || metadata.len() > MAX_GENERATION_MARKER_BYTES
-    {
+    if metadata.file_type().is_symlink() {
+        return Err(LocalProfileError::SymbolicLinkRejected);
+    }
+    if !metadata.is_file() || metadata.len() > MAX_GENERATION_MARKER_BYTES {
         return Err(LocalProfileError::GenerationMarkerMismatch);
     }
     #[cfg(windows)]
     {
         use std::os::windows::fs::MetadataExt;
         if metadata.file_attributes() & 0x0400 != 0 {
-            return Err(LocalProfileError::GenerationMarkerMismatch);
+            return Err(LocalProfileError::SymbolicLinkRejected);
         }
     }
     let content = read_control_text(path)?;
@@ -948,17 +934,17 @@ fn read_generation_marker(
 
 fn replace_generation_marker(path: &Path, content: &str) -> Result<(), LocalProfileError> {
     let metadata = fs::symlink_metadata(path)?;
-    if metadata.file_type().is_symlink()
-        || !metadata.is_file()
-        || metadata.len() > MAX_GENERATION_MARKER_BYTES
-    {
+    if metadata.file_type().is_symlink() {
+        return Err(LocalProfileError::SymbolicLinkRejected);
+    }
+    if !metadata.is_file() || metadata.len() > MAX_GENERATION_MARKER_BYTES {
         return Err(LocalProfileError::GenerationMarkerMismatch);
     }
     #[cfg(windows)]
     {
         use std::os::windows::fs::MetadataExt;
         if metadata.file_attributes() & 0x0400 != 0 {
-            return Err(LocalProfileError::GenerationMarkerMismatch);
+            return Err(LocalProfileError::SymbolicLinkRejected);
         }
     }
     let parent = path.parent().ok_or(LocalProfileError::UnsafeRelativePath)?;

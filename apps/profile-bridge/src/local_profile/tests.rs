@@ -86,6 +86,8 @@ fn compact_workspace_binds_every_id_and_preserves_existing_user_directories()
             assert_eq!(other.path().parent(), workspace.path().parent());
         }
     }
+    // The old unhashed layout and v1 marker are not a supported runtime path.
+    // New writes use only the canonical compact path; no compatibility lookup runs.
     let legacy_id = GenerationId::parse("generation_existing_user_data")?;
     let legacy = root
         .path()
@@ -97,16 +99,14 @@ fn compact_workspace_binds_every_id_and_preserves_existing_user_directories()
         legacy.join(".profile-generation"),
         "profile-platform-generation-v1\n",
     )?;
-    fs::write(legacy.join("unsaved.bin"), b"preserve")?;
-    assert_eq!(
-        root.open_generation(&tenant, &profile, &legacy_id)?.path(),
-        legacy
-    );
-    assert_eq!(
-        root.create_generation(&tenant, &profile, &legacy_id),
-        Err(LocalProfileError::TargetAlreadyExists)
-    );
-    assert_eq!(fs::read(legacy.join("unsaved.bin"))?, b"preserve");
+    fs::write(legacy.join("unsaved.bin"), b"test-only-stale-data")?;
+    assert!(matches!(
+        root.open_generation(&tenant, &profile, &legacy_id),
+        Err(LocalProfileError::Io(std::io::ErrorKind::NotFound))
+    ));
+    let new_workspace = root.create_generation(&tenant, &profile, &legacy_id)?;
+    assert_ne!(new_workspace.path(), legacy);
+    assert_eq!(fs::read(legacy.join("unsaved.bin"))?, b"test-only-stale-data");
     fs::remove_dir_all(path)?;
     Ok(())
 }
