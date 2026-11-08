@@ -806,18 +806,6 @@ def report_live_page_count(context: Any) -> None:
         return
 
 
-def firefox_native_first_run_args(user_data_dir: Path) -> list[str]:
-    """Ask Firefox itself for its ordinary blank tab only on a virgin profile.
-
-    Playwright's persistent context needs an initial native Page event; native
-    session restore (startup.page=3) has no previous page on first Open. Use
-    Firefox's standard CLI switch rather than opening, inspecting, closing or
-    navigating tabs through the application. All subsequent Opens preserve the
-    browser's own SessionStore without CLI startup overrides.
-    """
-    return ["-new-tab", "about:blank"] if not any(user_data_dir.iterdir()) else []
-
-
 def camoufox_launch_options(
     lock: dict[str, Any],
     root: Path,
@@ -866,12 +854,8 @@ def camoufox_launch_options(
     if isolated:
         options["offline"] = True
         options["args"] = ["-new-tab", MANAGED_BOOTSTRAP_TAB_URL]
-    else:
-        # Native Firefox, not CRM or Playwright, creates the only first-run tab.
-        # No change to any profile whose native session has already begun.
-        first_run_args = firefox_native_first_run_args(user_data_dir)
-        if first_run_args:
-            options["args"] = first_run_args
+    # Normal user Open does not inject a tab, URL or startup argument.
+    # Firefox owns its native first-run and session-restore behavior.
 
     official_env = options.get("env")
     if not isinstance(official_env, dict) or not any(
@@ -1567,11 +1551,8 @@ def report_runtime_stage(phase: str, step: str) -> None:
         ("launch", "browser_entered"),
         ("launch", "network_blocked"),
         ("launch", "ready"),
-        ("close", "last_native_window_closed"),
-        ("close", "playwright_release_begin"),
-        ("close", "playwright_release_complete"),
-        ("close", "native_writer_released"),
-        ("close", "clean_shutdown_verified"),
+        ("close", "browser_context_closed"),
+        ("close", "playwright_driver_released"),
     }
     if (phase, step) in allowed:
         print(f"camouhost_stage phase={phase} step={step}", file=sys.stderr, flush=True)
@@ -2068,173 +2049,24 @@ def run_ipc() -> int:
                 report_runtime_failure("cleanup", error)
 
 
-async def run_native_ipc_async() -> int:
-    """Production user Open through the official Camoufox SDK/Playwright API.
-
-    Rust has already verified the signed runtime/config identities and redeemed
-    the exact tenant/device/profile writer lease. Playwright owns the persistent
-    browser context and its driver lifetime; this adapter observes only Firefox's
-    profile lock and current-session shutdown checkpoint. It never inspects or
-    commands user pages, tabs, DOM or navigation.
-    """
-    report_runtime_stage("startup", "begin")
-    try:
-        from native_process import launch_native_camoufox
-        lock, _ = load_runtime_lock()
-        verify_python_components(lock)
-        root = resolve_profile_root(require_bridge_lock=True)
-        config, _ = load_generation_config(root)
-        expected = os.environ.get(EXPECTED_PROBE_SHA256_ENV)
-        if not valid_sha256(expected) or firefox_writer_active(root):
-            raise RuntimeContractError("user runtime identity unavailable")
-    except BaseException as error:
-        report_runtime_failure("startup", error)
-        emit("error|identity")
-        return 4
-
-    report_runtime_stage("startup", "ready")
-    negotiated = False
-    active_session: str | None = None
-    user_session: Any | None = None
-    while True:
-        # Read stdin without starving the official async Playwright dispatcher.
-        # One reader at a time: no second IPC command or browser writer.
-        raw = await asyncio.to_thread(sys.stdin.readline)
-        if not raw:
-            if user_session is None:
-                return 0
-            # If Bridge IPC disappears, keep the official Playwright driver
-            # alive while the user still owns Firefox.
-            while True:
-                status = user_session.profile_state()
-                if status == "CLEAN_SHUTDOWN_VERIFIED":
-                    with contextlib.suppress(BaseException):
-                        await user_session.close()
-                    return 3
-                if status == "CRASH_OR_UNKNOWN_PRESERVE_LOCAL":
-                    with contextlib.suppress(BaseException):
-                        await user_session.close_after_browser_exit()
-                    return 3
-                if status == "WRITER_NOT_OBSERVED":
-                    with contextlib.suppress(BaseException):
-                        await user_session.abort_startup()
-                    return 3
-                await asyncio.sleep(0.25)
-        if not valid_frame(raw):
-            emit("error|protocol")
-            if user_session is None:
-                return 2
-            continue
-        parts = raw[:-1].split("|")
-        if parts == ["hello", IPC_VERSION] and not negotiated:
-            negotiated = True
-            emit(f"hello_ack|{IPC_VERSION}")
-            continue
-        if (len(parts) == 2 and parts[0] == "launch" and negotiated
-            and active_session is None and SESSION_PATTERN.fullmatch(parts[1]) is not None):
-            try:
-                report_runtime_stage("launch", "before_browser_enter")
-                options = camoufox_launch_options(lock, root, config)
-                report_runtime_stage("launch", "options_ready")
-                user_session = await launch_native_camoufox(
-                    workspace=root,
-                    options=options,
-                    writer_active=firefox_writer_active,
-                    admission_granted=True,
-                    headless=resolve_headless_mode(),
-                )
-                report_runtime_stage("launch", "browser_entered")
-                # Ready depends only on Firefox's native writer lock. No page
-                # is queried, opened, evaluated or navigated by the application.
-                deadline = time.monotonic() + 30.0
-                status = user_session.profile_state()
-                while status != "PROFILE_BUSY":
-                    if status == "UNKNOWN_PRESERVE_LOCAL":
-                        raise RuntimeContractError("Firefox writer lock could not be verified")
-                    if status == "CRASH_OR_UNKNOWN_PRESERVE_LOCAL":
-                        raise RuntimeContractError("Camoufox exited before readiness")
-                    if time.monotonic() >= deadline:
-                        raise RuntimeContractError("Firefox writer lock was not observed")
-                    await asyncio.sleep(0.05)
-                    status = user_session.profile_state()
-            except BaseException as error:
-                if user_session is not None:
-                    with contextlib.suppress(BaseException):
-                        await user_session.abort_startup()
-                    user_session = None
-                report_runtime_failure("launch", error)
-                emit("error|runtime")
-                return 5
-            active_session = parts[1]
-            report_runtime_stage("launch", "ready")
-            emit(f"ready|{active_session}")
-            continue
-        if (len(parts) == 2 and parts[0] == "observe_close"
-            and active_session is not None and parts[1] == active_session
-            and user_session is not None):
-            status = user_session.profile_state()
-            if status == "CLEAN_SHUTDOWN_VERIFIED":
-                emit(f"close_observed|{active_session}|true")
-            elif status == "CRASH_OR_UNKNOWN_PRESERVE_LOCAL":
-                emit("error|runtime")
-            else:
-                emit(f"close_observed|{active_session}|false")
-            continue
-        if (len(parts) == 2 and parts[0] == "close"
-            and active_session is not None and parts[1] == active_session
-            and user_session is not None):
-            status = user_session.profile_state()
-            if status == "CLEAN_SHUTDOWN_VERIFIED":
-                try:
-                    await user_session.close()
-                except BaseException as error:
-                    report_runtime_failure("cleanup", error)
-                    emit(f"closed|{active_session}|false")
-                    return 6
-                emit(f"closed|{active_session}|true")
-                return 0
-            emit(f"closed|{active_session}|false")
-            if status == "CRASH_OR_UNKNOWN_PRESERVE_LOCAL":
-                with contextlib.suppress(BaseException):
-                    await user_session.close_after_browser_exit()
-                return 6
-            if status == "WRITER_NOT_OBSERVED":
-                with contextlib.suppress(BaseException):
-                    await user_session.abort_startup()
-                return 6
-            continue
-        emit("error|protocol")
-        if user_session is None:
-            return 2
-
-
-
-
-
 async def run_local_profile(root: Path) -> int:
-    """One local Firefox folder; no claim, network, R2 or site-specific API."""
+    """Launch one local profile and wait passively for Playwright's close event."""
     from native_process import launch_native_camoufox
 
     session = None
-    browser_exit = None
-    waiting_for_close = False
+    context_closed = False
     try:
         lock, _ = load_runtime_lock()
         verify_python_components(lock)
         if root.is_symlink() or not root.is_dir():
             raise RuntimeContractError("local browser folder unavailable")
         root = root.resolve(strict=True)
-        # Rust holds the exclusive local OS writer admission until Python
-        # exits. Direct invocation without that lock never opens Firefox.
+        # Rust holds exclusive local writer admission until Python exits.
         require_bridge_writer_lock(root)
-        # This local profile's config is its authority; cloud materialization
-        # and a server-provided digest are not prerequisites for browser Open.
         config, raw = load_canonical_json(root / CONFIG_NAME, MAX_CONFIG_BYTES)
         generation_webgl2_enabled(config)
         os.environ[EXPECTED_CONFIG_SHA256_ENV] = sha256_bytes(raw)
         config, _ = load_generation_config(root)
-        if firefox_writer_active(root):
-            raise RuntimeContractError("Firefox profile already in use")
         options = camoufox_launch_options(lock, root, config)
         session = await launch_native_camoufox(
             workspace=root,
@@ -2243,101 +2075,27 @@ async def run_local_profile(root: Path) -> int:
             admission_granted=True,
             headless=False,
         )
-        # Reuse the existing native process witness. It observes only the
-        # browser's top-level OS window; no user page, tab, DOM or navigation.
-        if os.name == "nt":
-            browser_exit = WindowsBrowserExitWitness(os.getpid())
+        report_runtime_stage("launch", "ready")
 
-        # A cold Camoufox startup is not an abnormal exit. The browser OS
-        # writer handle and native window can appear after SDK __aenter__ returns.
-        deadline = time.monotonic() + 30.0
-        window_seen = browser_exit is None
-        while True:
-            state = session.profile_state()
-            if state == "CLEAN_SHUTDOWN_VERIFIED":
-                report_runtime_stage("close", "clean_shutdown_verified")
-                report_runtime_stage("close", "playwright_release_begin")
-                await session.close()
-                report_runtime_stage("close", "playwright_release_complete")
-                if browser_exit is not None and not browser_exit.safely_exited(250):
-                    return 6
-                return 0
-            if state == "PROFILE_BUSY":
-                if browser_exit is None:
-                    window_seen = True
-                else:
-                    try:
-                        window_seen = window_seen or browser_exit.has_visible_window()
-                    except RuntimeContractError as error:
-                        report_runtime_failure("close", error)
-                if window_seen:
-                    report_runtime_stage("launch", "ready")
-                    waiting_for_close = True
-                    break
-            if state in ("CRASH_OR_UNKNOWN_PRESERVE_LOCAL", "UNKNOWN_PRESERVE_LOCAL"):
-                report_runtime_failure("close", RuntimeContractError("Firefox shutdown was not cleanly verified"))
-                await session.close_after_browser_exit()
-                return 6
-            if time.monotonic() >= deadline:
-                await session.abort_startup()
-                return 5
-            await asyncio.sleep(0.05)
+        # No WM_CLOSE, window/process enumeration, SessionStore inspection or
+        # page access. Firefox closes itself; Playwright reports the event.
+        await session.wait_for_browser_close()
+        context_closed = True
+        report_runtime_stage("close", "browser_context_closed")
 
-        while True:
-            state = session.profile_state()
-            if state == "CLEAN_SHUTDOWN_VERIFIED":
-                report_runtime_stage("close", "clean_shutdown_verified")
-                report_runtime_stage("close", "playwright_release_begin")
-                await session.close()
-                report_runtime_stage("close", "playwright_release_complete")
-                if browser_exit is not None and not browser_exit.safely_exited(250):
-                    return 6
-                return 0
-            if state in ("CRASH_OR_UNKNOWN_PRESERVE_LOCAL", "UNKNOWN_PRESERVE_LOCAL"):
-                report_runtime_failure("close", RuntimeContractError("Firefox shutdown was not cleanly verified"))
-                await session.close_after_browser_exit()
-                return 6
-            if browser_exit is not None and window_seen:
-                try:
-                    window_open = browser_exit.has_visible_window()
-                except RuntimeContractError as error:
-                    report_runtime_failure("close", error)
-                    window_open = True
-                if not window_open:
-                    report_runtime_stage("close", "last_native_window_closed")
-                    report_runtime_stage("close", "playwright_release_begin")
-                    # The user's last native window is already gone. Release
-                    # the persistent SDK context so Firefox can finish its
-                    # normal SessionStore shutdown and release the writer lock.
-                    # Reuse the existing SDK-release path only after the
-                    # native OS witness confirms the last browser window is gone.
-                    await session.abort_startup()
-                    report_runtime_stage("close", "playwright_release_complete")
-                    wait_for_browser_quiescence(root)
-                    report_runtime_stage("close", "native_writer_released")
-                    if (
-                        session.profile_state() == "CLEAN_SHUTDOWN_VERIFIED"
-                        and browser_exit.safely_exited(250)
-                    ):
-                        report_runtime_stage("close", "clean_shutdown_verified")
-                        return 0
-                    report_runtime_failure("close", RuntimeContractError("Firefox clean shutdown was not verified"))
-                    return 6
-            await asyncio.sleep(0.25)
+        # Release only the Playwright driver connection after the browser has
+        # already closed. The OS profile lock is the file-safety boundary.
+        await session.close_after_browser_exit()
+        report_runtime_stage("close", "playwright_driver_released")
+        return 0
     except BaseException as error:
-        report_runtime_failure("close" if waiting_for_close else "launch", error)
-        if session is not None:
+        report_runtime_failure("close" if context_closed else "launch", error)
+        # Never issue a browser-close command for a user session. A failed
+        # launch preserves local dirty evidence; normal Close uses the event.
+        if session is not None and not context_closed:
             with contextlib.suppress(BaseException):
                 await session.abort_startup()
         return 5
-    finally:
-        if browser_exit is not None:
-            browser_exit.close()
-
-
-def run_native_ipc() -> int:
-    """Keep the current IPC entrypoint while the native Playwright loop stays alive."""
-    return asyncio.run(run_native_ipc_async())
 
 
 def main() -> int:
@@ -2384,7 +2142,8 @@ def main() -> int:
         if os.environ.get(HEADLESS_MODE_ENV, "false") != "false":
             print("user browser requires headful mode", file=sys.stderr)
             return 2
-        return run_native_ipc()
+        print("user-native runtime requires --local-open", file=sys.stderr)
+        return 2
     if mode == ISOLATED_COLD_PROBE_MODE:
         # The Rust operator redeems a fresh one-time claim, materializes the
         # historical object into an exclusive disposable C09 slot, and holds
