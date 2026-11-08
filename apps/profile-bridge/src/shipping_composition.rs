@@ -863,6 +863,15 @@ mod windows {
                 start_sync_after_close(intent);
                 Ok(())
             }
+            Err(error @ crate::local_browser_open::LocalOpenError::BrowserNotClosedCleanly) => {
+                // The adapter may have died before reporting the official
+                // Playwright close event. Keep .local-unsynced and launch the
+                // same file-gated Sync/recovery anyway: it must not snapshot
+                // while Firefox still owns the folder. CRM is not the retry
+                // trigger, and the browser is never closed by this path.
+                start_sync_after_close(intent);
+                Err(ShippingCompositionError::LocalOpen(error))
+            }
             Err(crate::local_browser_open::LocalOpenError::RestoreRequired) => {
                 // Only a missing READY local folder crosses the cloud boundary.
                 // Ordinary Open/Close never requires a network request.
@@ -897,10 +906,26 @@ mod windows {
                 .map_err(|_| ShippingCompositionError::RestoreUnavailable)?;
                 // Re-enter the SAME local native Open; no managed Camoufox path
                 // and no Coordinator lease are introduced by recovery.
-                crate::local_browser_open::open(&root, intent, &device, delivery.runtime_root())
-                    .map_err(ShippingCompositionError::LocalOpen)?;
-                start_sync_after_close(intent);
-                Ok(())
+                match crate::local_browser_open::open(
+                    &root,
+                    intent,
+                    &device,
+                    delivery.runtime_root(),
+                ) {
+                    Ok(()) => {
+                        start_sync_after_close(intent);
+                        Ok(())
+                    }
+                    Err(error @ crate::local_browser_open::LocalOpenError::BrowserNotClosedCleanly) => {
+                        // Adapter failure is not proof that Firefox released
+                        // its files. The existing Sync owner must be started;
+                        // its native file-lock gate decides whether snapshot
+                        // can proceed and retains dirty evidence otherwise.
+                        start_sync_after_close(intent);
+                        Err(ShippingCompositionError::LocalOpen(error))
+                    }
+                    Err(error) => Err(ShippingCompositionError::LocalOpen(error)),
+                }
             }
             Err(error) => Err(ShippingCompositionError::LocalOpen(error)),
         }
