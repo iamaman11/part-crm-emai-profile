@@ -8,7 +8,7 @@ use profile_platform_primitives::{DeviceId, GenerationId};
 use sha2::{Digest, Sha256};
 use std::fmt;
 use std::fs::{self, OpenOptions};
-use std::io::Write;
+use std::io::{BufRead, BufReader, Write};
 use std::path::Path;
 use std::process::{Command, Stdio};
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -103,7 +103,7 @@ fn run_python(runtime_root: &Path, folder: &Path, action: &str) -> Result<bool, 
             return Err(LocalOpenError::RuntimeUnavailable);
         }
     }
-    let completed = Command::new(runtime_root.join(PYTHON))
+    let mut child = Command::new(runtime_root.join(PYTHON))
         .arg("-B")
         .arg(runtime_root.join(ENTRYPOINT))
         .arg(action)
@@ -114,9 +114,28 @@ fn run_python(runtime_root: &Path, folder: &Path, action: &str) -> Result<bool, 
         .env("CAMOUHOST_HEADLESS_MODE", "false")
         .stdin(Stdio::null())
         .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .status()
+        .stderr(Stdio::piped())
+        .spawn()
         .map_err(|_| LocalOpenError::RuntimeUnavailable)?;
+    let stderr = child
+        .stderr
+        .take()
+        .ok_or(LocalOpenError::RuntimeUnavailable)?;
+    let diagnostics = std::thread::spawn(move || {
+        for line in BufReader::new(stderr).lines().map_while(Result::ok) {
+            // Runtime stderr can contain upstream/library detail. Forward only
+            // the fixed, redacted milestones and typed failure categories.
+            if cfg!(debug_assertions)
+                && (line.starts_with("camouhost_stage ")
+                    || line.starts_with("camouhost_failure "))
+            {
+                let _ = writeln!(std::io::stderr().lock(), "{line}");
+            }
+        }
+    });
+    let status = child.wait();
+    let _ = diagnostics.join();
+    let completed = status.map_err(|_| LocalOpenError::RuntimeUnavailable)?;
     Ok(completed.success())
 }
 
