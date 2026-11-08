@@ -32,7 +32,9 @@ impl fmt::Display for LocalOpenError {
             Self::RuntimeUnavailable => "Installed Camoufox runtime is unavailable",
             Self::ProfileBusy => "This local browser profile is already in use",
             Self::IdentityPreparation => "Local Camoufox identity could not be prepared",
-            Self::BrowserNotClosedCleanly => "Browser close was not verified; local files were kept",
+            Self::BrowserNotClosedCleanly => {
+                "Browser close was not verified; local files were kept"
+            }
         })
     }
 }
@@ -52,9 +54,7 @@ fn local_generation(intent: &InitialProfileOpen) -> Result<GenerationId, LocalOp
         .map_err(|_| LocalOpenError::InvalidLocalWorkspace)
 }
 
-fn run_python(runtime_root: &Path, folder: &Path, action: &str)
-    -> Result<bool, LocalOpenError>
-{
+fn run_python(runtime_root: &Path, folder: &Path, action: &str) -> Result<bool, LocalOpenError> {
     // Never invoke a user-selected executable, shell or remote path.
     for relative in [PYTHON, ENTRYPOINT, LOCK] {
         let file = runtime_root.join(relative);
@@ -87,23 +87,24 @@ pub fn open(
     runtime_root: &Path,
 ) -> Result<(), LocalOpenError> {
     let generation = local_generation(intent)?;
-    let workspace = match root.open_generation(
-        &intent.tenant_id, &intent.profile_id, &generation,
-    ) {
+    let workspace = match root.open_generation(&intent.tenant_id, &intent.profile_id, &generation) {
         Ok(workspace) => workspace,
         Err(LocalProfileError::Io(std::io::ErrorKind::NotFound)) => root
             .create_generation(&intent.tenant_id, &intent.profile_id, &generation)
             .map_err(|_| LocalOpenError::InvalidLocalWorkspace)?,
         Err(_) => return Err(LocalOpenError::InvalidLocalWorkspace),
     };
-    let epoch = SystemTime::now().duration_since(UNIX_EPOCH)
-        .map_err(|_| LocalOpenError::InvalidLocalWorkspace)?.as_millis();
+    let epoch = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_err(|_| LocalOpenError::InvalidLocalWorkspace)?
+        .as_millis();
     let epoch = u64::try_from(epoch).map_err(|_| LocalOpenError::InvalidLocalWorkspace)?;
     let writer = match BridgeWorkspaceLock::acquire(&workspace, device, epoch) {
         Ok(writer) => writer,
-        Err(LocalProfileError::LockBusy) => BridgeWorkspaceLock::recover_interrupted_launch(
-            &workspace, device, epoch,
-        ).map_err(|_| LocalOpenError::ProfileBusy)?,
+        Err(LocalProfileError::LockBusy) => {
+            BridgeWorkspaceLock::recover_interrupted_launch(&workspace, device, epoch)
+                .map_err(|_| LocalOpenError::ProfileBusy)?
+        }
         Err(_) => return Err(LocalOpenError::InvalidLocalWorkspace),
     };
     let config = workspace.path().join(CONFIG);
@@ -119,14 +120,16 @@ pub fn open(
         // Never erase the user's cookies/WAL/session to make a retry pass.
         return Err(LocalOpenError::BrowserNotClosedCleanly);
     }
-    writer.release().map_err(|_| LocalOpenError::InvalidLocalWorkspace)
+    writer
+        .release()
+        .map_err(|_| LocalOpenError::InvalidLocalWorkspace)
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{local_generation, LocalOpenError};
+    use super::{LocalOpenError, local_generation};
     use crate::generation_initialization::InitialProfileOpen;
-    use profile_platform_primitives::{TenantId, ActorId, ProfileId};
+    use profile_platform_primitives::{ActorId, ProfileId, TenantId};
 
     fn intent() -> InitialProfileOpen {
         InitialProfileOpen {

@@ -433,13 +433,8 @@ mod windows {
         }
         let root = MaterializationRoot::open_or_create(&config.materialization_root)
             .map_err(|_| ShippingCompositionError::Configuration)?;
-        crate::local_browser_open::open(
-            &root,
-            intent,
-            binding.device_id(),
-            delivery.runtime_root(),
-        )
-        .map_err(ShippingCompositionError::LocalOpen)
+        crate::local_browser_open::open(&root, intent, binding.device_id(), delivery.runtime_root())
+            .map_err(ShippingCompositionError::LocalOpen)
     }
 
     pub fn run(claim: &ClaimUri) -> Result<(), ShippingCompositionError> {

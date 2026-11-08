@@ -22,9 +22,9 @@ pub mod generation_reopen;
 mod generation_snapshot;
 pub mod installed_connection;
 pub mod launch_binding;
-pub mod local_profile;
 #[cfg(windows)]
 pub mod local_browser_open;
+pub mod local_profile;
 pub mod operator_flow;
 pub mod runtime_bundle;
 pub mod shipping_composition;
