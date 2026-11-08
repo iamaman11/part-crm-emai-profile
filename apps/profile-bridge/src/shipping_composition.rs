@@ -269,8 +269,7 @@ mod windows {
     };
     use crate::dirty_generation::{GenerationSealingMaterialPort, closed_current_candidate_id};
     use crate::generation_initialization::{
-        InitialProfileStatus, reauthorize_current_ready_generation,
-        sync_closed_local_draft,
+        InitialProfileStatus, reauthorize_current_ready_generation, sync_closed_local_draft,
     };
     use crate::generation_reopen::{
         GenerationReopenControlPort, VerifiedGenerationObjectStreamDownloader,
