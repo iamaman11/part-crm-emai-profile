@@ -1,7 +1,7 @@
 use super::{
     BridgeWorkspaceLock, ForgottenWindowAction, ForgottenWindowPolicy, LocalGenerationRecord,
-    LocalGenerationState, LocalProfileError, MaterializationRoot, QuotaPolicy, RecoveryClone,
-    SupportBundleSummary,
+    LocalGenerationState, LocalProfileError, MaterializationRoot, ProfileCurrentState,
+    QuotaPolicy, RecoveryClone, SupportBundleSummary,
 };
 use profile_platform_primitives::{DeviceId, GenerationId, ProfileId, TenantId, UnixMillis};
 use std::fs;
@@ -107,6 +107,63 @@ fn compact_workspace_binds_every_id_and_preserves_existing_user_directories()
         Err(LocalProfileError::TargetAlreadyExists)
     );
     assert_eq!(fs::read(legacy.join("unsaved.bin"))?, b"preserve");
+    fs::remove_dir_all(path)?;
+    Ok(())
+}
+
+
+#[test]
+fn profile_current_has_one_stable_path_and_only_advances_base_after_receipt()
+-> Result<(), Box<dyn std::error::Error>> {
+    let path = test_root("profile-current")?;
+    let root = MaterializationRoot::open_or_create(&path)?;
+    let (tenant, profile) = ids()?;
+    let local_id = GenerationId::parse("generation_local_current")?;
+    let cloud_id = GenerationId::parse("generation_cloud_current")?;
+    let draft = root.create_profile_current(&tenant, &profile, &local_id, 1)?;
+    let stable_path = draft.workspace().path().to_path_buf();
+    fs::write(stable_path.join("browser-state.bin"), b"local browser data")?;
+    fs::write(stable_path.join(".local-unsynced"), b"local-unsynced-v2")?;
+
+    let inventory = draft.workspace().inventory()?;
+    assert!(inventory.entries().iter().any(|entry| entry.relative_path() == "browser-state.bin"));
+    assert!(inventory.entries().iter().all(|entry| {
+        entry.relative_path() != ".profile-current-state"
+            && entry.relative_path() != ".local-unsynced"
+    }));
+    assert_eq!(draft.state().base_generation_id(), None);
+
+    let synced = root.update_profile_current_sync_base(draft.workspace(), &cloud_id, 2)?;
+    assert_eq!(synced.workspace().path(), stable_path);
+    assert_eq!(synced.workspace().generation_id(), &cloud_id);
+    assert_eq!(synced.state().base_generation_id(), Some(&cloud_id));
+    assert_eq!(synced.state().profile_version(), 2);
+
+    let reopened = root.open_profile_current(&tenant, &profile)?;
+    assert_eq!(reopened.workspace().path(), stable_path);
+    assert_eq!(reopened.state(), synced.state());
+    assert_eq!(fs::read(stable_path.join("browser-state.bin"))?, b"local browser data");
+    fs::remove_dir_all(path)?;
+    Ok(())
+}
+
+#[test]
+fn corrupt_profile_current_sidecar_fails_closed_without_touching_browser_data()
+-> Result<(), Box<dyn std::error::Error>> {
+    let path = test_root("profile-current-corrupt")?;
+    let root = MaterializationRoot::open_or_create(&path)?;
+    let (tenant, profile) = ids()?;
+    let local_id = GenerationId::parse("generation_local_current_corrupt")?;
+    let current = root.create_profile_current(&tenant, &profile, &local_id, 1)?;
+    let data = current.workspace().path().join("browser-state.bin");
+    fs::write(&data, b"preserve")?;
+    fs::write(current.workspace().path().join(".profile-current-state"), b"corrupt")?;
+
+    assert_eq!(
+        root.open_profile_current(&tenant, &profile),
+        Err(LocalProfileError::InvalidPolicy)
+    );
+    assert_eq!(fs::read(data)?, b"preserve");
     fs::remove_dir_all(path)?;
     Ok(())
 }

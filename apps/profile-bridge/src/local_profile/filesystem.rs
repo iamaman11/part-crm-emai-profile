@@ -10,6 +10,9 @@ const ROOT_MARKER: &str = ".profile-platform-root";
 const ROOT_MARKER_CONTENT: &str = "profile-platform-local-root-v1\n";
 const GENERATION_MARKER: &str = ".profile-generation";
 const GENERATION_MARKER_CONTENT: &str = "profile-platform-generation-v1\n";
+const PROFILE_CURRENT_STATE_FILE: &str = ".profile-current-state";
+const PROFILE_CURRENT_STATE_HEADER: &str = "profile-platform-current-v1";
+const MAX_PROFILE_CURRENT_STATE_BYTES: u64 = 512;
 const BRIDGE_LOCK_FILE: &str = ".profile-platform.lock";
 const RECOVERY_MARKER_STAGE_PREFIX: &str = ".profile-platform.lock.recovery-";
 const GENERATION_ADMISSION_FILE: &str = ".profile-platform.writer-admission";
@@ -158,6 +161,153 @@ impl MaterializationRoot {
             .existing_generation_path(tenant_id, profile_id, generation_id)?
             .ok_or(LocalProfileError::Io(std::io::ErrorKind::NotFound))?;
         GenerationWorkspace::open(path, tenant_id, profile_id, generation_id)
+    }
+
+    /// Create the one stable local working directory for a tenant/profile.
+    /// The sidecar records only the logical generation and last cloud base; it is
+    /// excluded from browser snapshots and never contains browser data.
+    pub fn create_profile_current(
+        &self,
+        tenant_id: &TenantId,
+        profile_id: &ProfileId,
+        generation_id: &GenerationId,
+        profile_version: u64,
+    ) -> Result<ProfileCurrentWorkspace, LocalProfileError> {
+        let path = self.prepare_profile_current_path(tenant_id, profile_id)?;
+        fs::create_dir(&path)?;
+        write_new_text(&path.join(GENERATION_MARKER), GENERATION_MARKER_CONTENT)?;
+        let state = ProfileCurrentState::draft(generation_id.clone(), profile_version)?;
+        write_new_text(&path.join(PROFILE_CURRENT_STATE_FILE), &state.encode())?;
+        let workspace = GenerationWorkspace::open(path, tenant_id, profile_id, generation_id)?;
+        Ok(ProfileCurrentWorkspace { workspace, state })
+    }
+
+    /// Open the stable local working directory using its last confirmed cloud base.
+    /// A missing or corrupt sidecar never causes an empty replacement to be created.
+    pub fn open_profile_current(
+        &self,
+        tenant_id: &TenantId,
+        profile_id: &ProfileId,
+    ) -> Result<ProfileCurrentWorkspace, LocalProfileError> {
+        let path = self
+            .existing_profile_current_path(tenant_id, profile_id)?
+            .ok_or(LocalProfileError::Io(std::io::ErrorKind::NotFound))?;
+        let state = read_profile_current_state(&path.join(PROFILE_CURRENT_STATE_FILE))?;
+        let workspace = GenerationWorkspace::open(
+            path,
+            tenant_id,
+            profile_id,
+            &state.generation_id,
+        )?;
+        Ok(ProfileCurrentWorkspace { workspace, state })
+    }
+
+    /// Advance the local base only after the Worker has returned a verified Sync receipt.
+    /// The physical working directory never changes when the cloud generation changes.
+    pub fn update_profile_current_sync_base(
+        &self,
+        workspace: &GenerationWorkspace,
+        generation_id: &GenerationId,
+        profile_version: u64,
+    ) -> Result<ProfileCurrentWorkspace, LocalProfileError> {
+        let current_path = fs::canonicalize(
+            self.profile_current_path(workspace.tenant_id(), workspace.profile_id()),
+        )?;
+        if current_path != workspace.path() {
+            return Err(LocalProfileError::UnsafeRelativePath);
+        }
+        let state = ProfileCurrentState::synced(generation_id.clone(), profile_version)?;
+        write_existing_control_text(
+            &current_path.join(PROFILE_CURRENT_STATE_FILE),
+            &state.encode(),
+        )?;
+        let workspace = GenerationWorkspace::open(
+            current_path,
+            workspace.tenant_id(),
+            workspace.profile_id(),
+            generation_id,
+        )?;
+        Ok(ProfileCurrentWorkspace { workspace, state })
+    }
+
+    fn prepare_profile_current_path(
+        &self,
+        tenant: &TenantId,
+        profile: &ProfileId,
+    ) -> Result<PathBuf, LocalProfileError> {
+        if self.existing_profile_current_path(tenant, profile)?.is_some() {
+            return Err(LocalProfileError::TargetAlreadyExists);
+        }
+        let path = self.profile_current_path(tenant, profile);
+        let mut parent = self.canonical_path.clone();
+        for component in path
+            .strip_prefix(&self.canonical_path)
+            .map_err(|_| LocalProfileError::UnsafeRelativePath)?
+            .components()
+            .take(2)
+        {
+            parent = ensure_directory(
+                &parent,
+                component
+                    .as_os_str()
+                    .to_str()
+                    .ok_or(LocalProfileError::UnsafeRelativePath)?,
+            )?;
+        }
+        Ok(path)
+    }
+
+    fn existing_profile_current_path(
+        &self,
+        tenant: &TenantId,
+        profile: &ProfileId,
+    ) -> Result<Option<PathBuf>, LocalProfileError> {
+        let path = self.profile_current_path(tenant, profile);
+        let mut parent = self.canonical_path.clone();
+        for component in path
+            .strip_prefix(&self.canonical_path)
+            .map_err(|_| LocalProfileError::UnsafeRelativePath)?
+            .components()
+            .take(2)
+        {
+            let value = component
+                .as_os_str()
+                .to_str()
+                .ok_or(LocalProfileError::UnsafeRelativePath)?;
+            match open_directory(&parent, value) {
+                Ok(next) => parent = next,
+                Err(LocalProfileError::Io(std::io::ErrorKind::NotFound)) => return Ok(None),
+                Err(error) => return Err(error),
+            }
+        }
+        match fs::symlink_metadata(&path) {
+            Ok(metadata) if metadata.file_type().is_symlink() => {
+                Err(LocalProfileError::SymbolicLinkRejected)
+            }
+            Ok(metadata) if !metadata.is_dir() => Err(LocalProfileError::RootIsNotDirectory),
+            Ok(_) => Ok(Some(path)),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
+            Err(error) => Err(error.into()),
+        }
+    }
+
+    fn profile_current_path(&self, tenant: &TenantId, profile: &ProfileId) -> PathBuf {
+        self.profile_scope_path(tenant, profile).join("current")
+    }
+
+    fn profile_scope_path(&self, tenant: &TenantId, profile: &ProfileId) -> PathBuf {
+        let mut digest = Sha256::new();
+        digest.update(b"profile-platform/workspace-scope/v2\0");
+        for id in [tenant.as_str(), profile.as_str()] {
+            digest.update(id.as_bytes());
+            digest.update([0]);
+        }
+        let scope: String = digest
+            .finalize()
+            .iter()
+            .map(|byte| format!("{byte:02x}"))
+            .collect();
+        self.canonical_path.join(&scope[..32]).join(&scope[32..])
     }
 
     /// Physical cache placement is independent of opaque ID lengths. Full scoped identity is
@@ -404,6 +554,89 @@ impl GenerationWorkspace {
     pub fn materialization_inventory_digest(&self) -> Result<u64, LocalProfileError> {
         build_materialization_inventory_digest(&self.canonical_path)
     }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ProfileCurrentState {
+    generation_id: GenerationId,
+    base_generation_id: Option<GenerationId>,
+    profile_version: u64,
+}
+
+impl ProfileCurrentState {
+    fn draft(generation_id: GenerationId, profile_version: u64) -> Result<Self, LocalProfileError> {
+        validate_profile_version(profile_version)?;
+        Ok(Self {
+            generation_id,
+            base_generation_id: None,
+            profile_version,
+        })
+    }
+
+    fn synced(generation_id: GenerationId, profile_version: u64) -> Result<Self, LocalProfileError> {
+        validate_profile_version(profile_version)?;
+        Ok(Self {
+            base_generation_id: Some(generation_id.clone()),
+            generation_id,
+            profile_version,
+        })
+    }
+
+    fn encode(&self) -> String {
+        format!(
+            "{PROFILE_CURRENT_STATE_HEADER}\n{}\n{}\n{}\n",
+            self.generation_id.as_str(),
+            self.base_generation_id
+                .as_ref()
+                .map_or("-", GenerationId::as_str),
+            self.profile_version,
+        )
+    }
+
+    #[must_use]
+    pub fn generation_id(&self) -> &GenerationId {
+        &self.generation_id
+    }
+
+    #[must_use]
+    pub fn base_generation_id(&self) -> Option<&GenerationId> {
+        self.base_generation_id.as_ref()
+    }
+
+    #[must_use]
+    pub const fn profile_version(&self) -> u64 {
+        self.profile_version
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ProfileCurrentWorkspace {
+    workspace: GenerationWorkspace,
+    state: ProfileCurrentState,
+}
+
+impl ProfileCurrentWorkspace {
+    #[must_use]
+    pub const fn workspace(&self) -> &GenerationWorkspace {
+        &self.workspace
+    }
+
+    #[must_use]
+    pub fn into_workspace(self) -> GenerationWorkspace {
+        self.workspace
+    }
+
+    #[must_use]
+    pub const fn state(&self) -> &ProfileCurrentState {
+        &self.state
+    }
+}
+
+fn validate_profile_version(profile_version: u64) -> Result<(), LocalProfileError> {
+    if profile_version == 0 || profile_version >= i64::MAX as u64 {
+        return Err(LocalProfileError::InvalidPolicy);
+    }
+    Ok(())
 }
 
 #[derive(Debug)]
@@ -698,6 +931,59 @@ fn open_directory(parent: &Path, safe_segment: &str) -> Result<PathBuf, LocalPro
     Ok(path)
 }
 
+fn write_existing_control_text(path: &Path, content: &str) -> Result<(), LocalProfileError> {
+    let metadata = fs::symlink_metadata(path)?;
+    if metadata.file_type().is_symlink()
+        || !metadata.is_file()
+        || metadata.len() > MAX_PROFILE_CURRENT_STATE_BYTES
+    {
+        return Err(LocalProfileError::InvalidPolicy);
+    }
+    let mut file = OpenOptions::new().write(true).truncate(true).open(path)?;
+    file.write_all(content.as_bytes())?;
+    file.sync_all()?;
+    Ok(())
+}
+
+fn read_profile_current_state(path: &Path) -> Result<ProfileCurrentState, LocalProfileError> {
+    let metadata = fs::symlink_metadata(path)?;
+    if metadata.file_type().is_symlink()
+        || !metadata.is_file()
+        || metadata.len() > MAX_PROFILE_CURRENT_STATE_BYTES
+    {
+        return Err(LocalProfileError::InvalidPolicy);
+    }
+    let content = read_control_text(path)?;
+    let mut lines = content.lines();
+    if lines.next() != Some(PROFILE_CURRENT_STATE_HEADER) {
+        return Err(LocalProfileError::InvalidPolicy);
+    }
+    let generation_id = GenerationId::parse(
+        lines.next().ok_or(LocalProfileError::InvalidPolicy)?,
+    )
+    .map_err(|_| LocalProfileError::InvalidPolicy)?;
+    let base_generation_id = match lines.next() {
+        Some("-") => None,
+        Some(value) => Some(
+            GenerationId::parse(value).map_err(|_| LocalProfileError::InvalidPolicy)?,
+        ),
+        None => return Err(LocalProfileError::InvalidPolicy),
+    };
+    let profile_version = lines
+        .next()
+        .and_then(|value| value.parse::<u64>().ok())
+        .filter(|value| *value > 0 && *value < i64::MAX as u64)
+        .ok_or(LocalProfileError::InvalidPolicy)?;
+    if lines.next().is_some() {
+        return Err(LocalProfileError::InvalidPolicy);
+    }
+    Ok(ProfileCurrentState {
+        generation_id,
+        base_generation_id,
+        profile_version,
+    })
+}
+
 fn write_new_text(path: &Path, content: &str) -> Result<(), LocalProfileError> {
     let mut file = OpenOptions::new().write(true).create_new(true).open(path)?;
     file.write_all(content.as_bytes())?;
@@ -935,7 +1221,11 @@ fn normalized_relative_path(relative: &Path) -> Result<String, LocalProfileError
 fn is_bridge_control_file(relative_path: &str) -> bool {
     matches!(
         relative_path,
-        GENERATION_MARKER | BRIDGE_LOCK_FILE | GENERATION_ADMISSION_FILE
+        GENERATION_MARKER
+            | BRIDGE_LOCK_FILE
+            | GENERATION_ADMISSION_FILE
+            | PROFILE_CURRENT_STATE_FILE
+            | ".local-unsynced"
     ) || relative_path.starts_with(RECOVERY_MARKER_STAGE_PREFIX)
 }
 

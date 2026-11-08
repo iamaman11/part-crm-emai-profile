@@ -3,7 +3,9 @@
 #![forbid(unsafe_code)]
 
 use crate::generation_initialization::{InitialProfileOpen, InitialProfileStatus};
-use crate::local_profile::{BridgeWorkspaceLock, LocalProfileError, MaterializationRoot};
+use crate::local_profile::{
+    BridgeWorkspaceLock, LocalProfileError, MaterializationRoot, ProfileCurrentWorkspace,
+};
 use profile_platform_primitives::{DeviceId, GenerationId};
 use sha2::{Digest, Sha256};
 use std::fmt;
@@ -64,19 +66,20 @@ fn open_or_create_workspace(
     intent: &InitialProfileOpen,
     generation: &GenerationId,
 ) -> Result<crate::local_profile::GenerationWorkspace, LocalOpenError> {
-    match root.open_generation(&intent.tenant_id, &intent.profile_id, generation) {
-        Ok(workspace) => Ok(workspace),
+    match root.open_profile_current(&intent.tenant_id, &intent.profile_id) {
+        Ok(current) => Ok(current.into_workspace()),
         Err(LocalProfileError::Io(std::io::ErrorKind::NotFound))
-            if intent.status == InitialProfileStatus::Draft =>
-        {
-            root.create_generation(&intent.tenant_id, &intent.profile_id, generation)
-                .map_err(|_| LocalOpenError::InvalidLocalWorkspace)
-        }
+            if intent.status == InitialProfileStatus::Draft => root
+                .create_profile_current(
+                    &intent.tenant_id,
+                    &intent.profile_id,
+                    generation,
+                    intent.expected_version,
+                )
+                .map(ProfileCurrentWorkspace::into_workspace)
+                .map_err(|_| LocalOpenError::InvalidLocalWorkspace),
         Err(LocalProfileError::Io(std::io::ErrorKind::NotFound))
-            if intent.status == InitialProfileStatus::Ready =>
-        {
-            Err(LocalOpenError::RestoreRequired)
-        }
+            if intent.status == InitialProfileStatus::Ready => Err(LocalOpenError::RestoreRequired),
         Err(_) => Err(LocalOpenError::InvalidLocalWorkspace),
     }
 }
@@ -222,7 +225,7 @@ mod tests {
             Err(LocalOpenError::RestoreRequired)
         ));
         assert!(
-            root.open_generation(&intent.tenant_id, &intent.profile_id, &generation)
+            root.open_profile_current(&intent.tenant_id, &intent.profile_id)
                 .is_err()
         );
     }
@@ -236,8 +239,9 @@ mod tests {
         let generation = local_generation(&intent).unwrap();
         let created = open_or_create_workspace(&root, &intent, &generation).unwrap();
         let reopened = root
-            .open_generation(&intent.tenant_id, &intent.profile_id, &generation)
-            .unwrap();
+            .open_profile_current(&intent.tenant_id, &intent.profile_id)
+            .unwrap()
+            .into_workspace();
         assert_eq!(created.path(), reopened.path());
     }
 
