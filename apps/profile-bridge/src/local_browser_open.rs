@@ -3,9 +3,7 @@
 #![forbid(unsafe_code)]
 
 use crate::generation_initialization::{InitialProfileOpen, InitialProfileStatus};
-use crate::local_profile::{
-    BridgeWorkspaceLock, LocalProfileError, MaterializationRoot, ProfileCurrentWorkspace,
-};
+use crate::local_profile::{BridgeWorkspaceLock, LocalProfileError, MaterializationRoot};
 use profile_platform_primitives::{DeviceId, GenerationId};
 use sha2::{Digest, Sha256};
 use std::fmt;
@@ -77,7 +75,6 @@ fn open_or_create_workspace(
                 generation,
                 intent.expected_version,
             )
-            .map(ProfileCurrentWorkspace::into_workspace)
             .map_err(|_| LocalOpenError::InvalidLocalWorkspace)
         }
         Err(LocalProfileError::Io(std::io::ErrorKind::NotFound))
@@ -245,8 +242,7 @@ mod tests {
         let created = open_or_create_workspace(&root, &intent, &generation).unwrap();
         let reopened = root
             .open_profile_current(&intent.tenant_id, &intent.profile_id)
-            .unwrap()
-            .into_workspace();
+            .unwrap();
         assert_eq!(created.path(), reopened.path());
     }
 

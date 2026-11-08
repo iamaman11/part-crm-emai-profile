@@ -613,7 +613,7 @@ mod tests {
         }
 
         let intent = InitialProfileOpen::parse(
-            "profilebridge://open/v1/tenant_initial_retain/actor_initial_retain/profile_initial_retain/1",
+            "profilebridge://open/v2/tenant_initial_retain/actor_initial_retain/profile_initial_retain/1/DRAFT",
         )?;
         let actor = ActorContext::new(
             TenantScope::new(intent.tenant_id.clone()),

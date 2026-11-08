@@ -6,8 +6,7 @@ mod quiescence;
 
 pub(crate) use filesystem::BROWSER_IDENTITY_RECORD_FILE;
 pub use filesystem::{
-    GenerationInventory, GenerationWorkspace, InventoryEntry, MaterializationRoot,
-    ProfileCurrentState, ProfileCurrentWorkspace, RecoveryClone,
+    GenerationInventory, GenerationWorkspace, InventoryEntry, MaterializationRoot, RecoveryClone,
 };
 pub use lifecycle::{
     ForgottenWindowAction, ForgottenWindowPolicy, LocalGenerationRecord, LocalGenerationState,
