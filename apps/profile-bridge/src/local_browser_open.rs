@@ -98,8 +98,8 @@ fn mark_local_unsynced(folder: &Path) -> Result<(), LocalOpenError> {
                 .map_err(|_| LocalOpenError::InvalidLocalWorkspace)
         }
         Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
-            let metadata = fs::symlink_metadata(&file)
-                .map_err(|_| LocalOpenError::InvalidLocalWorkspace)?;
+            let metadata =
+                fs::symlink_metadata(&file).map_err(|_| LocalOpenError::InvalidLocalWorkspace)?;
             if metadata.file_type().is_symlink()
                 || !metadata.is_file()
                 || metadata.len() != LOCAL_UNSYNCED_CONTENT.len() as u64
