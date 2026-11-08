@@ -1100,7 +1100,8 @@ fn reopen_selection_witness(
         return (!historical && session.is_empty() && token.is_empty() && epoch == 0)
             .then_some(None);
     }
-    reopen_witness(session, token, epoch).map(Some)
+    reopen_witness(session, token, epoch)
+        .map(|(session_id, fencing_token)| Some((session_id, fencing_token, epoch)))
 }
 
 async fn authorize_local_current_restore(
@@ -1114,8 +1115,7 @@ async fn authorize_local_current_restore(
         use_cases::generation_initialization::authorize_initial_generation_access(
             actor, role, profile_id, &application,
         ).await,
-        Ok(context) if context.status == profile_domain::ProfileStatus::Ready
-            && context.active_generation_id.is_some()
+        Ok(context) if context.active_generation_id.is_some()
     ))
 }
 
@@ -1436,9 +1436,7 @@ async fn historical_predecessor_reopen_descriptor(
         profile_id,
         actor,
         device_id,
-        session_id,
-        fencing_token,
-        coordinator_epoch,
+        Some((session_id, fencing_token, coordinator_epoch)),
     )
     .await?;
     let observer = match profile_generation_successor_observer(env) {

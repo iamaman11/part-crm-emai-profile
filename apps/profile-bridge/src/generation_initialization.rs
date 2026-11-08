@@ -90,6 +90,23 @@ pub enum InitialProfileError {
     SavedRecovery,
 }
 
+impl core::fmt::Display for InitialProfileError {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.write_str(match self {
+            Self::Authorization => "profile Sync authorization was not confirmed",
+            Self::RuntimeBundle | Self::Runtime => "installed runtime is unavailable",
+            Self::Snapshot => "closed local snapshot could not be verified",
+            Self::Encryption => "generation encryption could not be verified",
+            Self::Upload => "cloud object upload was not confirmed",
+            Self::Commit => "cloud CURRENT Commit was not confirmed",
+            Self::SavedRecovery => "cloud Commit may have succeeded; preserve local dirty evidence",
+        })
+    }
+}
+
+impl std::error::Error for InitialProfileError {}
+
+
 fn hex(bytes: &[u8]) -> String {
     bytes.iter().map(|b| format!("{b:02x}")).collect()
 }

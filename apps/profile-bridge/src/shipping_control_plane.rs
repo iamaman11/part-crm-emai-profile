@@ -1983,6 +1983,7 @@ mod tests {
             ))
         };
         let shared = SharedControlPlaneCoordinator::new(ControlPlaneCoordinator {
+            local_current_restore: false,
             transport: SealingMachineHttp {
                 responses: VecDeque::from([accepted(14)?, accepted(15)?]),
                 requests: Vec::new(),
@@ -2124,6 +2125,7 @@ mod tests {
         // path. No initial result extends the confirmed lease.
         for initial_status in [None, Some(408), Some(429), Some(503)] {
             let mut coordinator = ControlPlaneCoordinator {
+                local_current_restore: false,
                 transport: LostHeartbeatResponseTransport {
                     requests: Vec::new(),
                     first_response: initial_status
@@ -2225,6 +2227,7 @@ mod tests {
             408, 429, 500, 502, 503, 504, 400, 401, 403, 404, 409, 410, 422,
         ] {
             let mut coordinator = ControlPlaneCoordinator {
+                local_current_restore: false,
                 transport: SealingMachineHttp {
                     responses: VecDeque::from([MachineHttpResponse::new(
                         status,
@@ -2316,6 +2319,7 @@ mod tests {
             };
             Ok(Self {
                 coordinator: ControlPlaneCoordinator {
+                    local_current_restore: false,
                     transport: SealingMachineHttp {
                         responses: VecDeque::from([response]),
                         requests: Vec::new(),
@@ -2555,6 +2559,7 @@ mod tests {
             )?;
             Ok((
                 ControlPlaneCoordinator {
+                    local_current_restore: false,
                     transport: SealingMachineHttp {
                         responses: VecDeque::from([release_response(
                             &tenant_id,
