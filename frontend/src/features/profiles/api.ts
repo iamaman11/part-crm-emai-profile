@@ -216,8 +216,12 @@ export function commandCoordinator(
   return issueProfileCoordinatorCommandOperation({ tenantId, profileId, body: input });
 }
 
-export function openBrowserProfile(launchUri: string): void {
-  // The authorized intent is fetched while the profile projection loads.
-  // A user click only dispatches the already prepared local Bridge URI.
+export async function openBrowserProfile(tenantId: string, profileId: string, idempotencyKey: string): Promise<void> {
+  const launch = await launchProfile(tenantId, profileId, idempotencyKey);
+  invokeProfileBridgeLaunch(launch.launchUri);
+}
+
+export function dispatchBrowserProfileOpen(launchUri: string): void {
+  // A user click only dispatches the already authorized, prefetched local Bridge URI.
   invokeProfileBridgeLaunch(launchUri);
 }
