@@ -6,7 +6,7 @@ import {
   assignProfile,
   detachProfile,
   getProfile,
-  invokeProfileBridgeLaunch,
+  dispatchBrowserProfileOpen,
   launchProfile,
 } from '../profiles';
 import { ClientProfilesPanel } from './ClientProfilesPanel';
@@ -16,12 +16,8 @@ vi.mock('../profiles', () => ({
   assignProfile: vi.fn(),
   detachProfile: vi.fn(),
   getProfile: vi.fn(),
-  invokeProfileBridgeLaunch: vi.fn(),
+  dispatchBrowserProfileOpen: vi.fn(),
   launchProfile: vi.fn(),
-  openBrowserProfile: async (tenant: string, profile: string, key: string) => {
-    const result = await mockedLaunchProfile(tenant, profile, key);
-    mockedInvokeProfileBridgeLaunch(result.launchUri);
-  },
 }));
 
 vi.mock('./api', () => ({
@@ -32,7 +28,7 @@ const mockedAssignProfile = vi.mocked(assignProfile);
 const mockedDetachProfile = vi.mocked(detachProfile);
 const mockedGetProfile = vi.mocked(getProfile);
 const mockedLaunchProfile = vi.mocked(launchProfile);
-const mockedInvokeProfileBridgeLaunch = vi.mocked(invokeProfileBridgeLaunch);
+const mockedDispatchBrowserProfileOpen = vi.mocked(dispatchBrowserProfileOpen);
 const mockedListClientProfiles = vi.mocked(listClientProfiles);
 
 const tenantId = 'tenant_01JCLIENTPROFILES';
@@ -120,16 +116,19 @@ describe('ClientProfilesPanel P1 relationship and P2 launch workflow', () => {
     renderPanel();
 
     expect(await screen.findByText(profileId)).toBeTruthy();
-    await user.click(screen.getByRole('button', { name: `Launch profile ${profileId}` }));
-
+    const launchButton = screen.getByRole('button', { name: `Launch profile ${profileId}` });
+    await user.hover(launchButton);
     await waitFor(() => expect(mockedLaunchProfile).toHaveBeenCalledTimes(1));
+    await user.click(launchButton);
+
+    await waitFor(() => expect(mockedDispatchBrowserProfileOpen).toHaveBeenCalledTimes(1));
     const [actualTenantId, actualProfileId, idempotencyKey] = mockedLaunchProfile.mock.calls[0] ?? [];
     expect(actualTenantId).toBe(tenantId);
     expect(actualProfileId).toBe(profileId);
     expect(typeof idempotencyKey).toBe('string');
     expect(idempotencyKey).not.toContain('device');
     expect(idempotencyKey).not.toContain('generation');
-    expect(mockedInvokeProfileBridgeLaunch).toHaveBeenCalledWith(
+    expect(mockedDispatchBrowserProfileOpen).toHaveBeenCalledWith(
       'profilebridge://open/v1/tenant_01JCLIENTPROFILES/actor_01JCLIENTPROFILES/profile_01JCLIENTPROFILES_LAUNCH/4',
     );
     expect(screen.queryByText(/claim_0123456789abcdef/u)).toBeNull();
@@ -147,11 +146,11 @@ describe('ClientProfilesPanel P1 relationship and P2 launch workflow', () => {
     renderPanel();
 
     expect(await screen.findByText(profileId)).toBeTruthy();
-    await user.click(screen.getByRole('button', { name: `Launch profile ${profileId}` }));
-
+    const launchButton = screen.getByRole('button', { name: `Launch profile ${profileId}` });
+    await user.hover(launchButton);
     expect(await screen.findByText('Profile launch failed. Retry from this profile.')).toBeTruthy();
     expect(screen.queryByText(/secret-claim-must-not-render/u)).toBeNull();
-    expect(mockedInvokeProfileBridgeLaunch).not.toHaveBeenCalled();
+    expect(mockedDispatchBrowserProfileOpen).not.toHaveBeenCalled();
   });
 
   it('loads the profile through its own visibility boundary before attach or atomic reassign', async () => {
