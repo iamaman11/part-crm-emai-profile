@@ -1,4 +1,5 @@
 #![forbid(unsafe_code)]
+#![cfg(windows)] // This integration test exercises the packaged Windows Firefox runtime.
 
 use profile_bridge::local_profile::MaterializationRoot;
 use profile_bridge::runtime_bundle::ApprovedRuntimeBundle;
