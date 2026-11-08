@@ -11,8 +11,10 @@ use runtime_bundle_domain::{
 };
 use sha2::{Digest, Sha256};
 use std::env;
-use std::fs;
+use std::fs::{self, OpenOptions};
 use std::path::{Path, PathBuf};
+#[cfg(windows)]
+use std::os::windows::fs::{MetadataExt, OpenOptionsExt};
 use std::process::Command;
 use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
@@ -163,118 +165,65 @@ fn sha256_hex(bytes: &[u8]) -> String {
     encoded
 }
 
-fn close_native_camoufox_window() -> Result<(), Box<dyn std::error::Error>> {
+fn native_profile_writer_active(folder: &Path) -> Result<bool, Box<dyn std::error::Error>> {
+    let path = folder.join("user_data").join("parent.lock");
+    let metadata = match fs::symlink_metadata(&path) {
+        Ok(metadata) => metadata,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(false),
+        Err(error) => return Err(error.into()),
+    };
+    if metadata.file_type().is_symlink()
+        || metadata.file_attributes() & 0x0400 != 0
+        || !metadata.is_file()
+    {
+        return Err("Firefox parent.lock has an unsafe filesystem shape".into());
+    }
+    match OpenOptions::new().read(true).share_mode(0).open(path) {
+        Ok(_handle) => Ok(false),
+        Err(error) if matches!(error.raw_os_error(), Some(5 | 32 | 33)) => Ok(true),
+        Err(error) => Err(error.into()),
+    }
+}
+
+fn wait_for_native_profile_writer(
+    folder: &Path,
+    deadline: Instant,
+) -> Result<(), Box<dyn std::error::Error>> {
+    loop {
+        if native_profile_writer_active(folder)? {
+            return Ok(());
+        }
+        if Instant::now() >= deadline {
+            return Err("Firefox did not acquire its native profile file lock".into());
+        }
+        thread::sleep(Duration::from_millis(50));
+    }
+}
+
+fn send_user_alt_f4() -> Result<(), Box<dyn std::error::Error>> {
+    // Test harness only: simulate a user pressing Alt+F4 in the foreground
+    // browser. No window lookup, process enumeration or window-message dispatch.
     let script = r#"
 $ErrorActionPreference = 'Stop'
 Add-Type -TypeDefinition @'
 using System;
-using System.Collections.Generic;
 using System.Runtime.InteropServices;
-
-public sealed class NativeCamoufoxWindowInfo {
-    public IntPtr Handle { get; set; }
-    public uint ProcessId { get; set; }
-}
-
-public static class NativeCamoufoxWindow {
-    public delegate bool EnumWindowsCallback(IntPtr hWnd, IntPtr lParam);
+public static class NativeUserInput {
     [DllImport("user32.dll", SetLastError = true)]
-    public static extern bool IsWindow(IntPtr hWnd);
-    [DllImport("user32.dll", SetLastError = true)]
-    public static extern bool IsWindowVisible(IntPtr hWnd);
-    [DllImport("user32.dll", SetLastError = true)]
-    public static extern bool PostMessage(IntPtr hWnd, uint msg, IntPtr wParam, IntPtr lParam);
-    [DllImport("user32.dll", SetLastError = true)]
-    public static extern bool EnumWindows(EnumWindowsCallback callback, IntPtr lParam);
-    [DllImport("user32.dll", SetLastError = true)]
-    public static extern uint GetWindowThreadProcessId(IntPtr hWnd, out uint processId);
-
-    public static List<NativeCamoufoxWindowInfo> FindVisibleWindows(uint[] processIds) {
-        var wanted = new HashSet<uint>(processIds);
-        var result = new List<NativeCamoufoxWindowInfo>();
-        bool completed = EnumWindows((hWnd, lParam) => {
-            if (!IsWindowVisible(hWnd)) return true;
-            uint processId = 0;
-            GetWindowThreadProcessId(hWnd, out processId);
-            if (wanted.Contains(processId)) {
-                result.Add(new NativeCamoufoxWindowInfo {
-                    Handle = hWnd,
-                    ProcessId = processId
-                });
-            }
-            return true;
-        }, IntPtr.Zero);
-        if (!completed) throw new InvalidOperationException("EnumWindows failed");
-        return result;
+    public static extern void keybd_event(byte key, byte scan, uint flags, UIntPtr extra);
+    public static void AltF4() {
+        const byte VK_MENU = 0x12;
+        const byte VK_F4 = 0x73;
+        const uint KEYUP = 0x0002;
+        keybd_event(VK_MENU, 0, 0, UIntPtr.Zero);
+        keybd_event(VK_F4, 0, 0, UIntPtr.Zero);
+        keybd_event(VK_F4, 0, KEYUP, UIntPtr.Zero);
+        keybd_event(VK_MENU, 0, KEYUP, UIntPtr.Zero);
     }
 }
 '@
-$deadline = [DateTime]::UtcNow.AddSeconds(30)
-$posted = $false
-$observed = $false
-do {
-    $browserProcesses = @(Get-Process -Name 'camoufox' -ErrorAction SilentlyContinue)
-    $browserPids = [uint32[]]@($browserProcesses | ForEach-Object { [uint32]$_.Id })
-    if ($browserPids.Length -eq 0) {
-        if ($observed) {
-            Write-Output 'NATIVE_CAMOUFOX_WM_CLOSE=ALREADY_CLOSED'
-            break
-        }
-        Start-Sleep -Milliseconds 100
-        continue
-    }
-    $browserWindows = [NativeCamoufoxWindow]::FindVisibleWindows($browserPids)
-    if ($browserWindows.Count -gt 1) {
-        $details = ($browserWindows | ForEach-Object {
-            "pid=$($_.ProcessId),hwnd=$($_.Handle)"
-        }) -join ';'
-        throw "expected one visible native Camoufox window, found $($browserWindows.Count): $details"
-    }
-    if ($browserWindows.Count -eq 1) {
-        $observed = $true
-        $target = $browserWindows[0]
-        if (-not [NativeCamoufoxWindow]::IsWindow($target.Handle)) {
-            Start-Sleep -Milliseconds 100
-            continue
-        }
-        if ([NativeCamoufoxWindow]::PostMessage(
-            $target.Handle, 0x0010, [IntPtr]::Zero, [IntPtr]::Zero
-        )) {
-            $posted = $true
-            Write-Output "NATIVE_CAMOUFOX_WM_CLOSE=POSTED;PID=$($target.ProcessId);HWND=$($target.Handle)"
-            break
-        }
-        $errorCode = [Runtime.InteropServices.Marshal]::GetLastWin32Error()
-        if ($errorCode -ne 1400) {
-            throw "WM_CLOSE failed: $errorCode"
-        }
-    }
-    Start-Sleep -Milliseconds 100
-} while ([DateTime]::UtcNow -lt $deadline)
-if ($posted) {
-    $closeDeadline = [DateTime]::UtcNow.AddSeconds(20)
-    $noVisibleWindows = $false
-    do {
-        $browserProcesses = @(Get-Process -Name 'camoufox' -ErrorAction SilentlyContinue)
-        $browserPids = [uint32[]]@($browserProcesses | ForEach-Object { [uint32]$_.Id })
-        $remaining = if ($browserPids.Length -eq 0) {
-            @()
-        } else {
-            [NativeCamoufoxWindow]::FindVisibleWindows($browserPids)
-        }
-        if ($remaining.Count -eq 0) {
-            $noVisibleWindows = $true
-            break
-        }
-        Start-Sleep -Milliseconds 100
-    } while ([DateTime]::UtcNow -lt $closeDeadline)
-    if (-not $noVisibleWindows) {
-        throw "WM_CLOSE was posted but $($remaining.Count) visible Camoufox window(s) remain"
-    }
-    Write-Output 'NATIVE_CAMOUFOX_WINDOW_DESTROYED=YES'
-} elseif (-not $observed) {
-    throw 'native Camoufox window remained unavailable for WM_CLOSE'
-}
+[NativeUserInput]::AltF4()
+Write-Output 'NATIVE_CAMOUFOX_USER_CLOSE=ALT_F4_SENT'
 "#;
     let output = Command::new("powershell.exe")
         .args([
@@ -288,20 +237,16 @@ if ($posted) {
         .output()?;
     let stdout = String::from_utf8_lossy(&output.stdout);
     let stderr = String::from_utf8_lossy(&output.stderr);
-    if !output.status.success()
-        || !(stdout.contains("NATIVE_CAMOUFOX_WM_CLOSE=POSTED")
-            || stdout.contains("NATIVE_CAMOUFOX_WM_CLOSE=ALREADY_CLOSED"))
-        || (stdout.contains("NATIVE_CAMOUFOX_WM_CLOSE=POSTED")
-            && !stdout.contains("NATIVE_CAMOUFOX_WINDOW_DESTROYED=YES"))
-    {
+    if !output.status.success() || !stdout.contains("NATIVE_CAMOUFOX_USER_CLOSE=ALT_F4_SENT") {
         return Err(format!(
-            "native Camoufox WM_CLOSE failed: stdout={stdout:?}; stderr={stderr:?}"
+            "user Alt+F4 input failed: stdout={stdout:?}; stderr={stderr:?}"
         )
         .into());
     }
     eprintln!("{}", stdout.trim());
     Ok(())
 }
+
 
 #[cfg(not(windows))]
 fn digest_file(path: &Path) -> Result<(u64, String), Box<dyn std::error::Error>> {
@@ -432,7 +377,7 @@ fn run_native_cold_launch_cycle() -> Result<ApprovedRuntimeBundle, Box<dyn std::
                 .map_err(|error| error.to_string())
         });
 
-        // Observe only native filesystem/process readiness; no page/DOM
+        // Observe only native filesystem readiness; no page/DOM/window/process
         // inspection, synthetic Playwright navigator, or managed browser IPC.
         let deadline = Instant::now() + Duration::from_secs(90);
         let folder = loop {
@@ -464,10 +409,14 @@ fn run_native_cold_launch_cycle() -> Result<ApprovedRuntimeBundle, Box<dyn std::
             _ => {}
         }
 
-        // The current native SDK must create a real browser window that
-        // closes via a normal user WM_CLOSE, not kill/Playwright automation.
+        // Wait for the Firefox-owned profile file lock, not a window or
+        // process. Then simulate the user's ordinary Alt+F4 action.
+        wait_for_native_profile_writer(
+            folder.path(),
+            Instant::now() + Duration::from_secs(90),
+        )?;
         let begin_close = Instant::now();
-        close_native_camoufox_window()?;
+        send_user_alt_f4()?;
         let (sender, receiver) = std::sync::mpsc::sync_channel(1);
         thread::spawn(move || {
             let result = opened
@@ -478,7 +427,7 @@ fn run_native_cold_launch_cycle() -> Result<ApprovedRuntimeBundle, Box<dyn std::
         });
         let close = receiver
             .recv_timeout(Duration::from_secs(60))
-            .map_err(|_| "native browser did not finish after WM_CLOSE")?;
+            .map_err(|_| "Playwright close event was not received after user Alt+F4")?;
         close.map_err(|error| format!("native browser Close failed: {error}"))?;
         eprintln!(
             "AR10_COLD_CYCLE_PHASE=native_open_close;ordinal={};elapsed_ms={}",
@@ -489,6 +438,9 @@ fn run_native_cold_launch_cycle() -> Result<ApprovedRuntimeBundle, Box<dyn std::
         let confirmed = root.open_profile_current(&intent.tenant_id, &intent.profile_id)?;
         if confirmed.path() != folder.path() {
             return Err("native Close changed the local CURRENT pathname".into());
+        }
+        if native_profile_writer_active(confirmed.path())? {
+            return Err("Firefox still owns the profile after Playwright close event".into());
         }
         if fs::read(confirmed.path().join(".local-unsynced"))? != b"local-unsynced-v2" {
             return Err("local Close lost the pending Sync marker".into());

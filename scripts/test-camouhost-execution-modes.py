@@ -46,16 +46,6 @@ def verify_embedded_python_path_configuration():
 def main() -> int:
     runtime = load_runtime()
     verify_embedded_python_path_configuration()
-    # First user Open asks Firefox itself for its standard blank initial
-    # tab. No app-controlled Playwright Page command is ever sent. Reopen
-    # receives no startup flags, preserving Firefox's native saved tabs.
-    with tempfile.TemporaryDirectory() as directory:
-        fresh = Path(directory) / "user_data"
-        fresh.mkdir()
-        assert runtime.firefox_native_first_run_args(fresh) == ["-new-tab", "about:blank"]
-        (fresh / "places.sqlite").write_bytes(b"synthetic existing Firefox state")
-        assert runtime.firefox_native_first_run_args(fresh) == []
-
     invoked = []
 
     def native():
@@ -72,7 +62,6 @@ def main() -> int:
         with (
             patch.dict(os.environ, env, clear=True),
             patch.object(sys, "argv", ["real.py"]),
-            patch.object(runtime, "run_native_ipc", side_effect=native),
             patch.object(runtime, "run_ipc", side_effect=automation),
             contextlib.redirect_stderr(error),
         ):
@@ -127,11 +116,11 @@ def main() -> int:
                 {runtime.EXECUTION_MODE_ENV: "playwright"}):
         assert run(env, 2, []), "fail-closed dispatch must explain rejection"
 
-    # Normal CRM user Open uses the official Playwright persistent context,
-    # never the page-inspecting automation/admission path.
-    run({runtime.EXECUTION_MODE_ENV: runtime.USER_NATIVE_MODE}, 17, ["native"])
-    run({runtime.EXECUTION_MODE_ENV: runtime.USER_NATIVE_MODE,
-         runtime.HEADLESS_MODE_ENV: "false"}, 17, ["native"])
+    # Normal CRM user Open has exactly one local-first entrypoint. Direct
+    # USER_NATIVE_MODE invocation without --local-open is rejected.
+    assert run({runtime.EXECUTION_MODE_ENV: runtime.USER_NATIVE_MODE}, 2, [])
+    assert not hasattr(runtime, "run_native_ipc")
+    assert not hasattr(runtime, "run_native_ipc_async")
     assert run({runtime.EXECUTION_MODE_ENV: runtime.USER_NATIVE_MODE,
                 runtime.AGENT_DIRECTORY_ENV: "/tmp/never-run-scripts"},
                2, []), "native user context must never execute local Python scripts"
@@ -193,10 +182,18 @@ def main() -> int:
     )
     assert "VerifyHistoricalCandidate" not in app
     native_process = (SOURCE.parents[2] / "runtime/camouhost/native_process.py").read_text(encoding="utf-8")
-    assert "from_options=dict(options)" in native_process
+    assert "AsyncNewBrowser" in native_process and "async_playwright" in native_process
     assert "persistent_context=True" in native_process
-    assert "subprocess.Popen" not in native_process
-    assert "context.pages" not in native_process and "context.new_page" not in native_process
+    assert 'context.on("close"' in native_process
+    assert "sessionCheckpoints.json" not in native_process
+    assert "EnumWindows" not in native_process and "Get-Process" not in native_process
+    assert "PostMessage" not in native_process and "WM_CLOSE" not in native_process
+    local_runtime = SOURCE.read_text(encoding="utf-8").split("async def run_local_profile", 1)[1].split("\n\ndef main", 1)[0]
+    assert "wait_for_browser_close" in local_runtime
+    assert "close_after_browser_exit" in local_runtime
+    assert "WindowsBrowserExitWitness" not in local_runtime
+    assert "profile_state" not in local_runtime
+    assert "firefox_native_first_run_args" not in SOURCE.read_text(encoding="utf-8")
 
     print("CAMOUHOST_EXECUTION_MODES=PASS")
     return 0
