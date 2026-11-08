@@ -536,7 +536,7 @@ pub(crate) fn materialize_workspace_snapshot_streaming_with_pre_publish(
 #[allow(clippy::too_many_arguments)]
 fn materialize_stream_into_staging(
     root: &MaterializationRoot,
-    staging: GenerationWorkspace,
+    mut staging: GenerationWorkspace,
     staging_path: &Path,
     tenant: &TenantId,
     profile: &ProfileId,
@@ -628,6 +628,9 @@ fn materialize_stream_into_staging(
     {
         return Err(GenerationSnapshotError::InvalidFormat);
     }
+    staging
+        .rebind_staging_generation(generation)
+        .map_err(GenerationSnapshotError::Local)?;
     verify_streamed_workspace(&staging, &entries)?;
     before_publish(&staging)?;
 
@@ -767,7 +770,7 @@ pub(crate) fn materialize_workspace_snapshot_with_pre_publish(
 #[allow(clippy::too_many_arguments)]
 fn materialize_into_staging(
     root: &MaterializationRoot,
-    staging: GenerationWorkspace,
+    mut staging: GenerationWorkspace,
     staging_path: &Path,
     tenant_id: &TenantId,
     profile_id: &ProfileId,
@@ -796,6 +799,9 @@ fn materialize_into_staging(
             return Err(GenerationSnapshotError::SourceChanged);
         }
     }
+    staging
+        .rebind_staging_generation(generation_id)
+        .map_err(GenerationSnapshotError::Local)?;
     verify_materialized_snapshot(&staging, entries)?;
     before_publish(&staging)?;
 

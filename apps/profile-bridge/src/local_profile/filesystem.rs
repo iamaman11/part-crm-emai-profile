@@ -490,6 +490,32 @@ impl GenerationWorkspace {
         self.profile_version
     }
 
+    /// Bind a temporary restore workspace to its final cloud generation before
+    /// atomic publication. No legacy marker or second metadata file is needed.
+    pub(crate) fn rebind_staging_generation(
+        &mut self,
+        generation_id: &GenerationId,
+    ) -> Result<(), LocalProfileError> {
+        if !self.generation_id.as_str().starts_with("reopen_stage_")
+            || self.base_generation_id.is_some()
+            || self.profile_version != 0
+            || &self.generation_id == generation_id
+        {
+            return Err(LocalProfileError::InvalidPolicy);
+        }
+        let marker = self.path().join(GENERATION_MARKER);
+        let (staged_id, base_generation_id, profile_version) = read_generation_marker(&marker)?;
+        if staged_id != self.generation_id || base_generation_id.is_some() || profile_version != 0 {
+            return Err(LocalProfileError::GenerationMarkerMismatch);
+        }
+        replace_generation_marker(
+            &marker,
+            &render_generation_marker(generation_id, None, 0)?,
+        )?;
+        self.generation_id = generation_id.clone();
+        Ok(())
+    }
+
     #[must_use]
     pub fn path(&self) -> &Path {
         &self.canonical_path
