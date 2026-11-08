@@ -2069,7 +2069,6 @@ async def run_local_profile(root: Path) -> int:
         session = await launch_native_camoufox(
             workspace=root,
             options=options,
-            writer_active=firefox_writer_active,
             admission_granted=True,
             headless=False,
         )
