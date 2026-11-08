@@ -157,9 +157,11 @@ pub(crate) struct ClosedProfileEncryptedStream {
 }
 
 impl ClosedProfileEncryptedStream {
+    #[cfg(windows)]
     pub(crate) fn metadata(&self) -> &encrypted_generation_domain::GenerationMetadata {
         self.report.metadata()
     }
+    #[cfg(windows)]
     pub(crate) fn object_key(&self) -> String {
         self.report.metadata().object_key()
     }
