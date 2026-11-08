@@ -13,6 +13,7 @@ const GENERATION_MARKER_CONTENT: &str = "profile-platform-generation-v1\n";
 const PROFILE_CURRENT_STATE_FILE: &str = ".profile-current-state";
 const PROFILE_CURRENT_STATE_HEADER: &str = "profile-platform-current-v1";
 const MAX_PROFILE_CURRENT_STATE_BYTES: u64 = 512;
+const PROFILE_CURRENT_STATE_STAGE_PREFIX: &str = ".profile-current-state.stage-";
 const BRIDGE_LOCK_FILE: &str = ".profile-platform.lock";
 const RECOVERY_MARKER_STAGE_PREFIX: &str = ".profile-platform.lock.recovery-";
 const GENERATION_ADMISSION_FILE: &str = ".profile-platform.writer-admission";
@@ -981,9 +982,19 @@ fn write_existing_control_text(path: &Path, content: &str) -> Result<(), LocalPr
             return Err(LocalProfileError::InvalidPolicy);
         }
     }
-    let mut file = OpenOptions::new().write(true).truncate(true).open(path)?;
-    file.write_all(content.as_bytes())?;
-    file.sync_all()?;
+    let parent = path.parent().ok_or(LocalProfileError::UnsafeRelativePath)?;
+    let sequence = RECOVERY_MARKER_SEQUENCE.fetch_add(1, Ordering::Relaxed);
+    let staged = parent.join(format!(
+        "{PROFILE_CURRENT_STATE_STAGE_PREFIX}{}-{sequence}",
+        std::process::id()
+    ));
+    write_new_text(&staged, content)?;
+    if fs::symlink_metadata(path)?.file_type().is_symlink() {
+        return Err(LocalProfileError::SymbolicLinkRejected);
+    }
+    fs::rename(&staged, path)?;
+    #[cfg(unix)]
+    File::open(parent)?.sync_all()?;
     Ok(())
 }
 
@@ -1276,6 +1287,7 @@ fn is_bridge_control_file(relative_path: &str) -> bool {
             | PROFILE_CURRENT_STATE_FILE
             | ".local-unsynced"
     ) || relative_path.starts_with(RECOVERY_MARKER_STAGE_PREFIX)
+        || relative_path.starts_with(PROFILE_CURRENT_STATE_STAGE_PREFIX)
 }
 
 fn is_ephemeral_browser_lock(relative_path: &str) -> bool {
