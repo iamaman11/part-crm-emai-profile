@@ -675,7 +675,7 @@ mod tests {
                 _: &crate::shipping_generation_save::SignedGenerationUploadCapability,
                 _: &mut crate::generation_object_spool::VerifiedGenerationObjectFile,
             ) -> Result<(), Self::Error> {
-                panic!("unverified local DRAFT may never stream")
+                Err(())
             }
         }
 
@@ -746,7 +746,7 @@ mod tests {
                 _: &crate::shipping_generation_save::SignedGenerationUploadCapability,
                 _: &mut crate::generation_object_spool::VerifiedGenerationObjectFile,
             ) -> Result<(), Self::Error> {
-                panic!("unverified local DRAFT may never stream")
+                Err(())
             }
         }
 
@@ -871,7 +871,7 @@ mod tests {
                 _: &crate::shipping_generation_save::SignedGenerationUploadCapability,
                 _: &mut crate::generation_object_spool::VerifiedGenerationObjectFile,
             ) -> Result<(), Self::Error> {
-                panic!("unverified local DRAFT may never stream")
+                Err(())
             }
         }
 
@@ -979,7 +979,7 @@ mod tests {
                 _: &crate::shipping_generation_save::SignedGenerationUploadCapability,
                 _: &mut crate::generation_object_spool::VerifiedGenerationObjectFile,
             ) -> Result<(), Self::Error> {
-                panic!("unverified local DRAFT may never stream")
+                Err(())
             }
         }
 
@@ -1074,7 +1074,7 @@ mod tests {
                 _: &crate::shipping_generation_save::SignedGenerationUploadCapability,
                 _: &mut crate::generation_object_spool::VerifiedGenerationObjectFile,
             ) -> Result<(), Self::Error> {
-                panic!("unverified local DRAFT may never stream")
+                Err(())
             }
         }
 

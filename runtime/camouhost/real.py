@@ -1191,9 +1191,9 @@ class WindowsBrowserExitWitness:
     def safely_exited(self, wait_millis: int = 0) -> bool:
         # A page-close callback is NOT proof. The exact browser root must have
         # finished with exit code zero, never STILL_ACTIVE, killed or unknown.
-        # A bounded wait is permitted only after all normal page-close callbacks;
-        # GUI WM_CLOSE may deliver Playwright TargetClosedError just before the
-        # native zero-exit witness becomes observable. No synthetic exit proof.
+        # A bounded wait is permitted only after a normal close indication:
+        # managed page-close callbacks or native window disappearance followed
+        # by SDK-context release. No synthetic exit proof.
         if not 0 <= wait_millis <= 250:
             raise ValueError("browser close witness wait exceeds safe limit")
         for handle in self.handles:
@@ -1209,7 +1209,7 @@ class WindowsBrowserExitWitness:
         return bool(self.handles) and all(self.wait(handle, 0) == 0 for handle in self.handles)
 
     def has_visible_window(self) -> bool:
-        """Observe only top-level native windows owned by the exact browser root."""
+        """Observe top-level native windows in the exact browser process tree."""
         from ctypes import wintypes
 
         user32 = self.ctypes.WinDLL("user32", use_last_error=True)
