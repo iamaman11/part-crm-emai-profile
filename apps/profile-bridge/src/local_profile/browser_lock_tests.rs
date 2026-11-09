@@ -96,8 +96,7 @@ fn acquire_or_recover_keeps_live_native_and_foreign_writers_blocked()
 }
 
 #[test]
-fn acquire_or_recover_keeps_malformed_marker_blocked()
--> Result<(), Box<dyn std::error::Error>> {
+fn acquire_or_recover_keeps_malformed_marker_blocked() -> Result<(), Box<dyn std::error::Error>> {
     let root_path = test_root("recover-malformed")?;
     let root = MaterializationRoot::open_or_create(&root_path)?;
     let (tenant_id, profile_id) = ids()?;
