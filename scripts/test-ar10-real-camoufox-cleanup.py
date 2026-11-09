@@ -959,21 +959,18 @@ sys.exit(5)
             raise AssertionError("workspace cleanup replaced the original failure")
 
 
-def prove_shipping_agent_build_boundary() -> None:
-    """Release Bridge must never publish an implicit in-browser Python runner."""
-    source = (Path(__file__).resolve().parents[1]
-              / "apps/profile-bridge/src/camouhost_process.rs").read_text(encoding="utf-8")
-    normalized = " ".join(source.split())
-    assert (
-        "let test_agent_enabled = !cfg!(windows) && "
-        "cfg!(any(test, feature = \"synthetic-test-bin\", debug_assertions)) && "
-        "self.config.execution_owner != RuntimeExecutionOwner::IsolatedBrowserStateTest;"
-    ) in normalized
-    assert 'test_agent_enabled.then_some(diagnostic_directory.as_path())' in source
-    assert 'state.agent_directory = test_agent_enabled.then_some(diagnostic_directory);' in source
-    assert 'if let Some(directory) = agent_directory {' in source
-    # This source check supplements compilation of the release path; it is not
-    # an authority to run scripts from any ordinary installed browser profile.
+def prove_shipping_managed_path_retired() -> None:
+    """Normal Open has no compiled ManagedCamouhost process or claim owner."""
+    root = Path(__file__).resolve().parents[1]
+    lib = (root / "apps/profile-bridge/src/lib.rs").read_text(encoding="utf-8")
+    composition = (root / "apps/profile-bridge/src/shipping_composition.rs").read_text(
+        encoding="utf-8"
+    )
+    assert "pub mod camouhost_process;" not in lib
+    assert not (root / "apps/profile-bridge/src/camouhost_process.rs").exists()
+    assert "ManagedCamouhostProcess" not in composition
+    assert "ManagedCamouhostIpc" not in composition
+    assert "pub fn run_claim(" not in composition
 
 
 def prove_disposable_managed_site_probe_contract() -> None:
@@ -994,7 +991,7 @@ def prove_disposable_managed_site_probe_contract() -> None:
 
 def main() -> int:
     prove_failure_observation_contract()
-    prove_shipping_agent_build_boundary()
+    prove_shipping_managed_path_retired()
     prove_disposable_managed_site_probe_contract()
     if sys.argv[1:] == ["--self-test"]:
         print("Camouhost failure phase, primary outcome and bounded cleanup proof passed.")
