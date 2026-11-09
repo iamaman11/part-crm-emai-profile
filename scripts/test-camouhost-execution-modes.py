@@ -182,7 +182,7 @@ def main() -> int:
     )[0]
     assert run_initial.count("start_sync_after_close(intent)") >= 4
     assert "Every post-restore local failure may leave the" in run_initial
-    assert "if error != crate::local_browser_open::LocalOpenError::StaleLocalWorkspace:" in run_initial
+    assert "if error != crate::local_browser_open::LocalOpenError::StaleLocalWorkspace {" in run_initial
     app = (SOURCE.parents[2] / "apps/profile-bridge/src/main.rs").read_text(
         encoding="utf-8"
     )

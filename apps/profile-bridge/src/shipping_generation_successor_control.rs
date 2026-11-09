@@ -14,9 +14,10 @@ use crate::generation_snapshot::{GenerationSnapshotError, WorkspaceSnapshotReade
 use crate::local_profile::{
     BridgeWorkspaceLock, LocalGenerationRecord, LocalProfileError, MaterializationRoot,
 };
+use crate::shipping_control_plane::ShippingControlPlaneError;
+#[cfg(any(windows, test, feature = "synthetic-test-bin"))]
 use crate::shipping_control_plane::{
-    MachineHttpMethod, MachineHttpPort, MachineHttpResponse, ShippingControlPlaneError,
-    safe_machine_problem_code,
+    MachineHttpMethod, MachineHttpPort, MachineHttpResponse, safe_machine_problem_code,
 };
 #[cfg(any(windows, test))]
 use crate::shipping_generation_save::CommittedGenerationSuccessor;
@@ -45,12 +46,14 @@ use crate::shipping_save_attempt::{
     retire_matching_local_unsynced_after_restart,
     retire_matching_streamed_local_unsynced_after_restart,
 };
+#[cfg(any(windows, test, feature = "synthetic-test-bin"))]
 use control_plane_contract::profile_generation_api::{
     BRIDGE_PROFILE_GENERATION_COMMIT_PATH_TEMPLATE,
     BRIDGE_PROFILE_GENERATION_UPLOAD_CAPABILITY_PATH_TEMPLATE,
     BridgeGenerationSuccessorCommitOutcomeDto, BridgeGenerationSuccessorCommitResponse,
-    BridgeGenerationUploadCapabilityResponse, BridgeProfileGenerationSuccessorRequest,
+    BridgeProfileGenerationSuccessorRequest,
 };
+use control_plane_contract::profile_generation_api::BridgeGenerationUploadCapabilityResponse;
 #[cfg(any(windows, test))]
 use control_plane_contract::profile_generation_api::{
     BRIDGE_PROFILE_GENERATION_LOCAL_UNSYNCED_RETRY_DECISION_PATH_TEMPLATE,
@@ -66,12 +69,17 @@ use control_plane_contract::profile_generation_api::{
 };
 #[cfg(any(windows, test))]
 use profile_platform_primitives::UnixMillis;
+#[cfg(any(windows, test, feature = "synthetic-test-bin"))]
 use profile_platform_primitives::{CorrelationId, GenerationId, ProfileId, TenantId};
+#[cfg(any(windows, test, feature = "synthetic-test-bin"))]
 use session_domain::ProfileLease;
 use std::fmt;
+#[cfg(any(windows, test, feature = "synthetic-test-bin"))]
 use std::sync::atomic::{AtomicU64, Ordering};
 
+#[cfg(any(windows, test, feature = "synthetic-test-bin"))]
 const MAX_UPLOAD_CAPABILITY_RESPONSE_BYTES: usize = 16_384;
+#[cfg(any(windows, test, feature = "synthetic-test-bin"))]
 const MAX_COMMIT_RESPONSE_BYTES: usize = 1_024;
 #[cfg(any(windows, test))]
 const MAX_OBSERVE_RESPONSE_BYTES: usize = 256;
@@ -80,6 +88,7 @@ const MAX_SIGNED_UPLOAD_HEADERS: usize = 16;
 const MAX_SIGNED_UPLOAD_HEADER_NAME_BYTES: usize = 128;
 const MAX_SIGNED_UPLOAD_HEADER_VALUE_BYTES: usize = 1_024;
 const MAX_UPLOAD_CAPABILITY_EXPIRES_SECONDS: u32 = 300;
+#[cfg(any(windows, test, feature = "synthetic-test-bin"))]
 static SAVE_REQUEST_SEQUENCE: AtomicU64 = AtomicU64::new(1);
 
 /// Evidence-driven post-commit local completion, never a new server write grant.
@@ -1558,6 +1567,7 @@ fn successor_request<S>(
 
 /// Only fixed route names appear in support logs; never print a tenant,
 /// profile, token, capability URL, R2 key, or untrusted HTTP response body.
+#[cfg(any(windows, test, feature = "synthetic-test-bin"))]
 fn save_control_operation(path: &str) -> &'static str {
     if path.ends_with("/generation-successor/upload-capability") {
         "UPLOAD_CAPABILITY"
@@ -1576,6 +1586,7 @@ fn save_control_operation(path: &str) -> &'static str {
 /// Reuse the existing bounded/allowlisted machine decoder, bound to the
 /// correlation issued for this exact request. Logs are evidence only and
 /// never change authorization, retry, or reconciliation decisions.
+#[cfg(any(windows, test, feature = "synthetic-test-bin"))]
 fn report_save_control_refusal(
     path: &str,
     correlation_id: &CorrelationId,
@@ -1591,6 +1602,7 @@ fn report_save_control_refusal(
     );
 }
 
+#[cfg(any(windows, test, feature = "synthetic-test-bin"))]
 fn post_json<T, S, B>(
     transport: &mut T,
     path: &str,
@@ -1703,12 +1715,14 @@ fn valid_header_value(value: &str) -> bool {
             .any(|byte| byte == b'\r' || byte == b'\n' || byte == 0)
 }
 
+#[cfg(any(windows, test, feature = "synthetic-test-bin"))]
 fn successor_path(template: &str, tenant_id: &TenantId, profile_id: &ProfileId) -> String {
     template
         .replace("{tenantId}", tenant_id.as_str())
         .replace("{profileId}", profile_id.as_str())
 }
 
+#[cfg(any(windows, test, feature = "synthetic-test-bin"))]
 fn next_correlation_id<S>() -> Result<CorrelationId, GenerationSuccessorControlError<S>> {
     let sequence = SAVE_REQUEST_SEQUENCE.fetch_add(1, Ordering::Relaxed);
     CorrelationId::parse(format!("corr_p3_generation_save_{sequence:020}"))
