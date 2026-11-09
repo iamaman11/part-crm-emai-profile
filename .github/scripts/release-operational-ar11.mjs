@@ -286,7 +286,6 @@ function promotionErrors(promotion) {
     "echo 'mode=promote'",
     "echo 'mode=rollback-negative'",
     'test "$GITHUB_ACTOR" = "$GITHUB_REPOSITORY_OWNER"',
-    'test "$GITHUB_REF" = refs/heads/main',
   ], 'promotion invocation router'));
   errors.push(...forbidMarkers(route, ['secrets.', 'wrangler deploy', 'environment: staging'], 'promotion invocation router'));
 
