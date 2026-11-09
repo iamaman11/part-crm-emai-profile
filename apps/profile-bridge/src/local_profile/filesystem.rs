@@ -645,6 +645,7 @@ impl BridgeWorkspaceLock {
     /// GENERATION admission plus shared root admission for new v2 markers.
     /// It also proved a fresh same-device fence and no live native Firefox writer.
     /// The persistent marker is crash evidence, not proof of a surviving OS writer.
+    #[cfg(any(test, feature = "synthetic-test-bin"))]
     pub(super) fn replace_interrupted(
         workspace: &GenerationWorkspace,
         device_id: &DeviceId,
@@ -693,6 +694,7 @@ impl BridgeWorkspaceLock {
     // interval with no recovery evidence, even though the OS locks are safe.
     // The small callback is a local fault boundary for the crash-before-rename
     // regression; shipping always supplies the no-op and never bypasses checks.
+    #[cfg(any(test, feature = "synthetic-test-bin"))]
     fn replace_interrupted_with_pre_publish<F>(
         workspace: &GenerationWorkspace,
         device_id: &DeviceId,
