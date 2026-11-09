@@ -52,7 +52,7 @@ impl BridgeWorkspaceLock {
     /// Only this generation requires OS exclusivity. A live OTHER profile must
     /// not block recovery of dirty bytes after browser/Bridge process death.
     /// The root shared lock still excludes installer activation across the whole root.
-    #[cfg(any(test, feature = "synthetic-test-bin"))]
+    #[cfg(any(windows, test, feature = "synthetic-test-bin"))]
     pub(crate) fn recover_interrupted_launch(
         workspace: &GenerationWorkspace,
         device_id: &DeviceId,

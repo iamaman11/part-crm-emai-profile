@@ -23,13 +23,13 @@ use crate::generation_reopen::{
     GenerationObjectDownloadError, GenerationObjectDownloadPort, GenerationReopenControlError,
     GenerationReopenControlPort,
 };
-#[cfg(any(windows, test))]
+#[cfg(any(test, feature = "synthetic-test-bin"))]
 use crate::generation_snapshot::{GenerationSnapshotError, WorkspaceSnapshotReader};
 #[cfg(any(test, feature = "synthetic-test-bin"))]
 use crate::local_profile::MaterializationRoot;
 #[cfg(any(test, feature = "synthetic-test-bin"))]
 use crate::local_profile::{BridgeWorkspaceLock, LocalGenerationRecord};
-#[cfg(any(windows, test))]
+#[cfg(any(test, feature = "synthetic-test-bin"))]
 use crate::local_profile::{GenerationInventory, RecoveryClone};
 use crate::local_profile::{GenerationWorkspace, LocalGenerationState, LocalProfileError};
 #[cfg(any(test, feature = "synthetic-test-bin"))]
@@ -40,7 +40,7 @@ use crate::shipping_control_plane::{MachineHttpPort, ShippingControlPlaneError};
 use crate::shipping_generation_save::CommittedGenerationSuccessor;
 #[cfg(any(test, feature = "synthetic-test-bin"))]
 use crate::shipping_generation_save::ShippingGenerationSaveError;
-#[cfg(any(windows, test))]
+#[cfg(any(test, feature = "synthetic-test-bin"))]
 use crate::shipping_generation_save::SignedGenerationObjectStreamPutPort;
 #[cfg(any(test, feature = "synthetic-test-bin"))]
 use crate::shipping_generation_save::{
@@ -51,18 +51,18 @@ use crate::shipping_generation_save::{
 use crate::shipping_generation_successor_control::ControlPlaneGenerationSuccessor;
 #[cfg(any(test, feature = "synthetic-test-bin"))]
 use crate::shipping_generation_successor_control::GenerationSuccessorControlError;
-#[cfg(any(windows, test))]
+#[cfg(any(test, feature = "synthetic-test-bin"))]
 use crate::shipping_generation_successor_control::{
     RestartExactLocalCompletionError, publish_streamed_exact_under_writer,
 };
-#[cfg(any(windows, test))]
+#[cfg(any(test, feature = "synthetic-test-bin"))]
 use crate::shipping_save_attempt::begin_native_rescue_edit;
 #[cfg(any(test, feature = "synthetic-test-bin"))]
 use crate::shipping_save_attempt::{
     SaveAttemptEvidenceError, discover_unresolved_streaming_exact_save_attempt,
     has_unresolved_save_attempt_for_profile, persist_local_unsynced_intent,
 };
-#[cfg(any(windows, test))]
+#[cfg(any(test, feature = "synthetic-test-bin"))]
 use crate::shipping_save_attempt::{
     ScopedPendingSaveEvidence, classify_scoped_pending_save_evidence,
     original_local_unsynced_successor, persist_streaming_exact_save_attempt_from_native,
