@@ -473,8 +473,7 @@ fn save_checkpoint_read_reason(source: SaveAttemptEvidenceError) -> GenerationSa
 /// browser under its already-retained Bridge writer lock, before constructing
 /// a second generation-sized RecoveryClone. This is a preflight only, never
 /// a Save, cloud retry, local repair or permission to open stale N.
-#[cfg(any(windows, test))]
-#[cfg(any(test, feature = "synthetic-test-bin"))]
+#[cfg(test)]
 fn preflight_retained_native_before_clone(
     source: &GenerationWorkspace,
     inventory: &GenerationInventory,
@@ -1204,7 +1203,7 @@ where
             preflight_started.elapsed().as_millis()
         );
         if native_rescue_required {
-            #[cfg(any(windows, test))]
+            #[cfg(test)]
             if begin_native_rescue_edit(root, &workspace, &lease).is_err() {
                 return Err(self.fail_with_lock_before_use(
                     OperatorFailureStage::GenerationSave,
@@ -1213,7 +1212,7 @@ where
                     &workspace,
                 ));
             }
-            #[cfg(not(any(windows, test)))]
+            #[cfg(not(test))]
             return Err(self.fail_with_lock_before_use(
                 OperatorFailureStage::GenerationSave,
                 lease,
