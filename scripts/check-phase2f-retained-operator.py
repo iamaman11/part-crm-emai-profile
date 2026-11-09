@@ -143,7 +143,7 @@ def check_sources(sources: dict[str, str]) -> list[str]:
             failures.append(f"shipping Bridge CLI lost single native Open/Sync dispatch: {required}")
 
     initial = function_body(shipping, "pub fn run_initial(")
-    local_open = initial.find("crate::local_browser_open::open(")
+    local_open = initial.find("crate::local_browser_open::open_with_health(")
     sync_handoff = initial.find("start_sync_after_close(intent);")
     if local_open < 0 or sync_handoff < local_open:
         failures.append("normal native Open must hand off to the same post-close Sync")
