@@ -23,13 +23,29 @@ def load():
     return module
 
 
+class FakeBrowser:
+    """Only the documented Playwright browser-disconnected event."""
+
+    def __init__(self):
+        self.handlers = []
+
+    def on(self, event, handler):
+        assert event == "disconnected"
+        self.handlers.append(handler)
+
+    def crash_or_close(self):
+        for handler in self.handlers:
+            handler(self)
+
+
 class FakeContext:
-    """No page/window/process API: only the documented Playwright close event."""
+    """No page/window/process API: only public Playwright lifecycle events."""
 
     def __init__(self, closed=False):
         self.closed = closed
         self.handlers = []
         self.close_calls = 0
+        self.browser = FakeBrowser()
 
     def on(self, event, handler):
         assert event == "close"
@@ -129,6 +145,7 @@ async def verify() -> int:
             }
             assert session.context is contexts[-1]
             assert len(contexts[-1].handlers) == 1
+            assert len(contexts[-1].browser.handlers) == 1
 
             waiting = asyncio.create_task(session.wait_for_browser_close())
             await asyncio.sleep(0)
@@ -155,6 +172,29 @@ async def verify() -> int:
             await asyncio.wait_for(raced.wait_for_browser_close(), timeout=1)
             await raced.close_after_browser_exit()
             assert already_closed.close_calls == 0
+
+            # If the browser crashes and the persistent context does not
+            # report is_closed(), the official Browser.disconnected event is
+            # still enough to release the Playwright connection. Rust's
+            # native file gate remains the authority for snapshot safety.
+            crashed_context = FakeContext()
+            async def crashed_browser(playwright, **kwargs):
+                launches.append((playwright, kwargs))
+                return crashed_context
+            camoufox_api.AsyncNewBrowser = crashed_browser
+            crashed = await module.launch_native_camoufox(
+                workspace=workspace, options=options,
+                admission_granted=True, headless=False,
+            )
+            crash_manager = FakePlaywrightManager.instances[-1]
+            waiting = asyncio.create_task(crashed.wait_for_browser_close())
+            await asyncio.sleep(0)
+            crashed_context.browser.crash_or_close()
+            await asyncio.wait_for(waiting, timeout=1)
+            assert crashed.context_is_closed()
+            await crashed.close_after_browser_exit()
+            assert crash_manager.exit_calls == 1
+            assert crashed_context.close_calls == 0
 
             # If the official launch fails before a context is admitted,
             # only the Playwright driver connection is released.
@@ -191,7 +231,7 @@ async def verify() -> int:
             await virtual.wait_for_browser_close()
             await virtual.close_after_browser_exit()
 
-    print("CAMOUHOST_PASSIVE_PLAYWRIGHT_CLOSE=PASS")
+    print("CAMOUHOST_PASSIVE_PLAYWRIGHT_CLOSE_AND_DISCONNECT=PASS")
     return 0
 
 
