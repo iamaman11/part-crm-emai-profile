@@ -81,10 +81,12 @@ impl RetainedDirtyClose {
     }
 
     #[must_use]
+    #[cfg(any(test, feature = "synthetic-test-bin"))]
     pub(crate) fn prepared_successor(&self) -> Option<&PreparedDirtyGeneration> {
         self.pending_prepared.as_ref()
     }
 
+    #[cfg(any(test, feature = "synthetic-test-bin"))]
     pub(crate) fn remember_prepared_successor(
         &mut self,
         prepared: PreparedDirtyGeneration,
@@ -105,6 +107,7 @@ impl RetainedDirtyClose {
         Ok(())
     }
 
+    #[cfg(any(test, feature = "synthetic-test-bin"))]
     pub(crate) fn take_prepared_successor(&mut self) -> Option<PreparedDirtyGeneration> {
         self.pending_prepared.take()
     }
