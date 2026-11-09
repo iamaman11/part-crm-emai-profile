@@ -319,6 +319,8 @@ fn ar11_workflow_terminalizes_after_owner_capture_and_before_final_assertion() -
     let root = repository_root();
     let workflow = fs::read_to_string(root.join(".github/workflows/release-set-promotion.yml"))
         .map_err(|error| format!("release-set-promotion workflow must exist: {error}"))?;
+    // Git may check out repository text files with CRLF on Windows; normalize before structural parsing.
+    let workflow = workflow.replace("\r\n", "\n");
 
     assert!(workflow.contains("promotion-operational-outcome-ar11.py"));
     assert!(workflow.contains("promotion-operational-outcome.json"));
