@@ -938,6 +938,7 @@ jobs:
         id: ready_bind
         run: |
           set -euo pipefail
+          [[ "$DISPATCH_DIGEST" =~ ^[0-9a-f]{64}$ ]]
           ready_root="$RUNNER_TEMP/ready"
           mkdir -p "$ready_root"
           gh run download "$READY_RUN_ID" --repo "$GITHUB_REPOSITORY" --name "$READY_ARTIFACT_NAME" --dir "$ready_root"
