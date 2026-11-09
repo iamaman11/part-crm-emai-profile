@@ -893,7 +893,10 @@ mod windows {
                 || Err("native file state unavailable"),
                 |delay| pauses.push(delay),
             );
-            assert!(matches!(result, Err(ShippingCompositionError::SyncUnconfirmed)));
+            assert!(matches!(
+                result,
+                Err(ShippingCompositionError::SyncUnconfirmed)
+            ));
             assert!(pauses.is_empty());
         }
     }
