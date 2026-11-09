@@ -1,64 +1,17 @@
-# Browser Profile Platform
+# CRM — Browser Profiles
 
-Browser Profile Platform is one modular product for governed users, client/customer cards, reusable
-browser profiles, local browser execution and independently enabled future capabilities.
+Browser Profiles is one module of **CRM**, not an independent product or another CRM service.
 
-```text
-source_present != production_enabled
-```
+**CURRENT physical testing:** [#266 pointer](https://github.com/iamaman11/part-crm-emai-profile/issues/266) → [#849 Windows 559 P0 issues](https://github.com/iamaman11/part-crm-emai-profile/issues/849). Release 559 has **not** passed physical acceptance: slow Open and Camoufox tab crash at VK ID after login-button click. CI and staging deployment SUCCESS are not product GO.
 
-The first product slice is intentionally finite: managed login, Client creation/editing, persistent
-Browser Profile creation, Client/Profile attachment, authorized launch through Windows Profile Bridge
-and real Camoufox, confirmed save, reopen and logout. Mailboxes, Notifications, Automation and unknown
-future providers do not block that slice.
+## First read
 
-## Start here
+- [Authority index](docs/INDEX.md) — current contracts vs historical evidence
+- [Product and ownership](docs/PRODUCT.md), [architecture](docs/ARCHITECTURE.md), [local profile lifecycle](docs/LOCAL_PROFILE_LIFECYCLE.md)
+- [AGENTS.md](AGENTS.md), [CONTRIBUTING.md](CONTRIBUTING.md) — developer and security guardrails
 
-1. [Documentation authority index](docs/INDEX.md)
-2. [Product definition](docs/PRODUCT.md)
-3. [Architecture](docs/ARCHITECTURE.md)
-4. [Current CAP execution program](docs/ARCHITECTURE_REBASELINE_V3_PLAN.md)
-5. [Repository agent contract](AGENTS.md) and [contributor guide](CONTRIBUTING.md)
+## Simple ownership
 
-[Issue #266](https://github.com/iamaman11/part-crm-emai-profile/issues/266) is the **sole live stage
-pointer**. Always read fresh protected `main`, #266 and the exactly one CURRENT stage Issue selected by
-#266; README never duplicates a current SHA, provider/readiness observation or stage status.
+CRM owns UI/business profiles/permissions. Rust ProfileBridge owns one local folder, native file access and closed-folder encryption/Sync/Restore. Camouhost is the thin official Camoufox+Playwright adapter. Camoufox+Playwright own browser contexts, windows, tabs, navigation, cookies, SessionStore and closure. Worker/D1/R2 own cloud admission and committed backups, but ordinary local Open must not wait on them.
 
-For a context-loss explanation of this model, see reference Issue
-[#625](https://github.com/iamaman11/part-crm-emai-profile/issues/625). It is orientation/provenance only,
-never a stage, pointer or execution authority.
-
-## Architecture invariants
-
-```text
-one semantic responsibility -> one natural owner
-domain -> application/ports -> adapters -> composition
-Rust contracts -> OpenAPI -> generated frontend operations -> feature UI
-source present != production enabled
-cut over callers -> prove zero predecessor use -> delete predecessor
-one objective invariant -> one primary proof at the cheapest sufficient tier
-```
-
-Backend owns authorization, capability admission, business validation and state transitions. Frontend
-is a generated-contract consumer and presentation/interaction layer. Product Runtime never depends on
-`opsctl`; operator tooling has no provider/network/mutation authority.
-
-Permanent rules live in
-[mandatory architecture requirements](docs/APPLICATION_ARCHITECTURE_MANDATORY_REQUIREMENTS.md),
-[architecture evolution quality contract](docs/ARCHITECTURE_EVOLUTION_QUALITY_CONTRACT.md),
-[contract policy](docs/CONTRACT_POLICY.md) and bounded owner documents linked from the index.
-
-## Current delivery program
-
-The complete ordered program, stage meanings and exit criteria have exactly one repository owner: the
-[current execution program](docs/ARCHITECTURE_REBASELINE_V3_PLAN.md). Fresh
-[Issue #266](https://github.com/iamaman11/part-crm-emai-profile/issues/266) selects exactly one CURRENT
-stage and links its one owning Issue. A CURRENT stage may use one or more bounded implementation
-transactions/PRs while its objective and DoD remain unchanged; this README deliberately does not copy
-the mutable stage position.
-
-## Historical material
-
-Completed AR, PF, PAS, Functional Closure, predecessor-stage and superseded execution Issues are
-provenance. They may explain why a current invariant exists, but they do not select current work or
-authorize staging/Production actions.
+There must be **one implementation and one owner per function**. Old stage plans, historical browser controls, migration proposals and completed CI claims are not a current development queue. No backward compatibility or data migration is needed for disposable test profiles.

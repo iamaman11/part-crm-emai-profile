@@ -1,20 +1,5 @@
-# Browser Profile Lifecycle Plan — Historical Tombstone
+# ARCHIVED — Browser Profile Lifecycle Plan
 
-**Document status:** SUPERSEDED  
-**Exact preserved former body:** `history/PROFILE_LIFECYCLE_PLAN_PRE_AR_V3_2026-08-15.md`  
-**Current program authority:** `docs/ARCHITECTURE_REBASELINE_V3_PLAN.md`  
-**Current documentation index:** `docs/INDEX.md`  
-**Camoufox runtime design input:** `docs/CAMOUFOX_RUNTIME_CUTOVER_PLAN.md`  
-**Tracking issue:** #266
+This is not a current roadmap. The previous text is preserved in [Git history](https://github.com/iamaman11/part-crm-emai-profile/blob/0d827a73dcad84680d9fe97bb5fa35f77564e470/PROFILE_LIFECYCLE_PLAN.md), and the earlier predecessor remains in `history/PROFILE_LIFECYCLE_PLAN_PRE_AR_V3_2026-08-15.md`.
 
-The former lifecycle plan is preserved byte-for-byte under `history/`. Its accepted lifecycle reasoning
-remains provenance, but this root path is not an execution queue and contains no current checkpoint or
-next action.
-
-Current lifecycle/program sequencing is governed through Architecture Re-baseline v3. Existing accepted profile lifecycle, fencing, recovery and authorization invariants are preserved unless their owning current architecture transaction/slice proves and accepts a bounded change.
-
-The subordinate Camoufox runtime cutover plan does not create another execution sequence. Current
-runtime work must be selected by the binding program and fresh Issue #266.
-
-Do not infer the current slice or next implementation gate from this tombstone, its preserved
-predecessor or any phase/AR wording. Read `docs/INDEX.md`, the binding program and fresh Issue #266.
+Current intended local behavior: [docs/LOCAL_PROFILE_LIFECYCLE.md](docs/LOCAL_PROFILE_LIFECYCLE.md). Current tested installed-version problems and acceptance: [#266](https://github.com/iamaman11/part-crm-emai-profile/issues/266) → [#849](https://github.com/iamaman11/part-crm-emai-profile/issues/849). The retired CAP execution plan has no current authority.
