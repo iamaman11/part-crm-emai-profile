@@ -748,7 +748,10 @@ mod windows {
                     return Ok(());
                 }
             }
-            eprintln!("BRIDGE_CLOUD_SYNC_RETRY_PENDING attempt={}", attempt.saturating_add(1));
+            eprintln!(
+                "BRIDGE_CLOUD_SYNC_RETRY_PENDING attempt={}",
+                attempt.saturating_add(1)
+            );
             thread::sleep(Duration::from_secs(retry_delay_seconds));
             retry_delay_seconds = next_sync_retry_delay(retry_delay_seconds);
             attempt = attempt.saturating_add(1);
@@ -1116,7 +1119,6 @@ mod windows {
             assert_eq!(next_sync_retry_delay(300), 300);
         }
     }
-
 }
 
 #[cfg(test)]
