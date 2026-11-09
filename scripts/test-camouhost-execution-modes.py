@@ -207,6 +207,8 @@ def main() -> int:
     assert "sessionCheckpoints.json" not in native_process
     assert "EnumWindows" not in native_process and "Get-Process" not in native_process
     assert "PostMessage" not in native_process and "WM_CLOSE" not in native_process
+    assert ".is_symlink(" not in native_process and ".is_dir(" not in native_process
+    assert ".resolve(" not in native_process
     local_runtime = SOURCE.read_text(encoding="utf-8").split("async def run_local_profile", 1)[1].split("\n\ndef main", 1)[0]
     assert "wait_for_browser_close" in local_runtime
     assert "close_after_browser_exit" in local_runtime
