@@ -1,20 +1,20 @@
-#[cfg(any(windows, test, feature = "synthetic-test-bin"))]
+#[cfg(any(windows, test))]
 use crate::browser_execution::{browser_writer_locks_absent, persist_committed_successor_binding};
-#[cfg(any(windows, test, feature = "synthetic-test-bin"))]
+#[cfg(any(windows, test))]
 use crate::dirty_generation::recover_local_unsynced_native_clone;
 use crate::dirty_generation::{
     GenerationSealingMaterial, GenerationSealingMaterialPort, PreparedDirtyGeneration,
 };
-#[cfg(any(windows, test, feature = "synthetic-test-bin"))]
+#[cfg(any(windows, test))]
 use crate::generation_snapshot::{GenerationSnapshotError, WorkspaceSnapshotReader};
 use crate::local_profile::MaterializationRoot;
-#[cfg(any(windows, test, feature = "synthetic-test-bin"))]
+#[cfg(any(windows, test))]
 use crate::local_profile::{BridgeWorkspaceLock, LocalGenerationRecord, LocalProfileError};
 use crate::shipping_control_plane::{
     MachineHttpMethod, MachineHttpPort, MachineHttpResponse, ShippingControlPlaneError,
     safe_machine_problem_code,
 };
-#[cfg(any(windows, test, feature = "synthetic-test-bin"))]
+#[cfg(any(windows, test))]
 use crate::shipping_generation_save::{
     CommittedGenerationSuccessor, SignedGenerationObjectStreamPutPort,
 };
@@ -22,13 +22,13 @@ use crate::shipping_generation_save::{
     GenerationSuccessorCommitOutcome, GenerationSuccessorControlPort,
     GenerationUploadAuthorization, SignedGenerationUploadCapability,
 };
-#[cfg(any(windows, test, feature = "synthetic-test-bin"))]
+#[cfg(any(windows, test))]
 use crate::shipping_save_attempt::{ReadOnlySaveAttempt, discover_unresolved_exact_save_attempt};
 use crate::shipping_save_attempt::{
     ReadOnlyStreamedSaveAttempt, discover_unresolved_streaming_exact_save_attempt,
     inspect_streaming_exact_save_attempt,
 };
-#[cfg(any(windows, test, feature = "synthetic-test-bin"))]
+#[cfg(any(windows, test))]
 use crate::shipping_save_attempt::{
     SaveAttemptEvidenceError, ScopedPendingSaveEvidence, classify_scoped_pending_save_evidence,
     deterministic_lone_unsynced_successor, local_unsynced_matches_fresh_lease,
@@ -46,7 +46,7 @@ use control_plane_contract::profile_generation_api::{
     BridgeGenerationSuccessorObserveRequest, BridgeGenerationSuccessorObserveResponse,
     BridgeGenerationUploadCapabilityResponse, BridgeProfileGenerationSuccessorRequest,
 };
-#[cfg(any(windows, test, feature = "synthetic-test-bin"))]
+#[cfg(any(windows, test))]
 use control_plane_contract::profile_generation_api::{
     BRIDGE_PROFILE_GENERATION_LOCAL_UNSYNCED_RETRY_DECISION_PATH_TEMPLATE,
     BRIDGE_PROFILE_GENERATION_RETRY_DECISION_PATH_TEMPLATE,
@@ -54,7 +54,7 @@ use control_plane_contract::profile_generation_api::{
     BridgeGenerationSuccessorRetryDecisionRequest, BridgeGenerationSuccessorRetryDecisionResponse,
     BridgeGenerationSuccessorRetryVerdict,
 };
-#[cfg(any(windows, test, feature = "synthetic-test-bin"))]
+#[cfg(any(windows, test))]
 use profile_platform_primitives::UnixMillis;
 use profile_platform_primitives::{CorrelationId, GenerationId, ProfileId, TenantId};
 use session_domain::ProfileLease;
@@ -72,7 +72,7 @@ const MAX_UPLOAD_CAPABILITY_EXPIRES_SECONDS: u32 = 300;
 static SAVE_REQUEST_SEQUENCE: AtomicU64 = AtomicU64::new(1);
 
 /// Evidence-driven post-commit local completion, never a new server write grant.
-#[cfg(any(windows, test, feature = "synthetic-test-bin"))]
+#[cfg(any(windows, test))]
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum RestartExactLocalCompletion {
     NoCanonicalCheckpoint,
@@ -91,7 +91,7 @@ pub enum RestartExactLocalCompletion {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-#[cfg(any(windows, test, feature = "synthetic-test-bin"))]
+#[cfg(any(windows, test))]
 pub enum RestartExactLocalCompletionError {
     LocalEvidenceChanged,
     NativeSnapshotTooLarge,
@@ -106,7 +106,7 @@ pub enum RestartExactLocalCompletionError {
     ControlPlane(ShippingControlPlaneError),
 }
 
-#[cfg(any(windows, test, feature = "synthetic-test-bin"))]
+#[cfg(any(windows, test))]
 impl RestartExactLocalCompletionError {
     #[must_use]
     pub const fn code(self) -> &'static str {
@@ -125,7 +125,7 @@ impl RestartExactLocalCompletionError {
     }
 }
 
-#[cfg(any(windows, test, feature = "synthetic-test-bin"))]
+#[cfg(any(windows, test))]
 fn first_seal_recovery_failure(
     error: SaveAttemptEvidenceError,
 ) -> RestartExactLocalCompletionError {
@@ -520,7 +520,7 @@ pub fn observe_discovered_successor_after_restart<T: MachineHttpPort>(
 /// current ACL/CNG authentication and a FRESH coordinator Profile writer claim.
 /// Never invoke PUT, D1 commit, rekey, cloud rollback or a second candidate.
 /// Unknown, mutated, foreign or native-writer-owned bytes remain untouched.
-#[cfg(any(windows, test, feature = "synthetic-test-bin"))]
+#[cfg(any(windows, test))]
 pub(crate) fn complete_active_exact_after_restart<T: MachineHttpPort>(
     root: &MaterializationRoot,
     tenant_id: &TenantId,
@@ -729,7 +729,7 @@ pub(crate) fn complete_active_exact_after_restart<T: MachineHttpPort>(
 /// Bounded-memory implementation of the existing restart-completion owner.
 /// The server-selected generation, fresh CNG/ACL/coordinator claim, native
 /// OS admission and D1 ACTIVE_EXACT still decide whether Open is allowed.
-#[cfg(any(windows, test, feature = "synthetic-test-bin"))]
+#[cfg(any(windows, test))]
 #[allow(clippy::too_many_arguments)]
 fn complete_streamed_exact_under_fresh_claim<T: MachineHttpPort>(
     root: &MaterializationRoot,
@@ -850,7 +850,7 @@ fn complete_streamed_exact_under_fresh_claim<T: MachineHttpPort>(
 /// browser. The resulting checkpoint keeps original intent provenance so a
 /// second power cut can safely resume the same N+1 through the existing
 /// exact-checkpoint owner. This uses the CURRENT coordinator as sealer.
-#[cfg(any(windows, test, feature = "synthetic-test-bin"))]
+#[cfg(any(windows, test))]
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn resume_lone_local_unsynced_under_fresh_lease<T, U, K>(
     root: &MaterializationRoot,
@@ -1024,7 +1024,7 @@ where
 /// checkpoint is retained; a NEW server-selected N+1 claim must complete
 /// ACTIVE_EXACT local binding before any browser Open or Saved is allowed.
 /// Never reconstruct a candidate, reuse an old fence or return a signed URL.
-#[cfg(any(windows, test, feature = "synthetic-test-bin"))]
+#[cfg(any(windows, test))]
 pub(crate) fn resume_exact_successor_under_fresh_lease<T, U>(
     root: &MaterializationRoot,
     tenant_id: &TenantId,
@@ -1123,7 +1123,7 @@ where
 /// ONE existing Bridge writer admission is held. Neither this helper nor the
 /// D1 retry decision is a second lease or storage state machine. Current
 /// ACL/fence/pointer and independent R2 verification remain server-owned.
-#[cfg(any(windows, test, feature = "synthetic-test-bin"))]
+#[cfg(any(windows, test))]
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn publish_streamed_exact_under_writer<T, U>(
     tenant_id: &TenantId,
@@ -1280,7 +1280,7 @@ where
 /// process-restart path this does NOT mint a new lease; the caller MUST
 /// separately verify the current coordinator deadline immediately before PUT.
 /// False/unknown/changed checkpoint never grants upload, commit or Saved.
-#[cfg(any(windows, test, feature = "synthetic-test-bin"))]
+#[cfg(any(windows, test))]
 pub(crate) fn confirm_retained_exact_retry_nonapplication<T: MachineHttpPort>(
     root: &MaterializationRoot,
     original_lease: &ProfileLease,
@@ -1302,7 +1302,7 @@ pub(crate) fn confirm_retained_exact_retry_nonapplication<T: MachineHttpPort>(
 }
 
 /// D1-positive base-only proof for a lone LOCAL_UNSYNCED native close.
-#[cfg(any(windows, test, feature = "synthetic-test-bin"))]
+#[cfg(any(windows, test))]
 fn request_local_unsynced_retry_decision<T: MachineHttpPort>(
     tenant_id: &TenantId,
     profile_id: &ProfileId,
@@ -1340,7 +1340,7 @@ fn request_local_unsynced_retry_decision<T: MachineHttpPort>(
 
 /// Typed server-positive eligibility for the exact original sealed attempt.
 /// Caller has a freshly claimed selected base. No PUT, commit or cleanup.
-#[cfg(any(windows, test, feature = "synthetic-test-bin"))]
+#[cfg(any(windows, test))]
 fn request_fresh_retry_decision<T: MachineHttpPort>(
     tenant_id: &TenantId,
     profile_id: &ProfileId,
@@ -1364,7 +1364,7 @@ fn request_fresh_retry_decision<T: MachineHttpPort>(
     )
 }
 
-#[cfg(any(windows, test, feature = "synthetic-test-bin"))]
+#[cfg(any(windows, test))]
 fn request_fresh_retry_decision_streamed<T: MachineHttpPort>(
     tenant_id: &TenantId,
     profile_id: &ProfileId,
@@ -1388,7 +1388,7 @@ fn request_fresh_retry_decision_streamed<T: MachineHttpPort>(
     )
 }
 
-#[cfg(any(windows, test, feature = "synthetic-test-bin"))]
+#[cfg(any(windows, test))]
 fn request_fresh_retry_decision_for_descriptor<T: MachineHttpPort>(
     tenant_id: &TenantId,
     profile_id: &ProfileId,
@@ -1443,7 +1443,7 @@ pub fn observe_retained_successor_after_restart<T: MachineHttpPort>(
 /// One existing read-only control-plane observation, over *already validated*
 /// exact local attempt evidence. Neither the discovered path nor the explicit
 /// generation-ID entrypoint rereads/duplicates the full sealed record.
-#[cfg(any(windows, test, feature = "synthetic-test-bin"))]
+#[cfg(any(windows, test))]
 fn observe_verified_exact_attempt<T: MachineHttpPort>(
     tenant_id: &TenantId,
     profile_id: &ProfileId,
