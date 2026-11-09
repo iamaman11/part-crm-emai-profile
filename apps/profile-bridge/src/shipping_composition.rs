@@ -136,11 +136,11 @@ mod windows {
         digest_closed_workspace_streaming, seal_closed_workspace_streaming,
     };
     use crate::local_profile::{DeliveryActivationGuard, MaterializationRoot};
+    use crate::operator_flow::EnrollmentPort;
     use crate::shipping_control_plane::{
         ControlPlaneCoordinator, ControlPlaneEnrollment, SharedControlPlaneCoordinator,
         ShippingControlPlaneError,
     };
-    use crate::operator_flow::EnrollmentPort;
     use crate::shipping_generation_successor_control::publish_closed_streamed_successor;
     use crate::windows_delivery_handoff::{
         DeliveryHandoffCoordinator, DeliveryHandoffRestartDisposition,
