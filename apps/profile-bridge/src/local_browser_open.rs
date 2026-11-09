@@ -274,7 +274,10 @@ fn materialize_identity_with_executable(
     {
         return Err(LocalOpenError::IdentityPreparation);
     }
-    let actual_digest = format!("{:x}", Sha256::digest(config_bytes));
+    let actual_digest = Sha256::digest(config_bytes)
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect::<String>();
     if actual_digest != expected_digest {
         return Err(LocalOpenError::IdentityPreparation);
     }
@@ -316,7 +319,7 @@ fn run_python_with_executable(
         runtime_root,
         folder,
         action,
-        pending_health,
+        before_launch,
         None,
     )
 }

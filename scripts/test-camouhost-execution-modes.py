@@ -223,7 +223,7 @@ def main() -> int:
     assert "require_bridge_writer_lock" not in local_runtime
     assert ".mkdir(" not in local_runtime and ".write_bytes(" not in local_runtime
 
-    print("CAMOUHOST_EXECUTION_MODES=PASS")    print("CAMOUHOST_EXECUTION_MODES=PASS")
+    print("CAMOUHOST_EXECUTION_MODES=PASS")
     return 0
 
 
