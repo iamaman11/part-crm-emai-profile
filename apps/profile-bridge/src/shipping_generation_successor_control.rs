@@ -4,6 +4,7 @@ use crate::browser_execution::{browser_writer_locks_absent, persist_committed_su
 use crate::dirty_generation::recover_local_unsynced_native_clone;
 #[cfg(any(test, feature = "synthetic-test-bin"))]
 use crate::dirty_generation::{GenerationSealingMaterial, GenerationSealingMaterialPort};
+#[cfg(test)]
 use crate::dirty_generation::PreparedDirtyGeneration;
 #[cfg(test)]
 use crate::generation_snapshot::{GenerationSnapshotError, WorkspaceSnapshotReader};
