@@ -50,10 +50,6 @@ fn main() -> ExitCode {
                 eprintln!("BRIDGE_S1_NOT_READY");
                 return ExitCode::from(3);
             }
-            if let BridgeCliError::LaunchFailed(ShippingCompositionError::Operator(owner)) = error {
-                // This closed typed outcome contains no claims, paths, credentials or profile data.
-                eprintln!("BRIDGE_OPERATOR_OUTCOME={owner:?}");
-            }
             eprintln!("{error}");
             error.diagnostic().show_desktop();
             ExitCode::from(2)
@@ -212,35 +208,6 @@ fn diagnostic_cause(result: &Result<(), BridgeCliError>) -> Cause {
     match result {
         Ok(()) => Cause::None,
         Err(BridgeCliError::InstallationFailed(_)) => Cause::InstallBlocked,
-        Err(BridgeCliError::LaunchFailed(
-            ShippingCompositionError::HeartbeatAuthorityUncertain,
-        )) => Cause::CoordinatorUncertain,
-        Err(BridgeCliError::LaunchFailed(ShippingCompositionError::CommittedRecoveryRequired)) => {
-            Cause::CloudSaveFailed
-        }
-        Err(BridgeCliError::LaunchFailed(ShippingCompositionError::Operator(
-            profile_bridge::operator_flow::OperatorFlowError::EnrollmentConflict,
-        ))) => Cause::CoordinatorLeaseConflict,
-        Err(BridgeCliError::LaunchFailed(ShippingCompositionError::Operator(
-            profile_bridge::operator_flow::OperatorFlowError::Preflight { reason, .. },
-        ))) => match reason {
-            profile_bridge::operator_flow::OperationalRejectionReason::RuntimeCandidateMismatch
-            | profile_bridge::operator_flow::OperationalRejectionReason::ConfigIntegrityMismatch
-            | profile_bridge::operator_flow::OperationalRejectionReason::IdentityObservationMismatch => Cause::BrowserConfigMismatch,
-            profile_bridge::operator_flow::OperationalRejectionReason::ProfileBusy => Cause::BrowserProfileBusy,
-            profile_bridge::operator_flow::OperationalRejectionReason::RecoveryRequired => Cause::BrowserRecoveryRequired,
-            profile_bridge::operator_flow::OperationalRejectionReason::RetryableNetworkRouteChurn => Cause::BrowserRouteUnstable,
-            profile_bridge::operator_flow::OperationalRejectionReason::LocalCacheIncomplete
-            | profile_bridge::operator_flow::OperationalRejectionReason::LocalCacheInaccessible
-            | profile_bridge::operator_flow::OperationalRejectionReason::FilesystemProcessCapabilityUnavailable => Cause::BrowserLocalCacheUnavailable,
-            profile_bridge::operator_flow::OperationalRejectionReason::BrowserPreflightRejected => Cause::BrowserUnavailable,
-        },
-        Err(BridgeCliError::LaunchFailed(ShippingCompositionError::Operator(
-            profile_bridge::operator_flow::OperatorFlowError::Runtime { .. },
-        ))) => Cause::BrowserRuntimeLaunchFailed,
-        Err(BridgeCliError::LaunchFailed(ShippingCompositionError::Operator(
-            profile_bridge::operator_flow::OperatorFlowError::AuthoritativeGeneration { .. },
-        ))) => Cause::DownloadFailed,
         Err(BridgeCliError::LaunchFailed(_)) => Cause::BrowserUnavailable,
         Err(_) => Cause::OtherSafeFailure,
     }
