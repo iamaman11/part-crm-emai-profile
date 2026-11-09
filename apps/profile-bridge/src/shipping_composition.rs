@@ -745,6 +745,24 @@ mod windows {
         }
     }
 
+    fn wait_for_native_writer_release<E>(
+        mut probe: impl FnMut() -> Result<bool, E>,
+        mut pause: impl FnMut(Duration),
+    ) -> Result<(), ShippingCompositionError> {
+        let mut delay_seconds = 1_u64;
+        loop {
+            match probe() {
+                Ok(true) => return Ok(()),
+                Ok(false) => {
+                    eprintln!("BRIDGE_SYNC_WAITING_FOR_NATIVE_FILE_RELEASE");
+                    pause(Duration::from_secs(delay_seconds));
+                    delay_seconds = delay_seconds.saturating_mul(2).min(15);
+                }
+                Err(_) => return Err(ShippingCompositionError::SyncUnconfirmed),
+            }
+        }
+    }
+
     pub fn run_closed_sync(
         intent: &crate::generation_initialization::InitialProfileOpen,
     ) -> Result<(), ShippingCompositionError> {
@@ -782,19 +800,10 @@ mod windows {
             // event, this same one-shot Sync process waits for the native OS
             // file lock to clear. It never guesses from a PID/window and never
             // needs the CRM page or a second service to trigger another try.
-            // The probe is repeated until the OS proves the folder is available.
-            let mut lock_retry_seconds = 1_u64;
-            loop {
-                match crate::browser_execution::browser_writer_locks_absent(&workspace) {
-                    Ok(true) => break,
-                    Ok(false) => {
-                        eprintln!("BRIDGE_SYNC_WAITING_FOR_NATIVE_FILE_RELEASE");
-                        thread::sleep(Duration::from_secs(lock_retry_seconds));
-                        lock_retry_seconds = lock_retry_seconds.saturating_mul(2).min(15);
-                    }
-                    Err(_) => return Err(ShippingCompositionError::SyncUnconfirmed),
-                }
-            }
+            wait_for_native_writer_release(
+                || crate::browser_execution::browser_writer_locks_absent(&workspace),
+                thread::sleep,
+            )?;
             // A completed first DRAFT Commit advances the *same* local marker.
             // Retry the outstanding native edits as READY without creating a
             // second local folder or replaying the first DRAFT generation.
@@ -857,6 +866,35 @@ mod windows {
                     "BRIDGE_SYNC_INLINE_FALLBACK_PENDING;error={error:?};NEXT_SAFE_STEP=PRESERVE_LOCAL_BYTES"
                 );
             }
+        }
+    }
+
+    #[cfg(test)]
+    mod native_writer_wait_tests {
+        use super::{ShippingCompositionError, wait_for_native_writer_release};
+        use std::time::Duration;
+
+        #[test]
+        fn same_sync_waits_for_native_file_release_with_backoff() {
+            let mut probes = [Ok(false), Ok(false), Ok(true)].into_iter();
+            let mut pauses = Vec::new();
+            wait_for_native_writer_release(
+                || probes.next().expect("three native lock probes"),
+                |delay| pauses.push(delay),
+            )
+            .expect("released native file lock");
+            assert_eq!(pauses, [Duration::from_secs(1), Duration::from_secs(2)]);
+        }
+
+        #[test]
+        fn unknown_native_file_state_fails_closed_without_waiting() {
+            let mut pauses = Vec::new();
+            let result = wait_for_native_writer_release(
+                || Err("native file state unavailable"),
+                |delay| pauses.push(delay),
+            );
+            assert!(matches!(result, Err(ShippingCompositionError::SyncUnconfirmed)));
+            assert!(pauses.is_empty());
         }
     }
 
