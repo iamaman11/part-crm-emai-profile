@@ -26,6 +26,12 @@ pub enum ShippingCompositionError {
     SyncUnconfirmed,
     #[cfg(windows)]
     DeliveryRuntime(crate::windows_delivery_runtime::WindowsDeliveryRuntimeError),
+    // Diagnostic-only historical outcomes; the v2 Open/Sync path cannot construct them.
+    Operator(crate::operator_flow::OperatorFlowError),
+    ActiveSessionMissing,
+    CloseObservation(bridge_domain::BridgePortError),
+    CommittedRecoveryRequired,
+    HeartbeatAuthorityUncertain,
     Initialization(crate::generation_initialization::InitialProfileError),
     #[cfg(windows)]
     LocalOpen(crate::local_browser_open::LocalOpenError),
@@ -54,6 +60,11 @@ impl core::fmt::Display for ShippingCompositionError {
             Self::SyncUnconfirmed => "Native Close succeeded; cloud Sync not confirmed",
             #[cfg(windows)]
             Self::DeliveryRuntime(error) => return core::fmt::Display::fmt(error, formatter),
+            Self::Operator(_) => "retired Profile Bridge operator outcome",
+            Self::ActiveSessionMissing => "retired Profile Bridge active session outcome",
+            Self::CloseObservation(_) => "retired Profile Bridge close observation outcome",
+            Self::CommittedRecoveryRequired => "retired Profile Bridge committed recovery outcome",
+            Self::HeartbeatAuthorityUncertain => "retired Profile Bridge heartbeat outcome",
             Self::Initialization(_) => "profile first-open preparation failed",
             #[cfg(windows)]
             Self::LocalOpen(error) => return core::fmt::Display::fmt(error, formatter),
