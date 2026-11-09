@@ -7,9 +7,9 @@ use crate::authoritative_generation::ensure_authoritative_generation;
 use crate::browser_execution::browser_writer_locks_absent;
 #[cfg(any(test, feature = "synthetic-test-bin"))]
 use crate::browser_mail_query::BrowserMailExecutionProof;
+use crate::dirty_close::DirtyCloseCompletion;
 #[cfg(any(test, feature = "synthetic-test-bin"))]
 use crate::dirty_close::RetainedDirtyCloseError;
-use crate::dirty_close::DirtyCloseCompletion;
 #[cfg(any(test, feature = "synthetic-test-bin"))]
 use crate::dirty_close::{DirtyCloseLocalOutcome, RetainedDirtyClose};
 #[cfg(any(test, feature = "synthetic-test-bin"))]
@@ -31,16 +31,16 @@ use crate::local_profile::{
 };
 #[cfg(any(test, feature = "synthetic-test-bin"))]
 use crate::local_profile::{GenerationInventory, MaterializationRoot, RecoveryClone};
-use crate::runtime_bundle::{ApprovedRuntimeBundle, RuntimeLaunchError};
 #[cfg(any(test, feature = "synthetic-test-bin"))]
 use crate::runtime_bundle::RuntimeSessionOrchestrator;
+use crate::runtime_bundle::{ApprovedRuntimeBundle, RuntimeLaunchError};
 #[cfg(any(test, feature = "synthetic-test-bin"))]
 use crate::shipping_control_plane::{MachineHttpPort, ShippingControlPlaneError};
-#[cfg(any(test, feature = "synthetic-test-bin"))]
-use crate::shipping_generation_save::SignedGenerationObjectStreamPutPort;
 use crate::shipping_generation_save::CommittedGenerationSuccessor;
 #[cfg(any(test, feature = "synthetic-test-bin"))]
 use crate::shipping_generation_save::ShippingGenerationSaveError;
+#[cfg(any(test, feature = "synthetic-test-bin"))]
+use crate::shipping_generation_save::SignedGenerationObjectStreamPutPort;
 #[cfg(any(test, feature = "synthetic-test-bin"))]
 use crate::shipping_generation_save::{
     SignedGenerationObjectPutPort, prepare_retained_generation_successor,
