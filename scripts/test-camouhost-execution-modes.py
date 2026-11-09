@@ -222,6 +222,11 @@ def main() -> int:
     assert "load_canonical_json" not in local_runtime
     assert "require_bridge_writer_lock" not in local_runtime
     assert ".mkdir(" not in local_runtime and ".write_bytes(" not in local_runtime
+    identity_runtime = SOURCE.read_text(encoding="utf-8").split(
+        "def materialize_candidate_identity", 1
+    )[1].split("\n\ndef valid_frame", 1)[0]
+    assert ".mkdir(" not in identity_runtime and ".write_bytes(" not in identity_runtime
+    assert '"camoufox_config_json"' in identity_runtime
 
     print("CAMOUHOST_EXECUTION_MODES=PASS")
     return 0

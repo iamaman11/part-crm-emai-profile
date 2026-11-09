@@ -168,6 +168,8 @@ fn run_python(
 
     let executable = runtime_root.join(PYTHON);
     if action == "--materialize-identity" {
+        // The SDK receives an already-created directory; Rust owns its creation.
+        let _ = ensure_user_data_directory(folder)?;
         return materialize_identity_with_executable(&executable, runtime_root, folder);
     }
     if action == "--local-open" {
@@ -551,6 +553,24 @@ mod tests {
             expected_version: 1,
             status: InitialProfileStatus::Draft,
         }
+    }
+
+    #[test]
+    fn rust_owns_user_data_creation_and_profile_config_read() -> Result<(), Box<dyn std::error::Error>> {
+        use std::fs;
+
+        let directory = tempfile::tempdir()?;
+        let folder = directory.path();
+        assert!(super::ensure_user_data_directory(folder)?);
+        assert!(folder.join(super::USER_DATA).is_dir());
+        assert!(super::ensure_user_data_directory(folder)?);
+        fs::write(folder.join(super::USER_DATA).join("prefs.js"), b"native browser state")?;
+        assert!(!super::ensure_user_data_directory(folder)?);
+
+        let config = b"{\"fingerprint\":\"test\"}\n";
+        fs::write(folder.join(super::CONFIG), config)?;
+        assert_eq!(super::read_profile_config(folder)?, String::from_utf8(config.to_vec())?);
+        Ok(())
     }
     #[test]
     fn only_the_exact_playwright_ready_event_confirms_health_once() {
