@@ -140,14 +140,8 @@ mod windows {
         ControlPlaneCoordinator, ControlPlaneEnrollment, SharedControlPlaneCoordinator,
         ShippingControlPlaneError,
     };
+    use crate::operator_flow::EnrollmentPort;
     use crate::shipping_generation_successor_control::publish_closed_streamed_successor;
-    use crate::shipping_generation_successor_control::{
-        RestartExactCommitObservation, RestartExactLocalCompletion,
-        RestartExactLocalCompletionError, complete_active_exact_after_restart,
-        confirm_retained_exact_retry_nonapplication, resume_exact_successor_under_fresh_lease,
-        resume_lone_local_unsynced_under_fresh_lease,
-    };
-    use crate::user_diagnostics::report::{self, Cause, Cloud, Outcome, Stage};
     use crate::windows_delivery_handoff::{
         DeliveryHandoffCoordinator, DeliveryHandoffRestartDisposition,
     };
@@ -157,7 +151,7 @@ mod windows {
     };
     use crate::windows_generation_get::WindowsSignedGenerationObjectGet;
     use crate::windows_generation_put::WindowsSignedGenerationObjectPut;
-    use application_ports::ProfileCoordinatorRuntimePort;
+    use application_ports::{ProfileCoordinatorPort, ProfileCoordinatorRuntimePort};
     use profile_platform_primitives::UnixMillis;
     use session_domain::ProfileLease;
     use std::env;
