@@ -48,7 +48,31 @@ impl BridgeWorkspaceLock {
         })
     }
 
-    /// Same-device recovery under a NEW authenticated Coordinator claim/fence.
+    /// Acquire the normal Bridge writer admission, recovering only an exact
+    /// same-device interrupted marker after OS and native-file checks prove the
+    /// previous writer is gone. Unknown or foreign writers remain blocked.
+    pub fn acquire_or_recover_interrupted(
+        workspace: &GenerationWorkspace,
+        device_id: &DeviceId,
+        epoch: u64,
+    ) -> Result<Self, LocalProfileError> {
+        match Self::acquire(workspace, device_id, epoch) {
+            Ok(lock) => Ok(lock),
+            Err(LocalProfileError::LockBusy) => {
+                #[cfg(any(windows, test, feature = "synthetic-test-bin"))]
+                {
+                    Self::recover_interrupted_launch(workspace, device_id, epoch)
+                }
+                #[cfg(not(any(windows, test, feature = "synthetic-test-bin")))]
+                {
+                    Err(LocalProfileError::LockBusy)
+                }
+            }
+            Err(error) => Err(error),
+        }
+    }
+
+    /// Same-device recovery of an interrupted local Bridge marker.
     /// Only this generation requires OS exclusivity. A live OTHER profile must
     /// not block recovery of dirty bytes after browser/Bridge process death.
     /// The root shared lock still excludes installer activation across the whole root.
@@ -89,8 +113,10 @@ impl BridgeWorkspaceLock {
             return Err(LocalProfileError::LockBusy);
         }
 
-        // Caller already proved fresh same-device lease; this only replaces the
-        // exact older marker. Never removes profile files, WAL or pending evidence.
+        // The caller supplies a strictly newer same-device epoch. This replaces
+        // only the exact older marker after root/generation OS admission and native
+        // Firefox file-lock checks succeed. It grants no cloud effect and never
+        // removes profile files, WAL or pending evidence.
         let inner = filesystem::BridgeWorkspaceLock::replace_interrupted(
             workspace,
             device_id,

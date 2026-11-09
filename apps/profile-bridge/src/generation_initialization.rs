@@ -368,7 +368,7 @@ pub fn sync_closed_local_draft<T: MachineHttpPort, U: SignedGenerationObjectStre
             .map_err(|_| InitialProfileError::Snapshot)?;
         u64::try_from(since_epoch.as_millis()).map_err(|_| InitialProfileError::Snapshot)
     };
-    let writer = BridgeWorkspaceLock::acquire(&workspace, device, stamp()?)
+    let writer = BridgeWorkspaceLock::acquire_or_recover_interrupted(&workspace, device, stamp()?)
         .map_err(|_| InitialProfileError::Snapshot)?;
     let admission = (|| {
         if !matches!(browser_writer_locks_absent(&workspace), Ok(true)) {
@@ -420,7 +420,7 @@ pub fn sync_closed_local_draft<T: MachineHttpPort, U: SignedGenerationObjectStre
 
     // Re-acquire only while sealing the exact ORIGINAL closed folder;
     // network/Worker waits never hold the Firefox writer admission.
-    let writer = BridgeWorkspaceLock::acquire(&workspace, device, stamp()?)
+    let writer = BridgeWorkspaceLock::acquire_or_recover_interrupted(&workspace, device, stamp()?)
         .map_err(|_| InitialProfileError::Snapshot)?;
     let encrypted = (|| {
         if !matches!(browser_writer_locks_absent(&workspace), Ok(true)) {
@@ -488,7 +488,7 @@ pub fn sync_closed_local_draft<T: MachineHttpPort, U: SignedGenerationObjectStre
     let current = root
         .open_profile_current(&intent.tenant_id, &intent.profile_id)
         .map_err(|_| InitialProfileError::SavedRecovery)?;
-    let guard = BridgeWorkspaceLock::acquire(&current, device, stamp()?)
+    let guard = BridgeWorkspaceLock::acquire_or_recover_interrupted(&current, device, stamp()?)
         .map_err(|_| InitialProfileError::SavedRecovery)?;
     let applied = (|| {
         if current.base_generation_id().is_some()
@@ -1384,4 +1384,97 @@ mod tests {
                 .is_err()
         );
     }
+    #[test]
+    fn closed_draft_sync_recovers_interrupted_bridge_marker_before_existing_sync()
+    -> Result<(), Box<dyn std::error::Error>> {
+        use crate::shipping_control_plane::MachineHttpResponse;
+        use crate::shipping_generation_save::{
+            SignedGenerationObjectPutPort, SignedGenerationUploadCapability,
+        };
+        use profile_platform_primitives::TenantScope;
+
+        struct FailingTransport {
+            calls: usize,
+        }
+        impl MachineHttpPort for FailingTransport {
+            type Error = ();
+            fn request(
+                &mut self,
+                _: MachineHttpMethod,
+                _: &str,
+                _: &CorrelationId,
+                _: Option<&[u8]>,
+            ) -> Result<MachineHttpResponse, ()> {
+                self.calls += 1;
+                Err(())
+            }
+        }
+        struct NoUpload;
+        impl SignedGenerationObjectPutPort for NoUpload {
+            type Error = ();
+            fn put_exact(
+                &mut self,
+                _: &SignedGenerationUploadCapability,
+                _: &[u8],
+            ) -> Result<(), ()> {
+                Err(())
+            }
+        }
+        impl SignedGenerationObjectStreamPutPort for NoUpload {
+            fn put_verified_stream(
+                &mut self,
+                _: &SignedGenerationUploadCapability,
+                _: &mut crate::generation_object_spool::VerifiedGenerationObjectFile,
+            ) -> Result<(), Self::Error> {
+                Err(())
+            }
+        }
+
+        let intent = InitialProfileOpen::parse(
+            "profilebridge://open/v2/tenant_sync_recover/actor_sync_recover/profile_sync_recover/1/DRAFT",
+        )?;
+        let actor = ActorContext::new(
+            TenantScope::new(intent.tenant_id.clone()),
+            intent.actor_id.clone(),
+            CorrelationId::parse("corr_sync_recover")?,
+        );
+        let device = DeviceId::parse("device_sync_recover")?;
+        let path = std::env::temp_dir().join(format!(
+            "bridge-sync-recover-{}-{}",
+            std::process::id(),
+            SystemTime::now().duration_since(UNIX_EPOCH)?.as_nanos()
+        ));
+        let root = MaterializationRoot::open_or_create(&path)?;
+        let generation = GenerationId::parse("generation_sync_recover")?;
+        let workspace =
+            root.create_profile_current(&intent.tenant_id, &intent.profile_id, &generation, 1)?;
+        std::fs::create_dir(workspace.path().join("user_data"))?;
+        std::fs::write(workspace.path().join("user_data/cookies.sqlite"), b"native-browser-state")?;
+        let dirty = workspace.path().join(".local-unsynced");
+        std::fs::write(&dirty, b"local-unsynced-v2")?;
+
+        let interrupted = BridgeWorkspaceLock::acquire(&workspace, &device, 1)?;
+        drop(interrupted); // Native process died after creating the durable Bridge marker.
+
+        let mut transport = FailingTransport { calls: 0 };
+        let result = sync_closed_local_draft(
+            &intent,
+            &actor,
+            &device,
+            &root,
+            &mut transport,
+            &mut NoUpload,
+        );
+        assert!(result.is_err()); // The fake Worker transport deliberately refuses Prepare.
+        assert_eq!(transport.calls, 1, "Sync must pass local lock admission before Worker I/O");
+        assert!(
+            !workspace.path().join(".profile-platform.lock").exists(),
+            "the recovered Bridge marker must be released after the closed snapshot"
+        );
+        assert_eq!(std::fs::read(&dirty)?, b"local-unsynced-v2");
+
+        std::fs::remove_dir_all(&path)?;
+        Ok(())
+    }
+
 }

@@ -220,14 +220,14 @@ pub fn open(
         .map_err(|_| LocalOpenError::InvalidLocalWorkspace)?
         .as_millis();
     let epoch = u64::try_from(epoch).map_err(|_| LocalOpenError::InvalidLocalWorkspace)?;
-    let writer = match BridgeWorkspaceLock::acquire(&workspace, device, epoch) {
-        Ok(writer) => writer,
-        Err(LocalProfileError::LockBusy) => {
-            BridgeWorkspaceLock::recover_interrupted_launch(&workspace, device, epoch)
-                .map_err(|_| LocalOpenError::ProfileBusy)?
-        }
-        Err(_) => return Err(LocalOpenError::InvalidLocalWorkspace),
-    };
+    let writer = BridgeWorkspaceLock::acquire_or_recover_interrupted(&workspace, device, epoch)
+        .map_err(|error| {
+            if error == LocalProfileError::LockBusy {
+                LocalOpenError::ProfileBusy
+            } else {
+                LocalOpenError::InvalidLocalWorkspace
+            }
+        })?;
     // Re-read the single existing generation marker under the acquired OS
     // writer lock. The earlier lookup is only a fast preliminary check.
     let workspace = match recheck_workspace_after_writer_admission(root, &workspace, intent) {

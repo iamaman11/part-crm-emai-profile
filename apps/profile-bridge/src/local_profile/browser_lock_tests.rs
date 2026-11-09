@@ -29,6 +29,75 @@ fn bridge_lock_is_exclusive_and_preserves_browser_lock_files()
 }
 
 #[test]
+fn acquire_or_recover_replaces_only_same_device_interrupted_marker()
+-> Result<(), Box<dyn std::error::Error>> {
+    let root_path = test_root("recover-interrupted")?;
+    let root = MaterializationRoot::open_or_create(&root_path)?;
+    let (tenant_id, profile_id) = ids()?;
+    let generation_id = GenerationId::parse("generation_01JSTEP8D")?;
+    let workspace = root.create_generation(&tenant_id, &profile_id, &generation_id)?;
+    let device_id = DeviceId::parse("device_01JSTEP8")?;
+
+    let interrupted = BridgeWorkspaceLock::acquire(&workspace, &device_id, 1)?;
+    drop(interrupted); // Simulate process death: OS locks drop, durable marker remains.
+    let marker = workspace.path().join(".profile-platform.lock");
+    let before = fs::read(&marker)?;
+    let recovered =
+        BridgeWorkspaceLock::acquire_or_recover_interrupted(&workspace, &device_id, 2)?;
+    let after = fs::read(&marker)?;
+    assert_ne!(after, before);
+    assert!(String::from_utf8(after)?.contains("\n2\n"));
+    recovered.release()?;
+    assert!(!marker.exists());
+
+    cleanup(root_path)?;
+    Ok(())
+}
+
+#[test]
+fn acquire_or_recover_keeps_live_native_and_foreign_writers_blocked()
+-> Result<(), Box<dyn std::error::Error>> {
+    let root_path = test_root("recover-negative")?;
+    let root = MaterializationRoot::open_or_create(&root_path)?;
+    let (tenant_id, profile_id) = ids()?;
+    let generation_id = GenerationId::parse("generation_01JSTEP8E")?;
+    let workspace = root.create_generation(&tenant_id, &profile_id, &generation_id)?;
+    let device_id = DeviceId::parse("device_01JSTEP8")?;
+
+    let active = BridgeWorkspaceLock::acquire(&workspace, &device_id, 1)?;
+    assert!(matches!(
+        BridgeWorkspaceLock::acquire_or_recover_interrupted(&workspace, &device_id, 2),
+        Err(LocalProfileError::LockBusy)
+    ));
+    active.release()?;
+
+    let interrupted = BridgeWorkspaceLock::acquire(&workspace, &device_id, 3)?;
+    drop(interrupted);
+    let marker = workspace.path().join(".profile-platform.lock");
+    let before = fs::read(&marker)?;
+    let foreign_device = DeviceId::parse("device_foreign")?;
+    assert!(matches!(
+        BridgeWorkspaceLock::acquire_or_recover_interrupted(
+            &workspace,
+            &foreign_device,
+            4
+        ),
+        Err(LocalProfileError::LockBusy)
+    ));
+    assert_eq!(fs::read(&marker)?, before);
+
+    fs::write(workspace.path().join(".parentlock"), b"native-writer-present")?;
+    assert!(matches!(
+        BridgeWorkspaceLock::acquire_or_recover_interrupted(&workspace, &device_id, 5),
+        Err(LocalProfileError::LockBusy)
+    ));
+    assert_eq!(fs::read(&marker)?, before);
+
+    cleanup(root_path)?;
+    Ok(())
+}
+
+#[test]
 fn inventory_is_deterministic_and_includes_browser_owned_locks()
 -> Result<(), Box<dyn std::error::Error>> {
     let root_path = test_root("inventory")?;
