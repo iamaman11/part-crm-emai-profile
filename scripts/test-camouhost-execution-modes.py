@@ -161,26 +161,24 @@ def main() -> int:
         else:
             raise AssertionError("unsupported headless mode accepted")
 
-    # The shipping Windows launcher selects the user-owned SDK context explicitly.
-    # This is source wiring coverage, not a substitute for a Rust build.
-    rust = SOURCE.parents[2] / "apps/profile-bridge/src/camouhost_process.rs"
-    shipping = rust.read_text(encoding="utf-8")
-    assert 'RuntimeExecutionOwner::NativeUser => "user-native"' in shipping
-    assert 'RuntimeExecutionOwner::IsolatedBrowserStateTest => "isolated-cold-probe"' in shipping
-    assert "CAMOUHOST_NATIVE_PROFILE" not in shipping
-    assert 'launch_with_browser_visible_admission(' in shipping
-    assert 'let test_agent_enabled = !cfg!(windows)' in shipping
-    assert "&& self.config.execution_owner != RuntimeExecutionOwner::IsolatedBrowserStateTest" in shipping
+    # Normal CRM Open has one Rust owner: local_browser_open. The
+    # retired claim/ManagedCamouhostProcess IPC path is not part of the app.
+    lib = (SOURCE.parents[2] / "apps/profile-bridge/src/lib.rs").read_text(
+        encoding="utf-8"
+    )
     composition = (SOURCE.parents[2] /
                    "apps/profile-bridge/src/shipping_composition.rs").read_text(encoding="utf-8")
-    # The historical diagnostic has been removed from shipping entirely.
-    # Only disposable CI state tests retain a separately authorized probe.
-    assert ".for_isolated_browser_state_test()" not in composition
-    assert "run_historical_candidate_probe" not in composition
+    assert "pub mod camouhost_process;" not in lib
+    assert "ManagedCamouhostProcess" not in composition
+    assert "ManagedCamouhostIpc" not in composition
+    assert "pub fn run_claim(" not in composition
+    assert "local_browser_open::open" in composition
+    assert "start_sync_after_close(intent)" in composition
     app = (SOURCE.parents[2] / "apps/profile-bridge/src/main.rs").read_text(
         encoding="utf-8"
     )
-    assert "VerifyHistoricalCandidate" not in app
+    assert "profilebridge://claim/" in app
+    assert "old_claim_and_v1_user_open_are_not_supported_application_modes" in app
     native_process = (SOURCE.parents[2] / "runtime/camouhost/native_process.py").read_text(encoding="utf-8")
     assert "AsyncNewBrowser" in native_process and "async_playwright" in native_process
     assert "persistent_context=True" in native_process
