@@ -11,7 +11,7 @@ const CAMOUFOX = '.github/workflows/camoufox-runtime-gate.yml';
 const CAMOUFOX_SCOPE = 'scripts/classify-camoufox-runtime-scope.py';
 const AUTHORITY = 'architecture/release-architecture-ar11.json';
 const ASSET_MATERIALIZER = 'scripts/release-set-assets-ar11.sh';
-const EXPECTED_PROMOTION_RUN_NAME = "run-name: AR11 Release Set Promotion — ${{ github.event_name == 'workflow_run' && 'READ-ONLY PREFLIGHT' || github.event_name == 'workflow_dispatch' && 'MANUAL PROMOTION (AUTHORIZATION REQUIRED)' || 'INTERNAL ROLLBACK-NEGATIVE EVIDENCE' }}";
+const EXPECTED_PROMOTION_RUN_NAME = "run-name: AR11 Release Set Promotion — ${{ github.event_name == 'workflow_run' && 'READ-ONLY PREFLIGHT' || github.event_name == 'workflow_dispatch' && format('STAGING PROMOTION by {0}', github.actor) || 'INTERNAL ROLLBACK-NEGATIVE EVIDENCE' }}";
 const READ_ONLY_TERMINAL_DISPOSITION = '(.status == "READ_ONLY_READY" or .status == "NOOP" or .status == "BLOCKED")';
 const LEGACY_FILES = [
   '.github/workflows/mailbox-secret-resolver-promotion.yml',
@@ -136,7 +136,7 @@ function deployCredentialBoundaryErrors(promotion, mutate) {
   const token = 'DEPLOY_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}';
   const readyBind = 'Download and bind prior READY evidence before provider credentials';
   const dryRun = 'Render mutation overlay and prove exact bits dry-run without deploy credential';
-  const activation = 'Activate deploy credential only after bound READY and authorization';
+  const activation = 'Activate deploy credential only after exact READY and dispatch binding';
   const promotionCount = promotion.split(token).length - 1;
   const mutateCount = mutate.split(token).length - 1;
   const readyIndex = mutate.indexOf(readyBind);
@@ -197,9 +197,12 @@ function authorityErrors(authority) {
   const policy = authority?.promotion_policy ?? {};
   const requiredTrue = [
     'build_once',
-    'read_only_ready_before_mutation_authorization',
-    'ready_to_mutate_evidence_required_for_authorization',
-    'authorization_binds_ready_evidence',
+    'read_only_ready_before_manual_dispatch',
+    'ready_to_mutate_evidence_required_for_dispatch',
+    'dispatch_intent_binds_ready_evidence',
+    'workflow_dispatch_is_staging_authorization',
+    'owner_only_manual_dispatch',
+    'staging_environment_main_only',
     'expected_current_refence_immediately_before_mutation',
     'd1_refence_immediately_before_mutation',
     'accepted_main_heavy_runtime_replay',
@@ -207,6 +210,9 @@ function authorityErrors(authority) {
   ];
   for (const key of requiredTrue) {
     if (policy[key] !== true) errors.push(`AR-11 promotion policy requires ${key}=true`);
+  }
+  for (const obsolete of ['read_only_ready_before_mutation_authorization', 'ready_to_mutate_evidence_required_for_authorization', 'authorization_binds_ready_evidence']) {
+    if (obsolete in policy) errors.push(`AR-11 promotion policy retains obsolete comment-authorization field ${obsolete}`);
   }
   if (policy.promotion_rebuild !== false || policy.opsctl_provider_mutation !== false) {
     errors.push('AR-11 promotion must remain no-rebuild with provider mutation outside opsctl');
@@ -230,14 +236,16 @@ function promotionErrors(promotion) {
   const errors = [];
   const runNameLine = promotion.split('\n').find((line) => line.startsWith('run-name: '));
   if (runNameLine !== EXPECTED_PROMOTION_RUN_NAME) {
-    errors.push('promotion run-name must distinguish read-only preflight, authorization-required manual promotion, and internal rollback-negative evidence');
+    errors.push('promotion run-name must distinguish read-only preflight, actor-attributed manual staging dispatch, and internal rollback-negative evidence');
   }
   errors.push(...requireMarkers(promotion, [
     'workflow_run:',
     '- Release Set Build',
     'workflow_dispatch:',
     'workflow_call:',
-    'concurrency:\n  group: release-set-promotion-staging',
+    'concurrency:',
+    'group: release-set-promotion-staging',
+    'cancel-in-progress: false',
   ], 'Release Set promotion'));
   if ((promotion.match(/\n  workflow_dispatch:/g) ?? []).length !== 1) errors.push('promotion must expose exactly one zero-field manual dispatch');
   const trigger = promotion.split('\npermissions:', 1)[0];
@@ -277,6 +285,7 @@ function promotionErrors(promotion) {
     "echo 'mode=preflight'",
     "echo 'mode=promote'",
     "echo 'mode=rollback-negative'",
+    "if: github.event_name != 'workflow_dispatch' || github.actor == github.repository_owner",
   ], 'promotion invocation router'));
   errors.push(...forbidMarkers(route, ['secrets.', 'wrangler deploy', 'environment: staging'], 'promotion invocation router'));
 
@@ -361,12 +370,16 @@ function promotionErrors(promotion) {
 
   errors.push(...requireMarkers(resolveAuthorized, [
     "if: needs.route.outputs.mode == 'promote'",
-    'Resolve exact one-shot authorization only after READY exists',
+    'environment: staging',
+    'Bind the explicit GitHub dispatch to the current staging candidate',
+    'STAGING_CANDIDATE',
+    'STAGING_PROMOTION_DISPATCH_INTENT',
+    "'github.workflow_dispatch'",
     'READY_RUN_ID',
     'READY_ARTIFACT_NAME',
     'READY_EVIDENCE_SHA256',
-    "WORKER_PROMOTION_AUTHORIZATION_V2",
-    'Download and verify exact prior READY_TO_MUTATE authority',
+    'dispatch_digest',
+    'Download and verify exact prior READY_TO_MUTATE evidence',
     'native_recovery="$(jq -er',
     '.recovery_strategy == $recovery',
     "jq -er '.promotion_preflight_sha256'",
@@ -381,20 +394,28 @@ function promotionErrors(promotion) {
     'ready == true',
     'provider_mutation == false',
     'Re-verify immutable target without provider credentials',
-  ], 'authorized READY binder'));
-  errors.push(...forbidMarkers(resolveAuthorized, ['secrets.CLOUDFLARE_', 'wrangler deploy', 'promotion plan', 'promotion preflight'], 'authorized READY binder'));
+  ], 'dispatch READY binder'));
+  errors.push(...forbidMarkers(resolveAuthorized, [
+    'secrets.CLOUDFLARE_', 'wrangler deploy', 'promotion plan', 'promotion preflight',
+    'SCOPED_EXCEPTION', 'AUTHORITY_COMMENT', 'WORKER_PROMOTION_AUTHORIZATION_V2',
+    'authorization_comment_id', 'issues/comments/', 'branches/main',
+  ], 'dispatch READY binder'));
 
   errors.push(...requireMarkers(mutate, [
-    'Execute exact same bits after READY plus authorization',
+    'Execute exact candidate after owner dispatch and READY evidence',
+    'environment: staging',
     'TARGET_PROFILE: ${{ needs.resolve-verify.outputs.target_profile }}',
     'EXPECTED_CURRENT_PROFILE: ${{ needs.resolve-verify.outputs.expected_current_profile }}',
+    'DISPATCH_DIGEST: ${{ needs.resolve-verify.outputs.dispatch_digest }}',
+    '[[ "$DISPATCH_DIGEST" =~ ^[0-9a-f]{64}$ ]]',
+    'dispatch_digest:$dispatch_digest',
     'Download and bind prior READY evidence before provider credentials',
     'AR11_MUTATION_FENCE',
     'target_capability_profile_id:$target_profile',
     'expected_current_capability_profile_id:$expected_current_profile',
     'Re-verify exact immutable Release Set before credentials',
     'Render mutation overlay and prove exact bits dry-run without deploy credential',
-    'Activate deploy credential only after bound READY and authorization',
+    'Activate deploy credential only after exact READY and dispatch binding',
     'DEPLOY_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}',
     'Re-fence Worker identity and D1 head immediately before mutation',
     'cmp --silent "$RUNNER_TEMP/mutation-d1-names.json" "$RUNNER_TEMP/ready/d1-names-after.json"',
@@ -460,6 +481,9 @@ function promotionErrors(promotion) {
     '.provider_mutation_executed == true',
     '.production_mutation_executed == false',
     '.effect_state == "EFFECT_VERIFIED"',
+    '.authorization_state == "GITHUB_WORKFLOW_DISPATCH"',
+    'DISPATCH_AUTHORIZED:',
+    'DISPATCH_DIGEST:',
   ], 'manual terminal outcome'));
   errors.push(...forbidMarkers(manualOutcome, ['secrets.CLOUDFLARE_', 'wrangler deploy --', 'environment: production', '--profile-id rehearsal-core-v2'], 'manual terminal outcome'));
   const manualTerminalize = manualOutcome.indexOf('Terminalize one lossless manual AR11 OperationalOutcome');
@@ -629,7 +653,7 @@ function validateAll({ build, promotion, camoufox, camoufoxClassifier, authority
 function selfTest(files) {
   void AR11_N24_CERTIFICATION_LOCATOR;
   const missingRecovery = files.promotion.replace('.recovery_strategy == $recovery', 'true');
-  if (!promotionErrors(missingRecovery).some((error) => error.includes('authorized READY binder'))) {
+  if (!promotionErrors(missingRecovery).some((error) => error.includes('dispatch READY binder'))) {
     throw new Error('missing native recovery binding fixture passed');
   }
   const missingRecoveryProjection = files.promotion.replace('recovery_strategy:$recovery_strategy', 'recovery_strategy:null');
@@ -644,6 +668,16 @@ function selfTest(files) {
   if (!promotionErrors(ambiguousRunName).some((error) => error.includes('run-name must distinguish'))) {
     throw new Error('ambiguous promotion run-name fixture unexpectedly passed');
   }
+  const missingOwnerGuard = files.promotion.replace("if: github.event_name != 'workflow_dispatch' || github.actor == github.repository_owner", "if: always()");
+  if (!promotionErrors(missingOwnerGuard).some((error) => error.includes('promotion invocation router'))) throw new Error('missing owner access guard fixture passed');
+  const missingStagingEnvironment = files.promotion.replace('    environment: staging\n    permissions:\n      actions: read\n      contents: read\n      issues: read', '    permissions:\n      actions: read\n      contents: read\n      issues: read');
+  if (!promotionErrors(missingStagingEnvironment).some((error) => error.includes('dispatch READY binder'))) throw new Error('missing staging resolver Environment guard fixture passed');
+  const missingMutationEnvironment = files.promotion.replace('    environment: staging\n    permissions:\n      actions: read\n      contents: read\n      deployments: write', '    permissions:\n      actions: read\n      contents: read\n      deployments: write');
+  if (!promotionErrors(missingMutationEnvironment).some((error) => error.includes('protected mutation executor'))) throw new Error('missing staging mutation Environment guard fixture passed');
+  const missingCandidateBinding = files.promotion.replaceAll('STAGING_CANDIDATE', 'STAGING_TARGET_REMOVED');
+  if (!promotionErrors(missingCandidateBinding).some((error) => error.includes('dispatch READY binder'))) throw new Error('missing canonical staging candidate fixture passed');
+  const commentAuthorizationRestored = files.promotion.replace('STAGING_CANDIDATE', 'WORKER_PROMOTION_AUTHORIZATION_V2\\n          STAGING_CANDIDATE');
+  if (!promotionErrors(commentAuthorizationRestored).some((error) => error.includes('dispatch READY binder'))) throw new Error('comment-based authorization fixture passed');
   const missingReadyBinding = files.promotion.replaceAll('READY_EVIDENCE_SHA256', 'READY_EVIDENCE_DIGEST_MISSING');
   if (promotionErrors(missingReadyBinding).length === 0) throw new Error('missing READY binding fixture passed');
   const missingReadyProfile = files.promotion.replace('target_capability_profile_id:$target_profile', 'target_capability_profile_id:null');
@@ -805,4 +839,4 @@ if (errors.length > 0) {
   process.exit(1);
 }
 if (process.argv.includes('--self-test')) selfTest(files);
-else console.log('AR-11 release operational authority passed: automatic read-only READY/BLOCKED terminalizes before authorization; opsctl owns prerequisite admission selection; target capability profile is READY-bound through authorization/fence/effect/postverify; immediate exact-current re-fence uses read-only observation authority and preserves sub-fence evidence; promotion run surfaces are explicit; Camoufox PR replay is fail-closed and runtime-impact-aware.');
+else console.log('AR-11 release operational authority passed: automatic read-only READY/BLOCKED terminalizes before the explicit owner workflow_dispatch; the canonical staging candidate and exact READY evidence bind to that dispatch; GitHub Environment restricts staging to main; exact-current Worker/D1 re-fence prevents replay after success; provider mutation remains behind the exact-bits dry-run and credential boundary; Camoufox PR replay is fail-closed and runtime-impact-aware.');

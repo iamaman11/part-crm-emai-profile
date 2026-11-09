@@ -148,6 +148,7 @@ function promotionPolicyErrors(promotion) {
     ' secret put ', ' secret bulk ', ' secret delete ', ' secrets put ', ' secrets bulk ', ' secrets delete ',
     'worker-build --release', 'cargo build', 'run: npm run build', 'environment: production',
     LEGACY_WORKFLOW, LEGACY_WRAPPER, LEGACY_CORE, HISTORICAL_CHECKER,
+    'WORKER_PROMOTION_AUTHORIZATION_V2', 'AUTHORITY_COMMENT', 'authorization_comment_id', 'issues/comments/',
   ];
   const lowered = ` ${promotion.toLowerCase()} `;
   for (const marker of forbidden) if (lowered.includes(marker.toLowerCase())) errors.push(`current Release Set promotion contains forbidden legacy/mutation authority: ${marker}`);
@@ -156,7 +157,11 @@ function promotionPolicyErrors(promotion) {
     'workflow_run:',
     '- Release Set Build',
     'AR11_READY_TO_MUTATE',
-    'WORKER_PROMOTION_AUTHORIZATION_V2',
+    'STAGING_CANDIDATE',
+    'STAGING_PROMOTION_DISPATCH_INTENT',
+    "'github.workflow_dispatch'",
+    'dispatch_digest',
+    'GITHUB_WORKFLOW_DISPATCH',
     'promotion preflight',
     'promotion verify',
     'release-set-promotion-staging',
@@ -167,12 +172,12 @@ function promotionPolicyErrors(promotion) {
   const preflightJob = promotion.indexOf('\n  preflight-ready:\n');
   const ready = promotion.indexOf('kind:"AR11_READY_TO_MUTATE"', preflightJob);
   const resolveVerifyJob = promotion.indexOf('\n  resolve-verify:\n');
-  const authorization = promotion.indexOf('Resolve exact one-shot authorization only after READY exists', resolveVerifyJob);
+  const dispatchBinding = promotion.indexOf('Bind the explicit GitHub dispatch to the current staging candidate', resolveVerifyJob);
   const mutateJob = promotion.indexOf('\n  mutate:\n');
   const deployCredential = promotion.indexOf('DEPLOY_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}', mutateJob);
   const deploy = promotion.indexOf('Deploy exact Release Set v3 bits after all fences', mutateJob);
-  if (!(preflightJob >= 0 && ready > preflightJob && resolveVerifyJob > ready && authorization > resolveVerifyJob && mutateJob > authorization && deployCredential > mutateJob && deploy > deployCredential)) {
-    errors.push('release successor must order read-only READY -> authorization binding -> deploy credential -> mutation');
+  if (!(preflightJob >= 0 && ready > preflightJob && resolveVerifyJob > ready && dispatchBinding > resolveVerifyJob && mutateJob > dispatchBinding && deployCredential > mutateJob && deploy > deployCredential)) {
+    errors.push('release successor must order read-only READY -> owner workflow_dispatch/candidate binding -> deploy credential -> mutation');
   }
   return errors;
 }
@@ -250,11 +255,11 @@ function selfTest() {
     if (promotionPolicyErrors(renamedPromotion).length !== 0) throw new Error('cosmetic AR11 label unexpectedly defines successor ordering');
   }
   const deployCredential = 'DEPLOY_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}';
-  const authorization = 'Resolve exact one-shot authorization only after READY exists';
+  const dispatchBinding = 'Bind the explicit GitHub dispatch to the current staging candidate';
   const withoutDeployCredential = promotion.replace(deployCredential, 'DEPLOY_TOKEN_REMOVED_FOR_ORDER_FIXTURE');
-  const reorderedPromotion = withoutDeployCredential.replace(authorization, `${deployCredential}\n      - name: ${authorization}`);
+  const reorderedPromotion = withoutDeployCredential.replace(dispatchBinding, `${deployCredential}\\n      - name: ${dispatchBinding}`);
   if (!promotionPolicyErrors(reorderedPromotion).some((error) => error.includes('must order read-only READY'))) {
-    throw new Error('deploy-credential-before-authorization negative fixture passed');
+    throw new Error('deploy-credential-before-dispatch-binding negative fixture passed');
   }
 
   const operationalSelfTest = run('node', [AR11_CHECKER, '--self-test'], { check: false });
