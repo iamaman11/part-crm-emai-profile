@@ -92,9 +92,10 @@ def main() -> int:
                 assert runtime.main() == outcome
             assert invoked == (["local"] if outcome == 19 else [])
 
-    local_owner = (SOURCE.parents[2] / "apps/profile-bridge/src/local_browser_open.rs").read_text(
+    local_source = (SOURCE.parents[2] / "apps/profile-bridge/src/local_browser_open.rs").read_text(
         encoding="utf-8"
     )
+    local_owner = local_source.split("pub(crate) fn open_with_health(", 1)[1].split("\\n}\\n", 1)[0]
     local_open_after_dirty = local_owner.split("mark_local_unsynced(workspace.path())?;", 1)[1]
     assert 'run_python(' in local_open_after_dirty
     assert '"--local-open"' in local_open_after_dirty

@@ -162,7 +162,7 @@ def check_sources(sources: dict[str, str]) -> list[str]:
         if required not in shipping:
             failures.append(f"single existing snapshot/cloud Save owner missing: {required}")
 
-    opened = function_body(local, "pub fn open(")
+    opened = function_body(local, "pub(crate) fn open_with_health(")
     marker = opened.find("mark_local_unsynced(workspace.path())?;")
     launch = opened.find("run_python(", marker)
     launch_call = opened[launch : launch + 256] if launch >= 0 else ""
