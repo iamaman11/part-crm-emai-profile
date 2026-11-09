@@ -321,7 +321,7 @@ jobs:
           python scripts/camouhost-runtime-package.py verify-manifest --manifest $externalManifest
           if ($LASTEXITCODE -ne 0) { throw 'exact runtime manifest verification failed' }
 
-      - name: Run official Camoufox Playwright user Open/Close through production Bridge crates
+      - name: Run official Camoufox Playwright user Open and native file-lock proof through production Bridge crates
         if: needs.scope.outputs.heavy == 'true'
         shell: pwsh
         run: |
@@ -330,13 +330,13 @@ jobs:
           $env:AR10_PYTHON = Join-Path $root 'python/python.exe'
           $env:AR10_RUNTIME_ROOT = $root
           $env:AR10_REAL_CAMOUFOX_HEADLESS = 'false'
-          $log = Join-Path $env:RUNNER_TEMP 'real-camoufox-open-close.log'
-          cargo test --locked -p profile-bridge --test real_camoufox_runtime bridge_preflight_launches_real_camoufox_through_official_playwright_without_page_inspection -- --exact --nocapture 2>&1 |
+          $log = Join-Path $env:RUNNER_TEMP 'real-camoufox-native-open.log'
+          cargo test --locked -p profile-bridge --test real_camoufox_runtime bridge_preflight_launches_real_camoufox_and_acquires_native_profile_lock -- --exact --nocapture 2>&1 |
             Tee-Object -FilePath $log
-          if ($LASTEXITCODE -ne 0) { throw 'official Camoufox Playwright Bridge integration failed' }
+          if ($LASTEXITCODE -ne 0) { throw 'official Camoufox Playwright Bridge native Open integration failed' }
           $text = Get-Content -Raw -LiteralPath $log
-          if ($text -notmatch 'AR10_COLD_CYCLE_COMPLETED=PASS;ordinal=3') {
-            throw 'REAL_CAMOUFOX_THREE_COLD_OPEN_CLOSE_CYCLES_NOT_CONFIRMED'
+          if ($text -notmatch 'AR10_NATIVE_OPEN_LOCK=PASS;elapsed_ms=[0-9]+') {
+            throw 'REAL_CAMOUFOX_NATIVE_OPEN_AND_FILE_LOCK_NOT_CONFIRMED'
           }
 
   camoufox-required-proof:
