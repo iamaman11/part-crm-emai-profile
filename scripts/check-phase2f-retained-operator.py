@@ -102,22 +102,22 @@ def check_sources(sources: dict[str, str]) -> list[str]:
     if opened.count("browser_writer_locks_absent(&workspace)") < 2:
         failures.append("native Open must verify the existing Firefox file-access gate")
 
-    draft_sync = function_body(generation, "pub fn sync_closed_local_draft(")
-    if draft_sync.count("BridgeWorkspaceLock::acquire_or_recover_interrupted(") != 3:
+    if (
+        "pub fn sync_closed_local_draft<" not in generation
+        or generation.count("BridgeWorkspaceLock::acquire_or_recover_interrupted(") != 3
+    ):
         failures.append("closed DRAFT Sync must use the shared same-device Bridge recovery owner")
-    ready_sync = function_body(shipping, "fn sync_closed_ready(")
-    if ready_sync.count("BridgeWorkspaceLock::acquire_or_recover_interrupted(") != 3:
+    if (
+        "fn sync_closed_ready(" not in shipping
+        or shipping.count("BridgeWorkspaceLock::acquire_or_recover_interrupted(") != 3
+    ):
         failures.append("closed READY Sync must use the shared same-device Bridge recovery owner")
-    draft_reconcile = function_body(
-        authoritative, "pub fn reconcile_closed_draft_with_confirmed_current<"
-    )
-    if "BridgeWorkspaceLock::acquire_or_recover_interrupted(" not in draft_reconcile:
-        failures.append("confirmed-current DRAFT reconciliation must use the shared Bridge recovery owner")
-    ready_reconcile = function_body(
-        authoritative, "pub(crate) fn reconcile_closed_ready_with_confirmed_current<"
-    )
-    if "BridgeWorkspaceLock::acquire_or_recover_interrupted(" not in ready_reconcile:
-        failures.append("confirmed-current READY reconciliation must use the shared Bridge recovery owner")
+    if (
+        "pub fn reconcile_closed_draft_with_confirmed_current<" not in authoritative
+        or "pub(crate) fn reconcile_closed_ready_with_confirmed_current<" not in authoritative
+        or authoritative.count("BridgeWorkspaceLock::acquire_or_recover_interrupted(") != 2
+    ):
+        failures.append("confirmed-current DRAFT/READY reconciliation must use the shared Bridge recovery owner")
 
     if "current.profile_version() != intent.expected_version" not in local:
         failures.append("stale local CURRENT must fail closed before browser launch")
