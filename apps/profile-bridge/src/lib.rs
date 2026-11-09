@@ -31,7 +31,6 @@ pub mod shipping_control_plane;
 pub mod shipping_generation_save;
 pub mod shipping_generation_successor_control;
 pub mod shipping_network;
-pub mod shipping_preflight;
 mod shipping_save_attempt;
 pub mod user_diagnostics;
 pub mod windows_delivery;
