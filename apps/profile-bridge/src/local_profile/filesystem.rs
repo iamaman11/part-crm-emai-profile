@@ -643,8 +643,9 @@ impl BridgeWorkspaceLock {
 
     /// Caller holds exclusive ROOT admission for legacy v1 markers, or exclusive
     /// GENERATION admission plus shared root admission for new v2 markers.
-    /// The caller also proves exact same-device marker ownership and absence of a
-    /// live native Firefox writer. This local admission is not a cloud lease/fence.
+    /// The caller supplies the installed device identity and proves absence of a
+    /// live native Firefox writer; this function verifies the exact marker owner
+    /// and strictly older epoch. This is not a cloud lease/fence.
     /// The persistent marker is crash evidence, not proof of a surviving OS writer.
     #[cfg(any(windows, test, feature = "synthetic-test-bin"))]
     pub(super) fn replace_interrupted(
