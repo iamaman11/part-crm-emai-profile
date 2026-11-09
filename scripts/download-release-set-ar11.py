@@ -278,6 +278,24 @@ def _self_test() -> None:
         def __exit__(self, *_args):
             self.stream.close()
 
+    class PartialThenErrorResponse:
+        def __init__(self, body: bytes):
+            self.body = body
+            self.sent_partial = False
+            self.headers = {"Content-Type": "application/octet-stream"}
+
+        def read(self, _size: int = -1) -> bytes:
+            if not self.sent_partial:
+                self.sent_partial = True
+                return self.body[:7]
+            raise urllib.error.URLError("connection reset")
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return None
+
     metadata = {
         "tag_name": release_set_id,
         "draft": False,
@@ -303,7 +321,11 @@ def _self_test() -> None:
         if url.endswith("/releases/assets/77"):
             calls["asset"] += 1
             if calls["asset"] == 1:
-                raise urllib.error.HTTPError(url, 502, "temporary", {}, None)
+                return PartialThenErrorResponse(payload)
+            partial_files = list(
+                Path(directory).glob(".ar11-release-set-download-*/assets/*.part")
+            )
+            assert not partial_files, "partial asset was not removed before retry"
             return FakeResponse(payload, "application/octet-stream")
         raise AssertionError(f"unexpected URL: {url}")
 
@@ -382,6 +404,16 @@ def _self_test() -> None:
         assert failed_asset_calls == 3
         assert not destination.exists()
         assert not list(Path(directory).glob(".ar11-release-set-download-*"))
+
+    workflow_path = (
+        Path(__file__).resolve().parents[1]
+        / ".github"
+        / "workflows"
+        / "release-set-promotion.yml"
+    )
+    workflow_source = workflow_path.read_text(encoding="utf-8")
+    assert "gh release download" not in workflow_source
+    assert workflow_source.count("scripts/download-release-set-ar11.py") == 6
 
     print("AR11 immutable Release Set downloader self-test: PASS")
 
