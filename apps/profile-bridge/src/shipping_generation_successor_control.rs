@@ -1450,9 +1450,14 @@ pub fn observe_retained_successor_after_restart<T: MachineHttpPort>(
     successor_id: &GenerationId,
     transport: &mut T,
 ) -> Result<bool, ShippingControlPlaneError> {
-    let attempt = crate::shipping_save_attempt::inspect_streaming_exact_save_attempt(root, tenant_id, profile_id, successor_id)
-        .map_err(|_| ShippingControlPlaneError::InvalidResponse)?
-        .ok_or(ShippingControlPlaneError::InvalidResponse)?;
+    let attempt = crate::shipping_save_attempt::inspect_streaming_exact_save_attempt(
+        root,
+        tenant_id,
+        profile_id,
+        successor_id,
+    )
+    .map_err(|_| ShippingControlPlaneError::InvalidResponse)?
+    .ok_or(ShippingControlPlaneError::InvalidResponse)?;
     observe_verified_streamed_attempt(tenant_id, profile_id, &attempt, transport)
 }
 

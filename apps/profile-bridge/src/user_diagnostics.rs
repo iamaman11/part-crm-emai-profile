@@ -413,6 +413,7 @@ impl UserDiagnostic {
                     match error {
                         Local::InvalidLocalWorkspace => "BRIDGE_LOCAL_FOLDER_UNAVAILABLE",
                         Local::RestoreRequired => "BRIDGE_LOCAL_RESTORE_REQUIRED",
+                        Local::StaleLocalWorkspace => "BRIDGE_LOCAL_VERSION_MISMATCH",
                         Local::RuntimeUnavailable => "BRIDGE_LOCAL_RUNTIME_UNAVAILABLE",
                         Local::ProfileBusy => "BRIDGE_LOCAL_BROWSER_BUSY",
                         Local::IdentityPreparation => "BRIDGE_LOCAL_IDENTITY_NOT_READY",
@@ -845,6 +846,9 @@ impl UserDiagnostic {
                     }
                     Local::RestoreRequired => {
                         "This READY profile has no local copy. Restore its single confirmed cloud CURRENT before opening. No empty workspace was created and no local data was changed."
+                    }
+                    Local::StaleLocalWorkspace => {
+                        "The authorized CRM version does not match the existing local profile. Do not overwrite the local folder or discard unsynchronized data; resolve its pending Sync or use the confirmed-current Restore procedure."
                     }
                     Local::RuntimeUnavailable => {
                         "Installed Camoufox cannot be started. Check local installation health. The browser profile was not deleted."
