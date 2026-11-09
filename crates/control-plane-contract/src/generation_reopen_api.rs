@@ -11,6 +11,10 @@ pub const BRIDGE_PROFILE_GENERATION_PREDECESSOR_DOWNLOAD_PATH_TEMPLATE: &str = "
 pub const BRIDGE_PROFILE_GENERATION_PREDECESSOR_OPENING_PATH_TEMPLATE: &str = "/bridge/v1/tenants/{tenantId}/profiles/{profileId}/generation-working-candidate/opening-material";
 pub const GENERATION_DOWNLOAD_CAPABILITY_MAX_EXPIRES_SECONDS: u32 = 300;
 
+fn false_value(value: &bool) -> bool {
+    !*value
+}
+
 pub const BRIDGE_PROFILE_GENERATION_WORKING_PROOF_PATH_TEMPLATE: &str =
     "/bridge/v1/tenants/{tenantId}/profiles/{profileId}/generation-working-candidate/certify";
 
@@ -104,6 +108,9 @@ pub struct BridgeGenerationDownloadCapabilityRequest {
     coordinator_session_id: String,
     coordinator_fencing_token: String,
     coordinator_epoch: u64,
+    /// Read-only server-confirmed CURRENT, without a browser-session lease.
+    #[serde(default, skip_serializing_if = "false_value")]
+    local_restore: bool,
 }
 
 impl BridgeGenerationDownloadCapabilityRequest {
@@ -117,7 +124,26 @@ impl BridgeGenerationDownloadCapabilityRequest {
             coordinator_session_id: coordinator_session_id.into(),
             coordinator_fencing_token: coordinator_fencing_token.into(),
             coordinator_epoch,
+            local_restore: false,
         }
+    }
+
+    /// The browser is closed and the exact local CURRENT is absent. The
+    /// Worker independently checks actor/profile/device access and selects
+    /// the sole verified cloud CURRENT; no caller generation selector exists.
+    #[must_use]
+    pub fn local_restore() -> Self {
+        Self {
+            coordinator_session_id: String::new(),
+            coordinator_fencing_token: String::new(),
+            coordinator_epoch: 0,
+            local_restore: true,
+        }
+    }
+
+    #[must_use]
+    pub const fn is_local_restore(&self) -> bool {
+        self.local_restore
     }
 
     #[must_use]
@@ -255,6 +281,8 @@ pub struct BridgeGenerationOpeningMaterialRequest {
     coordinator_session_id: String,
     coordinator_fencing_token: String,
     coordinator_epoch: u64,
+    #[serde(default, skip_serializing_if = "false_value")]
+    local_restore: bool,
 }
 
 impl BridgeGenerationOpeningMaterialRequest {
@@ -270,7 +298,24 @@ impl BridgeGenerationOpeningMaterialRequest {
             coordinator_session_id: coordinator_session_id.into(),
             coordinator_fencing_token: coordinator_fencing_token.into(),
             coordinator_epoch,
+            local_restore: false,
         }
+    }
+
+    #[must_use]
+    pub fn local_restore(metadata_prelude_hex: impl Into<String>) -> Self {
+        Self {
+            metadata_prelude_hex: metadata_prelude_hex.into(),
+            coordinator_session_id: String::new(),
+            coordinator_fencing_token: String::new(),
+            coordinator_epoch: 0,
+            local_restore: true,
+        }
+    }
+
+    #[must_use]
+    pub const fn is_local_restore(&self) -> bool {
+        self.local_restore
     }
 
     #[must_use]
@@ -354,6 +399,38 @@ mod tests {
         BridgeGenerationOpeningMaterialRequest, BridgeGenerationOpeningMaterialResponse,
         GENERATION_DOWNLOAD_CAPABILITY_MAX_EXPIRES_SECONDS,
     };
+
+    #[test]
+    fn local_current_restore_is_explicit_and_never_selects_a_generation()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let download = BridgeGenerationDownloadCapabilityRequest::local_restore();
+        let value = serde_json::to_value(&download)?;
+        assert_eq!(value["localRestore"], true);
+        assert_eq!(value["coordinatorSessionId"], "");
+        assert_eq!(value["coordinatorFencingToken"], "");
+        assert_eq!(value["coordinatorEpoch"], 0);
+        assert!(value.get("generationId").is_none());
+        assert!(value.get("objectKey").is_none());
+        let decoded: BridgeGenerationDownloadCapabilityRequest = serde_json::from_value(value)?;
+        assert!(decoded.is_local_restore());
+
+        let opening = BridgeGenerationOpeningMaterialRequest::local_restore("cafe");
+        let value = serde_json::to_value(&opening)?;
+        assert_eq!(value["localRestore"], true);
+        assert_eq!(value["metadataPreludeHex"], "cafe");
+        assert!(value.get("generationId").is_none());
+        let decoded: BridgeGenerationOpeningMaterialRequest = serde_json::from_value(value)?;
+        assert!(decoded.is_local_restore());
+
+        let original =
+            BridgeGenerationDownloadCapabilityRequest::new("session_original", "fence_original", 2);
+        assert!(
+            serde_json::to_value(original)?
+                .get("localRestore")
+                .is_none()
+        );
+        Ok(())
+    }
 
     #[test]
     fn request_contains_no_generation_or_object_selection() -> Result<(), Box<dyn std::error::Error>>

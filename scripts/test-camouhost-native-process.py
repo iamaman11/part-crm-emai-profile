@@ -1,10 +1,9 @@
 #!/usr/bin/env python3
-"""Official Camoufox Playwright persistent-context boundary tests."""
+"""Official Camoufox + passive Playwright close-event boundary tests."""
 from __future__ import annotations
 
+import asyncio
 import importlib.util
-import json
-import os
 import pathlib
 import sys
 import tempfile
@@ -24,42 +23,85 @@ def load():
     return module
 
 
-def write_checkpoints(path, values, previous_mtime=None):
-    path.write_text(json.dumps(values), encoding="utf-8")
-    if previous_mtime is not None:
-        observed = path.stat().st_mtime_ns
-        target = max(observed, previous_mtime + 1_000_000_000)
-        os.utime(path, ns=(target, target))
+class FakeBrowser:
+    """Only the documented Playwright browser-disconnected event."""
+
+    def __init__(self):
+        self.handlers = []
+
+    def on(self, event, handler):
+        assert event == "disconnected"
+        self.handlers.append(handler)
+
+    def crash_or_close(self):
+        for handler in self.handlers:
+            handler(self)
 
 
-def main() -> int:
+class FakeContext:
+    """No page/window/process API: only public Playwright lifecycle events."""
+
+    def __init__(self, closed=False):
+        self.closed = closed
+        self.handlers = []
+        self.close_calls = 0
+        self.browser = FakeBrowser()
+
+    def on(self, event, handler):
+        assert event == "close"
+        self.handlers.append(handler)
+
+    def is_closed(self):
+        return self.closed
+
+    def user_close(self):
+        self.closed = True
+        for handler in self.handlers:
+            handler(self)
+
+
+class FakePlaywrightManager:
+    instances = []
+
+    def __init__(self):
+        self.exit_calls = 0
+        self.playwright = object()
+        self.instances.append(self)
+
+    async def __aenter__(self):
+        return self.playwright
+
+    async def __aexit__(self, *_args):
+        self.exit_calls += 1
+        return False
+
+
+async def verify() -> int:
     module = load()
-    assert "subprocess" not in module.__dict__, "user Open must not Popen the browser executable"
+    source = SOURCE.read_text(encoding="utf-8")
+    assert "sessionCheckpoints.json" not in source
+    assert "EnumWindows" not in source and "Get-Process" not in source
+    assert "PostMessage" not in source and "WM_CLOSE" not in source
+    assert "subprocess" not in module.__dict__
+    assert "writer_active" not in source
 
-    class FakeContext:
-        # Deliberately no page/DOM/navigation APIs: the adapter must not call them.
-        pass
+    contexts = []
+    launches = []
 
-    class FakeCamoufox:
-        instances = []
-
-        def __init__(self, **kwargs):
-            self.kwargs = kwargs
-            self.context = FakeContext()
-            self.exit_calls = 0
-            self.instances.append(self)
-
-        def __enter__(self):
-            return self.context
-
-        def __exit__(self, *_args):
-            self.exit_calls += 1
-            return False
+    async def async_new_browser(playwright, **kwargs):
+        context = FakeContext()
+        contexts.append(context)
+        launches.append((playwright, kwargs))
+        return context
 
     package = types.ModuleType("camoufox")
     package.__path__ = []
-    sync_api = types.ModuleType("camoufox.sync_api")
-    sync_api.Camoufox = FakeCamoufox
+    camoufox_api = types.ModuleType("camoufox.async_api")
+    camoufox_api.AsyncNewBrowser = async_new_browser
+    playwright_package = types.ModuleType("playwright")
+    playwright_package.__path__ = []
+    playwright_api = types.ModuleType("playwright.async_api")
+    playwright_api.async_playwright = FakePlaywrightManager
 
     with tempfile.TemporaryDirectory() as temporary:
         workspace = pathlib.Path(temporary) / "generation"
@@ -67,129 +109,131 @@ def main() -> int:
         user_data.mkdir(parents=True)
         browser = pathlib.Path(temporary) / "camoufox.exe"
         browser.write_bytes(b"approved disposable browser fixture")
-        checkpoint = user_data / "sessionCheckpoints.json"
-        write_checkpoints(checkpoint, {
-            "profile-after-change": True,
-            "sessionstore-final-state-write-complete": True,
-        })
-        active = False
-
-        def writer_active(_workspace):
-            return active
-
         options = {
             "executable_path": str(browser),
             "user_data_dir": str(user_data),
             "headless": False,
             "env": {"CAMOU_CONFIG_1": "{}"},
         }
-
         with patch.dict(sys.modules, {
             "camoufox": package,
-            "camoufox.sync_api": sync_api,
+            "camoufox.async_api": camoufox_api,
+            "playwright": playwright_package,
+            "playwright.async_api": playwright_api,
         }):
-            for admission, writer in ((False, False), (True, True)):
-                active = writer
-                try:
-                    module.launch_native_camoufox(
-                        workspace=workspace, options=options,
-                        writer_active=writer_active, admission_granted=admission,
-                        headless=False,
-                    )
-                except module.NativeLaunchError:
-                    pass
-                else:
-                    raise AssertionError("unauthorized/already-owned profile launched")
-                assert not FakeCamoufox.instances
+            try:
+                await module.launch_native_camoufox(
+                    workspace=workspace, options=options,
+                    admission_granted=False, headless=False,
+                )
+            except module.NativeLaunchError:
+                pass
+            else:
+                raise AssertionError("unadmitted profile launched")
+            assert not launches
 
-            active = False
-            session = module.launch_native_camoufox(
+            session = await module.launch_native_camoufox(
                 workspace=workspace, options=options,
-                writer_active=writer_active, admission_granted=True, headless=False,
+                admission_granted=True, headless=False,
             )
-            manager = FakeCamoufox.instances[-1]
-            assert manager.kwargs == {
-                "from_options": options,
+            manager = FakePlaywrightManager.instances[-1]
+            assert launches[-1][0] is manager.playwright
+            assert launches[-1][1] == {
                 "headless": False,
+                "from_options": options,
                 "persistent_context": True,
             }
-            assert session.context is manager.context
-            assert session.profile_state() == "WRITER_NOT_OBSERVED"
+            assert session.context is contexts[-1]
+            assert len(contexts[-1].handlers) == 1
+            assert len(contexts[-1].browser.handlers) == 1
 
-            active = True
-            baseline = checkpoint.stat().st_mtime_ns
-            write_checkpoints(checkpoint, {"profile-after-change": True}, baseline)
-            assert session.profile_state() == "PROFILE_BUSY"
-            assert session.active_session_checkpoint_seen
+            waiting = asyncio.create_task(session.wait_for_browser_close())
+            await asyncio.sleep(0)
+            assert not waiting.done(), "close waiter must not invent a close"
+            contexts[-1].user_close()
+            await waiting
+            assert session.context_is_closed()
 
-            active = False
-            baseline = checkpoint.stat().st_mtime_ns
-            write_checkpoints(checkpoint, {
-                "profile-after-change": True,
-                "sessionstore-final-state-write-complete": True,
-            }, baseline)
-            assert session.profile_state() == "CLEAN_SHUTDOWN_VERIFIED"
-            session.close()
+            await session.close_after_browser_exit()
             assert manager.exit_calls == 1
+            assert contexts[-1].close_calls == 0
             assert session.manager is None and session.context is None
 
-            active = True
-            baseline = checkpoint.stat().st_mtime_ns
-            write_checkpoints(checkpoint, {
-                "profile-after-change": True,
-                "sessionstore-final-state-write-complete": True,
-            }, baseline)
-            assert session.profile_state() == "CRASH_OR_UNKNOWN_PRESERVE_LOCAL"
-
-            active = False
-            reopened = module.launch_native_camoufox(
+            # A close racing listener registration is still observed.
+            already_closed = FakeContext(closed=True)
+            async def closed_browser(playwright, **kwargs):
+                launches.append((playwright, kwargs))
+                return already_closed
+            camoufox_api.AsyncNewBrowser = closed_browser
+            raced = await module.launch_native_camoufox(
                 workspace=workspace, options=options,
-                writer_active=writer_active, admission_granted=True, headless=False,
+                admission_granted=True, headless=False,
             )
-            reopened_manager = FakeCamoufox.instances[-1]
-            active = True
-            baseline = checkpoint.stat().st_mtime_ns
-            write_checkpoints(checkpoint, {"profile-after-change": True}, baseline)
-            assert reopened.profile_state() == "PROFILE_BUSY"
-            active = False
-            assert reopened.profile_state() == "CRASH_OR_UNKNOWN_PRESERVE_LOCAL"
-            reopened.close_after_browser_exit()
-            assert reopened_manager.exit_calls == 1
+            await asyncio.wait_for(raced.wait_for_browser_close(), timeout=1)
+            await raced.close_after_browser_exit()
+            assert already_closed.close_calls == 0
 
-            active = False
-            startup = module.launch_native_camoufox(
+            # If the browser crashes and the persistent context does not
+            # report is_closed(), the official Browser.disconnected event is
+            # still enough to release the Playwright connection. Rust's
+            # native file gate remains the authority for snapshot safety.
+            crashed_context = FakeContext()
+            async def crashed_browser(playwright, **kwargs):
+                launches.append((playwright, kwargs))
+                return crashed_context
+            camoufox_api.AsyncNewBrowser = crashed_browser
+            crashed = await module.launch_native_camoufox(
                 workspace=workspace, options=options,
-                writer_active=writer_active, admission_granted=True, headless=False,
+                admission_granted=True, headless=False,
             )
-            startup_manager = FakeCamoufox.instances[-1]
-            startup.abort_startup()
-            assert startup_manager.exit_calls == 1
+            crash_manager = FakePlaywrightManager.instances[-1]
+            waiting = asyncio.create_task(crashed.wait_for_browser_close())
+            await asyncio.sleep(0)
+            crashed_context.browser.crash_or_close()
+            await asyncio.wait_for(waiting, timeout=1)
+            assert crashed.context_is_closed()
+            await crashed.close_after_browser_exit()
+            assert crash_manager.exit_calls == 1
+            assert crashed_context.close_calls == 0
 
-            def unknown(_workspace):
-                raise OSError("untrusted lock path")
-            unknown_session = module.launch_native_camoufox(
-                workspace=workspace, options=options,
-                writer_active=writer_active, admission_granted=True, headless=False,
-            )
-            unknown_session.writer_active = unknown
-            assert unknown_session.profile_state() == "UNKNOWN_PRESERVE_LOCAL"
-            unknown_session.writer_active = writer_active
-            unknown_session.abort_startup()
+            # If the official launch fails before a context is admitted,
+            # only the Playwright driver connection is released.
+            async def failed_browser(_playwright, **_kwargs):
+                raise RuntimeError("synthetic SDK launch failure")
+            camoufox_api.AsyncNewBrowser = failed_browser
+            manager_count = len(FakePlaywrightManager.instances)
+            try:
+                await module.launch_native_camoufox(
+                    workspace=workspace, options=options,
+                    admission_granted=True, headless=False,
+                )
+            except module.NativeLaunchError:
+                pass
+            else:
+                raise AssertionError("failed SDK launch unexpectedly succeeded")
+            assert len(FakePlaywrightManager.instances) == manager_count + 1
+            assert FakePlaywrightManager.instances[-1].exit_calls == 1
 
             virtual_options = dict(options)
             virtual_options["headless"] = "virtual"
-            virtual = module.launch_native_camoufox(
+            async def virtual_browser(playwright, **kwargs):
+                launches.append((playwright, kwargs))
+                virtual_context = FakeContext()
+                contexts.append(virtual_context)
+                return virtual_context
+            camoufox_api.AsyncNewBrowser = virtual_browser
+            virtual = await module.launch_native_camoufox(
                 workspace=workspace, options=virtual_options,
-                writer_active=writer_active, admission_granted=True, headless="virtual",
+                admission_granted=True, headless="virtual",
             )
-            virtual_manager = FakeCamoufox.instances[-1]
-            assert virtual_manager.kwargs["headless"] == "virtual"
-            virtual.abort_startup()
-            assert virtual_manager.exit_calls == 1
+            assert launches[-1][1]["headless"] == "virtual"
+            virtual.context.user_close()
+            await virtual.wait_for_browser_close()
+            await virtual.close_after_browser_exit()
 
-    print("CAMOUHOST_OFFICIAL_PLAYWRIGHT_CONTEXT=PASS")
+    print("CAMOUHOST_PASSIVE_PLAYWRIGHT_CLOSE_AND_DISCONNECT=PASS")
     return 0
 
 
 if __name__ == "__main__":
-    raise SystemExit(main())
+    raise SystemExit(asyncio.run(verify()))

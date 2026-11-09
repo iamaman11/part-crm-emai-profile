@@ -61,6 +61,7 @@ impl std::error::Error for BrowserLaunchBlocker {}
 /// Persist the generation-owned browser identity first, then bind local materialization evidence to
 /// its exact SHA-256. The identity record lives inside the generation and therefore travels through
 /// the existing encrypted snapshot/save/reopen path; the sidecar remains host-local evidence only.
+#[cfg(test)]
 pub(crate) fn persist_browser_identity(
     workspace: &GenerationWorkspace,
     identity: &BrowserIdentityManifest,
@@ -475,8 +476,8 @@ pub(crate) fn browser_writer_locks_absent(
     browser_writer_locks_absent_at(workspace.path())
 }
 
-/// Read-only native lock check for the Windows installer, which has the canonical
-/// workspace directory but must never claim a generation or alter pending-save data.
+/// Read-only native file-access proof shared by local Open and closed-profile Sync.
+/// It never claims a generation or alters pending-save data.
 pub(crate) fn browser_writer_locks_absent_at(root: &Path) -> Result<bool, BrowserLaunchBlocker> {
     let (parent_lock, lock) = observed_browser_writer_locks_at(root)?;
     if parent_lock || lock {
@@ -484,9 +485,8 @@ pub(crate) fn browser_writer_locks_absent_at(root: &Path) -> Result<bool, Browse
     }
     #[cfg(not(windows))]
     {
-        // Camouhost alone can distinguish stale Unix fcntl marker files from
-        // active writers before launch. The stricter coordinator Clean proof
-        // cannot borrow that future check: ANY unknown marker forbids Clean.
+        // Unix marker files are treated as active/ambiguous by this native owner.
+        // A stale marker is not silently deleted or used to authorize a snapshot.
         let data = root.join(FIREFOX_USER_DATA_DIRECTORY);
         for marker in [
             FIREFOX_PARENT_LOCK_FILE,

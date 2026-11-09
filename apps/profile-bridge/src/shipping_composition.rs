@@ -1,9 +1,6 @@
 #![forbid(unsafe_code)]
 
-use bridge_domain::ClaimUri;
-
-/// Internal one-shot maintenance command, never a normal Profile Open.
-/// It requires a fresh ordinary device-bound one-time launch claim.
+/// Existing one-shot installation and activation commands; not browser Open or Sync.
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum ShippingDeliveryCommand {
@@ -24,14 +21,20 @@ pub enum ShippingCompositionError {
     FirstInstallation(crate::windows_delivery_handoff::DeliveryHandoffError),
     InstalledConnection(crate::installed_connection::InstalledConnectionError),
     DeliveryRecoveryRequired,
+    /// Cloud CURRENT recovery was required but not proven. Local bytes untouched.
+    RestoreUnavailable,
+    SyncUnconfirmed,
     #[cfg(windows)]
     DeliveryRuntime(crate::windows_delivery_runtime::WindowsDeliveryRuntimeError),
+    // Diagnostic-only historical outcomes; the v2 Open/Sync path cannot construct them.
     Operator(crate::operator_flow::OperatorFlowError),
     ActiveSessionMissing,
     CloseObservation(bridge_domain::BridgePortError),
     CommittedRecoveryRequired,
     HeartbeatAuthorityUncertain,
     Initialization(crate::generation_initialization::InitialProfileError),
+    #[cfg(windows)]
+    LocalOpen(crate::local_browser_open::LocalOpenError),
 }
 
 impl core::fmt::Display for ShippingCompositionError {
@@ -51,152 +54,25 @@ impl core::fmt::Display for ShippingCompositionError {
             Self::DeliveryRecoveryRequired => {
                 "shipping Profile Bridge delivery recovery is required"
             }
+            Self::RestoreUnavailable => {
+                "Verified cloud CURRENT could not be restored; local profile was not opened or overwritten"
+            }
+            Self::SyncUnconfirmed => "Native Close succeeded; cloud Sync not confirmed",
             #[cfg(windows)]
             Self::DeliveryRuntime(error) => return core::fmt::Display::fmt(error, formatter),
-            Self::Operator(_) => "shipping Profile Bridge operator flow failed",
-            Self::ActiveSessionMissing => "shipping Profile Bridge active session is missing",
-            Self::CloseObservation(bridge_domain::BridgePortError::UncleanBrowserExit) => {
-                "Camoufox exited without a clean shutdown checkpoint; local recovery is required"
-            }
-            Self::CloseObservation(_) => "shipping Profile Bridge close observation failed",
+            Self::Operator(_) => "retired Profile Bridge operator outcome",
+            Self::ActiveSessionMissing => "retired Profile Bridge active session outcome",
+            Self::CloseObservation(_) => "retired Profile Bridge close observation outcome",
+            Self::CommittedRecoveryRequired => "retired Profile Bridge committed recovery outcome",
+            Self::HeartbeatAuthorityUncertain => "retired Profile Bridge heartbeat outcome",
             Self::Initialization(_) => "profile first-open preparation failed",
-            Self::HeartbeatAuthorityUncertain => {
-                "browser closed safely: coordinator heartbeat was not confirmed; local data retained for recovery"
-            },
-            Self::CommittedRecoveryRequired => {
-                "generation successor committed but local recovery is required"
-            }
+            #[cfg(windows)]
+            Self::LocalOpen(error) => return core::fmt::Display::fmt(error, formatter),
         })
     }
 }
 
 impl std::error::Error for ShippingCompositionError {}
-
-#[cfg(any(windows, test))]
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-enum CloseObservationDisposition {
-    ContinueRuntime,
-    BeginConfirmedSave,
-    RecoverUncleanExit,
-}
-
-#[cfg(any(windows, test))]
-fn close_observation_disposition(
-    observation: Result<bool, bridge_domain::BridgePortError>,
-) -> Result<CloseObservationDisposition, bridge_domain::BridgePortError> {
-    match observation {
-        Ok(true) => Ok(CloseObservationDisposition::BeginConfirmedSave),
-        Ok(false) => Ok(CloseObservationDisposition::ContinueRuntime),
-        Err(bridge_domain::BridgePortError::UncleanBrowserExit) => {
-            Ok(CloseObservationDisposition::RecoverUncleanExit)
-        }
-        Err(error) => Err(error),
-    }
-}
-
-/// The existing pending-recovery observation is read-only. Preserve an
-/// exact native-size refusal through the Open owner's normal lease cleanup;
-/// all other errors remain blocked without synthetic browser authority.
-#[cfg(any(windows, test))]
-fn pending_recovery_failure_disposition(
-    error: crate::shipping_generation_successor_control::RestartExactLocalCompletionError,
-) -> crate::operator_flow::PendingSaveRecovery {
-    use crate::operator_flow::PendingSaveRecovery;
-    use crate::shipping_generation_successor_control::RestartExactLocalCompletionError;
-    if error == RestartExactLocalCompletionError::NativeSnapshotTooLarge {
-        PendingSaveRecovery::NativeSnapshotTooLarge
-    } else {
-        PendingSaveRecovery::Blocked
-    }
-}
-
-/// One user-triggered Open may continue once after its local N->N+1
-/// recovery was proved committed and its unused Coordinator lease was
-/// released cleanly. The existing machine authority issues a fresh claim;
-/// no stale claim replay, hidden local grant, background daemon or loop.
-// A rejected or malformed *read-only* D1 retry decision can never be
-// retried on the strength of the old writer fence. Only an uncertain
-// transport/408/429/5xx may be re-observed while the original lease is live.
-#[cfg(any(windows, test))]
-fn retryable_reconnect_observation(
-    error: crate::shipping_generation_successor_control::RestartExactLocalCompletionError,
-) -> bool {
-    use crate::shipping_control_plane::ShippingControlPlaneError as Http;
-    use crate::shipping_generation_successor_control::RestartExactLocalCompletionError as Restart;
-    matches!(
-        error,
-        Restart::ControlPlane(Http::Transport | Http::HttpServerUncertain)
-    )
-}
-
-/// Diagnostic only. A failed recovery never grants permission to replay
-/// a sealing request, mutate a LOCAL_UNSYNCED profile or open stale N.
-/// Keep the next action specific so an oversized native snapshot or unknown
-/// cloud effect is not presented as an ordinary safe retry.
-#[cfg(any(windows, test))]
-fn recovery_next_safe_step(
-    error: crate::shipping_generation_successor_control::RestartExactLocalCompletionError,
-) -> &'static str {
-    use crate::shipping_control_plane::ShippingControlPlaneError as Http;
-    use crate::shipping_generation_successor_control::RestartExactLocalCompletionError as Restart;
-    match error {
-        Restart::NativeSnapshotTooLarge => "PRESERVE_LOCAL_BYTES;NATIVE_RESCUE_REQUIRED",
-        Restart::PreSealTransport
-        | Restart::PreSealResponseUncertain
-        | Restart::UploadOrCommitUncertain
-        | Restart::ControlPlane(Http::Transport | Http::HttpServerUncertain) => {
-            "PRESERVE_LOCAL_BYTES;FRESH_AUTHORIZED_OBSERVATION"
-        }
-        Restart::PreSealRejected
-        | Restart::ControlPlane(Http::HttpStatus | Http::LaunchLeaseConflict) => {
-            "PRESERVE_LOCAL_BYTES;CHECK_SERVER_AUTHORITY"
-        }
-        Restart::PreSealUnavailable => "PRESERVE_LOCAL_BYTES;CHECK_SEALING_SERVICE",
-        Restart::LocalEvidenceChanged => "PRESERVE_LOCAL_BYTES;CHECK_LOCAL_EVIDENCE",
-        Restart::WriterOrLockUnresolved => "PRESERVE_LOCAL_BYTES;CHECK_NATIVE_WRITER",
-        Restart::BindingOrRetirementFailed => "PRESERVE_LOCAL_BYTES;RECONCILE_ACTIVE_EXACT",
-        Restart::ControlPlane(Http::InvalidResponse) => {
-            "PRESERVE_LOCAL_BYTES;INSPECT_SERVER_RESPONSE"
-        }
-        Restart::ControlPlane(Http::Clock) => "PRESERVE_LOCAL_BYTES;CHECK_CLOCK",
-    }
-}
-
-#[cfg(any(windows, test))]
-fn open_with_one_fresh_claim<Open, NewClaim>(
-    original: &ClaimUri,
-    mut open: Open,
-    new_claim: NewClaim,
-) -> Result<(), ShippingCompositionError>
-where
-    Open: FnMut(&ClaimUri) -> Result<(), ShippingCompositionError>,
-    NewClaim: FnOnce() -> Result<ClaimUri, ShippingCompositionError>,
-{
-    match open(original) {
-        Err(ShippingCompositionError::Operator(
-            crate::operator_flow::OperatorFlowError::FreshAuthorizedOpenRequired,
-        )) => {
-            let fresh = new_claim()?;
-            if &fresh == original {
-                return Err(ShippingCompositionError::ControlPlane);
-            }
-            open(&fresh)
-        }
-        outcome => outcome,
-    }
-}
-
-pub fn run_claim(claim: &ClaimUri) -> Result<(), ShippingCompositionError> {
-    #[cfg(windows)]
-    {
-        return windows::run(claim);
-    }
-    #[cfg(not(windows))]
-    {
-        let _ = claim;
-        Err(ShippingCompositionError::UnsupportedPlatform)
-    }
-}
 
 pub fn run_initial_profile(
     intent: &crate::generation_initialization::InitialProfileOpen,
@@ -204,6 +80,22 @@ pub fn run_initial_profile(
     #[cfg(windows)]
     {
         windows::run_initial(intent)
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = intent;
+        Err(ShippingCompositionError::UnsupportedPlatform)
+    }
+}
+
+/* Internal one-shot invocation of the SAME installed Bridge executable.
+ * Only the cloud Sync owner runs here; native Camoufox is never relaunched. */
+pub fn run_closed_profile_sync(
+    intent: &crate::generation_initialization::InitialProfileOpen,
+) -> Result<(), ShippingCompositionError> {
+    #[cfg(windows)]
+    {
+        windows::run_closed_sync(intent)
     }
     #[cfg(not(windows))]
     {
@@ -228,33 +120,31 @@ pub fn run_delivery_command(
 
 #[cfg(windows)]
 mod windows {
-    use super::{
-        CloseObservationDisposition, ShippingCompositionError, ShippingDeliveryCommand,
-        close_observation_disposition, open_with_one_fresh_claim,
-        pending_recovery_failure_disposition, recovery_next_safe_step,
-        retryable_reconnect_observation,
+    use super::{ShippingCompositionError, ShippingDeliveryCommand};
+    use crate::authoritative_generation::{
+        ensure_authoritative_current, reconcile_closed_draft_with_confirmed_current,
+        reconcile_closed_ready_with_confirmed_current,
     };
-    use crate::camouhost_process::{
-        ManagedCamouhostConfig, ManagedCamouhostProcess, RuntimeBindingSlot, RuntimeDisplayMode,
+    use crate::dirty_generation::{GenerationSealingMaterialPort, closed_current_candidate_id};
+    use crate::generation_initialization::{
+        InitialProfileStatus, finish_pending_sync_under_writer,
+        reauthorize_current_ready_generation, sync_closed_local_draft,
     };
-    use crate::generation_reopen::VerifiedGenerationObjectStreamDownloader;
-    use crate::local_profile::{DeliveryActivationGuard, MaterializationRoot};
-    use crate::operator_flow::{
-        OperatorFailureStage, OperatorFlowError, PendingSaveRecovery, ProfileBridgeOperator,
+    use crate::generation_reopen::{
+        GenerationReopenControlPort, VerifiedGenerationObjectStreamDownloader,
     };
+    use crate::generation_snapshot::{
+        digest_closed_workspace_streaming, seal_closed_workspace_streaming,
+    };
+    use crate::local_profile::{
+        DeliveryActivationGuard, MaterializationRoot, PendingSyncDescriptor,
+    };
+    use crate::shipping_control_plane::SyncEnrollmentPort;
     use crate::shipping_control_plane::{
-        ControlPlaneCoordinator, ControlPlaneEnrollment, ControlPlaneLeaseTiming,
-        SharedControlPlaneCoordinator, ShippingControlPlaneError,
+        ControlPlaneCoordinator, ControlPlaneEnrollment, SharedControlPlaneCoordinator,
+        ShippingControlPlaneError,
     };
-    use crate::shipping_generation_successor_control::{
-        RestartExactCommitObservation, RestartExactLocalCompletion,
-        RestartExactLocalCompletionError, complete_active_exact_after_restart,
-        confirm_retained_exact_retry_nonapplication, resume_exact_successor_under_fresh_lease,
-        resume_lone_local_unsynced_under_fresh_lease,
-    };
-    use crate::shipping_preflight::ShippingBrowserLaunchPreflight;
-    use crate::user_diagnostics::report::{self, Cause, Cloud, Outcome, Stage};
-    use crate::user_diagnostics::{PendingSaveReadOnlyDiagnosis, ReadOnlyProfileDiagnosis};
+    use crate::shipping_generation_successor_control::publish_closed_streamed_successor;
     use crate::windows_delivery_handoff::{
         DeliveryHandoffCoordinator, DeliveryHandoffRestartDisposition,
     };
@@ -264,14 +154,10 @@ mod windows {
     };
     use crate::windows_generation_get::WindowsSignedGenerationObjectGet;
     use crate::windows_generation_put::WindowsSignedGenerationObjectPut;
-    use crate::windows_native::WindowsDeviceIdentity;
-    use application_ports::ProfileCoordinatorRuntimePort;
-    use bridge_domain::ClaimUri;
+    use application_ports::{ProfileCoordinatorPort, ProfileCoordinatorRuntimePort};
     use profile_platform_primitives::UnixMillis;
     use session_domain::ProfileLease;
     use std::env;
-    use std::fs;
-    use std::os::windows::fs::MetadataExt;
     use std::path::PathBuf;
     use std::sync::atomic::{AtomicBool, Ordering};
     use std::sync::{Arc, mpsc};
@@ -281,19 +167,13 @@ mod windows {
     const NETWORK_POLICY_PATH_ENV: &str = "PROFILE_BRIDGE_NETWORK_POLICY_PATH";
     const PROXY_CONFIG_PATH_ENV: &str = "PROFILE_BRIDGE_PROXY_CONFIG_PATH";
     const PACKAGED_PYTHON_EXECUTABLE: &str = "python/python.exe";
-    // Exactly one protected staging slot. A crashed/uncertain cold probe
-    // leaves this slot occupied rather than silently deleting a potentially
-    // still-running Firefox workspace or accumulating unlimited full clones.
-    const CONTROLLED_CLOSE_POLL_MS: u64 = 250;
     const HEARTBEAT_TRANSPORT_RETRY_MS: u64 = 1_000;
-    const SAVE_RECONNECT_PAUSE_MS: u64 = 1_000;
     const SAVE_RECONNECT_AUTHORITY_RESERVE_MS: u64 = 5_000;
     const SAVE_HEARTBEAT_PERIOD_MS: u64 = 5_000;
 
-    /// A scoped helper for the long, synchronous native-seal/R2-PUT path.
-    /// It shares the operator's actual cursor. There is no additional writer,
-    /// persisted state or independent sequence; dropping the scope joins the
-    /// heartbeat before the Bridge process exits.
+    /// A scoped helper for the existing one-shot Sync's long native-seal/R2-PUT path.
+    /// It shares that Sync's coordinator cursor; it creates no second writer or
+    /// persisted state. Dropping the scope joins the heartbeat before exit.
     struct RetainedSaveHeartbeat {
         stop: mpsc::Sender<()>,
         thread: Option<thread::JoinHandle<()>>,
@@ -408,833 +288,704 @@ mod windows {
         }
     }
 
-    pub fn run_initial(
+    /// Reuse the existing authenticated Profile claim/DO fence, encrypted
+    /// successor writer, signed R2 PUT and D1 CAS ONLY after native Close.
+    /// Ordinary browser Open remains local and never acquires this authority.
+    ///
+    /// This does not launch Camoufox, clone Firefox into a generation folder,
+    /// introduce a daemon or replace the stable local current path.
+    fn pending_descriptor_matches_current(
+        pending: &PendingSyncDescriptor,
+        current: &crate::generation_reopen::GenerationDownloadCapability,
+    ) -> bool {
+        current.generation_id() == pending.candidate_generation_id()
+            && current.metadata_digest() == *pending.metadata_digest()
+            && current.container_digest() == *pending.container_digest()
+            && current.container_bytes() == pending.container_bytes()
+    }
+
+    fn sync_closed_ready(
+        intent: &crate::generation_initialization::InitialProfileOpen,
+        binding: &WindowsDeviceApplicationBinding,
+        root: &MaterializationRoot,
+        origin: &str,
+    ) -> Result<(), ()> {
+        use crate::browser_execution::browser_writer_locks_absent;
+        use crate::local_profile::BridgeWorkspaceLock;
+        use std::fs;
+
+        let mut workspace = root
+            .open_profile_current(&intent.tenant_id, &intent.profile_id)
+            .map_err(|_| ())?;
+        if let Some(pending) = workspace.pending_sync().cloned() {
+            let reader_app =
+                WindowsDeviceApplication::from_system(origin.to_owned(), binding.clone())
+                    .map_err(|_| ())?;
+            let mut read_only =
+                ControlPlaneCoordinator::for_local_current_restore(reader_app.transport());
+            let current = read_only
+                .download_capability(&intent.tenant_id, &intent.profile_id)
+                .map_err(|_| ())?;
+            if pending_descriptor_matches_current(&pending, &current) {
+                let guard = BridgeWorkspaceLock::acquire_or_recover_interrupted(
+                    &workspace,
+                    binding.device_id(),
+                    now().map_err(|_| ())?.value(),
+                )
+                .map_err(|_| ())?;
+                let active = root
+                    .open_profile_current(&intent.tenant_id, &intent.profile_id)
+                    .map_err(|_| ())?;
+                let applied = (|| {
+                    if active.pending_sync() != Some(&pending) {
+                        return Err(());
+                    }
+                    finish_pending_sync_under_writer(root, &active, &pending).map_err(|_| ())
+                })();
+                let unlocked = guard.release().map_err(|_| ());
+                let unchanged = applied?;
+                unlocked?;
+                return if unchanged { Ok(()) } else { Err(()) };
+            }
+            if !pending.is_committed()
+                && workspace
+                    .base_generation_id()
+                    .is_some_and(|base| current.generation_id() == base)
+            {
+                let guard = BridgeWorkspaceLock::acquire_or_recover_interrupted(
+                    &workspace,
+                    binding.device_id(),
+                    now().map_err(|_| ())?.value(),
+                )
+                .map_err(|_| ())?;
+                let active = root
+                    .open_profile_current(&intent.tenant_id, &intent.profile_id)
+                    .map_err(|_| ())?;
+                let cleared = (|| {
+                    if active.pending_sync() != Some(&pending)
+                        || !matches!(browser_writer_locks_absent(&active), Ok(true))
+                    {
+                        return Err(());
+                    }
+                    root.clear_profile_current_pending_sync(&active)
+                        .map_err(|_| ())
+                })();
+                let unlocked = guard.release().map_err(|_| ());
+                cleared?;
+                unlocked?;
+                workspace = root
+                    .open_profile_current(&intent.tenant_id, &intent.profile_id)
+                    .map_err(|_| ())?;
+            } else {
+                return Err(());
+            }
+        }
+        let Some(base) = workspace.base_generation_id().cloned() else {
+            // First DRAFT -> READY committed in D1, but our HTTP response or
+            // local receipt update was lost. Admit only the expected single
+            // Profile-version increment and exact native-byte equality with
+            // the verified, server-selected CURRENT. No overwrite or N+2.
+            if workspace.profile_version().checked_add(1) != Some(intent.expected_version)
+                || fs::read(workspace.path().join(".local-unsynced")).map_err(|_| ())?
+                    != b"local-unsynced-v2"
+            {
+                return Err(());
+            }
+            let application =
+                WindowsDeviceApplication::from_system(origin.to_owned(), binding.clone())
+                    .map_err(|_| ())?;
+            let mut control =
+                ControlPlaneCoordinator::for_local_current_restore(application.transport());
+            let confirmed = control
+                .download_capability(&intent.tenant_id, &intent.profile_id)
+                .map_err(|_| ())?;
+            if confirmed.generation_id() != workspace.generation_id() {
+                return Err(());
+            }
+            let reader = WindowsSignedGenerationObjectGet::from_system().map_err(|_| ())?;
+            let mut downloader = VerifiedGenerationObjectStreamDownloader::new(reader);
+            return reconcile_closed_draft_with_confirmed_current(
+                root,
+                &intent.tenant_id,
+                &intent.profile_id,
+                confirmed.generation_id(),
+                intent.expected_version,
+                binding.device_id(),
+                now().map_err(|_| ())?.value(),
+                &mut control,
+                &mut downloader,
+            )
+            .map_err(|_| ());
+        };
+        if workspace.profile_version() != intent.expected_version
+            || fs::read(workspace.path().join(".local-unsynced")).map_err(|_| ())?
+                != b"local-unsynced-v2"
+        {
+            return Err(());
+        }
+        let device = binding.device_id();
+        let lock = BridgeWorkspaceLock::acquire_or_recover_interrupted(
+            &workspace,
+            device,
+            now().map_err(|_| ())?.value(),
+        )
+        .map_err(|_| ())?;
+        let captured = (|| {
+            if !matches!(browser_writer_locks_absent(&workspace), Ok(true)) {
+                return Err(());
+            }
+            let inventory = workspace.inventory().map_err(|_| ())?;
+            let (bytes, digest) =
+                digest_closed_workspace_streaming(&workspace, &inventory).map_err(|_| ())?;
+            Ok((inventory, bytes, digest))
+        })();
+        let unlock = lock.release().map_err(|_| ());
+        let (original_inventory, plaintext_bytes, digest) = captured?;
+        unlock?;
+        let candidate =
+            closed_current_candidate_id(&intent.tenant_id, &intent.profile_id, &base, digest)
+                .map_err(|_| ())?;
+
+        // A lost READY N+1 Commit reply cannot authorize a fresh N+2.
+        // Read exact server-selected CURRENT first; a newer candidate must
+        // match the ORIGINAL closed local bytes before the local marker moves.
+        let reader_app = WindowsDeviceApplication::from_system(origin.to_owned(), binding.clone())
+            .map_err(|_| ())?;
+        let mut read_only =
+            ControlPlaneCoordinator::for_local_current_restore(reader_app.transport());
+        let current = read_only
+            .download_capability(&intent.tenant_id, &intent.profile_id)
+            .map_err(|_| ())?;
+        if current.generation_id() == &candidate {
+            let reader = WindowsSignedGenerationObjectGet::from_system().map_err(|_| ())?;
+            let mut downloader = VerifiedGenerationObjectStreamDownloader::new(reader);
+            return reconcile_closed_ready_with_confirmed_current(
+                root,
+                &intent.tenant_id,
+                &intent.profile_id,
+                &candidate,
+                &base,
+                intent.expected_version.checked_add(1).ok_or(())?,
+                binding.device_id(),
+                now().map_err(|_| ())?.value(),
+                &mut read_only,
+                &mut downloader,
+            )
+            .map_err(|_| ());
+        }
+        if current.generation_id() != &base {
+            return Err(());
+        }
+
+        let application = WindowsDeviceApplication::from_system(origin.to_owned(), binding.clone())
+            .map_err(|_| ())?;
+        let mut transport = application.transport();
+        let actor = profile_platform_primitives::ActorContext::new(
+            profile_platform_primitives::TenantScope::new(intent.tenant_id.clone()),
+            intent.actor_id.clone(),
+            profile_platform_primitives::CorrelationId::parse("corr_closed_ready_sync")
+                .map_err(|_| ())?,
+        );
+        // Sync-only fresh Coordinator witness. Native Open uses no lease.
+        let claim = reauthorize_current_ready_generation(intent, &actor, device, &mut transport)
+            .map_err(|_| ())?;
+        let mut enrollment = ControlPlaneEnrollment::new(transport.clone());
+        let enrolled = enrollment
+            .redeem_claim(&claim, device, now().map_err(|_| ())?)
+            .map_err(|_| ())?;
+        if enrolled.actor().actor_id() != actor.actor_id()
+            || enrolled.actor().tenant_scope().tenant_id() != actor.tenant_scope().tenant_id()
+            || enrolled.profile_id() != &intent.profile_id
+            || enrolled.generation_id() != &base
+        {
+            return Err(());
+        }
+        let mut coordinator =
+            SharedControlPlaneCoordinator::new(ControlPlaneCoordinator::new(transport.clone()));
+        let lease = coordinator
+            .claim_launch_intent(
+                enrolled.actor(),
+                &intent.profile_id,
+                device,
+                enrolled.launch_intent_id(),
+            )
+            .map_err(|_| ())?;
+        let heartbeat = RetainedSaveHeartbeat::start(coordinator.clone(), lease.clone());
+        let outcome = (|| {
+            let mut sealer = coordinator.clone();
+            let material = sealer
+                .material_for(
+                    &intent.tenant_id,
+                    &intent.profile_id,
+                    &base,
+                    &candidate,
+                    digest,
+                )
+                .map_err(|_| ())?;
+            // Network/key service does not hold the local admission. Only the
+            // ORIGINAL closed folder is read for the streaming BPGC seal.
+            let lock = BridgeWorkspaceLock::acquire_or_recover_interrupted(
+                &workspace,
+                device,
+                now().map_err(|_| ())?.value(),
+            )
+            .map_err(|_| ())?;
+            let encrypted = (|| {
+                if !matches!(browser_writer_locks_absent(&workspace), Ok(true)) {
+                    return Err(());
+                }
+                let encrypted = seal_closed_workspace_streaming(
+                    &workspace,
+                    &original_inventory,
+                    &candidate,
+                    Some(&base),
+                    material,
+                    plaintext_bytes,
+                    digest,
+                )
+                .map_err(|_| ())?;
+                let pending = PendingSyncDescriptor::new(
+                    candidate.clone(),
+                    encrypted.metadata_digest(),
+                    encrypted.container_digest(),
+                    encrypted.container_bytes(),
+                    digest,
+                    plaintext_bytes,
+                )
+                .map_err(|_| ())?;
+                root.set_profile_current_pending_sync(&workspace, pending.clone())
+                    .map_err(|_| ())?;
+                Ok((encrypted, pending))
+            })();
+            let unlock = lock.release().map_err(|_| ());
+            let (encrypted, pending) = encrypted?;
+            unlock?;
+            if !heartbeat.is_healthy() {
+                return Err(());
+            }
+            let mut upload = WindowsSignedGenerationObjectPut::from_system().map_err(|_| ())?;
+            publish_closed_streamed_successor(
+                &intent.tenant_id,
+                &intent.profile_id,
+                &base,
+                &candidate,
+                &encrypted,
+                &lease,
+                &mut transport,
+                &mut upload,
+            )
+            .map_err(|_| ())?;
+            if !heartbeat.is_healthy() {
+                return Err(());
+            }
+            Ok((candidate.clone(), pending))
+        })();
+        drop(heartbeat);
+        if outcome.is_ok() {
+            coordinator.close_confirmed_save(&lease).map_err(|_| ())?;
+        } else {
+            let _ = coordinator.close_lease(&lease);
+        }
+        let (committed, pending) = outcome?;
+        if &committed != pending.candidate_generation_id() {
+            return Err(());
+        }
+
+        // The exact encrypted descriptor was durably checkpointed before
+        // upload/Commit. Reconcile it without replacing a reopened profile.
+        let active = root
+            .open_profile_current(&intent.tenant_id, &intent.profile_id)
+            .map_err(|_| ())?;
+        let guard = BridgeWorkspaceLock::acquire_or_recover_interrupted(
+            &active,
+            device,
+            now().map_err(|_| ())?.value(),
+        )
+        .map_err(|_| ())?;
+        let applied = (|| {
+            if active.base_generation_id() != Some(&base)
+                || active.profile_version() != intent.expected_version
+                || active.pending_sync() != Some(&pending)
+                || !matches!(browser_writer_locks_absent(&active), Ok(true))
+            {
+                return Err(());
+            }
+            finish_pending_sync_under_writer(root, &active, &pending).map_err(|_| ())
+        })();
+        let unlocked = guard.release().map_err(|_| ());
+        let unchanged = applied?;
+        unlocked?;
+        if !unchanged {
+            return Err(());
+        }
+        Ok(())
+    }
+
+    /// The SAME post-close handler runs after normal Open and READY restore.
+    /// Neither Firefox closure nor its local bytes depend on the cloud result.
+    fn sync_after_native_close(
+        intent: &crate::generation_initialization::InitialProfileOpen,
+        binding: &WindowsDeviceApplicationBinding,
+        root: &MaterializationRoot,
+        origin: &str,
+    ) -> Result<(), ShippingCompositionError> {
+        if intent.status == InitialProfileStatus::Ready {
+            sync_closed_ready(intent, binding, root, origin)
+                .map_err(|_| ShippingCompositionError::SyncUnconfirmed)
+        } else {
+            let application =
+                WindowsDeviceApplication::from_system(origin.to_owned(), binding.clone())
+                    .map_err(|_| ShippingCompositionError::SyncUnconfirmed)?;
+            let mut transport = application.transport();
+            let mut uploader = WindowsSignedGenerationObjectPut::from_system()
+                .map_err(|_| ShippingCompositionError::SyncUnconfirmed)?;
+            let actor = profile_platform_primitives::ActorContext::new(
+                profile_platform_primitives::TenantScope::new(intent.tenant_id.clone()),
+                intent.actor_id.clone(),
+                profile_platform_primitives::CorrelationId::parse("corr_local_draft_sync")
+                    .map_err(|_| ShippingCompositionError::SyncUnconfirmed)?,
+            );
+            match sync_closed_local_draft(
+                intent,
+                &actor,
+                binding.device_id(),
+                root,
+                &mut transport,
+                &mut uploader,
+            ) {
+                Ok(()) => Ok(()),
+                Err(error) => {
+                    // The first exact D1 Commit may have succeeded while its
+                    // HTTP reply was lost. ONLY a verified server-selected
+                    // CURRENT matching the original local native bytes may
+                    // reconcile it; no blind second PUT or generation is made.
+                    let mut proof = intent.clone();
+                    proof.status = InitialProfileStatus::Ready;
+                    proof.expected_version = proof
+                        .expected_version
+                        .checked_add(1)
+                        .ok_or(ShippingCompositionError::Initialization(error))?;
+                    sync_closed_ready(&proof, binding, root, origin)
+                        .map_err(|_| ShippingCompositionError::Initialization(error))
+                }
+            }
+        }
+    }
+
+    fn wait_for_native_writer_release<E>(
+        mut probe: impl FnMut() -> Result<bool, E>,
+        mut pause: impl FnMut(Duration),
+    ) -> Result<(), ShippingCompositionError> {
+        let mut delay_seconds = 1_u64;
+        loop {
+            match probe() {
+                Ok(true) => return Ok(()),
+                Ok(false) => {
+                    eprintln!("BRIDGE_SYNC_WAITING_FOR_NATIVE_FILE_RELEASE");
+                    pause(Duration::from_secs(delay_seconds));
+                    delay_seconds = delay_seconds.saturating_mul(2).min(15);
+                }
+                Err(_) => return Err(ShippingCompositionError::SyncUnconfirmed),
+            }
+        }
+    }
+
+    pub fn run_closed_sync(
         intent: &crate::generation_initialization::InitialProfileOpen,
     ) -> Result<(), ShippingCompositionError> {
-        use crate::operator_flow::DeviceAuthenticationPort;
-        use bridge_domain::DeviceKeyPort;
-        use profile_platform_primitives::{ActorContext, CorrelationId, TenantScope};
-        if recover_delivery_before_claim()? {
-            return Ok(());
-        }
+        // The same one-shot Bridge process retries transient offline failure
+        // without requiring the native browser to open again. This has no
+        // additional service, local state file, or independent cloud writer.
+        const RETRY_DELAYS_SECONDS: [u64; 4] = [2, 8, 20, 45];
         let config = ShippingConfig::from_installation()?;
-        // First Open of a DRAFT profile is an ordinary browser Open too.
-        // Reuse the verified signed installation and check its critical launch
-        // files; full 2.8 GiB runtime verification belongs to setup/repair.
-        let active = ActiveWindowsDeliveryRuntime::resolve_for_browser_open().map_err(|error| {
-            eprintln!("BRIDGE_DELIVERY_RUNTIME_FAILURE={error:?}");
-            ShippingCompositionError::DeliveryRuntime(error)
-        })?;
-        let pending_health = active.pending_health_confirmation();
-        let runtime_root = active.runtime_root().to_path_buf();
-        let mut bundles = active.into_bundle_selection();
         let binding =
             WindowsDeviceApplicationBinding::open(&config.device_application_binding_path)
                 .map_err(|_| ShippingCompositionError::Configuration)?;
         if binding.tenant_id() != &intent.tenant_id || binding.actor_id() != &intent.actor_id {
-            return Err(ShippingCompositionError::ControlPlane);
+            return Err(ShippingCompositionError::Configuration);
         }
-        let device = binding.device_id().clone();
-        let actor = ActorContext::new(
-            TenantScope::new(binding.tenant_id().clone()),
-            binding.actor_id().clone(),
-            CorrelationId::parse("corr_initial_profile")
-                .map_err(|_| ShippingCompositionError::Configuration)?,
-        );
-        let mut application =
-            WindowsDeviceApplication::from_system(config.control_plane_origin, binding)
-                .map_err(|_| ShippingCompositionError::Configuration)?;
-        let key = application
-            .ensure_key_handle(&device)
-            .map_err(|_| ShippingCompositionError::ControlPlane)?;
-        application
-            .authenticate(&device, &key)
-            .map_err(|_| ShippingCompositionError::ControlPlane)?;
-        let mut transport = application.transport();
         let root = MaterializationRoot::open_or_create(&config.materialization_root)
             .map_err(|_| ShippingCompositionError::Configuration)?;
-        let runtime = ManagedCamouhostConfig::new(
-            runtime_root.join(PACKAGED_PYTHON_EXECUTABLE),
-            runtime_root,
-            RuntimeDisplayMode::Headful,
-            None,
-            None,
-        )
-        .map_err(|_| ShippingCompositionError::Configuration)?;
-        let mut uploader = WindowsSignedGenerationObjectPut::from_system()
-            .map_err(|_| ShippingCompositionError::Configuration)?;
-        let materialize =
-            |workspace: &crate::local_profile::GenerationWorkspace,
-             bundle: &crate::runtime_bundle::ApprovedRuntimeBundle| {
-                use crate::generation_initialization::InitialProfileError;
-                let started = pending_health
-                    .map(|pending| {
-                        pending
-                            .start_before_runtime_health()
-                            .map_err(|_| InitialProfileError::Runtime)
-                    })
-                    .transpose()?;
-                let identity = runtime
-                    .materialize_initial_identity(workspace, bundle)
-                    .map_err(|_| InitialProfileError::Runtime)?;
-                if let Some(started) = started {
-                    started
-                        .confirm_after_runtime_ready()
-                        .map_err(|_| InitialProfileError::Runtime)?;
+        for (attempt, pause) in RETRY_DELAYS_SECONDS
+            .iter()
+            .copied()
+            .map(Some)
+            .chain(std::iter::once(None))
+            .enumerate()
+        {
+            let workspace = root
+                .open_profile_current(&intent.tenant_id, &intent.profile_id)
+                .map_err(|_| ShippingCompositionError::SyncUnconfirmed)?;
+            let dirty = workspace.path().join(".local-unsynced");
+            if matches!(
+                std::fs::symlink_metadata(&dirty),
+                Err(ref error) if error.kind() == std::io::ErrorKind::NotFound
+            ) && workspace.pending_sync().is_none()
+            {
+                return Ok(());
+            }
+            // If Camouhost exited before Playwright could deliver its close
+            // event, this same one-shot Sync process waits for the native OS
+            // file lock to clear. It never guesses from a PID/window and never
+            // needs the CRM page or a second service to trigger another try.
+            wait_for_native_writer_release(
+                || crate::browser_execution::browser_writer_locks_absent(&workspace),
+                thread::sleep,
+            )?;
+            // A completed first DRAFT Commit advances the *same* local marker.
+            // Retry the outstanding native edits as READY without creating a
+            // second local folder or replaying the first DRAFT generation.
+            let mut effective = intent.clone();
+            if workspace.base_generation_id().is_some() {
+                effective.status = InitialProfileStatus::Ready;
+                effective.expected_version = workspace.profile_version();
+            }
+            let outcome =
+                sync_after_native_close(&effective, &binding, &root, &config.control_plane_origin);
+            if outcome.is_ok() {
+                let latest = root
+                    .open_profile_current(&intent.tenant_id, &intent.profile_id)
+                    .map_err(|_| ShippingCompositionError::SyncUnconfirmed)?;
+                if matches!(
+                    std::fs::symlink_metadata(&dirty),
+                    Err(ref error) if error.kind() == std::io::ErrorKind::NotFound
+                ) && latest.pending_sync().is_none()
+                {
+                    return Ok(());
                 }
-                Ok(identity)
-            };
-        let claim = crate::generation_initialization::initialize(
-            intent,
-            &actor,
-            &device,
-            &root,
-            materialize,
-            &mut bundles,
-            &mut transport,
-            &mut uploader,
-        )
-        .map_err(ShippingCompositionError::Initialization)?;
-        open_with_one_fresh_claim(&claim, run, || {
-            // The browser may have remained open for hours. Never reuse the
-            // old machine session; reauthenticate the existing P-256 key.
-            application
-                .authenticate(&device, &key)
-                .map_err(|_| ShippingCompositionError::ControlPlane)?;
-            let mut fresh_transport = application.transport();
-            crate::generation_initialization::reauthorize_current_ready_generation(
-                intent,
-                &actor,
-                &device,
-                &mut fresh_transport,
-            )
-            .map_err(ShippingCompositionError::Initialization)
-        })
+            }
+            if let Some(seconds) = pause {
+                eprintln!("BRIDGE_CLOUD_SYNC_RETRY_PENDING attempt={}", attempt + 1);
+                thread::sleep(Duration::from_secs(seconds));
+            }
+        }
+        // A non-confirmed cloud effect never changes the local success state.
+        // The original dirty marker survives for an explicit independent
+        // existing Bridge startup/recovery or an explicit --sync-closed retry;
+        // neither requires a browser window.
+        Err(ShippingCompositionError::SyncUnconfirmed)
     }
 
-    pub fn run(claim: &ClaimUri) -> Result<(), ShippingCompositionError> {
-        #[cfg(windows)]
-        let preparation_started = std::time::Instant::now();
-        if recover_delivery_before_claim()? {
+    /// The same installed executable handles one ephemeral cloud Sync
+    /// invocation. No daemon, extra binary or new browser writer is created.
+    /// A failed child start falls back to the same Sync inline.
+    fn start_sync_after_close(intent: &crate::generation_initialization::InitialProfileOpen) {
+        use std::process::{Command, Stdio};
+        let status = match intent.status {
+            InitialProfileStatus::Draft => "DRAFT",
+            InitialProfileStatus::Ready => "READY",
+        };
+        let uri = format!(
+            "profilebridge://open/v2/{}/{}/{}/{}/{}",
+            intent.tenant_id.as_str(),
+            intent.actor_id.as_str(),
+            intent.profile_id.as_str(),
+            intent.expected_version,
+            status,
+        );
+        let result = env::current_exe().and_then(|exe| {
+            Command::new(exe)
+                .arg("--sync-closed")
+                .arg(uri)
+                .stdin(Stdio::null())
+                .stdout(Stdio::null())
+                .stderr(Stdio::null())
+                .spawn()
+        });
+        if result.is_err() {
+            eprintln!("BRIDGE_SYNC_NOT_STARTED;FALLBACK=RUN_EXISTING_SYNC_INLINE");
+            if let Err(error) = run_closed_sync(intent) {
+                eprintln!(
+                    "BRIDGE_SYNC_INLINE_FALLBACK_PENDING;error={error:?};NEXT_SAFE_STEP=PRESERVE_LOCAL_BYTES"
+                );
+            }
+        }
+    }
+
+    #[cfg(test)]
+    mod native_writer_wait_tests {
+        use super::{ShippingCompositionError, wait_for_native_writer_release};
+        use std::time::Duration;
+
+        #[test]
+        fn same_sync_waits_for_native_file_release_with_backoff() {
+            let mut probes = [Ok::<bool, ()>(false), Ok(false), Ok(true)].into_iter();
+            let mut pauses = Vec::new();
+            wait_for_native_writer_release(
+                || probes.next().expect("three native lock probes"),
+                |delay| pauses.push(delay),
+            )
+            .expect("released native file lock");
+            assert_eq!(pauses, vec![Duration::from_secs(1), Duration::from_secs(2)]);
+        }
+
+        #[test]
+        fn unknown_native_file_state_fails_closed_without_waiting() {
+            let mut pauses = Vec::new();
+            let result = wait_for_native_writer_release(
+                || Err("native file state unavailable"),
+                |delay| pauses.push(delay),
+            );
+            assert!(matches!(
+                result,
+                Err(ShippingCompositionError::SyncUnconfirmed)
+            ));
+            assert!(pauses.is_empty());
+        }
+    }
+
+    #[cfg(test)]
+    mod pending_sync_descriptor_tests {
+        use super::pending_descriptor_matches_current;
+        use crate::generation_reopen::GenerationDownloadCapability;
+        use crate::local_profile::PendingSyncDescriptor;
+        use profile_platform_primitives::GenerationId;
+
+        #[test]
+        fn pending_checkpoint_matches_only_the_exact_worker_current_descriptor()
+        -> Result<(), Box<dyn std::error::Error>> {
+            let candidate = GenerationId::parse("generation_pending_descriptor")?;
+            let pending = PendingSyncDescriptor::new(
+                candidate.clone(),
+                [0x11; 32],
+                [0x22; 32],
+                4_096,
+                [0x33; 32],
+                2_048,
+            )?;
+            let exact = GenerationDownloadCapability::new(
+                candidate.clone(),
+                "tenant/profile/generation_pending_descriptor.bpgc".to_owned(),
+                [0x11; 32],
+                [0x22; 32],
+                4_096,
+                "https://example.invalid/signed".to_owned(),
+                60,
+            );
+            assert!(pending_descriptor_matches_current(&pending, &exact));
+
+            let wrong_digest = GenerationDownloadCapability::new(
+                candidate.clone(),
+                "tenant/profile/generation_pending_descriptor.bpgc".to_owned(),
+                [0x12; 32],
+                [0x22; 32],
+                4_096,
+                "https://example.invalid/signed".to_owned(),
+                60,
+            );
+            assert!(!pending_descriptor_matches_current(&pending, &wrong_digest));
+
+            let wrong_size = GenerationDownloadCapability::new(
+                candidate,
+                "tenant/profile/generation_pending_descriptor.bpgc".to_owned(),
+                [0x11; 32],
+                [0x22; 32],
+                4_097,
+                "https://example.invalid/signed".to_owned(),
+                60,
+            );
+            assert!(!pending_descriptor_matches_current(&pending, &wrong_size));
+            Ok(())
+        }
+    }
+
+    pub fn run_initial(
+        intent: &crate::generation_initialization::InitialProfileOpen,
+    ) -> Result<(), ShippingCompositionError> {
+        // The CRM web page already supplied the selected profile. Opening the
+        // browser is now a local filesystem/process operation, not an R2
+        // initialization or a Coordinator lease. Sync belongs to a different
+        // operation and cannot block a local Firefox window.
+        if recover_delivery_before_open()? {
             return Ok(());
         }
-        #[cfg(windows)]
-        eprintln!(
-            "bridge_open_phase name=delivery_recovery_readback elapsed_ms={}",
-            preparation_started.elapsed().as_millis()
-        );
-        #[cfg(windows)]
-        let config_started = std::time::Instant::now();
         let config = ShippingConfig::from_installation()?;
-        #[cfg(windows)]
-        eprintln!(
-            "bridge_open_phase name=installation_config elapsed_ms={}",
-            config_started.elapsed().as_millis()
-        );
-        let active_delivery =
-            ActiveWindowsDeliveryRuntime::resolve_for_browser_open().map_err(|error| {
-                eprintln!("BRIDGE_DELIVERY_RUNTIME_FAILURE={error:?}");
-                ShippingCompositionError::DeliveryRuntime(error)
-            })?;
-        let (release_sequence, runtime_id) = active_delivery.observed_release_identity();
-        report::record_runtime_identity(release_sequence, runtime_id);
-        let owner_setup_started = std::time::Instant::now();
-        let pending_health = active_delivery.pending_health_confirmation();
-        let runtime_root = active_delivery.runtime_root().to_path_buf();
-        let runtime_bundles = active_delivery.into_bundle_selection();
-
+        let delivery = ActiveWindowsDeliveryRuntime::resolve_for_browser_open()
+            .map_err(ShippingCompositionError::DeliveryRuntime)?;
         let binding =
             WindowsDeviceApplicationBinding::open(&config.device_application_binding_path)
                 .map_err(|_| ShippingCompositionError::Configuration)?;
-        let identity = WindowsDeviceIdentity::new(binding.device_id().clone());
-        let device_application =
-            WindowsDeviceApplication::from_system(config.control_plane_origin, binding)
-                .map_err(|_| ShippingCompositionError::Configuration)?;
-        let transport = device_application.transport();
-        let save_transport = transport.clone();
-        let mut recovery_observation_transport = transport.clone();
-        let signed_generation_get = WindowsSignedGenerationObjectGet::from_system()
-            .map_err(|_| ShippingCompositionError::Configuration)?;
-        let mut generation_downloader =
-            VerifiedGenerationObjectStreamDownloader::new(signed_generation_get);
-        let mut generation_uploader = WindowsSignedGenerationObjectPut::from_system()
-            .map_err(|_| ShippingCompositionError::Configuration)?;
-
-        let enrollment = ControlPlaneEnrollment::new(transport.clone());
-        let coordinator =
-            SharedControlPlaneCoordinator::new(ControlPlaneCoordinator::new(transport));
-        let materialization_root =
-            MaterializationRoot::open_or_create(&config.materialization_root)
-                .map_err(|_| ShippingCompositionError::Configuration)?;
-        let runtime_binding = RuntimeBindingSlot::new();
-        let browser_preflight = ShippingBrowserLaunchPreflight::new(runtime_binding.clone());
-        let python_executable = runtime_root.join(PACKAGED_PYTHON_EXECUTABLE);
-        let camouhost_config = ManagedCamouhostConfig::new(
-            python_executable,
-            runtime_root,
-            RuntimeDisplayMode::Headful,
-            None,
-            None,
-        )
-        .map_err(|_| ShippingCompositionError::Configuration)?;
-        let (process, camouhost) = ManagedCamouhostProcess::pair(camouhost_config, runtime_binding);
-        let mut close_observer = camouhost.close_observer();
-
-        let mut operator = ProfileBridgeOperator::new(
-            identity,
-            device_application.clone(),
-            device_application,
-            enrollment,
-            coordinator,
-            runtime_bundles,
-            browser_preflight,
-            process,
-            camouhost,
-        );
-        eprintln!(
-            "bridge_open_phase name=owner_setup elapsed_ms={}",
-            owner_setup_started.elapsed().as_millis()
-        );
-        let opened_at = now()?;
-        let open_started = std::time::Instant::now();
-        report::record_current(
-            Stage::GenerationSelection,
-            Outcome::Started,
-            Cloud::Unknown,
-            Cause::None,
-            0,
-        );
-        let mut pending_health = pending_health;
-        let mut started_health = None;
-        let mut prelaunch_keepalive = None;
-        let selection_started = std::time::Instant::now();
-        let opening = operator
-            .open_authoritative_with_runtime_health_and_pending_recovery(
-                claim,
-                &materialization_root,
-                &mut generation_downloader,
-                opened_at,
-                (|current, lease| {
-                    // The same original cursor stays alive during exact
-                    // pending N+1 recovery, R2 download and Camoufox startup.
-                    prelaunch_keepalive = Some(RetainedSaveHeartbeat::start(
-                        current.clone(),
-                        lease.clone(),
-                    ));
-                },
-                || {
-                    started_health = pending_health
-                        .take()
-                        .map(|confirmation| {
-                            confirmation.start_before_runtime_health().map_err(|_| ())
-                        })
-                        .transpose()?;
-                    Ok(())
-                }),
-                |live_coordinator, tenant, profile, selected_generation, fresh_lease| {
-                    // The pre-launch keepalive above already spans exact
-                    // recovery and any long R2 PUT. No duplicate thread.
-                    // The existing operator already proved fresh CNG/ACL,
-                    // tenant/Profile enrollment and exclusive coordinator
-                    // writer claim. Only exact ACTIVE_EXACT may repair an
-                    // unchanged N+1 binding; never PUT/commit with old fence.
-                    let recovered = match complete_active_exact_after_restart(
-                        &materialization_root,
-                        tenant,
-                        profile,
-                        selected_generation,
-                        fresh_lease,
-                        &mut recovery_observation_transport,
-                    ) {
-                        Ok(RestartExactLocalCompletion::ActiveExactLocalReady) => {
-                            eprintln!(
-                                "P3_RECOVERY=ACTIVE_EXACT_LOCAL_READY;NEXT_SAFE_STEP=CONTINUE_OPEN"
-                            );
-                            PendingSaveRecovery::ReadySelected
-                        }
-                        Ok(RestartExactLocalCompletion::RetryDecisionConfirmedAwaitingResumption) => {
-                            // The fresh lease selected N, not N+1. Even if
-                            // replay commits successfully, this launch must
-                            // NOT open N. A new claim selects and completes
-                            // the authoritative exact N+1 on the next Open.
-                            let committed = match resume_exact_successor_under_fresh_lease(
-                                &materialization_root,
-                                tenant,
-                                profile,
-                                selected_generation,
-                                fresh_lease,
-                                &mut recovery_observation_transport,
-                                &mut generation_uploader,
-                            ) {
-                                Ok(true) => {
-                                    eprintln!(
-                                        "P3_RECOVERY=RETRY_COMMITTED;NEXT_SAFE_STEP=FRESH_OPEN_ACTIVE_EXACT"
-                                    );
-                                    true
-                                }
-                                Ok(false) => {
-                                    eprintln!(
-                                        "P3_RECOVERY=RETRY_BLOCKED;NEXT_SAFE_STEP=PRESERVE_LOCAL_BYTES"
-                                    );
-                                    false
-                                }
-                                Err(error) => {
-                                    eprintln!(
-                                        "P3_RECOVERY={};NEXT_SAFE_STEP={}",
-                                        error.code(),
-                                        recovery_next_safe_step(error)
-                                    );
-                                    return pending_recovery_failure_disposition(error);
-                                }
-                            };
-                            if committed {
-                                PendingSaveRecovery::CommittedNewerRequiresClaim
-                            } else {
-                                PendingSaveRecovery::Blocked
-                            }
-                        }
-                        Ok(RestartExactLocalCompletion::NativeRescueRequired) => {
-                            eprintln!("P3_RECOVERY=NATIVE_RESCUE_REQUESTED;NEXT_SAFE_STEP=FRESH_CLAIM_NATIVE_JOURNAL");
-                            PendingSaveRecovery::NativeRescueRequired
-                        }
-                        Ok(RestartExactLocalCompletion::RetryDecisionBlocked) => {
-                            eprintln!("P3_RECOVERY=RETRY_BLOCKED;NEXT_SAFE_STEP=PRESERVE_LOCAL_BYTES");
-                            PendingSaveRecovery::Blocked
-                        }
-                        Ok(RestartExactLocalCompletion::NotActiveExact) => {
-                            let diagnosis = PendingSaveReadOnlyDiagnosis::from_observation(
-                                Ok(RestartExactCommitObservation::NotActiveExact),
-                            );
-                            eprintln!(
-                                "{};NEXT_SAFE_STEP={}",
-                                diagnosis.code(),
-                                diagnosis.next_safe_step()
-                            );
-                            PendingSaveRecovery::Blocked
-                        }
-                        Ok(RestartExactLocalCompletion::LocalUnsyncedAuthorizedAwaitingFirstSeal) => {
-                            // The one current coordinator owns the new claimed
-                            // fence AND the generation sealing material cursor.
-                            // No second coordinator or persisting recovery SM.
-                            let committed = match resume_lone_local_unsynced_under_fresh_lease(
-                                &materialization_root,
-                                tenant,
-                                profile,
-                                selected_generation,
-                                fresh_lease,
-                                live_coordinator,
-                                &mut recovery_observation_transport,
-                                &mut generation_uploader,
-                            ) {
-                                Ok(true) => {
-                                    eprintln!(
-                                        "P3_RECOVERY=FIRST_SUCCESSOR_COMMITTED;NEXT_SAFE_STEP=FRESH_OPEN_ACTIVE_EXACT"
-                                    );
-                                    true
-                                }
-                                Ok(false) => {
-                                    eprintln!(
-                                        "P3_RECOVERY=FIRST_SEAL_BLOCKED;NEXT_SAFE_STEP=PRESERVE_LOCAL_BYTES"
-                                    );
-                                    false
-                                }
-                                Err(RestartExactLocalCompletionError::NativeSnapshotTooLarge) => {
-                                    // Not a PUT retry grant. This Open already owns
-                                    // a freshly redeemed/current N writer claim;
-                                    // the operator must also acquire native OS
-                                    // admission, verify the original and publish
-                                    // rescue-in-progress before Camoufox launch.
-                                    eprintln!("P3_RECOVERY=NATIVE_RESCUE_REQUIRED;NEXT_SAFE_STEP=VERIFY_ORIGINAL_AND_JOURNAL");
-                                    return PendingSaveRecovery::NativeRescueRequired;
-                                }
-                                Err(error) => {
-                                    eprintln!(
-                                        "P3_RECOVERY={};NEXT_SAFE_STEP={}",
-                                        error.code(),
-                                        recovery_next_safe_step(error)
-                                    );
-                                    return pending_recovery_failure_disposition(error);
-                                }
-                            };
-                            // First-sealed LOCAL_UNSYNCED uses the same exact
-                            // checkpoint/Firefox-writer proofs as sealed BPAT.
-                            // Never open stale N, but don't strand a proved
-                            // committed N+1 behind Uncertain coordinator state.
-                            if committed {
-                                PendingSaveRecovery::CommittedNewerRequiresClaim
-                            } else {
-                                PendingSaveRecovery::Blocked
-                            }
-                        }
-                        Ok(RestartExactLocalCompletion::NoCanonicalCheckpoint) => {
-                            let diagnosis = PendingSaveReadOnlyDiagnosis::from_observation(
-                                Ok(RestartExactCommitObservation::NoCanonicalCheckpoint),
-                            );
-                            eprintln!(
-                                "{};NEXT_SAFE_STEP={}",
-                                diagnosis.code(),
-                                diagnosis.next_safe_step()
-                            );
-                            PendingSaveRecovery::Blocked
-                        }
-                        Ok(RestartExactLocalCompletion::ServerSelectedDifferentGeneration) => {
-                            eprintln!(
-                                "P3_RECOVERY=CONFLICT;NEXT_SAFE_STEP=REQUIRE_CURRENT_SERVER_GENERATION"
-                            );
-                            PendingSaveRecovery::Blocked
-                        }
-                        Err(error) => {
-                            eprintln!(
-                                "P3_RECOVERY={};NEXT_SAFE_STEP={}",
-                                error.code(),
-                                recovery_next_safe_step(error)
-                            );
-                            pending_recovery_failure_disposition(error)
-                        }
-                    };
-                    recovered
-                },
-            );
-        eprintln!(
-            "bridge_open_phase name=authoritative_open elapsed_ms={} completed={}",
-            selection_started.elapsed().as_millis(),
-            opening.is_ok(),
-        );
-        // Always finish the heartbeat thread before observing its final
-        // authority result. A slow or failed heartbeat cannot be ignored just
-        // because the browser opened successfully in the foreground.
-        let health = prelaunch_keepalive
-            .as_ref()
-            .map(|guard: &RetainedSaveHeartbeat| Arc::clone(&guard.healthy));
-        drop(prelaunch_keepalive);
-        opening.map_err(ShippingCompositionError::Operator)?;
-        if !health
-            .as_ref()
-            .is_some_and(|confirmed| confirmed.load(Ordering::Acquire))
-        {
-            let _ = operator.abort(now().unwrap_or(opened_at));
-            return Err(ShippingCompositionError::HeartbeatAuthorityUncertain);
+        if binding.tenant_id() != &intent.tenant_id || binding.actor_id() != &intent.actor_id {
+            return Err(ShippingCompositionError::Configuration);
         }
-
-        if let Some(confirmation) = started_health
-            && confirmation.confirm_after_runtime_ready().is_err()
-        {
-            let abort_at = now().unwrap_or(opened_at);
-            let _ = operator.abort(abort_at);
-            return Err(ShippingCompositionError::DeliveryHealth);
-        }
-        report::record_current(
-            Stage::BrowserReady,
-            Outcome::Observed,
-            Cloud::Unknown,
-            Cause::None,
-            u64::try_from(open_started.elapsed().as_millis())
-                .unwrap_or(u64::MAX)
-                .min(86_400_000),
-        );
-
-        let mut next_heartbeat_deadline = next_heartbeat_at(
-            operator
-                .coordinator()
-                .runtime_timing()
-                .map_err(|_| ShippingCompositionError::ControlPlane)?,
-            now()?,
-        )?;
-        // An unanswered heartbeat does not refresh the coordinator deadline.
-        // We allow at most ONE narrow transport-only retry before gracefully
-        // quiescing the local browser and preserving its native WAL/session data.
-        let mut heartbeat_retry_used = false;
-        loop {
-            let observed_at = now()?;
-            let timing = operator
-                .coordinator()
-                .runtime_timing()
-                .map_err(|_| ShippingCompositionError::ControlPlane)?;
-            // Check BEFORE controlled-close observation or any save attempt.
-            // A loop delayed past the confirmed lease deadline must not
-            // publish under a stale fence even if the browser just closed.
-            if observed_at.value() >= timing.idle_expires_at_ms().min(timing.hard_expires_at_ms()) {
-                // Unlike a transport timeout, this deadline is known to
-                // have expired. Immediately fence the writer; do not spend a
-                // graceful shutdown interval writing without coordinator authority.
-                return Err(ShippingCompositionError::Operator(
-                    operator.stop_after_confirmed_lease_expiry(observed_at),
-                ));
+        let root = MaterializationRoot::open_or_create(&config.materialization_root)
+            .map_err(|_| ShippingCompositionError::Configuration)?;
+        match crate::local_browser_open::open(
+            &root,
+            intent,
+            binding.device_id(),
+            delivery.runtime_root(),
+        ) {
+            Ok(()) => {
+                start_sync_after_close(intent);
+                Ok(())
             }
-            let session_id = operator
-                .active_session_id()
-                .cloned()
-                .ok_or(ShippingCompositionError::ActiveSessionMissing)?;
-            let close_disposition =
-                close_observation_disposition(close_observer.observe_controlled_close(&session_id))
-                    .map_err(ShippingCompositionError::CloseObservation)?;
-            if close_disposition == CloseObservationDisposition::RecoverUncleanExit {
-                operator
-                    .abort(now()?)
-                    .map_err(ShippingCompositionError::Operator)?;
-                return Err(ShippingCompositionError::CloseObservation(
-                    bridge_domain::BridgePortError::UncleanBrowserExit,
-                ));
-            }
-            if close_disposition == CloseObservationDisposition::BeginConfirmedSave {
-                operator
-                    .close_with_durable_local_intent(&materialization_root, now()?)
-                    .map_err(ShippingCompositionError::Operator)?;
-                eprintln!(
-                    "{}",
-                    ReadOnlyProfileDiagnosis::after_durable_local_close(
-                        operator.diagnostic_facts()
-                    )
-                    .redacted_record()
-                );
-                report::record_current(
-                    Stage::LocalUnsynced,
-                    Outcome::Unconfirmed,
-                    Cloud::NotConfirmed,
-                    Cause::None,
-                    0,
-                );
-                // An unknown heartbeat response is not an acknowledged fence.
-                // Retain the closed local working profile; do not attempt an
-                // upload/commit using a possibly revoked writer session.
-                if heartbeat_retry_used {
-                    return Err(ShippingCompositionError::HeartbeatAuthorityUncertain);
-                }
-                // Native sealing makes several full passes; the signed R2 PUT
-                // can block for up to 120 seconds. The browser event loop
-                // cannot heartbeat during either operation. This ONE scoped
-                // keepalive uses the same serialized coordinator cursor.
-                let retained = operator
-                    .retained_save_lease()
-                    .cloned()
-                    .ok_or(ShippingCompositionError::ActiveSessionMissing)?;
-                let save_heartbeat =
-                    RetainedSaveHeartbeat::start(operator.coordinator().clone(), retained);
-                report::record_current(
-                    Stage::CloudSaveAttempt,
-                    Outcome::Started,
-                    Cloud::NotConfirmed,
-                    Cause::None,
-                    0,
-                );
-                let save_started = std::time::Instant::now();
-                let initial = operator.save_retained_successor_streaming(
-                    &materialization_root,
-                    save_transport.clone(),
-                    &mut generation_uploader,
-                    now()?,
-                );
-                let confirmed = initial.as_ref().is_ok_and(|done| done.is_saved());
-                report::record_current(
-                    if confirmed {
-                        Stage::CloudSaveConfirmed
-                    } else {
-                        Stage::CloudSaveAttempt
-                    },
-                    if confirmed {
-                        Outcome::Succeeded
-                    } else {
-                        Outcome::Unconfirmed
-                    },
-                    if confirmed {
-                        Cloud::CommittedExact
-                    } else {
-                        Cloud::NotConfirmed
-                    },
-                    if confirmed {
-                        Cause::None
-                    } else {
-                        Cause::CloudSaveFailed
-                    },
-                    u64::try_from(save_started.elapsed().as_millis())
-                        .unwrap_or(u64::MAX)
-                        .min(86_400_000),
-                );
-                eprintln!(
-                    "{}",
-                    ReadOnlyProfileDiagnosis::after_save(operator.diagnostic_facts(), &initial)
-                        .redacted_record()
-                );
-                if !save_heartbeat.is_healthy()
-                    && !initial.as_ref().is_ok_and(|done| done.is_saved())
-                {
-                    return Err(ShippingCompositionError::HeartbeatAuthorityUncertain);
-                }
-                // Pre-seal transport uncertainty precedes BPAT creation.
-                // Reattempt only the original local seal after a confirmed
-                // live heartbeat; ordinary D1 retry fencing still guards PUT.
-                let mut first_seal_pending = matches!(
-                    &initial,
-                    Err(OperatorFlowError::GenerationSave { reason })
-                        if reason.allows_bounded_preseal_reconnect()
-                );
-                match initial {
-                    Ok(completion) if completion.is_saved() => return Ok(()),
-                    Ok(_) => return Err(ShippingCompositionError::CommittedRecoveryRequired),
-                    Err(OperatorFlowError::GenerationSave { reason })
-                        if !reason.allows_bounded_cloud_reconcile()
-                            && !reason.allows_bounded_preseal_reconnect() =>
-                    {
-                        if reason
-                            == crate::operator_flow::GenerationSaveFailureReason::SnapshotTooLarge
-                        {
-                            eprintln!(
-                                "P3_RECOVERY=NATIVE_SNAPSHOT_TOO_LARGE;NEXT_SAFE_STEP=PRESERVE_LOCAL_BYTES;NATIVE_RESCUE_REQUIRED"
-                            );
-                        }
-                        return Err(ShippingCompositionError::Operator(
-                            OperatorFlowError::GenerationSave { reason },
-                        ));
-                    }
-                    Err(
-                        OperatorFlowError::Stage(OperatorFailureStage::GenerationSave)
-                        | OperatorFlowError::GenerationSave { .. },
-                    ) if operator.has_pending_dirty_close() => {
-                        // Browser closed: WAL/native bytes and the original
-                        // workspace lock are retained. Do not start Firefox.
-                        // Retry ONLY the already-sealed exact checkpoint.
-                        // Both a current DO heartbeat AND affirmative D1
-                        // descriptor-level nonapplication are mandatory.
-                        eprintln!(
-                            "P3_RECOVERY=LOCAL_UNSYNCED;NEXT_SAFE_STEP=BOUNDED_LIVE_RECONNECT"
-                        );
-                        // Do not abandon a recoverable Save after an arbitrary
-                        // 30 seconds. The current Coordinator's confirmed idle
-                        // and hard deadlines are the real upper bound. Every
-                        // network effect below re-proves the same writer and
-                        // exact D1 nonapplication before reusing N+1.
-                        loop {
-                            if !save_heartbeat.is_healthy() {
-                                return Err(ShippingCompositionError::HeartbeatAuthorityUncertain);
-                            }
-                            let timing = operator
-                                .coordinator()
-                                .runtime_timing()
-                                .map_err(|_| ShippingCompositionError::ControlPlane)?;
-                            if !safe_reconnect_writer_window(
-                                timing.idle_expires_at_ms(),
-                                timing.hard_expires_at_ms(),
-                                now()?,
-                            ) {
-                                break;
-                            }
-                            thread::sleep(Duration::from_millis(SAVE_RECONNECT_PAUSE_MS));
-                            let timing = operator
-                                .coordinator()
-                                .runtime_timing()
-                                .map_err(|_| ShippingCompositionError::ControlPlane)?;
-                            if !safe_reconnect_writer_window(
-                                timing.idle_expires_at_ms(),
-                                timing.hard_expires_at_ms(),
-                                now()?,
-                            ) {
-                                break;
-                            }
-                            match operator.reprove_retained_save_writer() {
-                                Ok(()) => {}
-                                Err(OperatorFlowError::HeartbeatTransportUncertain) => continue,
-                                Err(error) => {
-                                    return Err(ShippingCompositionError::Operator(error));
-                                }
-                            }
-                            let timing = operator
-                                .coordinator()
-                                .runtime_timing()
-                                .map_err(|_| ShippingCompositionError::ControlPlane)?;
-                            if !safe_reconnect_writer_window(
-                                timing.idle_expires_at_ms(),
-                                timing.hard_expires_at_ms(),
-                                now()?,
-                            ) {
-                                break;
-                            }
-                            let original = operator
-                                .retained_save_lease()
-                                .cloned()
-                                .ok_or(ShippingCompositionError::CommittedRecoveryRequired)?;
-                            // No exact BPAT exists after a transient first-seal
-                            // failure. The retained Save must still prove
-                            // the exact descriptor in D1 before any cloud PUT.
-                            if !first_seal_pending {
-                                match confirm_retained_exact_retry_nonapplication(
-                                    &materialization_root,
-                                    &original,
-                                    &mut recovery_observation_transport,
-                                ) {
-                                    Ok(true) => {}
-                                    Ok(false) => {
-                                        return Err(
-                                            ShippingCompositionError::CommittedRecoveryRequired,
-                                        );
-                                    }
-                                    Err(error) if retryable_reconnect_observation(error) => {
-                                        // No D1-positive decision was observed. Wait
-                                        // only within the confirmed writer deadline.
-                                        continue;
-                                    }
-                                    Err(error) => {
-                                        // Definitive 401/403/404, malformed response,
-                                        // clock or changed local evidence are NOT
-                                        // transient network failures. Preserve N+1.
-                                        eprintln!(
-                                            "P3_RECOVERY={};NEXT_SAFE_STEP=PRESERVE_LOCAL_BYTES",
-                                            error.code()
-                                        );
-                                        return Err(
-                                            ShippingCompositionError::CommittedRecoveryRequired,
-                                        );
-                                    }
-                                }
-                            }
-                            let timing = operator
-                                .coordinator()
-                                .runtime_timing()
-                                .map_err(|_| ShippingCompositionError::ControlPlane)?;
-                            if !safe_reconnect_writer_window(
-                                timing.idle_expires_at_ms(),
-                                timing.hard_expires_at_ms(),
-                                now()?,
-                            ) {
-                                break;
-                            }
-                            report::record_current(
-                                Stage::CloudSaveAttempt,
-                                Outcome::Started,
-                                Cloud::NotConfirmed,
-                                Cause::None,
-                                0,
-                            );
-                            let retry_started = std::time::Instant::now();
-                            let attempt = operator.save_retained_successor_streaming(
-                                &materialization_root,
-                                save_transport.clone(),
-                                &mut generation_uploader,
-                                now()?,
-                            );
-                            let confirmed = attempt.as_ref().is_ok_and(|done| done.is_saved());
-                            report::record_current(
-                                if confirmed {
-                                    Stage::CloudSaveConfirmed
-                                } else {
-                                    Stage::CloudSaveAttempt
-                                },
-                                if confirmed {
-                                    Outcome::Succeeded
-                                } else {
-                                    Outcome::Unconfirmed
-                                },
-                                if confirmed {
-                                    Cloud::CommittedExact
-                                } else {
-                                    Cloud::NotConfirmed
-                                },
-                                if confirmed {
-                                    Cause::None
-                                } else {
-                                    Cause::CloudSaveFailed
-                                },
-                                u64::try_from(retry_started.elapsed().as_millis())
-                                    .unwrap_or(u64::MAX)
-                                    .min(86_400_000),
-                            );
-                            eprintln!(
-                                "{}",
-                                ReadOnlyProfileDiagnosis::after_save(
-                                    operator.diagnostic_facts(),
-                                    &attempt
-                                )
-                                .redacted_record()
-                            );
-                            match attempt {
-                                Ok(completion) if completion.is_saved() => return Ok(()),
-                                Ok(_) => {
-                                    return Err(
-                                        ShippingCompositionError::CommittedRecoveryRequired,
-                                    );
-                                }
-                                Err(OperatorFlowError::GenerationSave { reason })
-                                    if !reason.allows_bounded_cloud_reconcile()
-                                        && !reason.allows_bounded_preseal_reconnect() =>
-                                {
-                                    if reason == crate::operator_flow::GenerationSaveFailureReason::SnapshotTooLarge {
-                                        eprintln!("P3_RECOVERY=NATIVE_SNAPSHOT_TOO_LARGE;NEXT_SAFE_STEP=PRESERVE_LOCAL_BYTES;NATIVE_RESCUE_REQUIRED");
-                                    }
-                                    return Err(ShippingCompositionError::Operator(
-                                        OperatorFlowError::GenerationSave { reason },
-                                    ));
-                                }
-                                Err(OperatorFlowError::GenerationSave { reason })
-                                    if operator.has_pending_dirty_close() =>
-                                {
-                                    // A retry after first seal can reach D1/R2.
-                                    // Next iteration must gate any exact BPAT.
-                                    first_seal_pending = reason.allows_bounded_preseal_reconnect();
-                                    continue;
-                                }
-                                Err(OperatorFlowError::Stage(
-                                    OperatorFailureStage::GenerationSave,
-                                )) if operator.has_pending_dirty_close() => {
-                                    first_seal_pending = false;
-                                    continue;
-                                }
-                                Err(error) => {
-                                    return Err(ShippingCompositionError::Operator(error));
-                                }
-                            }
-                        }
-                        eprintln!(
-                            "P3_RECOVERY=LOCAL_BYTES_RETAINED;NEXT_SAFE_STEP=FRESH_AUTHORIZED_OPEN"
-                        );
-                        return Err(ShippingCompositionError::CommittedRecoveryRequired);
-                    }
-                    Err(error) => return Err(ShippingCompositionError::Operator(error)),
-                }
-            }
-
-            if observed_at >= next_heartbeat_deadline {
-                match operator.heartbeat(observed_at) {
+            Err(crate::local_browser_open::LocalOpenError::RestoreRequired) => {
+                // Only a missing READY local folder crosses the cloud boundary.
+                // Ordinary Open/Close never requires a network request.
+                let device = binding.device_id().clone();
+                let application = WindowsDeviceApplication::from_system(
+                    config.control_plane_origin.clone(),
+                    binding.clone(),
+                )
+                .map_err(|_| ShippingCompositionError::RestoreUnavailable)?;
+                let mut remote =
+                    ControlPlaneCoordinator::for_local_current_restore(application.transport());
+                // Worker selects CURRENT; neither the browser URI nor local files
+                // may choose a cloud generation or an historical fallback.
+                let selected = remote
+                    .download_capability(&intent.tenant_id, &intent.profile_id)
+                    .map_err(|_| ShippingCompositionError::RestoreUnavailable)?;
+                let reader = WindowsSignedGenerationObjectGet::from_system()
+                    .map_err(|_| ShippingCompositionError::RestoreUnavailable)?;
+                let mut downloader = VerifiedGenerationObjectStreamDownloader::new(reader);
+                let epoch = now()?.value();
+                ensure_authoritative_current(
+                    &root,
+                    &intent.tenant_id,
+                    &intent.profile_id,
+                    selected.generation_id(),
+                    intent.expected_version,
+                    &device,
+                    epoch,
+                    &mut remote,
+                    &mut downloader,
+                )
+                .map_err(|_| ShippingCompositionError::RestoreUnavailable)?;
+                // Re-enter the SAME local native Open; no managed Camoufox path
+                // and no Coordinator lease are introduced by recovery.
+                match crate::local_browser_open::open(
+                    &root,
+                    intent,
+                    &device,
+                    delivery.runtime_root(),
+                ) {
                     Ok(()) => {
-                        heartbeat_retry_used = false;
-                        next_heartbeat_deadline = next_heartbeat_at(
-                            operator
-                                .coordinator()
-                                .runtime_timing()
-                                .map_err(|_| ShippingCompositionError::ControlPlane)?,
-                            observed_at,
-                        )?;
+                        start_sync_after_close(intent);
+                        Ok(())
                     }
-                    Err(crate::operator_flow::OperatorFlowError::HeartbeatTransportUncertain) => {
-                        if heartbeat_retry_used {
-                            // Two consecutive unacknowledged transport effects:
-                            // stop normal work without falsely marking Clean/Saved.
-                            operator
-                                .close_with_durable_local_intent(&materialization_root, observed_at)
-                                .map_err(ShippingCompositionError::Operator)?;
-                            return Err(ShippingCompositionError::HeartbeatAuthorityUncertain);
-                        }
-                        let Some(retry_at) = bounded_heartbeat_retry_at(
-                            timing.idle_expires_at_ms().min(timing.hard_expires_at_ms()),
-                            observed_at,
-                        ) else {
-                            operator
-                                .close_with_durable_local_intent(&materialization_root, observed_at)
-                                .map_err(ShippingCompositionError::Operator)?;
-                            return Err(ShippingCompositionError::HeartbeatAuthorityUncertain);
-                        };
-                        heartbeat_retry_used = true;
-                        next_heartbeat_deadline = retry_at;
+                    Err(error) => {
+                        // Every post-restore local failure may leave the
+                        // existing .local-unsynced marker. Start the same
+                        // idempotent Sync attempt; it exits cleanly when no
+                        // marker exists and otherwise waits for native file
+                        // release before snapshot. No CRM return is required.
+                        start_sync_after_close(intent);
+                        Err(ShippingCompositionError::LocalOpen(error))
                     }
-                    Err(error) => return Err(ShippingCompositionError::Operator(error)),
                 }
             }
-
-            let until_heartbeat = next_heartbeat_deadline
-                .value()
-                .saturating_sub(observed_at.value())
-                .max(1);
-            thread::sleep(Duration::from_millis(
-                until_heartbeat.min(CONTROLLED_CLOSE_POLL_MS),
-            ));
+            Err(error) => {
+                // A stale CRM launch intent must not start a cloud write for
+                // conflicting local bytes. Keep the original folder and dirty
+                // marker for the existing explicit recovery/Restore contract.
+                if error != crate::local_browser_open::LocalOpenError::StaleLocalWorkspace {
+                    // The adapter may fail before or after launch. The same
+                    // Sync checks the dirty marker and native file locks.
+                    start_sync_after_close(intent);
+                }
+                Err(ShippingCompositionError::LocalOpen(error))
+            }
         }
     }
 
@@ -1278,7 +1029,7 @@ mod windows {
         Ok(())
     }
 
-    fn recover_delivery_before_claim() -> Result<bool, ShippingCompositionError> {
+    fn recover_delivery_before_open() -> Result<bool, ShippingCompositionError> {
         let (coordinator, current_executable) =
             delivery_process_context().map_err(|_| ShippingCompositionError::DeliveryHandoff)?;
         if !coordinator
@@ -1340,26 +1091,8 @@ mod windows {
         std::mem::forget(guard);
     }
 
-    fn next_heartbeat_at(
-        timing: ControlPlaneLeaseTiming,
-        observed_at: UnixMillis,
-    ) -> Result<UnixMillis, ShippingCompositionError> {
-        let deadline = timing.idle_expires_at_ms().min(timing.hard_expires_at_ms());
-        let remaining = deadline.saturating_sub(observed_at.value());
-        if remaining <= 1 {
-            return Err(ShippingCompositionError::ControlPlane);
-        }
-        let delay = (remaining / 2).max(1);
-        observed_at
-            .value()
-            .checked_add(delay)
-            .map(UnixMillis::new)
-            .ok_or(ShippingCompositionError::Clock)
-    }
-
-    // This is only a server-CONFIRMED live writer's authority window.
-    // Wall-clock passage NEVER extends the DO fence, and no upload is
-    // started too near the hard/idle expiration.
+    // Keep the existing coordinator heartbeat alive only while the
+    // same confirmed lease has a safe native-save completion window.
     fn safe_reconnect_writer_window(
         idle_expires_at_ms: u64,
         hard_expires_at_ms: u64,
@@ -1369,108 +1102,6 @@ mod windows {
             .value()
             .checked_add(SAVE_RECONNECT_AUTHORITY_RESERVE_MS)
             .is_some_and(|finish_by| finish_by < idle_expires_at_ms.min(hard_expires_at_ms))
-    }
-
-    // Retry at most once, and strictly before the last confirmed deadline.
-    // No old lease/fence authority is extended by the passage of time.
-    fn bounded_heartbeat_retry_at(expiry: u64, observed_at: UnixMillis) -> Option<UnixMillis> {
-        let remaining = expiry.checked_sub(observed_at.value())?;
-        if remaining <= 1 {
-            return None;
-        }
-        let delay = HEARTBEAT_TRANSPORT_RETRY_MS.min(remaining / 2).max(1);
-        observed_at
-            .value()
-            .checked_add(delay)
-            .filter(|next| *next < expiry)
-            .map(UnixMillis::new)
-    }
-
-    #[cfg(test)]
-    mod heartbeat_safety_tests {
-        use super::{bounded_heartbeat_retry_at, safe_reconnect_writer_window};
-        use profile_platform_primitives::UnixMillis;
-
-        #[test]
-        fn live_save_reconnect_requires_positive_deadline_margin() {
-            assert!(safe_reconnect_writer_window(
-                60_000,
-                120_000,
-                UnixMillis::new(1_000),
-            ));
-            assert!(!safe_reconnect_writer_window(
-                60_000,
-                120_000,
-                UnixMillis::new(55_000),
-            ));
-            assert!(!safe_reconnect_writer_window(
-                60_000,
-                120_000,
-                UnixMillis::new(60_000),
-            ));
-            assert!(!safe_reconnect_writer_window(
-                60_000,
-                120_000,
-                UnixMillis::new(u64::MAX),
-            ));
-            assert!(!safe_reconnect_writer_window(
-                80_000,
-                60_000,
-                UnixMillis::new(56_000),
-            ));
-        }
-
-        #[test]
-        fn live_save_reconnect_outlasts_thirty_seconds_only_with_current_authority() {
-            // A brief outage that exceeds the previous 30 attempts must not
-            // strand the retained exact checkpoint when the writer is valid.
-            assert!(safe_reconnect_writer_window(
-                120_000,
-                180_000,
-                UnixMillis::new(35_000),
-            ));
-            assert!(safe_reconnect_writer_window(
-                120_000,
-                180_000,
-                UnixMillis::new(110_000),
-            ));
-            // Never continue at/inside the five-second reserve or after
-            // either independently enforced deadline.
-            assert!(!safe_reconnect_writer_window(
-                120_000,
-                180_000,
-                UnixMillis::new(115_000),
-            ));
-            assert!(!safe_reconnect_writer_window(
-                180_000,
-                120_000,
-                UnixMillis::new(115_000),
-            ));
-        }
-
-        #[test]
-        fn retry_is_at_most_one_second_and_never_reaches_lease_deadline() {
-            assert_eq!(
-                bounded_heartbeat_retry_at(60_000, UnixMillis::new(10_000)),
-                Some(UnixMillis::new(11_000))
-            );
-            assert_eq!(
-                bounded_heartbeat_retry_at(60_000, UnixMillis::new(59_900)),
-                Some(UnixMillis::new(59_950))
-            );
-            assert_eq!(
-                bounded_heartbeat_retry_at(60_000, UnixMillis::new(59_999)),
-                None
-            );
-            assert_eq!(
-                bounded_heartbeat_retry_at(60_000, UnixMillis::new(60_000)),
-                None
-            );
-            assert_eq!(
-                bounded_heartbeat_retry_at(60_000, UnixMillis::new(60_001)),
-                None
-            );
-        }
     }
 
     fn now() -> Result<UnixMillis, ShippingCompositionError> {
@@ -1485,281 +1116,29 @@ mod windows {
 
 #[cfg(test)]
 mod tests {
-    use super::{
-        CloseObservationDisposition, ShippingCompositionError, close_observation_disposition,
-        open_with_one_fresh_claim, pending_recovery_failure_disposition, recovery_next_safe_step,
-        retryable_reconnect_observation,
-    };
-    #[cfg(not(windows))]
-    use super::{ShippingDeliveryCommand, run_claim, run_delivery_command};
-    use crate::operator_flow::OperatorFlowError;
-    use bridge_domain::ClaimUri;
-    use std::cell::Cell;
-
-    #[test]
-    fn committed_newer_generation_reopens_once_with_independent_claim()
-    -> Result<(), Box<dyn std::error::Error>> {
-        let old = ClaimUri::parse("profilebridge://claim/claim_original_0123456789abcdef")?;
-        let fresh = ClaimUri::parse("profilebridge://claim/claim_current_0123456789abcdef")?;
-        let calls = Cell::new(0);
-        let issued = Cell::new(0);
-        open_with_one_fresh_claim(
-            &old,
-            |claim| {
-                calls.set(calls.get() + 1);
-                if calls.get() == 1 {
-                    assert_eq!(claim, &old);
-                    Err(ShippingCompositionError::Operator(
-                        OperatorFlowError::FreshAuthorizedOpenRequired,
-                    ))
-                } else {
-                    assert_eq!(claim, &fresh);
-                    Ok(())
-                }
-            },
-            || {
-                issued.set(issued.get() + 1);
-                Ok(fresh.clone())
-            },
-        )?;
-        assert_eq!(calls.get(), 2);
-        assert_eq!(issued.get(), 1);
-        Ok(())
-    }
-
-    #[test]
-    fn reauthorization_is_never_started_for_other_failures_or_replayed_claims()
-    -> Result<(), Box<dyn std::error::Error>> {
-        let original = ClaimUri::parse("profilebridge://claim/claim_original_0123456789abcdef")?;
-        let calls = Cell::new(0);
-        let result = open_with_one_fresh_claim(
-            &original,
-            |_| {
-                calls.set(calls.get() + 1);
-                Err(ShippingCompositionError::ControlPlane)
-            },
-            || Err(ShippingCompositionError::ControlPlane),
-        );
-        assert_eq!(result, Err(ShippingCompositionError::ControlPlane));
-        assert_eq!(calls.get(), 1);
-        let denied = ShippingCompositionError::Initialization(
-            crate::generation_initialization::InitialProfileError::Authorization,
-        );
-        assert_eq!(
-            open_with_one_fresh_claim(
-                &original,
-                |_| {
-                    calls.set(calls.get() + 1);
-                    Err(ShippingCompositionError::Operator(
-                        OperatorFlowError::FreshAuthorizedOpenRequired,
-                    ))
-                },
-                || Err(denied),
-            ),
-            Err(denied)
-        );
-        assert_eq!(calls.get(), 2);
-        assert_eq!(
-            open_with_one_fresh_claim(
-                &original,
-                |_| {
-                    calls.set(calls.get() + 1);
-                    Err(ShippingCompositionError::Operator(
-                        OperatorFlowError::FreshAuthorizedOpenRequired,
-                    ))
-                },
-                || Ok(original.clone()),
-            ),
-            Err(ShippingCompositionError::ControlPlane)
-        );
-        assert_eq!(calls.get(), 3);
-        let fresh = ClaimUri::parse("profilebridge://claim/claim_current_0123456789abcdef")?;
-        assert_eq!(
-            open_with_one_fresh_claim(
-                &original,
-                |_| {
-                    calls.set(calls.get() + 1);
-                    Err(ShippingCompositionError::Operator(
-                        OperatorFlowError::FreshAuthorizedOpenRequired,
-                    ))
-                },
-                || Ok(fresh),
-            ),
-            Err(ShippingCompositionError::Operator(
-                OperatorFlowError::FreshAuthorizedOpenRequired
-            ))
-        );
-        assert_eq!(calls.get(), 5);
-        Ok(())
-    }
-
-    #[test]
-    fn native_oversize_recovery_reports_exact_cause_without_open_or_retry_authority() {
-        use crate::operator_flow::PendingSaveRecovery;
-        use crate::shipping_control_plane::ShippingControlPlaneError as Http;
-        use crate::shipping_generation_successor_control::RestartExactLocalCompletionError as Restart;
-
-        assert_eq!(
-            pending_recovery_failure_disposition(Restart::NativeSnapshotTooLarge),
-            PendingSaveRecovery::NativeSnapshotTooLarge
-        );
-        for other in [
-            Restart::LocalEvidenceChanged,
-            Restart::WriterOrLockUnresolved,
-            Restart::PreSealTransport,
-            Restart::ControlPlane(Http::HttpStatus),
-        ] {
-            assert_eq!(
-                pending_recovery_failure_disposition(other),
-                PendingSaveRecovery::Blocked
-            );
-        }
-    }
-
-    #[test]
-    fn reconnect_observation_never_spins_on_acl_denial_or_invalid_authority() {
-        use crate::shipping_control_plane::ShippingControlPlaneError as Http;
-        use crate::shipping_generation_successor_control::RestartExactLocalCompletionError as Restart;
-
-        for retryable in [Http::Transport, Http::HttpServerUncertain] {
-            assert!(
-                retryable_reconnect_observation(Restart::ControlPlane(retryable)),
-                "only temporary network uncertainty can continue the same Save"
-            );
-        }
-        for terminal in [Http::HttpStatus, Http::InvalidResponse, Http::Clock] {
-            assert!(
-                !retryable_reconnect_observation(Restart::ControlPlane(terminal)),
-                "explicit rejection or bad authority is never a retry grant"
-            );
-        }
-        for local in [
-            Restart::LocalEvidenceChanged,
-            Restart::NativeSnapshotTooLarge,
-            Restart::PreSealTransport,
-            Restart::PreSealResponseUncertain,
-            Restart::PreSealRejected,
-            Restart::PreSealUnavailable,
-            Restart::WriterOrLockUnresolved,
-            Restart::BindingOrRetirementFailed,
-            Restart::UploadOrCommitUncertain,
-        ] {
-            assert!(!retryable_reconnect_observation(local));
-        }
-    }
-
-    #[test]
-    fn failed_recovery_advises_only_safe_actions_without_replay_or_stale_open() {
-        use crate::shipping_control_plane::ShippingControlPlaneError as Http;
-        use crate::shipping_generation_successor_control::RestartExactLocalCompletionError as Restart;
-
-        for (failure, expected) in [
-            (
-                Restart::NativeSnapshotTooLarge,
-                "PRESERVE_LOCAL_BYTES;NATIVE_RESCUE_REQUIRED",
-            ),
-            (
-                Restart::PreSealTransport,
-                "PRESERVE_LOCAL_BYTES;FRESH_AUTHORIZED_OBSERVATION",
-            ),
-            (
-                Restart::PreSealResponseUncertain,
-                "PRESERVE_LOCAL_BYTES;FRESH_AUTHORIZED_OBSERVATION",
-            ),
-            (
-                Restart::UploadOrCommitUncertain,
-                "PRESERVE_LOCAL_BYTES;FRESH_AUTHORIZED_OBSERVATION",
-            ),
-            (
-                Restart::PreSealRejected,
-                "PRESERVE_LOCAL_BYTES;CHECK_SERVER_AUTHORITY",
-            ),
-            (
-                Restart::PreSealUnavailable,
-                "PRESERVE_LOCAL_BYTES;CHECK_SEALING_SERVICE",
-            ),
-            (
-                Restart::LocalEvidenceChanged,
-                "PRESERVE_LOCAL_BYTES;CHECK_LOCAL_EVIDENCE",
-            ),
-            (
-                Restart::WriterOrLockUnresolved,
-                "PRESERVE_LOCAL_BYTES;CHECK_NATIVE_WRITER",
-            ),
-            (
-                Restart::BindingOrRetirementFailed,
-                "PRESERVE_LOCAL_BYTES;RECONCILE_ACTIVE_EXACT",
-            ),
-            (
-                Restart::ControlPlane(Http::Transport),
-                "PRESERVE_LOCAL_BYTES;FRESH_AUTHORIZED_OBSERVATION",
-            ),
-            (
-                Restart::ControlPlane(Http::HttpServerUncertain),
-                "PRESERVE_LOCAL_BYTES;FRESH_AUTHORIZED_OBSERVATION",
-            ),
-            (
-                Restart::ControlPlane(Http::HttpStatus),
-                "PRESERVE_LOCAL_BYTES;CHECK_SERVER_AUTHORITY",
-            ),
-            (
-                Restart::ControlPlane(Http::LaunchLeaseConflict),
-                "PRESERVE_LOCAL_BYTES;CHECK_SERVER_AUTHORITY",
-            ),
-            (
-                Restart::ControlPlane(Http::InvalidResponse),
-                "PRESERVE_LOCAL_BYTES;INSPECT_SERVER_RESPONSE",
-            ),
-            (
-                Restart::ControlPlane(Http::Clock),
-                "PRESERVE_LOCAL_BYTES;CHECK_CLOCK",
-            ),
-        ] {
-            let step = recovery_next_safe_step(failure);
-            assert_eq!(step, expected);
-            assert!(step.starts_with("PRESERVE_LOCAL_BYTES;"));
-            assert!(!step.contains("RETRY_OWNED_RECOVERY"));
-            assert!(!step.contains("CONTINUE_OPEN"));
-        }
-    }
-
-    #[test]
-    fn only_verified_clean_shutdown_starts_save_and_unclean_exit_recovers() {
-        assert_eq!(
-            close_observation_disposition(Ok(false)),
-            Ok(CloseObservationDisposition::ContinueRuntime)
-        );
-        assert_eq!(
-            close_observation_disposition(Ok(true)),
-            Ok(CloseObservationDisposition::BeginConfirmedSave)
-        );
-        assert_eq!(
-            close_observation_disposition(Err(bridge_domain::BridgePortError::UncleanBrowserExit)),
-            Ok(CloseObservationDisposition::RecoverUncleanExit)
-        );
-        assert_eq!(
-            close_observation_disposition(Err(bridge_domain::BridgePortError::Unavailable)),
-            Err(bridge_domain::BridgePortError::Unavailable)
-        );
-    }
-
     #[cfg(not(windows))]
     #[test]
-    fn non_windows_shipping_binary_has_no_fallback_runtime()
+    fn non_windows_shipping_binary_has_no_browser_or_sync_fallback()
     -> Result<(), Box<dyn std::error::Error>> {
-        let claim = ClaimUri::parse("profilebridge://claim/claim_01JBRIDGE_FEASIBILITY")?;
-        assert_eq!(
-            run_claim(&claim),
+        use super::{ShippingCompositionError, run_closed_profile_sync, run_initial_profile};
+        use crate::generation_initialization::{InitialProfileOpen, InitialProfileStatus};
+        use profile_platform_primitives::{ActorId, ProfileId, TenantId};
+
+        let intent = InitialProfileOpen {
+            tenant_id: TenantId::parse("tenant_01JLOCAL")?,
+            actor_id: ActorId::parse("actor_01JLOCAL")?,
+            profile_id: ProfileId::parse("profile_01JLOCAL")?,
+            expected_version: 1,
+            status: InitialProfileStatus::Draft,
+        };
+        assert!(matches!(
+            run_initial_profile(&intent),
             Err(ShippingCompositionError::UnsupportedPlatform)
-        );
-        assert_eq!(
-            run_delivery_command(ShippingDeliveryCommand::ActivateStaged),
+        ));
+        assert!(matches!(
+            run_closed_profile_sync(&intent),
             Err(ShippingCompositionError::UnsupportedPlatform)
-        );
-        assert_eq!(
-            run_delivery_command(ShippingDeliveryCommand::HandoffArrived),
-            Err(ShippingCompositionError::UnsupportedPlatform)
-        );
+        ));
         Ok(())
     }
 }

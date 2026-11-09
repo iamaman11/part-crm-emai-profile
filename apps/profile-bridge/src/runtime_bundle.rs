@@ -1,6 +1,9 @@
+#[cfg(any(test, feature = "synthetic-test-bin"))]
 use crate::ProcessControlPort;
-use crate::operator_flow::RuntimeBundleSelectionPort;
-use bridge_domain::{BridgePortError, CAMOUHOST_IPC_VERSION, CamouhostMessage, CamouhostPort};
+use bridge_domain::BridgePortError;
+#[cfg(any(test, feature = "synthetic-test-bin"))]
+use bridge_domain::{CAMOUHOST_IPC_VERSION, CamouhostMessage, CamouhostPort};
+#[cfg(any(test, feature = "synthetic-test-bin"))]
 use profile_platform_primitives::SessionId;
 use runtime_bundle_domain::{
     BundleRelativePath, InventoryEntry, InventoryError, RuntimeInventory, RuntimeManifest,
@@ -13,6 +16,12 @@ use std::fmt;
 use std::fs;
 use std::io::Read;
 use std::path::{Component, Path, PathBuf};
+
+pub trait RuntimeBundleSelectionPort {
+    type Error;
+
+    fn select_bundle(&mut self) -> Result<ApprovedRuntimeBundle, Self::Error>;
+}
 
 const SHIPPING_RUNTIME_VERSION: &str = "2.0.0";
 const SHIPPING_PYTHON_VERSION: &str = "3.12";
@@ -813,8 +822,10 @@ fn sha256_hex(bytes: &[u8]) -> String {
     encoded
 }
 
+#[cfg(any(test, feature = "synthetic-test-bin"))]
 pub struct RuntimeSessionOrchestrator;
 
+#[cfg(any(test, feature = "synthetic-test-bin"))]
 impl RuntimeSessionOrchestrator {
     pub fn launch<P, C>(
         _bundle: &ApprovedRuntimeBundle,
@@ -903,6 +914,7 @@ impl RuntimeSessionOrchestrator {
     }
 }
 
+#[cfg(any(test, feature = "synthetic-test-bin"))]
 fn rollback_camouhost<P: ProcessControlPort>(
     process: &mut P,
     session_id: &SessionId,
@@ -914,6 +926,7 @@ fn rollback_camouhost<P: ProcessControlPort>(
     }
 }
 
+#[cfg(any(test, feature = "synthetic-test-bin"))]
 fn rollback_process_failure<P: ProcessControlPort>(
     process: &mut P,
     session_id: &SessionId,

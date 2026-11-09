@@ -9,7 +9,9 @@ use std::sync::atomic::{AtomicU64, Ordering};
 const ROOT_MARKER: &str = ".profile-platform-root";
 const ROOT_MARKER_CONTENT: &str = "profile-platform-local-root-v1\n";
 const GENERATION_MARKER: &str = ".profile-generation";
-const GENERATION_MARKER_CONTENT: &str = "profile-platform-generation-v1\n";
+const GENERATION_MARKER_HEADER: &str = "profile-platform-generation-v3";
+const MAX_GENERATION_MARKER_BYTES: u64 = 1_024;
+const GENERATION_MARKER_STAGE_PREFIX: &str = ".profile-generation.stage-";
 const BRIDGE_LOCK_FILE: &str = ".profile-platform.lock";
 const RECOVERY_MARKER_STAGE_PREFIX: &str = ".profile-platform.lock.recovery-";
 const GENERATION_ADMISSION_FILE: &str = ".profile-platform.writer-admission";
@@ -112,7 +114,7 @@ impl MaterializationRoot {
         fs::create_dir(&generation_path)?;
         write_new_text(
             &generation_path.join(GENERATION_MARKER),
-            GENERATION_MARKER_CONTENT,
+            &render_generation_marker(generation_id, None, 0, None)?,
         )?;
         GenerationWorkspace::open(generation_path, tenant_id, profile_id, generation_id)
     }
@@ -160,14 +162,269 @@ impl MaterializationRoot {
         GenerationWorkspace::open(path, tenant_id, profile_id, generation_id)
     }
 
-    /// Physical cache placement is independent of opaque ID lengths. Full scoped identity is
-    /// hashed without truncation; three directory levels preserve the root admission boundary.
-    pub(crate) fn generation_path(
+    /// One stable local folder per tenant/profile. The existing generation marker
+    /// is also the sole local record of the last confirmed cloud base and version.
+    pub fn create_profile_current(
+        &self,
+        tenant_id: &TenantId,
+        profile_id: &ProfileId,
+        generation_id: &GenerationId,
+        profile_version: u64,
+    ) -> Result<GenerationWorkspace, LocalProfileError> {
+        let path = self.prepare_profile_current_path(tenant_id, profile_id)?;
+        fs::create_dir(&path)?;
+        write_new_text(
+            &path.join(GENERATION_MARKER),
+            &render_generation_marker(generation_id, None, profile_version, None)?,
+        )?;
+        GenerationWorkspace::open(path, tenant_id, profile_id, generation_id)
+    }
+
+    /// Open the stable local folder from its existing generation marker.
+    /// Missing or corrupt metadata never creates a replacement workspace.
+    pub fn open_profile_current(
+        &self,
+        tenant_id: &TenantId,
+        profile_id: &ProfileId,
+    ) -> Result<GenerationWorkspace, LocalProfileError> {
+        let path = self
+            .existing_profile_current_path(tenant_id, profile_id)?
+            .ok_or(LocalProfileError::Io(std::io::ErrorKind::NotFound))?;
+        let (generation_id, _, _, _) = read_generation_marker(&path.join(GENERATION_MARKER))?;
+        GenerationWorkspace::open(path, tenant_id, profile_id, &generation_id)
+    }
+
+    /// Advance the local cloud base only after a verified Worker Sync receipt.
+    /// Browser bytes and the physical CURRENT path are unchanged.
+    pub fn update_profile_current_sync_base(
+        &self,
+        workspace: &GenerationWorkspace,
+        generation_id: &GenerationId,
+        profile_version: u64,
+    ) -> Result<GenerationWorkspace, LocalProfileError> {
+        if workspace.pending_sync.is_some() {
+            return Err(LocalProfileError::InvalidPolicy);
+        }
+        let current_path = self.checked_profile_current_path(workspace)?;
+        replace_generation_marker(
+            &current_path.join(GENERATION_MARKER),
+            &render_generation_marker(generation_id, Some(generation_id), profile_version, None)?,
+        )?;
+        GenerationWorkspace::open(
+            current_path,
+            workspace.tenant_id(),
+            workspace.profile_id(),
+            generation_id,
+        )
+    }
+
+    /// Persist the exact encrypted successor descriptor before the network
+    /// Commit. The existing generation marker remains the sole local state
+    /// owner; no second journal or sidecar is introduced.
+    pub fn set_profile_current_pending_sync(
+        &self,
+        workspace: &GenerationWorkspace,
+        pending: PendingSyncDescriptor,
+    ) -> Result<GenerationWorkspace, LocalProfileError> {
+        if workspace.pending_sync.is_some() || pending.phase != PendingSyncPhase::Prepared {
+            return Err(LocalProfileError::InvalidPolicy);
+        }
+        let current_path = self.checked_profile_current_path(workspace)?;
+        replace_generation_marker(
+            &current_path.join(GENERATION_MARKER),
+            &render_generation_marker(
+                &workspace.generation_id,
+                workspace.base_generation_id.as_ref(),
+                workspace.profile_version,
+                Some(&pending),
+            )?,
+        )?;
+        GenerationWorkspace::open(
+            current_path,
+            workspace.tenant_id(),
+            workspace.profile_id(),
+            workspace.generation_id(),
+        )
+    }
+
+    /// Mark a Worker-confirmed exact Commit in the same local marker. The
+    /// pending descriptor is retained until dirty-marker cleanup is complete,
+    /// so a process crash cannot turn a successful Commit into a false N+2.
+    pub fn mark_profile_current_pending_sync_committed(
+        &self,
+        workspace: &GenerationWorkspace,
+    ) -> Result<GenerationWorkspace, LocalProfileError> {
+        let pending = workspace
+            .pending_sync
+            .as_ref()
+            .ok_or(LocalProfileError::InvalidPolicy)?;
+        if pending.phase != PendingSyncPhase::Prepared {
+            return Err(LocalProfileError::InvalidPolicy);
+        }
+        let profile_version = workspace
+            .profile_version
+            .checked_add(1)
+            .filter(|value| *value < i64::MAX as u64)
+            .ok_or(LocalProfileError::InvalidPolicy)?;
+        let current_path = self.checked_profile_current_path(workspace)?;
+        let committed = pending.with_phase(PendingSyncPhase::Committed);
+        replace_generation_marker(
+            &current_path.join(GENERATION_MARKER),
+            &render_generation_marker(
+                pending.candidate_generation_id(),
+                Some(pending.candidate_generation_id()),
+                profile_version,
+                Some(&committed),
+            )?,
+        )?;
+        GenerationWorkspace::open(
+            current_path,
+            workspace.tenant_id(),
+            workspace.profile_id(),
+            pending.candidate_generation_id(),
+        )
+    }
+
+    /// Clear only the exact pending descriptor already read from the current
+    /// marker. A committed descriptor is cleared only after its local cleanup
+    /// has been completed by the Sync owner.
+    pub fn clear_profile_current_pending_sync(
+        &self,
+        workspace: &GenerationWorkspace,
+    ) -> Result<GenerationWorkspace, LocalProfileError> {
+        if workspace.pending_sync.is_none() {
+            return Err(LocalProfileError::InvalidPolicy);
+        }
+        let current_path = self.checked_profile_current_path(workspace)?;
+        replace_generation_marker(
+            &current_path.join(GENERATION_MARKER),
+            &render_generation_marker(
+                &workspace.generation_id,
+                workspace.base_generation_id.as_ref(),
+                workspace.profile_version,
+                None,
+            )?,
+        )?;
+        GenerationWorkspace::open(
+            current_path,
+            workspace.tenant_id(),
+            workspace.profile_id(),
+            workspace.generation_id(),
+        )
+    }
+
+    fn checked_profile_current_path(
+        &self,
+        workspace: &GenerationWorkspace,
+    ) -> Result<PathBuf, LocalProfileError> {
+        let current_path = self.profile_current_path(workspace.tenant_id(), workspace.profile_id());
+        let metadata = fs::symlink_metadata(&current_path)?;
+        if metadata.file_type().is_symlink() || !metadata.is_dir() {
+            return Err(LocalProfileError::SymbolicLinkRejected);
+        }
+        #[cfg(windows)]
+        {
+            use std::os::windows::fs::MetadataExt;
+            if metadata.file_attributes() & 0x0400 != 0 {
+                return Err(LocalProfileError::SymbolicLinkRejected);
+            }
+        }
+        let current_path = fs::canonicalize(current_path)?;
+        if current_path != workspace.path() {
+            return Err(LocalProfileError::UnsafeRelativePath);
+        }
+        let (generation, base, version, pending) =
+            read_generation_marker(&current_path.join(GENERATION_MARKER))?;
+        if generation != workspace.generation_id
+            || base != workspace.base_generation_id
+            || version != workspace.profile_version
+            || pending != workspace.pending_sync
+        {
+            return Err(LocalProfileError::GenerationMarkerMismatch);
+        }
+        Ok(current_path)
+    }
+
+    pub(crate) fn prepare_profile_current_path(
         &self,
         tenant: &TenantId,
         profile: &ProfileId,
-        generation: &GenerationId,
-    ) -> PathBuf {
+    ) -> Result<PathBuf, LocalProfileError> {
+        if self
+            .existing_profile_current_path(tenant, profile)?
+            .is_some()
+        {
+            return Err(LocalProfileError::TargetAlreadyExists);
+        }
+        let path = self.profile_current_path(tenant, profile);
+        let mut parent = self.canonical_path.clone();
+        for component in path
+            .strip_prefix(&self.canonical_path)
+            .map_err(|_| LocalProfileError::UnsafeRelativePath)?
+            .components()
+            .take(2)
+        {
+            parent = ensure_directory(
+                &parent,
+                component
+                    .as_os_str()
+                    .to_str()
+                    .ok_or(LocalProfileError::UnsafeRelativePath)?,
+            )?;
+        }
+        Ok(path)
+    }
+
+    fn existing_profile_current_path(
+        &self,
+        tenant: &TenantId,
+        profile: &ProfileId,
+    ) -> Result<Option<PathBuf>, LocalProfileError> {
+        let path = self.profile_current_path(tenant, profile);
+        let mut parent = self.canonical_path.clone();
+        for component in path
+            .strip_prefix(&self.canonical_path)
+            .map_err(|_| LocalProfileError::UnsafeRelativePath)?
+            .components()
+            .take(2)
+        {
+            let value = component
+                .as_os_str()
+                .to_str()
+                .ok_or(LocalProfileError::UnsafeRelativePath)?;
+            match open_directory(&parent, value) {
+                Ok(next) => parent = next,
+                Err(LocalProfileError::Io(std::io::ErrorKind::NotFound)) => return Ok(None),
+                Err(error) => return Err(error),
+            }
+        }
+        match fs::symlink_metadata(&path) {
+            Ok(metadata) if metadata.file_type().is_symlink() => {
+                Err(LocalProfileError::SymbolicLinkRejected)
+            }
+            Ok(metadata) => {
+                #[cfg(windows)]
+                {
+                    use std::os::windows::fs::MetadataExt;
+                    if metadata.file_attributes() & 0x0400 != 0 {
+                        return Err(LocalProfileError::SymbolicLinkRejected);
+                    }
+                }
+                if !metadata.is_dir() {
+                    return Err(LocalProfileError::RootIsNotDirectory);
+                }
+                Ok(Some(path))
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
+            Err(error) => Err(error.into()),
+        }
+    }
+
+    fn profile_current_path(&self, tenant: &TenantId, profile: &ProfileId) -> PathBuf {
+        self.profile_scope_path(tenant, profile).join("current")
+    }
+
+    fn profile_scope_path(&self, tenant: &TenantId, profile: &ProfileId) -> PathBuf {
         let mut digest = Sha256::new();
         digest.update(b"profile-platform/workspace-scope/v2\0");
         for id in [tenant.as_str(), profile.as_str()] {
@@ -179,6 +436,17 @@ impl MaterializationRoot {
             .iter()
             .map(|byte| format!("{byte:02x}"))
             .collect();
+        self.canonical_path.join(&scope[..32]).join(&scope[32..])
+    }
+
+    /// Physical cache placement is independent of opaque ID lengths. Full scoped identity is
+    /// hashed without truncation; three directory levels preserve the root admission boundary.
+    pub(crate) fn generation_path(
+        &self,
+        tenant: &TenantId,
+        profile: &ProfileId,
+        generation: &GenerationId,
+    ) -> PathBuf {
         let mut digest = Sha256::new();
         digest.update(b"profile-platform/workspace-generation/v2\0");
         digest.update(generation.as_str().as_bytes());
@@ -187,10 +455,7 @@ impl MaterializationRoot {
             .iter()
             .map(|byte| format!("{byte:02x}"))
             .collect();
-        self.canonical_path
-            .join(&scope[..32])
-            .join(&scope[32..])
-            .join(generation)
+        self.profile_scope_path(tenant, profile).join(generation)
     }
 
     fn existing_generation_path(
@@ -219,23 +484,9 @@ impl MaterializationRoot {
             }
         }
         match fs::symlink_metadata(&current) {
-            Ok(_) => return Ok(Some(current)),
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
-            Err(error) => return Err(error.into()),
-        }
-        // Existing user/recovery data has a durable obligation. Lookup only: every new write
-        // uses the compact layout, and an old generation must never be silently shadowed.
-        let legacy = (|| {
-            let tenant = open_directory(&self.canonical_path, tenant.as_str())?;
-            let profile = open_directory(&tenant, profile.as_str())?;
-            let path = profile.join(generation.as_str());
-            fs::symlink_metadata(&path)?;
-            Ok(path)
-        })();
-        match legacy {
-            Ok(path) => Ok(Some(path)),
-            Err(LocalProfileError::Io(std::io::ErrorKind::NotFound)) => Ok(None),
-            Err(error) => Err(error),
+            Ok(_) => Ok(Some(current)),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
+            Err(error) => Err(error.into()),
         }
     }
 
@@ -286,12 +537,196 @@ impl MaterializationRoot {
     }
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum PendingSyncPhase {
+    Prepared,
+    Committed,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct PendingSyncDescriptor {
+    candidate_generation_id: GenerationId,
+    metadata_digest: [u8; 32],
+    container_digest: [u8; 32],
+    container_bytes: u64,
+    plaintext_digest: [u8; 32],
+    plaintext_bytes: u64,
+    phase: PendingSyncPhase,
+}
+
+impl PendingSyncDescriptor {
+    pub fn new(
+        candidate_generation_id: GenerationId,
+        metadata_digest: [u8; 32],
+        container_digest: [u8; 32],
+        container_bytes: u64,
+        plaintext_digest: [u8; 32],
+        plaintext_bytes: u64,
+    ) -> Result<Self, LocalProfileError> {
+        if container_bytes == 0
+            || container_bytes >= i64::MAX as u64
+            || plaintext_bytes >= i64::MAX as u64
+        {
+            return Err(LocalProfileError::InvalidPolicy);
+        }
+        Ok(Self {
+            candidate_generation_id,
+            metadata_digest,
+            container_digest,
+            container_bytes,
+            plaintext_digest,
+            plaintext_bytes,
+            phase: PendingSyncPhase::Prepared,
+        })
+    }
+
+    #[must_use]
+    pub const fn candidate_generation_id(&self) -> &GenerationId {
+        &self.candidate_generation_id
+    }
+
+    #[must_use]
+    pub const fn metadata_digest(&self) -> &[u8; 32] {
+        &self.metadata_digest
+    }
+
+    #[must_use]
+    pub const fn container_digest(&self) -> &[u8; 32] {
+        &self.container_digest
+    }
+
+    #[must_use]
+    pub const fn container_bytes(&self) -> u64 {
+        self.container_bytes
+    }
+
+    #[must_use]
+    pub const fn plaintext_digest(&self) -> &[u8; 32] {
+        &self.plaintext_digest
+    }
+
+    #[must_use]
+    pub const fn plaintext_bytes(&self) -> u64 {
+        self.plaintext_bytes
+    }
+
+    #[must_use]
+    pub const fn is_committed(&self) -> bool {
+        matches!(self.phase, PendingSyncPhase::Committed)
+    }
+
+    fn with_phase(&self, phase: PendingSyncPhase) -> Self {
+        let mut value = self.clone();
+        value.phase = phase;
+        value
+    }
+
+    fn render(&self) -> String {
+        format!(
+            "{}|{}|{}|{}|{}|{}|{}",
+            match self.phase {
+                PendingSyncPhase::Prepared => "prepared",
+                PendingSyncPhase::Committed => "committed",
+            },
+            self.candidate_generation_id.as_str(),
+            encode_lower_hex(&self.metadata_digest),
+            encode_lower_hex(&self.container_digest),
+            self.container_bytes,
+            encode_lower_hex(&self.plaintext_digest),
+            self.plaintext_bytes,
+        )
+    }
+}
+
+fn parse_pending_sync(value: &str) -> Result<PendingSyncDescriptor, LocalProfileError> {
+    let mut parts = value.split('|');
+    let phase = match parts.next() {
+        Some("prepared") => PendingSyncPhase::Prepared,
+        Some("committed") => PendingSyncPhase::Committed,
+        _ => return Err(LocalProfileError::GenerationMarkerMismatch),
+    };
+    let candidate_generation_id = GenerationId::parse(
+        parts
+            .next()
+            .ok_or(LocalProfileError::GenerationMarkerMismatch)?,
+    )
+    .map_err(|_| LocalProfileError::GenerationMarkerMismatch)?;
+    let metadata_digest = decode_lower_hex_32(
+        parts
+            .next()
+            .ok_or(LocalProfileError::GenerationMarkerMismatch)?,
+    )
+    .ok_or(LocalProfileError::GenerationMarkerMismatch)?;
+    let container_digest = decode_lower_hex_32(
+        parts
+            .next()
+            .ok_or(LocalProfileError::GenerationMarkerMismatch)?,
+    )
+    .ok_or(LocalProfileError::GenerationMarkerMismatch)?;
+    let container_bytes = parts
+        .next()
+        .and_then(|value| value.parse::<u64>().ok())
+        .filter(|value| *value > 0 && *value < i64::MAX as u64)
+        .ok_or(LocalProfileError::GenerationMarkerMismatch)?;
+    let plaintext_digest = decode_lower_hex_32(
+        parts
+            .next()
+            .ok_or(LocalProfileError::GenerationMarkerMismatch)?,
+    )
+    .ok_or(LocalProfileError::GenerationMarkerMismatch)?;
+    let plaintext_bytes = parts
+        .next()
+        .and_then(|value| value.parse::<u64>().ok())
+        .filter(|value| *value < i64::MAX as u64)
+        .ok_or(LocalProfileError::GenerationMarkerMismatch)?;
+    if parts.next().is_some() {
+        return Err(LocalProfileError::GenerationMarkerMismatch);
+    }
+    Ok(PendingSyncDescriptor {
+        candidate_generation_id,
+        metadata_digest,
+        container_digest,
+        container_bytes,
+        plaintext_digest,
+        plaintext_bytes,
+        phase,
+    })
+}
+
+fn encode_lower_hex(value: &[u8; 32]) -> String {
+    value.iter().map(|byte| format!("{byte:02x}")).collect()
+}
+
+fn decode_lower_hex_32(value: &str) -> Option<[u8; 32]> {
+    if value.len() != 64 {
+        return None;
+    }
+    let mut output = [0_u8; 32];
+    for (index, byte) in output.iter_mut().enumerate() {
+        let high = lower_hex_nibble(value.as_bytes()[index * 2])?;
+        let low = lower_hex_nibble(value.as_bytes()[index * 2 + 1])?;
+        *byte = (high << 4) | low;
+    }
+    Some(output)
+}
+
+fn lower_hex_nibble(value: u8) -> Option<u8> {
+    match value {
+        b'0'..=b'9' => Some(value - b'0'),
+        b'a'..=b'f' => Some(value - b'a' + 10),
+        _ => None,
+    }
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct GenerationWorkspace {
     canonical_path: PathBuf,
     tenant_id: TenantId,
     profile_id: ProfileId,
     generation_id: GenerationId,
+    base_generation_id: Option<GenerationId>,
+    profile_version: u64,
+    pending_sync: Option<PendingSyncDescriptor>,
 }
 
 impl GenerationWorkspace {
@@ -312,7 +747,9 @@ impl GenerationWorkspace {
         if !marker.exists() {
             return Err(LocalProfileError::GenerationMarkerMissing);
         }
-        if read_control_text(&marker)? != GENERATION_MARKER_CONTENT {
+        let (marker_generation, base_generation_id, profile_version, pending_sync) =
+            read_generation_marker(&marker)?;
+        if &marker_generation != generation {
             return Err(LocalProfileError::GenerationMarkerMismatch);
         }
         Ok(Self {
@@ -320,6 +757,9 @@ impl GenerationWorkspace {
             tenant_id: tenant.clone(),
             profile_id: profile.clone(),
             generation_id: generation.clone(),
+            base_generation_id,
+            profile_version,
+            pending_sync,
         })
     }
 
@@ -339,12 +779,86 @@ impl GenerationWorkspace {
     }
 
     #[must_use]
+    pub fn base_generation_id(&self) -> Option<&GenerationId> {
+        self.base_generation_id.as_ref()
+    }
+
+    #[must_use]
+    pub const fn profile_version(&self) -> u64 {
+        self.profile_version
+    }
+
+    #[must_use]
+    pub fn pending_sync(&self) -> Option<&PendingSyncDescriptor> {
+        self.pending_sync.as_ref()
+    }
+
+    /// Bind a temporary restore workspace to its final cloud generation before
+    /// atomic publication. No legacy marker or second metadata file is needed.
+    pub(crate) fn rebind_staging_generation(
+        &mut self,
+        generation_id: &GenerationId,
+    ) -> Result<(), LocalProfileError> {
+        if !self.generation_id.as_str().starts_with("reopen_stage_")
+            || self.base_generation_id.is_some()
+            || self.profile_version != 0
+            || &self.generation_id == generation_id
+        {
+            return Err(LocalProfileError::InvalidPolicy);
+        }
+        let marker = self.path().join(GENERATION_MARKER);
+        let (staged_id, base_generation_id, profile_version, pending_sync) =
+            read_generation_marker(&marker)?;
+        if staged_id != self.generation_id
+            || base_generation_id.is_some()
+            || profile_version != 0
+            || pending_sync.is_some()
+        {
+            return Err(LocalProfileError::GenerationMarkerMismatch);
+        }
+        replace_generation_marker(
+            &marker,
+            &render_generation_marker(generation_id, None, 0, None)?,
+        )?;
+        self.generation_id = generation_id.clone();
+        Ok(())
+    }
+
+    /// Bind a verified, not-yet-published restore workspace to the exact cloud
+    /// CURRENT and its confirmed Profile version. Uses the one existing marker.
+    /// No existing local CURRENT is ever opened or modified here.
+    pub(crate) fn rebind_staging_current(
+        &mut self,
+        generation_id: &GenerationId,
+        profile_version: u64,
+    ) -> Result<(), LocalProfileError> {
+        if profile_version == 0 {
+            return Err(LocalProfileError::InvalidPolicy);
+        }
+        self.rebind_staging_generation(generation_id)?;
+        replace_generation_marker(
+            &self.path().join(GENERATION_MARKER),
+            &render_generation_marker(generation_id, Some(generation_id), profile_version, None)?,
+        )?;
+        self.base_generation_id = Some(generation_id.clone());
+        self.profile_version = profile_version;
+        Ok(())
+    }
+
+    #[must_use]
     pub fn path(&self) -> &Path {
         &self.canonical_path
     }
 
     pub fn inventory(&self) -> Result<GenerationInventory, LocalProfileError> {
         build_inventory(&self.canonical_path)
+    }
+
+    /// Fast size hint for the in-memory Open lifecycle record. Metadata only:
+    /// no reads of browser cookies, SQLite/WAL contents, sessions or caches.
+    /// Full per-file hashes are computed only by snapshot/Save/repair owners.
+    pub fn metadata_total_bytes(&self) -> Result<u64, LocalProfileError> {
+        metadata_total_bytes(&self.canonical_path)
     }
 
     /// Flush a verified independent native copy, including its directory
@@ -440,8 +954,11 @@ impl BridgeWorkspaceLock {
 
     /// Caller holds exclusive ROOT admission for legacy v1 markers, or exclusive
     /// GENERATION admission plus shared root admission for new v2 markers.
-    /// It also proved a fresh same-device fence and no live native Firefox writer.
+    /// The caller supplies the installed device identity and proves absence of a
+    /// live native Firefox writer; this function verifies the exact marker owner
+    /// and strictly older epoch. This is not a cloud lease/fence.
     /// The persistent marker is crash evidence, not proof of a surviving OS writer.
+    #[cfg(any(windows, test, feature = "synthetic-test-bin"))]
     pub(super) fn replace_interrupted(
         workspace: &GenerationWorkspace,
         device_id: &DeviceId,
@@ -490,6 +1007,7 @@ impl BridgeWorkspaceLock {
     // interval with no recovery evidence, even though the OS locks are safe.
     // The small callback is a local fault boundary for the crash-before-rename
     // regression; shipping always supplies the no-op and never bypasses checks.
+    #[cfg(any(windows, test, feature = "synthetic-test-bin"))]
     fn replace_interrupted_with_pre_publish<F>(
         workspace: &GenerationWorkspace,
         device_id: &DeviceId,
@@ -663,6 +1181,13 @@ fn ensure_directory(parent: &Path, safe_segment: &str) -> Result<PathBuf, LocalP
         if metadata.file_type().is_symlink() {
             return Err(LocalProfileError::SymbolicLinkRejected);
         }
+        #[cfg(windows)]
+        {
+            use std::os::windows::fs::MetadataExt;
+            if metadata.file_attributes() & 0x0400 != 0 {
+                return Err(LocalProfileError::SymbolicLinkRejected);
+            }
+        }
         if !metadata.is_dir() {
             return Err(LocalProfileError::RootIsNotDirectory);
         }
@@ -685,10 +1210,186 @@ fn open_directory(parent: &Path, safe_segment: &str) -> Result<PathBuf, LocalPro
     if metadata.file_type().is_symlink() {
         return Err(LocalProfileError::SymbolicLinkRejected);
     }
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::MetadataExt;
+        if metadata.file_attributes() & 0x0400 != 0 {
+            return Err(LocalProfileError::SymbolicLinkRejected);
+        }
+    }
     if !metadata.is_dir() {
         return Err(LocalProfileError::RootIsNotDirectory);
     }
     Ok(path)
+}
+
+fn render_generation_marker(
+    generation_id: &GenerationId,
+    base_generation_id: Option<&GenerationId>,
+    profile_version: u64,
+    pending_sync: Option<&PendingSyncDescriptor>,
+) -> Result<String, LocalProfileError> {
+    if profile_version >= i64::MAX as u64
+        || base_generation_id.is_some_and(|base| base != generation_id || profile_version == 0)
+    {
+        return Err(LocalProfileError::InvalidPolicy);
+    }
+    if let Some(pending) = pending_sync {
+        let valid = match pending.phase {
+            PendingSyncPhase::Prepared => {
+                profile_version
+                    .checked_add(1)
+                    .is_some_and(|next| next < i64::MAX as u64)
+                    && match base_generation_id {
+                        Some(base) => {
+                            base == generation_id
+                                && pending.candidate_generation_id != *generation_id
+                        }
+                        None => pending.candidate_generation_id == *generation_id,
+                    }
+            }
+            PendingSyncPhase::Committed => {
+                base_generation_id == Some(&pending.candidate_generation_id)
+                    && generation_id == &pending.candidate_generation_id
+                    && profile_version > 0
+            }
+        };
+        if !valid {
+            return Err(LocalProfileError::InvalidPolicy);
+        }
+    }
+    let pending = pending_sync.map_or_else(|| "-".to_owned(), PendingSyncDescriptor::render);
+    Ok(format!(
+        "{GENERATION_MARKER_HEADER}\n{}\n{}\n{}\n{}\n",
+        generation_id.as_str(),
+        base_generation_id.map_or("-", GenerationId::as_str),
+        profile_version,
+        pending,
+    ))
+}
+
+fn read_generation_marker(
+    path: &Path,
+) -> Result<
+    (
+        GenerationId,
+        Option<GenerationId>,
+        u64,
+        Option<PendingSyncDescriptor>,
+    ),
+    LocalProfileError,
+> {
+    let metadata = fs::symlink_metadata(path)?;
+    if metadata.file_type().is_symlink() {
+        return Err(LocalProfileError::SymbolicLinkRejected);
+    }
+    if !metadata.is_file() || metadata.len() > MAX_GENERATION_MARKER_BYTES {
+        return Err(LocalProfileError::GenerationMarkerMismatch);
+    }
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::MetadataExt;
+        if metadata.file_attributes() & 0x0400 != 0 {
+            return Err(LocalProfileError::SymbolicLinkRejected);
+        }
+    }
+    let content = read_control_text(path)?;
+    let mut lines = content.lines();
+    if lines.next() != Some(GENERATION_MARKER_HEADER) {
+        return Err(LocalProfileError::GenerationMarkerMismatch);
+    }
+    let generation_id = GenerationId::parse(
+        lines
+            .next()
+            .ok_or(LocalProfileError::GenerationMarkerMismatch)?,
+    )
+    .map_err(|_| LocalProfileError::GenerationMarkerMismatch)?;
+    let base_generation_id = match lines.next() {
+        Some("-") => None,
+        Some(value) => Some(
+            GenerationId::parse(value).map_err(|_| LocalProfileError::GenerationMarkerMismatch)?,
+        ),
+        None => return Err(LocalProfileError::GenerationMarkerMismatch),
+    };
+    let profile_version = lines
+        .next()
+        .and_then(|value| value.parse::<u64>().ok())
+        .filter(|value| *value < i64::MAX as u64)
+        .ok_or(LocalProfileError::GenerationMarkerMismatch)?;
+    let pending_sync = match lines.next() {
+        Some("-") => None,
+        Some(value) => Some(parse_pending_sync(value)?),
+        None => return Err(LocalProfileError::GenerationMarkerMismatch),
+    };
+    if lines.next().is_some()
+        || base_generation_id
+            .as_ref()
+            .is_some_and(|base| base != &generation_id || profile_version == 0)
+    {
+        return Err(LocalProfileError::GenerationMarkerMismatch);
+    }
+    if let Some(pending) = pending_sync.as_ref() {
+        let valid = match pending.phase {
+            PendingSyncPhase::Prepared => {
+                profile_version
+                    .checked_add(1)
+                    .is_some_and(|next| next < i64::MAX as u64)
+                    && match base_generation_id.as_ref() {
+                        Some(base) => {
+                            base == &generation_id
+                                && pending.candidate_generation_id != generation_id
+                        }
+                        None => pending.candidate_generation_id == generation_id,
+                    }
+            }
+            PendingSyncPhase::Committed => {
+                base_generation_id.as_ref() == Some(&pending.candidate_generation_id)
+                    && generation_id == pending.candidate_generation_id
+                    && profile_version > 0
+            }
+        };
+        if !valid {
+            return Err(LocalProfileError::GenerationMarkerMismatch);
+        }
+    }
+    Ok((
+        generation_id,
+        base_generation_id,
+        profile_version,
+        pending_sync,
+    ))
+}
+
+fn replace_generation_marker(path: &Path, content: &str) -> Result<(), LocalProfileError> {
+    let metadata = fs::symlink_metadata(path)?;
+    if metadata.file_type().is_symlink() {
+        return Err(LocalProfileError::SymbolicLinkRejected);
+    }
+    if !metadata.is_file() || metadata.len() > MAX_GENERATION_MARKER_BYTES {
+        return Err(LocalProfileError::GenerationMarkerMismatch);
+    }
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::MetadataExt;
+        if metadata.file_attributes() & 0x0400 != 0 {
+            return Err(LocalProfileError::SymbolicLinkRejected);
+        }
+    }
+    let parent = path.parent().ok_or(LocalProfileError::UnsafeRelativePath)?;
+    let sequence = RECOVERY_MARKER_SEQUENCE.fetch_add(1, Ordering::Relaxed);
+    let staged = parent.join(format!(
+        "{GENERATION_MARKER_STAGE_PREFIX}{}-{sequence}",
+        std::process::id()
+    ));
+    write_new_text(&staged, content)?;
+    let current = fs::symlink_metadata(path)?;
+    if current.file_type().is_symlink() || !current.is_file() {
+        return Err(LocalProfileError::GenerationMarkerMismatch);
+    }
+    fs::rename(&staged, path)?;
+    #[cfg(unix)]
+    File::open(parent)?.sync_all()?;
+    Ok(())
 }
 
 fn write_new_text(path: &Path, content: &str) -> Result<(), LocalProfileError> {
@@ -709,6 +1410,54 @@ fn read_control_text(path: &Path) -> Result<String, LocalProfileError> {
     let mut content = String::new();
     File::open(path)?.read_to_string(&mut content)?;
     Ok(content)
+}
+
+// Do not replace this with inventory(): its content reads are Save-only.
+fn metadata_total_bytes(root: &Path) -> Result<u64, LocalProfileError> {
+    let mut dirs = vec![root.to_path_buf()];
+    let mut count = 0_usize;
+    let mut total = 0_u64;
+    while let Some(dir) = dirs.pop() {
+        for child in fs::read_dir(&dir)? {
+            let path = child?.path();
+            let relative = path
+                .strip_prefix(root)
+                .map_err(|_| LocalProfileError::UnsafeRelativePath)?;
+            let relative = normalized_relative_path(relative)?;
+            let metadata = fs::symlink_metadata(&path)?;
+            let kind = metadata.file_type();
+            if kind.is_symlink() {
+                return Err(LocalProfileError::SymbolicLinkRejected);
+            }
+            #[cfg(windows)]
+            {
+                use std::os::windows::fs::MetadataExt;
+                if metadata.file_attributes() & 0x0400 != 0 {
+                    return Err(LocalProfileError::SymbolicLinkRejected);
+                }
+            }
+            if is_ephemeral_browser_lock(&relative) || is_bridge_control_file(&relative) {
+                if !kind.is_file() {
+                    return Err(LocalProfileError::SpecialFileRejected);
+                }
+                continue;
+            }
+            if kind.is_dir() {
+                dirs.push(path);
+            } else if kind.is_file() {
+                count += 1;
+                if count > MAX_INVENTORY_FILES {
+                    return Err(LocalProfileError::InventoryLimitExceeded);
+                }
+                total = total
+                    .checked_add(metadata.len())
+                    .ok_or(LocalProfileError::InventorySizeOverflow)?;
+            } else {
+                return Err(LocalProfileError::SpecialFileRejected);
+            }
+        }
+    }
+    Ok(total)
 }
 
 fn build_inventory(root: &Path) -> Result<GenerationInventory, LocalProfileError> {
@@ -880,8 +1629,9 @@ fn normalized_relative_path(relative: &Path) -> Result<String, LocalProfileError
 fn is_bridge_control_file(relative_path: &str) -> bool {
     matches!(
         relative_path,
-        GENERATION_MARKER | BRIDGE_LOCK_FILE | GENERATION_ADMISSION_FILE
+        GENERATION_MARKER | BRIDGE_LOCK_FILE | GENERATION_ADMISSION_FILE | ".local-unsynced"
     ) || relative_path.starts_with(RECOVERY_MARKER_STAGE_PREFIX)
+        || relative_path.starts_with(GENERATION_MARKER_STAGE_PREFIX)
 }
 
 fn is_ephemeral_browser_lock(relative_path: &str) -> bool {
@@ -961,6 +1711,33 @@ mod tests {
             ProfileId::parse(format!("profile_reject_{sequence}"))?,
             GenerationId::parse(format!("generation_reject_{sequence}"))?,
         ))
+    }
+
+    #[test]
+    fn ordinary_open_metadata_size_matches_save_inventory_without_reading_content()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let (path, root, tenant, profile, generation) = fixture()?;
+        let workspace = root.create_generation(&tenant, &profile, &generation)?;
+        std::fs::write(workspace.path().join("camoufox-config.json"), b"{}\\n")?;
+        std::fs::create_dir_all(workspace.path().join("user_data"))?;
+        std::fs::write(
+            workspace.path().join("user_data").join("cookies.sqlite"),
+            vec![5_u8; 8192],
+        )?;
+        assert_eq!(
+            workspace.metadata_total_bytes()?,
+            workspace.inventory()?.total_bytes()
+        );
+        std::fs::write(
+            workspace.path().join("user_data").join("cookies.sqlite"),
+            vec![9_u8; 8192],
+        )?;
+        assert_eq!(
+            workspace.metadata_total_bytes()?,
+            workspace.inventory()?.total_bytes()
+        );
+        let _ = crate::test_support::remove_test_root(&path);
+        Ok(())
     }
 
     #[test]

@@ -76,14 +76,27 @@ async fn issue_for_operator(
             "Profile is not ready to open",
         );
     }
+    let status = match &context.status {
+        application_ports::profiles::ProfileStatus::Draft => "DRAFT",
+        application_ports::profiles::ProfileStatus::Ready => "READY",
+        _ => {
+            return problem(
+                actor.correlation_id().as_str(),
+                409,
+                "invalid_state",
+                "Profile is not ready to open",
+            );
+        }
+    };
     let mut response = Response::from_json(&ProfileLaunchIntentProjectionV2 {
         schema_version: 2,
         launch_uri: format!(
-            "profilebridge://open/v1/{}/{}/{}/{}",
+            "profilebridge://open/v2/{}/{}/{}/{}/{}",
             actor.tenant_scope().tenant_id().as_str(),
             actor.actor_id().as_str(),
             profile_id.as_str(),
-            context.version.value()
+            context.version.value(),
+            status
         ),
     })?;
     response.headers_mut().set("cache-control", "no-store")?;
@@ -293,7 +306,7 @@ mod tests {
         let value = serde_json::to_value(ProfileLaunchIntentProjectionV2 {
             schema_version: 2,
             launch_uri:
-                "profilebridge://open/v1/tenant_01JLAUNCH/actor_01JLAUNCH/profile_01JLAUNCH/1"
+                "profilebridge://open/v2/tenant_01JLAUNCH/actor_01JLAUNCH/profile_01JLAUNCH/1/READY"
                     .to_owned(),
         })?;
         assert_eq!(value["schemaVersion"], 2);

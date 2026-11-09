@@ -2,11 +2,12 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { TenantProvider } from '../../app/TenantContext';
-import { changeGenerationActivation, getCoordinator, getGeneration, getProfile } from './api';
+import { changeGenerationActivation, dispatchBrowserProfileOpen, getCoordinator, getGeneration, getProfile, launchProfile } from './api';
 import { ProfilesWorkspace } from './ProfilesWorkspace';
 
 vi.mock('./api', () => ({
-  openBrowserProfile: vi.fn(),
+  dispatchBrowserProfileOpen: vi.fn(),
+  launchProfile: vi.fn(),
   changeGenerationActivation: vi.fn(),
   commandCoordinator: vi.fn(),
   createProfile: vi.fn(),
@@ -23,10 +24,47 @@ const profileLookup = vi.mocked(getProfile);
 const generationLookup = vi.mocked(getGeneration);
 const coordinatorLookup = vi.mocked(getCoordinator);
 const activation = vi.mocked(changeGenerationActivation);
+const launchIntent = vi.mocked(launchProfile);
+const localOpen = vi.mocked(dispatchBrowserProfileOpen);
 
 describe('ProfilesWorkspace generation refresh (#802 F06)', () => {
+  it('prefetches the authorized launch intent before click and dispatches locally without a click-time API call', async () => {
+    profileLookup.mockResolvedValue({
+      profileId: 'profile_test', status: 'READY', version: 7, linkedClientId: null,
+      activeGenerationId: 'generation_current',
+    } as Awaited<ReturnType<typeof getProfile>>);
+    const uri = 'profilebridge://open/v2/tenant_test/actor_test/profile_test/7/READY';
+    launchIntent.mockResolvedValue({
+      schemaVersion: 2,
+      launchUri: uri,
+    } as Awaited<ReturnType<typeof launchProfile>>);
+    const cache = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    render(
+      <QueryClientProvider client={cache}>
+        <TenantProvider loadTenantContexts={async () => ({
+          tenants: [{ tenantId: 'tenant_test', displayName: 'Test tenant', actorId: 'actor_test', role: 'TENANT_OWNER' }],
+        })}>
+          <ProfilesWorkspace selectedProfileId="profile_test" onProfileSelected={() => undefined} />
+        </TenantProvider>
+      </QueryClientProvider>,
+    );
+
+    const open = await screen.findByRole('button', { name: 'Open browser' }) as HTMLButtonElement;
+    await waitFor(() => expect(launchIntent).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(open.disabled).toBe(false));
+    expect(localOpen).not.toHaveBeenCalled();
+
+    fireEvent.click(open);
+    await waitFor(() => expect(localOpen).toHaveBeenCalledWith(uri));
+    expect(launchIntent).toHaveBeenCalledTimes(1);
+  });
+
   beforeEach(() => {
     vi.clearAllMocks();
+    launchIntent.mockResolvedValue({
+      schemaVersion: 2,
+      launchUri: 'profilebridge://open/v2/tenant_test/actor_test/profile_test/1/DRAFT',
+    } as Awaited<ReturnType<typeof launchProfile>>);
     window.history.replaceState(null, '', '/profiles');
   });
 
@@ -55,7 +93,7 @@ describe('ProfilesWorkspace generation refresh (#802 F06)', () => {
     );
 
     const open = await screen.findByRole('button', { name: 'Open browser' }) as HTMLButtonElement;
-    expect(open.disabled).toBe(false);
+    await waitFor(() => expect(open.disabled).toBe(false));
     // The Generation controls are intentionally inside a collapsed advanced
     // disclosure. Exercise the real operator path rather than querying hidden UI.
     fireEvent.click(screen.getByText('Administration and diagnostics'));
@@ -169,7 +207,9 @@ describe('ProfilesWorkspace generation refresh (#802 F06)', () => {
     });
     expect(screen.queryByText('profile_old')).toBeNull();
     expect(screen.getByText('profile_new')).toBeTruthy();
-    expect((screen.getByRole('button', { name: 'Open browser' }) as HTMLButtonElement).disabled).toBe(false);
+    // Profile projection and prefetched Worker launch authorization are distinct
+    // asynchronous reads. A correct Open stays disabled until both have arrived.
+    await waitFor(() => expect((screen.getByRole('button', { name: 'Open browser' }) as HTMLButtonElement).disabled).toBe(false));
   });
 
   it('does not render stale generation or coordinator after switching profiles', async () => {

@@ -1,14 +1,21 @@
+#[cfg(any(test, feature = "synthetic-test-bin"))]
 use crate::dirty_generation::{
     DirtyGenerationError, GenerationSealingMaterialPort, PreparedDirtyGeneration,
     prepare_dirty_generation_candidate,
 };
 use crate::generation_object_spool::VerifiedGenerationObjectFile;
+#[cfg(any(test, feature = "synthetic-test-bin"))]
 use crate::local_profile::{GenerationWorkspace, LocalGenerationRecord, MaterializationRoot};
-use profile_platform_primitives::{GenerationId, ProfileId, TenantId};
+use profile_platform_primitives::GenerationId;
+#[cfg(any(test, feature = "synthetic-test-bin"))]
+use profile_platform_primitives::{ProfileId, TenantId};
+#[cfg(any(test, feature = "synthetic-test-bin"))]
 use session_domain::ProfileLease;
+#[cfg(any(test, feature = "synthetic-test-bin"))]
 use sha2::{Digest, Sha256};
 use std::fmt;
 
+#[cfg(any(test, feature = "synthetic-test-bin"))]
 const SUCCESSOR_ID_DOMAIN: &[u8] = b"profile-generation-successor-id-v1";
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -99,6 +106,7 @@ pub enum GenerationUploadAuthorization {
     UploadRequired(SignedGenerationUploadCapability),
 }
 
+#[cfg(any(test, feature = "synthetic-test-bin"))]
 pub trait GenerationSuccessorControlPort: GenerationSealingMaterialPort {
     fn upload_authorization(
         &mut self,
@@ -213,6 +221,7 @@ impl CommittedGenerationSuccessor {
     }
 }
 
+#[cfg(any(test, feature = "synthetic-test-bin"))]
 #[derive(Debug, Eq, PartialEq)]
 pub enum ShippingGenerationSaveError<C, U> {
     InvalidRetainedAuthority,
@@ -224,6 +233,7 @@ pub enum ShippingGenerationSaveError<C, U> {
     DescriptorMismatch,
 }
 
+#[cfg(any(test, feature = "synthetic-test-bin"))]
 impl<C: fmt::Display, U: fmt::Display> fmt::Display for ShippingGenerationSaveError<C, U> {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
@@ -244,11 +254,13 @@ impl<C: fmt::Display, U: fmt::Display> fmt::Display for ShippingGenerationSaveEr
     }
 }
 
+#[cfg(any(test, feature = "synthetic-test-bin"))]
 impl<C: std::error::Error, U: std::error::Error> std::error::Error
     for ShippingGenerationSaveError<C, U>
 {
 }
 
+#[cfg(any(test, feature = "synthetic-test-bin"))]
 #[allow(clippy::too_many_arguments)]
 pub fn prepare_retained_generation_successor<C>(
     base_record: &LocalGenerationRecord,
@@ -307,6 +319,7 @@ where
     .map_err(ShippingGenerationSaveError::Prepare)
 }
 
+#[cfg(any(test, feature = "synthetic-test-bin"))]
 #[allow(clippy::too_many_arguments)]
 pub fn publish_verify_and_commit_successor<C, U>(
     tenant_id: &TenantId,
@@ -367,6 +380,7 @@ where
     })
 }
 
+#[cfg(any(test, feature = "synthetic-test-bin"))]
 fn validate_prepared_descriptor<C, U>(
     tenant_id: &TenantId,
     profile_id: &ProfileId,
@@ -388,9 +402,11 @@ fn validate_prepared_descriptor<C, U>(
     Ok(())
 }
 
+#[cfg(any(test, feature = "synthetic-test-bin"))]
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 struct CandidateGenerationIdError;
 
+#[cfg(any(test, feature = "synthetic-test-bin"))]
 fn successor_generation_id_for_lease(
     lease: &ProfileLease,
 ) -> Result<GenerationId, CandidateGenerationIdError> {
@@ -406,11 +422,13 @@ fn successor_generation_id_for_lease(
         .map_err(|_| CandidateGenerationIdError)
 }
 
+#[cfg(any(test, feature = "synthetic-test-bin"))]
 fn append_len_prefixed(hasher: &mut Sha256, value: &[u8]) {
     hasher.update(u64::try_from(value.len()).unwrap_or(u64::MAX).to_be_bytes());
     hasher.update(value);
 }
 
+#[cfg(any(test, feature = "synthetic-test-bin"))]
 fn lower_hex(bytes: &[u8]) -> String {
     const HEX: &[u8; 16] = b"0123456789abcdef";
     let mut output = String::with_capacity(bytes.len().saturating_mul(2));

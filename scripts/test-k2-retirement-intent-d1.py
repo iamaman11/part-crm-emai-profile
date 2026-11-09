@@ -450,11 +450,36 @@ def main() -> None:
         assert conn.execute(
             pending, (FX["TENANT"], FX["PROFILE"], FX["CANDIDATE"], FX["BASE"])
         ).fetchone() is None, "CURRENT must never be selected"
+        # Lost R2 DELETE reply is never a deletion receipt. The SAME exact
+        # pending D1 tombstone remains selectable without creating a second
+        # retirement intent or touching CURRENT / protected WORKING.
+        interrupted = conn.execute(
+            pending, (FX["TENANT"], FX["PROFILE"], FX["WINNER"], FX["BASE"])
+        ).fetchone()
+        assert interrupted is not None
+        assert tuple(interrupted[key] for key in (
+            "generation_id", "object_key", "metadata_digest", "container_digest"
+        )) == tuple(old[key] for key in (
+            "generation_id", "object_key", "metadata_digest", "container_digest"
+        ))
+        assert conn.execute(
+            "SELECT COUNT(*) FROM profile_generation_retirement_intents "
+            "WHERE tenant_id=? AND profile_id=? AND deleted_at_ms IS NULL",
+            (FX["TENANT"], FX["PROFILE"])
+        ).fetchone()[0] == 1
         finish = sql_constant("COMPLETE_RETIREMENT_EFFECT")
         effect_fields = (
             FX["TENANT"], FX["PROFILE"], FX["CANDIDATE"],
             old["object_key"], old["metadata_digest"], old["container_digest"],
         )
+        # A foreign digest, including an otherwise matching R2 key, cannot
+        # mark this candidate DELETED. The exact intent remains pending.
+        wrong_effect = list(effect_fields)
+        wrong_effect[-1] = "f" * 64
+        assert conn.execute(finish, (150, *wrong_effect, 150)).fetchone() is None
+        assert conn.execute(
+            pending, (FX["TENANT"], FX["PROFILE"], FX["WINNER"], FX["BASE"])
+        ).fetchone()["generation_id"] == FX["CANDIDATE"]
         assert conn.execute(finish, (150, *effect_fields, 150)).fetchone()[0] == FX["CANDIDATE"]
         assert conn.execute(finish, (151, *effect_fields, 151)).fetchone() is None
         assert conn.execute(

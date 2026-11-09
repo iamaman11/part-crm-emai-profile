@@ -283,6 +283,7 @@ pub(crate) async fn dispatch_authorized(
             actor,
             device_id,
             operation == BridgeGenerationMachineOperation::PredecessorDownloadCapability,
+            role,
         )
         .await;
     }
@@ -298,6 +299,7 @@ pub(crate) async fn dispatch_authorized(
             actor,
             device_id,
             operation == BridgeGenerationMachineOperation::PredecessorOpeningMaterial,
+            role,
         )
         .await;
     }
@@ -1085,6 +1087,38 @@ async fn retire_one_old_generation(
     Ok(())
 }
 
+/// Some(None) is read-only CURRENT restoration. Every other generation
+/// request retains its original live coordinator witness.
+fn reopen_selection_witness(
+    session: &str,
+    token: &str,
+    epoch: u64,
+    local_restore: bool,
+    historical: bool,
+) -> Option<Option<(SessionId, FencingToken, u64)>> {
+    if local_restore {
+        return (!historical && session.is_empty() && token.is_empty() && epoch == 0)
+            .then_some(None);
+    }
+    reopen_witness(session, token, epoch)
+        .map(|(session_id, fencing_token)| Some((session_id, fencing_token, epoch)))
+}
+
+async fn authorize_local_current_restore(
+    env: &Env,
+    actor: &ActorContext,
+    role: identity_access_domain::MembershipRole,
+    profile_id: &ProfileId,
+) -> Result<bool> {
+    let application = crate::composition::profile_generation_application(env)?;
+    Ok(matches!(
+        use_cases::generation_initialization::authorize_initial_generation_access(
+            actor, role, profile_id, &application,
+        ).await,
+        Ok(context) if context.active_generation_id.is_some()
+    ))
+}
+
 async fn dispatch_download_capability(
     request: &mut Request,
     env: &Env,
@@ -1092,6 +1126,7 @@ async fn dispatch_download_capability(
     actor: &ActorContext,
     device_id: &DeviceId,
     historical: bool,
+    role: identity_access_domain::MembershipRole,
 ) -> Result<Response> {
     let body = match request
         .json::<BridgeGenerationDownloadCapabilityRequest>()
@@ -1100,14 +1135,19 @@ async fn dispatch_download_capability(
         Ok(value) => value,
         Err(_) => return invalid_request(actor.correlation_id().as_str()),
     };
-    let (session_id, fencing_token) = match reopen_witness(
+    let witness = match reopen_selection_witness(
         body.coordinator_session_id(),
         body.coordinator_fencing_token(),
         body.coordinator_epoch(),
+        body.is_local_restore(),
+        historical,
     ) {
         Some(value) => value,
         None => return invalid_request(actor.correlation_id().as_str()),
     };
+    if witness.is_none() && !authorize_local_current_restore(env, actor, role, profile_id).await? {
+        return forbidden(actor.correlation_id().as_str());
+    }
 
     let selected = if historical {
         historical_predecessor_reopen_descriptor(
@@ -1115,22 +1155,21 @@ async fn dispatch_download_capability(
             profile_id,
             actor,
             device_id,
-            session_id,
-            fencing_token,
+            witness
+                .as_ref()
+                .expect("historical requires witness")
+                .0
+                .clone(),
+            witness
+                .as_ref()
+                .expect("historical requires witness")
+                .1
+                .clone(),
             body.coordinator_epoch(),
         )
         .await
     } else {
-        authoritative_reopen_descriptor(
-            env,
-            profile_id,
-            actor,
-            device_id,
-            session_id,
-            fencing_token,
-            body.coordinator_epoch(),
-        )
-        .await
+        authoritative_reopen_descriptor(env, profile_id, actor, device_id, witness).await
     };
     let (reference, descriptor) = match selected {
         Ok(value) => value,
@@ -1176,6 +1215,7 @@ async fn dispatch_opening_material(
     actor: &ActorContext,
     device_id: &DeviceId,
     historical: bool,
+    role: identity_access_domain::MembershipRole,
 ) -> Result<Response> {
     let body = match request
         .json::<BridgeGenerationOpeningMaterialRequest>()
@@ -1184,14 +1224,19 @@ async fn dispatch_opening_material(
         Ok(value) => value,
         Err(_) => return invalid_request(actor.correlation_id().as_str()),
     };
-    let (session_id, fencing_token) = match reopen_witness(
+    let witness = match reopen_selection_witness(
         body.coordinator_session_id(),
         body.coordinator_fencing_token(),
         body.coordinator_epoch(),
+        body.is_local_restore(),
+        historical,
     ) {
         Some(value) => value,
         None => return invalid_request(actor.correlation_id().as_str()),
     };
+    if witness.is_none() && !authorize_local_current_restore(env, actor, role, profile_id).await? {
+        return forbidden(actor.correlation_id().as_str());
+    }
     let prelude = match decode_bounded_lower_hex(
         body.metadata_prelude_hex(),
         MAX_GENERATION_METADATA_PRELUDE_BYTES,
@@ -1210,22 +1255,21 @@ async fn dispatch_opening_material(
             profile_id,
             actor,
             device_id,
-            session_id,
-            fencing_token,
+            witness
+                .as_ref()
+                .expect("historical requires witness")
+                .0
+                .clone(),
+            witness
+                .as_ref()
+                .expect("historical requires witness")
+                .1
+                .clone(),
             body.coordinator_epoch(),
         )
         .await
     } else {
-        authoritative_reopen_descriptor(
-            env,
-            profile_id,
-            actor,
-            device_id,
-            session_id,
-            fencing_token,
-            body.coordinator_epoch(),
-        )
-        .await
+        authoritative_reopen_descriptor(env, profile_id, actor, device_id, witness).await
     };
     let (reference, descriptor) = match selected {
         Ok(value) => value,
@@ -1268,9 +1312,7 @@ async fn authoritative_reopen_descriptor(
     profile_id: &ProfileId,
     actor: &ActorContext,
     device_id: &DeviceId,
-    session_id: SessionId,
-    fencing_token: FencingToken,
-    coordinator_epoch: u64,
+    witness: Option<(SessionId, FencingToken, u64)>,
 ) -> core::result::Result<
     (
         application_ports::generation_objects::GenerationObjectCatalogReference,
@@ -1328,24 +1370,26 @@ async fn authoritative_reopen_descriptor(
         },
     }
 
-    let successor = profile_generation_successor_commit(env);
-    if let Err(error) = successor
-        .prove_profile_generation_writer_authority(
-            actor,
-            &ProfileGenerationWriterAuthorityRequest::new(
-                device_id.clone(),
-                profile_id.clone(),
-                session_id,
-                fencing_token,
-                coordinator_epoch,
-            ),
-        )
-        .await
-    {
-        return Err(successor_failure(
-            actor.correlation_id().as_str(),
-            error.class(),
-        ));
+    if let Some((session_id, fencing_token, coordinator_epoch)) = witness {
+        let successor = profile_generation_successor_commit(env);
+        if let Err(error) = successor
+            .prove_profile_generation_writer_authority(
+                actor,
+                &ProfileGenerationWriterAuthorityRequest::new(
+                    device_id.clone(),
+                    profile_id.clone(),
+                    session_id,
+                    fencing_token,
+                    coordinator_epoch,
+                ),
+            )
+            .await
+        {
+            return Err(successor_failure(
+                actor.correlation_id().as_str(),
+                error.class(),
+            ));
+        }
     }
 
     let objects = match generation_object_verifier(env) {
@@ -1392,9 +1436,7 @@ async fn historical_predecessor_reopen_descriptor(
         profile_id,
         actor,
         device_id,
-        session_id,
-        fencing_token,
-        coordinator_epoch,
+        Some((session_id, fencing_token, coordinator_epoch)),
     )
     .await?;
     let observer = match profile_generation_successor_observer(env) {
@@ -1855,6 +1897,16 @@ mod tests {
         ActorContext, ActorId, CorrelationId, GenerationId, ProfileId, TenantId, TenantScope,
     };
     use worker::Method;
+
+    #[test]
+    fn local_current_restore_admits_only_empty_witness_not_historical_or_mutation() {
+        assert!(super::reopen_selection_witness("", "", 0, true, false).is_some());
+        assert!(super::reopen_selection_witness("", "", 0, true, true).is_none());
+        assert!(super::reopen_selection_witness("session_fake", "", 0, true, false).is_none());
+        assert!(super::reopen_selection_witness("", "token_fake", 0, true, false).is_none());
+        assert!(super::reopen_selection_witness("", "", 1, true, false).is_none());
+        assert!(super::reopen_selection_witness("", "", 0, false, false).is_none());
+    }
 
     #[test]
     fn only_exact_generation_machine_posts_are_recognized() {

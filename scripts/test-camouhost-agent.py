@@ -632,165 +632,58 @@ def prove_pid_reuse_fails_closed() -> None:
             agent.close()
 
 
-def prove_close_failure_witness_preserves_order() -> None:
-    """F02: original typed OS failure and callback chronology survive redacted reporting."""
-    import contextlib
-    import io
-
+def prove_official_context_close_event() -> None:
+    """F02: only the official Playwright context-close event is the adapter signal."""
     runtime = runtime_module()
-    class EventPage:
+
+    class EventContext:
         def __init__(self) -> None:
             self.handlers: dict[str, object] = {}
+            self.closed = False
+
         def on(self, name: str, callback: object) -> None:
             self.handlers[name] = callback
 
-    class EventContext:
-        def __init__(self, page: EventPage) -> None:
-            self.pages = [page]
-            self.handlers: dict[str, object] = {}
-        def on(self, name: str, callback: object) -> None:
-            self.handlers[name] = callback
+        def is_closed(self) -> bool:
+            return self.closed
 
-    class SyntheticWindowsFailure(OSError):
-        winerror = 32
+        def close(self) -> None:
+            self.closed = True
+            callback = self.handlers.get("close")
+            assert callable(callback)
+            callback(self)
 
-    page = EventPage()
-    state = runtime.install_controlled_close_observation(EventContext(page))
-    assert state["callback_events"] == ["page"]
-    page.handlers["close"](None)
-    assert state["callback_events"] == ["page", "close"]
+        def crash(self) -> None:
+            # Playwright reports a browser crash as context closure as well.
+            self.close()
 
-    problem = SyntheticWindowsFailure(13, "private profile path must not appear in diagnostics")
-    captured = io.StringIO()
-    with contextlib.redirect_stderr(captured):
-        runtime.report_close_observation_detail(state, problem)
-    raw = captured.getvalue()
-    lines = raw.splitlines()
-    assert len(lines) == 2, lines
-    assert lines[0].startswith("camouhost_close_observation_detail ")
-    assert lines[1].startswith("camouhost_close_witness ")
-    report = json.loads(lines[0].split(" ", 1)[1])
-    assert "exception=SyntheticWindowsFailure" in lines[1]
-    assert "errno=13 winerror=32" in lines[1]
-    assert "events=page,close" in lines[1]
-    assert report["exception_type"] == "SyntheticWindowsFailure"
-    assert report["errno"] == 13 and report["winerror"] == 32
-    assert report["tracked"] == 1 and report["closed"] == 1
-    assert report["callback_events"] == ["page", "close"]
-    assert report["callback_event_count"] == 2
-    assert "private profile path" not in raw
-    for _ in range(100):
-        runtime.record_close_callback(state, "page")
-    assert len(state["callback_events"]) == 64, "unbounded callback diagnostic"
-    assert state["callback_event_count"] == 102
-    assert state["callback_events"] == ["page"] * 64
+    normal = EventContext()
+    normal_state = runtime.install_context_close_observation(normal)
+    assert normal_state == {"closed": False, "event_count": 0}
+    assert runtime.context_close_observed(normal, normal_state) is False
+    normal.close()
+    assert normal_state == {"closed": True, "event_count": 1}
+    assert runtime.context_close_observed(normal, normal_state) is True
 
-    page.handlers["crash"](None)
-    assert state["callback_events"][-1] == "crash"
-    assert state["callback_event_count"] == 103
-    assert not runtime.controlled_close_candidate(state), "crash became successful closure"
+    crashed = EventContext()
+    crash_state = runtime.install_context_close_observation(crashed)
+    crashed.crash()
+    assert runtime.context_close_observed(crashed, crash_state) is True
+    assert crash_state["event_count"] == 1
 
-
-def prove_wm_close_exit_timing_requires_native_success() -> None:
-    """F02: a close-event/Windows zero-exit race must not masquerade as a crash.
-
-    Negative controls preserve the original error when the process did not
-    cleanly exit, a close callback is missing, or a crash event was observed.
-    """
-    runtime = runtime_module()
-
-    class TargetClosedError(RuntimeError):
-        pass
-
-    class EventContext:
-        def __init__(self, error: Exception) -> None:
-            self.error = error
-
-        def wait_for_event(self, event: str, timeout: int) -> None:
-            assert event == "page" and timeout == 100
-            raise self.error
-
-    class NativeExit:
-        def __init__(self, eventually_zero: bool) -> None:
-            self.eventually_zero = eventually_zero
-            self.exited = False
-            self.waits: list[int] = []
-
-        def safely_exited(self, wait_millis: int = 0) -> bool:
-            self.waits.append(wait_millis)
-            assert 0 <= wait_millis <= 250, "unbounded wait would hide a hung browser"
-            if wait_millis == 250 and self.eventually_zero:
-                self.exited = True
-            return self.exited
-
-        def has_exited(self) -> bool:
-            # Mirror the real native witness API: unknown/nonzero exit
-            # remains a failure, never evidence of a clean browser close.
-            return self.exited
-
-    def state(witness: NativeExit, *, closed: bool = True, crashed: bool = False) -> dict:
-        return {
-            "tracked_pages": {1},
-            "closed_pages": {1} if closed else set(),
-            "crashed": crashed,
-            "unresolved_crashes": {1} if crashed else set(),
-            "recovery_candidates": set(),
-            "page_objects": {},
-            "browser_exit": witness,
-        }
-
-    # All page callbacks observed, native Windows root exits normally just
-    # after the Playwright API reports TargetClosedError.
-    clean = NativeExit(True)
-    observed = runtime.observe_controlled_close(
-        EventContext(TargetClosedError("browser target closed")), state(clean)
-    )
-    assert observed is True
-    assert clean.waits == [250, 0], clean.waits
-
-    # A nonzero/unknown native process status can NEVER be counted as Saved.
-    failed = NativeExit(False)
-    try:
-        runtime.observe_controlled_close(
-            EventContext(TargetClosedError("unverified process death")), state(failed)
-        )
-    except TargetClosedError:
-        pass
-    else:
-        raise AssertionError("unverified process exit was accepted as normal close")
-    assert failed.waits == [250], failed.waits
-
-    # No normal callback means no native wait and no positive close, even if
-    # a process could exit with status zero.
-    incomplete = NativeExit(True)
-    try:
-        runtime.observe_controlled_close(
-            EventContext(TargetClosedError("no page close callback")),
-            state(incomplete, closed=False),
-        )
-    except TargetClosedError:
-        pass
-    else:
-        raise AssertionError("missing page-close callback was accepted")
-    assert not incomplete.waits
-
-    crashed = NativeExit(True)
-    try:
-        runtime.observe_controlled_close(
-            EventContext(TargetClosedError("crashed page")),
-            state(crashed, crashed=True),
-        )
-    except TargetClosedError:
-        pass
-    else:
-        raise AssertionError("crashed page was accepted as clean")
-    assert not crashed.waits
-
-    pending = NativeExit(False)
-    assert runtime.observe_controlled_close(
-        EventContext(TimeoutError("no new page")), state(pending, closed=False)
-    ) is False
-    assert not pending.waits, "ordinary pending close should never wait on process"
+    # The Camouhost adapter must not contain a parallel native process/window
+    # witness or a Python-owned Firefox file-lock probe. Rust owns file safety.
+    source = (ROOT / "runtime" / "camouhost" / "real.py").read_text(encoding="utf-8")
+    for forbidden in (
+        "WindowsBrowserExitWitness",
+        "firefox_writer_active",
+        "wait_for_browser_quiescence",
+        "EnumWindows",
+        "CreateToolhelp32Snapshot",
+        "WM_CLOSE",
+        "PostMessage",
+    ):
+        assert forbidden not in source, f"retired browser observer remains: {forbidden}"
 
 
 def prove_owned_job_execution_witness() -> None:
@@ -829,8 +722,7 @@ def prove_owned_job_execution_witness() -> None:
 
 def main() -> int:
     prove_receipt_failure_diagnostics()
-    prove_close_failure_witness_preserves_order()
-    prove_wm_close_exit_timing_requires_native_success()
+    prove_official_context_close_event()
     prove_owned_job_execution_witness()
     prove_pid_reuse_fails_closed()
     prove_agent()

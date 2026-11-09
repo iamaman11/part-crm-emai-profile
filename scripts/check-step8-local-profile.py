@@ -157,7 +157,9 @@ def source_text(root: Path) -> tuple[str, list[str]]:
 
 
 def dirty_generation_failures(source: str) -> list[str]:
-    production = source.split("#[cfg(test)]", 1)[0]
+    # Function-level test gates precede the legacy recovery contracts; the
+    # invariant scan must end at the test module, not the first cfg(test).
+    production = source.split("#[cfg(test)]\nmod tests", 1)[0]
     failures: list[str] = []
     for fragment in DIRTY_REQUIRED_FRAGMENTS:
         if fragment not in production:
@@ -171,7 +173,7 @@ def dirty_generation_failures(source: str) -> list[str]:
 
 
 def dirty_generation_self_test(source: str) -> list[str]:
-    fixture = source.split("#[cfg(test)]", 1)[0] + "\nuse worker::d1::D1Database;\n"
+    fixture = source.split("#[cfg(test)]\nmod tests", 1)[0] + "\nuse worker::d1::D1Database;\n"
     failures = dirty_generation_failures(fixture)
     if not any("ownership: D1Database" in failure for failure in failures):
         return ["dirty-generation negative storage fixture unexpectedly passed"]

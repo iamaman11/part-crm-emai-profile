@@ -46,16 +46,6 @@ def verify_embedded_python_path_configuration():
 def main() -> int:
     runtime = load_runtime()
     verify_embedded_python_path_configuration()
-    # First user Open asks Firefox itself for its standard blank initial
-    # tab. No app-controlled Playwright Page command is ever sent. Reopen
-    # receives no startup flags, preserving Firefox's native saved tabs.
-    with tempfile.TemporaryDirectory() as directory:
-        fresh = Path(directory) / "user_data"
-        fresh.mkdir()
-        assert runtime.firefox_native_first_run_args(fresh) == ["-new-tab", "about:blank"]
-        (fresh / "places.sqlite").write_bytes(b"synthetic existing Firefox state")
-        assert runtime.firefox_native_first_run_args(fresh) == []
-
     invoked = []
 
     def native():
@@ -72,7 +62,6 @@ def main() -> int:
         with (
             patch.dict(os.environ, env, clear=True),
             patch.object(sys, "argv", ["real.py"]),
-            patch.object(runtime, "run_native_ipc", side_effect=native),
             patch.object(runtime, "run_ipc", side_effect=automation),
             contextlib.redirect_stderr(error),
         ):
@@ -81,6 +70,45 @@ def main() -> int:
         assert invoked == called, (env, invoked, called)
         return error.getvalue()
 
+    # The canonical local-first user launch never redeems an online claim.
+    # This is the same official async Playwright path, not a second engine.
+    async def local_open(_folder):
+        invoked.append("local")
+        return 19
+
+    with tempfile.TemporaryDirectory() as folder:
+        for environment, outcome in (
+            ({runtime.EXECUTION_MODE_ENV: runtime.USER_NATIVE_MODE}, 19),
+            ({}, 2),
+            ({runtime.EXECUTION_MODE_ENV: runtime.ISOLATED_COLD_PROBE_MODE}, 2),
+            ({runtime.EXECUTION_MODE_ENV: runtime.USER_NATIVE_MODE,
+              runtime.AGENT_DIRECTORY_ENV: folder}, 2),
+        ):
+            invoked.clear()
+            with (patch.dict(os.environ, environment, clear=True),
+                  patch.object(sys, "argv", ["real.py", "--local-open", folder]),
+                  patch.object(runtime, "run_local_profile", side_effect=local_open),
+                  contextlib.redirect_stderr(io.StringIO())):
+                assert runtime.main() == outcome
+            assert invoked == (["local"] if outcome == 19 else [])
+
+    local_owner = (SOURCE.parents[2] / "apps/profile-bridge/src/local_browser_open.rs").read_text(
+        encoding="utf-8"
+    )
+    assert 'run_python(runtime_root, workspace.path(), "--local-open")' in local_owner
+    assert ".local-unsynced" in local_owner
+    assert "ControlPlaneEnrollment" not in local_owner
+    assert "MachineHttpPort" not in local_owner and "SharedControlPlaneCoordinator" not in local_owner
+    composition = (SOURCE.parents[2] /
+                   "apps/profile-bridge/src/shipping_composition.rs").read_text(encoding="utf-8")
+    local_first = composition.split("    pub fn run_initial(", 1)[1].split(
+        "    pub fn run_delivery_command(", 1
+    )[0]
+    assert "local_browser_open::open" in local_first
+    assert "generation_initialization::initialize(" not in local_first
+    assert "ControlPlaneEnrollment" not in local_first
+    assert "claim_launch_intent" not in local_first
+
     # No implicit managed browser launch when a mode flag is missing/old/unknown.
     for env in ({}, {"CAMOUHOST_NATIVE_PROFILE": "1"},
                 {runtime.EXECUTION_MODE_ENV: ""},
@@ -88,11 +116,11 @@ def main() -> int:
                 {runtime.EXECUTION_MODE_ENV: "playwright"}):
         assert run(env, 2, []), "fail-closed dispatch must explain rejection"
 
-    # Normal CRM user Open uses the official Playwright persistent context,
-    # never the page-inspecting automation/admission path.
-    run({runtime.EXECUTION_MODE_ENV: runtime.USER_NATIVE_MODE}, 17, ["native"])
-    run({runtime.EXECUTION_MODE_ENV: runtime.USER_NATIVE_MODE,
-         runtime.HEADLESS_MODE_ENV: "false"}, 17, ["native"])
+    # Normal CRM user Open has exactly one local-first entrypoint. Direct
+    # USER_NATIVE_MODE invocation without --local-open is rejected.
+    assert run({runtime.EXECUTION_MODE_ENV: runtime.USER_NATIVE_MODE}, 2, [])
+    assert not hasattr(runtime, "run_native_ipc")
+    assert not hasattr(runtime, "run_native_ipc_async")
     assert run({runtime.EXECUTION_MODE_ENV: runtime.USER_NATIVE_MODE,
                 runtime.AGENT_DIRECTORY_ENV: "/tmp/never-run-scripts"},
                2, []), "native user context must never execute local Python scripts"
@@ -100,15 +128,16 @@ def main() -> int:
         assert run({runtime.EXECUTION_MODE_ENV: runtime.USER_NATIVE_MODE,
                     runtime.HEADLESS_MODE_ENV: invalid}, 2, []), "no headless fallback"
 
-    # The old managed SDK remains reachable *only* through the explicit
-    # automation execution mode. It is not wired to shipping Windows Open.
+    # The isolated Python Playwright automation IPC remains reachable only
+    # through its explicit disposable-profile execution mode. It is not wired
+    # to shipping Windows Open.
     assert run({runtime.EXECUTION_MODE_ENV: runtime.AUTOMATION_PLAYWRIGHT_MODE},
                2, []), "automation must not open a managed context without a job"
     run({runtime.EXECUTION_MODE_ENV: runtime.AUTOMATION_PLAYWRIGHT_MODE,
          runtime.AGENT_DIRECTORY_ENV: "/tmp/authorized-test-inbox"},
         18, ["automation"])
-    # C09 runs the official SDK on an isolated, exclusively owned R2
-    # historical restore; no generic scripts or user-browser attachment.
+    # The isolated cold-probe adapter is test/automation-only and cannot be
+    # reached from the user-native Rust Open path.
     run({runtime.EXECUTION_MODE_ENV: runtime.ISOLATED_COLD_PROBE_MODE},
         18, ["automation"])
     for env in (
@@ -133,31 +162,52 @@ def main() -> int:
         else:
             raise AssertionError("unsupported headless mode accepted")
 
-    # The shipping Windows launcher selects the user-owned SDK context explicitly.
-    # This is source wiring coverage, not a substitute for a Rust build.
-    rust = SOURCE.parents[2] / "apps/profile-bridge/src/camouhost_process.rs"
-    shipping = rust.read_text(encoding="utf-8")
-    assert 'RuntimeExecutionOwner::NativeUser => "user-native"' in shipping
-    assert 'RuntimeExecutionOwner::IsolatedBrowserStateTest => "isolated-cold-probe"' in shipping
-    assert "CAMOUHOST_NATIVE_PROFILE" not in shipping
-    assert 'launch_with_browser_visible_admission(' in shipping
-    assert 'let test_agent_enabled = !cfg!(windows)' in shipping
-    assert "&& self.config.execution_owner != RuntimeExecutionOwner::IsolatedBrowserStateTest" in shipping
+    # Normal CRM Open has one Rust owner: local_browser_open. The
+    # retired claim/ManagedCamouhostProcess IPC path is not part of the app.
+    lib = (SOURCE.parents[2] / "apps/profile-bridge/src/lib.rs").read_text(
+        encoding="utf-8"
+    )
     composition = (SOURCE.parents[2] /
                    "apps/profile-bridge/src/shipping_composition.rs").read_text(encoding="utf-8")
-    # The historical diagnostic has been removed from shipping entirely.
-    # Only disposable CI state tests retain a separately authorized probe.
-    assert ".for_isolated_browser_state_test()" not in composition
-    assert "run_historical_candidate_probe" not in composition
+    assert "pub mod camouhost_process;" not in lib
+    assert "pub mod shipping_preflight;" not in lib
+    assert not (SOURCE.parents[2] / "apps/profile-bridge/src/shipping_preflight.rs").exists()
+    assert "ManagedCamouhostProcess" not in composition
+    assert "ManagedCamouhostIpc" not in composition
+    assert "pub fn run_claim(" not in composition
+    assert "local_browser_open::open" in composition
+    assert "start_sync_after_close(intent)" in composition
+    run_initial = composition.split("    pub fn run_initial(", 1)[1].split(
+        "    pub fn run_delivery_command(", 1
+    )[0]
+    assert run_initial.count("start_sync_after_close(intent)") >= 4
+    assert "Every post-restore local failure may leave the" in run_initial
+    assert "if error != crate::local_browser_open::LocalOpenError::StaleLocalWorkspace {" in run_initial
     app = (SOURCE.parents[2] / "apps/profile-bridge/src/main.rs").read_text(
         encoding="utf-8"
     )
-    assert "VerifyHistoricalCandidate" not in app
+    assert "profilebridge://claim/" in app
+    assert "old_claim_and_v1_user_open_are_not_supported_application_modes" in app
     native_process = (SOURCE.parents[2] / "runtime/camouhost/native_process.py").read_text(encoding="utf-8")
-    assert "from_options=dict(options)" in native_process
+    assert "AsyncNewBrowser" in native_process and "async_playwright" in native_process
     assert "persistent_context=True" in native_process
-    assert "subprocess.Popen" not in native_process
-    assert "context.pages" not in native_process and "context.new_page" not in native_process
+    assert 'context.on("close"' in native_process
+    assert "sessionCheckpoints.json" not in native_process
+    assert "EnumWindows" not in native_process and "Get-Process" not in native_process
+    assert "PostMessage" not in native_process and "WM_CLOSE" not in native_process
+    local_runtime = SOURCE.read_text(encoding="utf-8").split("async def run_local_profile", 1)[1].split("\n\ndef main", 1)[0]
+    assert "wait_for_browser_close" in local_runtime
+    assert "close_after_browser_exit" in local_runtime
+    assert "WindowsBrowserExitWitness" not in local_runtime
+    assert "profile_state" not in local_runtime
+    with tempfile.TemporaryDirectory() as directory:
+        virgin = Path(directory) / "user_data"
+        virgin.mkdir()
+        assert runtime.firefox_native_first_run_args(virgin) == [
+            "-new-tab", "about:blank"
+        ]
+        (virgin / "places.sqlite").write_bytes(b"synthetic existing Firefox state")
+        assert runtime.firefox_native_first_run_args(virgin) == []
 
     print("CAMOUHOST_EXECUTION_MODES=PASS")
     return 0

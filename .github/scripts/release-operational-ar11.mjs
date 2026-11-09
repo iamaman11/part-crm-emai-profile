@@ -550,8 +550,13 @@ function camoufoxErrors(workflow, classifier) {
   const errors = [];
   const scope = jobBlock(workflow, 'scope');
   const linux = jobBlock(workflow, 'real-runtime-linux');
+  const runtimePackage = jobBlock(workflow, 'runtime-package-windows');
+  const archiveReader = jobBlock(workflow, 'shipping-archive-reader-windows');
   const windows = jobBlock(workflow, 'bridge-regression-windows');
-  if (!scope || !linux || !windows) return ['Camoufox change-aware topology is incomplete'];
+  const proof = jobBlock(workflow, 'camoufox-required-proof');
+  if (!scope || !linux || !runtimePackage || !archiveReader || !windows || !proof) {
+    return ['Camoufox bounded Windows proof topology is incomplete'];
+  }
   errors.push(...requireMarkers(scope, [
     'Classify accepted-main or mechanically proven runtime-unrelated PR',
     'if [ "$GITHUB_EVENT_NAME" = push ]; then',
@@ -567,16 +572,46 @@ function camoufoxErrors(workflow, classifier) {
     '--github-output "$GITHUB_OUTPUT"',
   ], 'Camoufox scope routing'));
   errors.push(...camoufoxClassifierErrors(classifier));
-  for (const [label, block] of [['Linux required context', linux], ['Windows required context', windows]]) {
-    errors.push(...requireMarkers(block, [
-      'needs: scope',
-      'if: always()',
-      'Require successful scope classification',
-      "needs.scope.outputs.heavy",
-    ], label));
-  }
+  errors.push(...requireMarkers(linux, [
+    'needs: scope',
+    'if: always()',
+    'Require successful scope classification',
+    'needs.scope.outputs.heavy',
+  ], 'Linux required context'));
+  errors.push(...requireMarkers(runtimePackage, [
+    'needs: scope',
+    "if: needs.scope.outputs.heavy == 'true'",
+    'Require successful scope classification',
+    'Materialize official browser and verified offline fpgen model',
+    'Package exact compressed Release Set runtime input',
+    'Upload exact-head official runtime for downstream Windows proofs',
+  ], 'Windows runtime package context'));
+  errors.push(...requireMarkers(archiveReader, [
+    'needs: [scope, runtime-package-windows]',
+    "if: needs.scope.outputs.heavy == 'true'",
+    'Require exact runtime package',
+    'Download exact official runtime artifact',
+    'Run Windows Bridge library tests and production archive reader',
+  ], 'Windows production archive-reader context'));
+  errors.push(...requireMarkers(windows, [
+    'needs: [scope, runtime-package-windows, shipping-archive-reader-windows]',
+    'if: always()',
+    'Require successful prerequisites',
+    'needs.scope.outputs.heavy',
+    "if: needs.scope.outputs.heavy == 'true'",
+    'Download exact official runtime artifact',
+    'Extract and verify exact official runtime',
+    'Run official Camoufox Playwright user Open and native file-lock proof through production Bridge crates',
+  ], 'Windows user Open and native file-lock context'));
+  errors.push(...requireMarkers(proof, [
+    'needs: [scope, runtime-package-windows, shipping-archive-reader-windows, bridge-regression-windows]',
+    'if: always()',
+    'Require exact official Camoufox and Bridge Windows proof',
+  ], 'Camoufox required-proof aggregator'));
   if (!linux.includes("if: needs.scope.outputs.heavy == 'true'")) errors.push('Linux heavy proof is not gated by exact scope output');
-  if (!windows.includes("if: needs.scope.outputs.heavy == 'true'")) errors.push('Windows heavy proof is not gated by exact scope output');
+  if (!runtimePackage.includes("if: needs.scope.outputs.heavy == 'true'")) errors.push('Windows runtime packaging is not gated by exact scope output');
+  if (!archiveReader.includes("if: needs.scope.outputs.heavy == 'true'")) errors.push('Windows archive-reader proof is not gated by exact scope output');
+  if (!windows.includes("if: needs.scope.outputs.heavy == 'true'")) errors.push('Windows user Open proof is not gated by exact scope output');
   return errors;
 }
 

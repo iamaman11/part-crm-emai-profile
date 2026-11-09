@@ -1,62 +1,74 @@
+#[cfg(any(test, feature = "synthetic-test-bin"))]
 use crate::ProcessControlPort;
-use crate::authoritative_generation::{
-    AuthoritativeGenerationMaterializationError, ensure_authoritative_generation,
-};
+use crate::authoritative_generation::AuthoritativeGenerationMaterializationError;
+#[cfg(any(test, feature = "synthetic-test-bin"))]
+use crate::authoritative_generation::ensure_authoritative_generation;
+#[cfg(any(test, feature = "synthetic-test-bin"))]
 use crate::browser_execution::browser_writer_locks_absent;
 #[cfg(any(test, feature = "synthetic-test-bin"))]
 use crate::browser_mail_query::BrowserMailExecutionProof;
+use crate::dirty_close::DirtyCloseCompletion;
 #[cfg(any(test, feature = "synthetic-test-bin"))]
 use crate::dirty_close::RetainedDirtyCloseError;
-use crate::dirty_close::{DirtyCloseCompletion, DirtyCloseLocalOutcome, RetainedDirtyClose};
+#[cfg(any(test, feature = "synthetic-test-bin"))]
+use crate::dirty_close::{DirtyCloseLocalOutcome, RetainedDirtyClose};
 #[cfg(any(test, feature = "synthetic-test-bin"))]
 use crate::dirty_generation::PreparedDirtyGeneration;
+#[cfg(any(test, feature = "synthetic-test-bin"))]
 use crate::dirty_generation::{DirtyGenerationError, GenerationSealingMaterialPort};
 #[cfg(any(test, feature = "synthetic-test-bin"))]
 use crate::dirty_generation_finalize::DirtyGenerationCommitClientPort;
+#[cfg(any(test, feature = "synthetic-test-bin"))]
 use crate::generation_reopen::{
     GenerationObjectDownloadError, GenerationObjectDownloadPort, GenerationReopenControlError,
     GenerationReopenControlPort,
 };
-#[cfg(any(windows, test))]
+#[cfg(test)]
 use crate::generation_snapshot::{GenerationSnapshotError, WorkspaceSnapshotReader};
-use crate::local_profile::{
-    BridgeWorkspaceLock, GenerationWorkspace, LocalGenerationRecord, LocalGenerationState,
-    LocalProfileError, MaterializationRoot,
-};
-#[cfg(any(windows, test))]
+#[cfg(any(test, feature = "synthetic-test-bin"))]
+use crate::local_profile::MaterializationRoot;
+#[cfg(any(test, feature = "synthetic-test-bin"))]
+use crate::local_profile::{BridgeWorkspaceLock, LocalGenerationRecord};
+#[cfg(test)]
 use crate::local_profile::{GenerationInventory, RecoveryClone};
-use crate::runtime_bundle::{
-    ApprovedRuntimeBundle, RuntimeLaunchError, RuntimeSessionOrchestrator,
-};
+use crate::local_profile::{GenerationWorkspace, LocalGenerationState, LocalProfileError};
+#[cfg(any(test, feature = "synthetic-test-bin"))]
+use crate::runtime_bundle::RuntimeSessionOrchestrator;
+use crate::runtime_bundle::{ApprovedRuntimeBundle, RuntimeLaunchError};
+#[cfg(any(test, feature = "synthetic-test-bin"))]
 use crate::shipping_control_plane::{MachineHttpPort, ShippingControlPlaneError};
-#[cfg(any(windows, test))]
+use crate::shipping_generation_save::CommittedGenerationSuccessor;
+#[cfg(any(test, feature = "synthetic-test-bin"))]
+use crate::shipping_generation_save::ShippingGenerationSaveError;
+#[cfg(test)]
 use crate::shipping_generation_save::SignedGenerationObjectStreamPutPort;
-use crate::shipping_generation_save::{CommittedGenerationSuccessor, ShippingGenerationSaveError};
-#[cfg(any(test, feature = "synthetic-test-bin", debug_assertions))]
+#[cfg(any(test, feature = "synthetic-test-bin"))]
 use crate::shipping_generation_save::{
     SignedGenerationObjectPutPort, prepare_retained_generation_successor,
     publish_verify_and_commit_successor,
 };
-#[cfg(any(test, feature = "synthetic-test-bin", debug_assertions))]
+#[cfg(any(test, feature = "synthetic-test-bin"))]
 use crate::shipping_generation_successor_control::ControlPlaneGenerationSuccessor;
+#[cfg(any(test, feature = "synthetic-test-bin"))]
 use crate::shipping_generation_successor_control::GenerationSuccessorControlError;
-#[cfg(any(windows, test))]
+#[cfg(test)]
 use crate::shipping_generation_successor_control::{
     RestartExactLocalCompletionError, publish_streamed_exact_under_writer,
 };
-#[cfg(any(windows, test))]
+#[cfg(test)]
 use crate::shipping_save_attempt::begin_native_rescue_edit;
+#[cfg(any(test, feature = "synthetic-test-bin"))]
 use crate::shipping_save_attempt::{
     SaveAttemptEvidenceError, discover_unresolved_streaming_exact_save_attempt,
     has_unresolved_save_attempt_for_profile, persist_local_unsynced_intent,
 };
-#[cfg(any(windows, test))]
+#[cfg(test)]
 use crate::shipping_save_attempt::{
     ScopedPendingSaveEvidence, classify_scoped_pending_save_evidence,
     original_local_unsynced_successor, persist_streaming_exact_save_attempt_from_native,
     retire_fully_saved_streaming_attempt, retire_local_unsynced_after_streamed_checkpoint,
 };
-#[cfg(any(test, feature = "synthetic-test-bin", debug_assertions))]
+#[cfg(any(test, feature = "synthetic-test-bin"))]
 use crate::shipping_save_attempt::{
     inspect_exact_save_attempt, persist_exact_save_attempt, retire_fully_saved_attempt,
     retire_local_unsynced_after_exact_checkpoint,
@@ -65,13 +77,16 @@ use crate::shipping_save_attempt::{
 use application_ports::generation_objects::{
     GenerationObjectExactVerifyPort, GenerationObjectUploadPort,
 };
+#[cfg(any(test, feature = "synthetic-test-bin"))]
 use application_ports::{ProfileCoordinatorPort, ProfileCoordinatorRuntimePort};
+#[cfg(any(test, feature = "synthetic-test-bin"))]
 use bridge_domain::{CamouhostPort, ClaimUri, DeviceIdentityPort, DeviceKeyPort};
 #[cfg(any(test, feature = "synthetic-test-bin"))]
 use profile_platform_primitives::TenantScope;
-use profile_platform_primitives::{
-    ActorContext, DeviceId, GenerationId, LaunchIntentId, ProfileId, SessionId, UnixMillis,
-};
+use profile_platform_primitives::{DeviceId, GenerationId, SessionId};
+#[cfg(any(test, feature = "synthetic-test-bin"))]
+use profile_platform_primitives::{ProfileId, UnixMillis};
+#[cfg(any(test, feature = "synthetic-test-bin"))]
 use session_domain::ProfileLease;
 use std::fmt;
 
@@ -81,33 +96,11 @@ pub trait DeviceAuthenticationPort {
     fn authenticate(&mut self, device_id: &DeviceId, key_handle: &str) -> Result<(), Self::Error>;
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum EnrollmentFailureKind {
-    LeaseConflict,
-    ServiceUncertain,
-    Other,
-}
-
-pub trait EnrollmentPort {
-    fn classify_error(_error: &Self::Error) -> EnrollmentFailureKind {
-        EnrollmentFailureKind::Other
-    }
-
-    type Error;
-
-    fn redeem_claim(
-        &mut self,
-        claim: &ClaimUri,
-        device_id: &DeviceId,
-        now: UnixMillis,
-    ) -> Result<OperatorEnrollment, Self::Error>;
-}
-
-pub trait RuntimeBundleSelectionPort {
-    type Error;
-
-    fn select_bundle(&mut self) -> Result<ApprovedRuntimeBundle, Self::Error>;
-}
+pub use crate::runtime_bundle::RuntimeBundleSelectionPort;
+pub use crate::shipping_control_plane::{
+    SyncEnrollment as OperatorEnrollment, SyncEnrollmentFailureKind as EnrollmentFailureKind,
+    SyncEnrollmentPort as EnrollmentPort,
+};
 
 /// Ephemeral result from the existing, freshly authorized pending-Save owner.
 /// Neither a persisted phase nor independent permission to open a browser.
@@ -179,51 +172,6 @@ pub trait BrowserLaunchPreflightPort {
         workspace_epoch: u64,
         runtime_bundle: &ApprovedRuntimeBundle,
     ) -> Result<(), Self::Error>;
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct OperatorEnrollment {
-    actor: ActorContext,
-    profile_id: ProfileId,
-    generation_id: GenerationId,
-    launch_intent_id: LaunchIntentId,
-}
-
-impl OperatorEnrollment {
-    #[must_use]
-    pub const fn new(
-        actor: ActorContext,
-        profile_id: ProfileId,
-        generation_id: GenerationId,
-        launch_intent_id: LaunchIntentId,
-    ) -> Self {
-        Self {
-            actor,
-            profile_id,
-            generation_id,
-            launch_intent_id,
-        }
-    }
-
-    #[must_use]
-    pub const fn actor(&self) -> &ActorContext {
-        &self.actor
-    }
-
-    #[must_use]
-    pub const fn profile_id(&self) -> &ProfileId {
-        &self.profile_id
-    }
-
-    #[must_use]
-    pub const fn generation_id(&self) -> &GenerationId {
-        &self.generation_id
-    }
-
-    #[must_use]
-    pub const fn launch_intent_id(&self) -> &LaunchIntentId {
-        &self.launch_intent_id
-    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -430,6 +378,7 @@ impl GenerationSaveFailureReason {
     }
 }
 
+#[cfg(any(test, feature = "synthetic-test-bin"))]
 fn save_control_reason<S>(
     source: GenerationSuccessorControlError<S>,
 ) -> GenerationSaveFailureReason {
@@ -447,6 +396,7 @@ fn save_control_reason<S>(
     }
 }
 
+#[cfg(any(test, feature = "synthetic-test-bin"))]
 fn save_generation_reason<S, U>(
     source: ShippingGenerationSaveError<GenerationSuccessorControlError<S>, U>,
 ) -> GenerationSaveFailureReason {
@@ -473,6 +423,7 @@ fn save_generation_reason<S, U>(
     }
 }
 
+#[cfg(any(test, feature = "synthetic-test-bin"))]
 fn save_checkpoint_reason(source: SaveAttemptEvidenceError) -> GenerationSaveFailureReason {
     match source {
         SaveAttemptEvidenceError::Io(_) | SaveAttemptEvidenceError::Unavailable => {
@@ -495,6 +446,7 @@ fn save_checkpoint_reason(source: SaveAttemptEvidenceError) -> GenerationSaveFai
     }
 }
 
+#[cfg(any(test, feature = "synthetic-test-bin"))]
 fn save_checkpoint_read_reason(source: SaveAttemptEvidenceError) -> GenerationSaveFailureReason {
     match source {
         SaveAttemptEvidenceError::Io(_) | SaveAttemptEvidenceError::Unavailable => {
@@ -521,7 +473,7 @@ fn save_checkpoint_read_reason(source: SaveAttemptEvidenceError) -> GenerationSa
 /// browser under its already-retained Bridge writer lock, before constructing
 /// a second generation-sized RecoveryClone. This is a preflight only, never
 /// a Save, cloud retry, local repair or permission to open stale N.
-#[cfg(any(windows, test))]
+#[cfg(test)]
 fn preflight_retained_native_before_clone(
     source: &GenerationWorkspace,
     inventory: &GenerationInventory,
@@ -653,6 +605,7 @@ impl fmt::Display for OperatorFlowError {
 
 impl std::error::Error for OperatorFlowError {}
 
+#[cfg(any(test, feature = "synthetic-test-bin"))]
 struct ActiveOperatorSession {
     lease: ProfileLease,
     workspace_lock: Option<BridgeWorkspaceLock>,
@@ -671,6 +624,7 @@ pub(crate) struct OperatorDiagnosticFacts {
     pub(crate) cleanup_blocked: bool,
 }
 
+#[cfg(any(test, feature = "synthetic-test-bin"))]
 pub struct ProfileBridgeOperator<D, K, A, E, C, R, B, P, H> {
     device_identity: D,
     device_keys: K,
@@ -687,6 +641,7 @@ pub struct ProfileBridgeOperator<D, K, A, E, C, R, B, P, H> {
     cleanup_blocked: bool,
 }
 
+#[cfg(any(test, feature = "synthetic-test-bin"))]
 impl<D, K, A, E, C, R, B, P, H> ProfileBridgeOperator<D, K, A, E, C, R, B, P, H>
 where
     D: DeviceIdentityPort,
@@ -1248,7 +1203,7 @@ where
             preflight_started.elapsed().as_millis()
         );
         if native_rescue_required {
-            #[cfg(any(windows, test))]
+            #[cfg(test)]
             if begin_native_rescue_edit(root, &workspace, &lease).is_err() {
                 return Err(self.fail_with_lock_before_use(
                     OperatorFailureStage::GenerationSave,
@@ -1257,7 +1212,7 @@ where
                     &workspace,
                 ));
             }
-            #[cfg(not(any(windows, test)))]
+            #[cfg(not(test))]
             return Err(self.fail_with_lock_before_use(
                 OperatorFailureStage::GenerationSave,
                 lease,
@@ -1265,9 +1220,14 @@ where
                 &workspace,
             ));
         }
+        // Ordinary Open requires only metadata for an ephemeral lifecycle
+        // record, NOT a snapshot inventory. Reading every Firefox cache,
+        // SQLite and WAL byte here can delay Open by seconds and is useless:
+        // the native browser changes those bytes immediately on launch.
+        // Save/recovery remain the exclusive owners of full content hashes.
         #[cfg(windows)]
-        let inventory_started = std::time::Instant::now();
-        let inventory = match workspace.inventory() {
+        let metadata_started = std::time::Instant::now();
+        let local_bytes = match workspace.metadata_total_bytes() {
             Ok(value) => value,
             Err(_) => {
                 return Err(self.fail_with_lock_before_use(
@@ -1280,8 +1240,8 @@ where
         };
         #[cfg(windows)]
         eprintln!(
-            "bridge_open_subphase name=workspace_inventory elapsed_ms={}",
-            inventory_started.elapsed().as_millis()
+            "bridge_open_subphase name=workspace_metadata elapsed_ms={}",
+            metadata_started.elapsed().as_millis()
         );
         // Only this exact boundary may consume pending delivery health. The runtime has
         // not been spawned or allowed to mutate the workspace at this point.
@@ -1293,11 +1253,8 @@ where
                 &workspace,
             ));
         }
-        let mut local_record = LocalGenerationRecord::new(
-            enrollment.generation_id().clone(),
-            inventory.total_bytes(),
-            now,
-        );
+        let mut local_record =
+            LocalGenerationRecord::new(enrollment.generation_id().clone(), local_bytes, now);
         if local_record.set_locked(true).is_err() || local_record.begin_use(now).is_err() {
             return Err(self.fail_with_lock_before_use(
                 OperatorFailureStage::LocalLifecycle,
@@ -1517,9 +1474,9 @@ where
         })
     }
 
-    /// Legacy in-memory Save exists only in debug/test or explicitly synthetic builds.
-    /// Installed production release uses `save_retained_successor_streaming` only.
-    #[cfg(any(test, feature = "synthetic-test-bin", debug_assertions))]
+    /// The retired operator's Save paths are test-only. Installed production
+    /// uses the closed-profile streaming Sync in shipping_composition, not this operator.
+    #[cfg(any(test, feature = "synthetic-test-bin"))]
     pub fn save_retained_successor<T, U>(
         &mut self,
         root: &MaterializationRoot,
@@ -1744,7 +1701,7 @@ where
     /// coordinator, but seals its original Firefox files directly to a durable
     /// BPAT instead of constructing a generation-sized plaintext/ciphertext Vec.
     /// Retries reuse the exact saved attempt; no second save owner or N+2.
-    #[cfg(any(windows, test))]
+    #[cfg(test)]
     pub fn save_retained_successor_streaming<T, U>(
         &mut self,
         root: &MaterializationRoot,

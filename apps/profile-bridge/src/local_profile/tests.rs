@@ -1,7 +1,7 @@
 use super::{
     BridgeWorkspaceLock, ForgottenWindowAction, ForgottenWindowPolicy, LocalGenerationRecord,
-    LocalGenerationState, LocalProfileError, MaterializationRoot, QuotaPolicy, RecoveryClone,
-    SupportBundleSummary,
+    LocalGenerationState, LocalProfileError, MaterializationRoot, PendingSyncDescriptor,
+    QuotaPolicy, RecoveryClone, SupportBundleSummary,
 };
 use profile_platform_primitives::{DeviceId, GenerationId, ProfileId, TenantId, UnixMillis};
 use std::fs;
@@ -86,6 +86,8 @@ fn compact_workspace_binds_every_id_and_preserves_existing_user_directories()
             assert_eq!(other.path().parent(), workspace.path().parent());
         }
     }
+    // The old unhashed layout and v1 marker are not a supported runtime path.
+    // New writes use only the canonical compact path; no compatibility lookup runs.
     let legacy_id = GenerationId::parse("generation_existing_user_data")?;
     let legacy = root
         .path()
@@ -97,16 +99,159 @@ fn compact_workspace_binds_every_id_and_preserves_existing_user_directories()
         legacy.join(".profile-generation"),
         "profile-platform-generation-v1\n",
     )?;
-    fs::write(legacy.join("unsaved.bin"), b"preserve")?;
+    fs::write(legacy.join("unsaved.bin"), b"test-only-stale-data")?;
+    assert!(matches!(
+        root.open_generation(&tenant, &profile, &legacy_id),
+        Err(LocalProfileError::Io(std::io::ErrorKind::NotFound))
+    ));
+    let new_workspace = root.create_generation(&tenant, &profile, &legacy_id)?;
+    assert_ne!(new_workspace.path(), legacy);
     assert_eq!(
-        root.open_generation(&tenant, &profile, &legacy_id)?.path(),
-        legacy
+        fs::read(legacy.join("unsaved.bin"))?,
+        b"test-only-stale-data"
     );
+    fs::remove_dir_all(path)?;
+    Ok(())
+}
+
+#[test]
+fn profile_current_uses_one_existing_marker_for_generation_and_cloud_base()
+-> Result<(), Box<dyn std::error::Error>> {
+    let path = test_root("profile-current")?;
+    let root = MaterializationRoot::open_or_create(&path)?;
+    let (tenant, profile) = ids()?;
+    let local_id = GenerationId::parse("generation_local_current")?;
+    let cloud_id = GenerationId::parse("generation_cloud_current")?;
+    let draft = root.create_profile_current(&tenant, &profile, &local_id, 1)?;
+    let stable_path = draft.path().to_path_buf();
+    fs::write(stable_path.join("browser-state.bin"), b"local browser data")?;
+    fs::write(stable_path.join(".local-unsynced"), b"local-unsynced-v2")?;
+
+    let inventory = draft.inventory()?;
+    assert!(
+        inventory
+            .entries()
+            .iter()
+            .any(|entry| entry.relative_path() == "browser-state.bin")
+    );
+    assert!(inventory.entries().iter().all(|entry| {
+        entry.relative_path() != ".profile-generation" && entry.relative_path() != ".local-unsynced"
+    }));
+    assert_eq!(draft.base_generation_id(), None);
+    assert_eq!(draft.profile_version(), 1);
+
+    let synced = root.update_profile_current_sync_base(&draft, &cloud_id, 2)?;
+    assert_eq!(synced.path(), stable_path);
+    assert_eq!(synced.generation_id(), &cloud_id);
+    assert_eq!(synced.base_generation_id(), Some(&cloud_id));
+    assert_eq!(synced.profile_version(), 2);
+
+    let reopened = root.open_profile_current(&tenant, &profile)?;
+    assert_eq!(reopened.path(), stable_path);
+    assert_eq!(reopened.generation_id(), &cloud_id);
+    assert_eq!(reopened.base_generation_id(), Some(&cloud_id));
+    assert_eq!(reopened.profile_version(), 2);
     assert_eq!(
-        root.create_generation(&tenant, &profile, &legacy_id),
-        Err(LocalProfileError::TargetAlreadyExists)
+        fs::read(stable_path.join("browser-state.bin"))?,
+        b"local browser data"
     );
-    assert_eq!(fs::read(legacy.join("unsaved.bin"))?, b"preserve");
+    fs::remove_dir_all(path)?;
+    Ok(())
+}
+
+#[test]
+fn profile_current_pending_sync_recovers_exact_commit_without_replacing_local_files()
+-> Result<(), Box<dyn std::error::Error>> {
+    let path = test_root("profile-current-pending-sync")?;
+    let root = MaterializationRoot::open_or_create(&path)?;
+    let (tenant, profile) = ids()?;
+    let base = GenerationId::parse("generation_pending_base")?;
+    let candidate = GenerationId::parse("generation_pending_candidate")?;
+    let draft = root.create_profile_current(&tenant, &profile, &base, 4)?;
+    fs::write(draft.path().join("browser-state.bin"), b"snapshot bytes")?;
+    let ready = root.update_profile_current_sync_base(&draft, &base, 4)?;
+    let before = ready.inventory()?;
+    let pending = PendingSyncDescriptor::new(
+        candidate.clone(),
+        [0x11; 32],
+        [0x22; 32],
+        4_096,
+        [0x33; 32],
+        before.total_bytes(),
+    )?;
+
+    let prepared = root.set_profile_current_pending_sync(&ready, pending.clone())?;
+    assert_eq!(prepared.pending_sync(), Some(&pending));
+    assert_eq!(prepared.inventory()?, before);
+
+    let reopened = root.open_profile_current(&tenant, &profile)?;
+    assert_eq!(reopened.pending_sync(), Some(&pending));
+    let committed = root.mark_profile_current_pending_sync_committed(&reopened)?;
+    assert_eq!(committed.generation_id(), &candidate);
+    assert_eq!(committed.base_generation_id(), Some(&candidate));
+    assert_eq!(committed.profile_version(), 5);
+    assert!(
+        committed
+            .pending_sync()
+            .is_some_and(PendingSyncDescriptor::is_committed)
+    );
+    assert_eq!(committed.inventory()?, before);
+
+    let recovered = root.open_profile_current(&tenant, &profile)?;
+    let cleared = root.clear_profile_current_pending_sync(&recovered)?;
+    assert!(cleared.pending_sync().is_none());
+    assert_eq!(cleared.generation_id(), &candidate);
+    assert_eq!(cleared.base_generation_id(), Some(&candidate));
+    assert_eq!(cleared.profile_version(), 5);
+    assert_eq!(cleared.inventory()?, before);
+    fs::remove_dir_all(path)?;
+    Ok(())
+}
+
+#[test]
+fn draft_pending_sync_must_bind_its_original_local_generation()
+-> Result<(), Box<dyn std::error::Error>> {
+    let path = test_root("profile-current-draft-pending-sync")?;
+    let root = MaterializationRoot::open_or_create(&path)?;
+    let (tenant, profile) = ids()?;
+    let local = GenerationId::parse("generation_draft_pending")?;
+    let wrong = GenerationId::parse("generation_draft_wrong")?;
+    let draft = root.create_profile_current(&tenant, &profile, &local, 1)?;
+    let invalid = PendingSyncDescriptor::new(wrong, [0x11; 32], [0x22; 32], 4_096, [0x33; 32], 0)?;
+    assert!(matches!(
+        root.set_profile_current_pending_sync(&draft, invalid),
+        Err(LocalProfileError::InvalidPolicy)
+    ));
+    let valid =
+        PendingSyncDescriptor::new(local.clone(), [0x11; 32], [0x22; 32], 4_096, [0x33; 32], 0)?;
+    let pending = root.set_profile_current_pending_sync(&draft, valid)?;
+    assert_eq!(
+        pending
+            .pending_sync()
+            .map(PendingSyncDescriptor::candidate_generation_id),
+        Some(&local)
+    );
+    fs::remove_dir_all(path)?;
+    Ok(())
+}
+
+#[test]
+fn corrupt_profile_generation_marker_fails_closed_without_touching_browser_data()
+-> Result<(), Box<dyn std::error::Error>> {
+    let path = test_root("profile-current-corrupt")?;
+    let root = MaterializationRoot::open_or_create(&path)?;
+    let (tenant, profile) = ids()?;
+    let local_id = GenerationId::parse("generation_local_current_corrupt")?;
+    let current = root.create_profile_current(&tenant, &profile, &local_id, 1)?;
+    let data = current.path().join("browser-state.bin");
+    fs::write(&data, b"preserve")?;
+    fs::write(current.path().join(".profile-generation"), b"corrupt")?;
+
+    assert_eq!(
+        root.open_profile_current(&tenant, &profile),
+        Err(LocalProfileError::GenerationMarkerMismatch)
+    );
+    assert_eq!(fs::read(data)?, b"preserve");
     fs::remove_dir_all(path)?;
     Ok(())
 }

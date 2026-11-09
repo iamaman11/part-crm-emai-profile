@@ -220,3 +220,8 @@ export async function openBrowserProfile(tenantId: string, profileId: string, id
   const launch = await launchProfile(tenantId, profileId, idempotencyKey);
   invokeProfileBridgeLaunch(launch.launchUri);
 }
+
+export function dispatchBrowserProfileOpen(launchUri: string): void {
+  // A user click only dispatches the already authorized, prefetched local Bridge URI.
+  invokeProfileBridgeLaunch(launchUri);
+}

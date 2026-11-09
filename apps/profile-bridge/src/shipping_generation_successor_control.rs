@@ -1,32 +1,40 @@
 #[cfg(any(windows, test))]
 use crate::browser_execution::{browser_writer_locks_absent, persist_committed_successor_binding};
+#[cfg(any(test, feature = "synthetic-test-bin"))]
+use crate::dirty_generation::GenerationSealingMaterial;
+#[cfg(any(windows, test, feature = "synthetic-test-bin"))]
+use crate::dirty_generation::GenerationSealingMaterialPort;
+#[cfg(any(test, feature = "synthetic-test-bin"))]
+use crate::dirty_generation::PreparedDirtyGeneration;
 #[cfg(any(windows, test))]
 use crate::dirty_generation::recover_local_unsynced_native_clone;
-use crate::dirty_generation::{
-    GenerationSealingMaterial, GenerationSealingMaterialPort, PreparedDirtyGeneration,
-};
 #[cfg(any(windows, test))]
 use crate::generation_snapshot::{GenerationSnapshotError, WorkspaceSnapshotReader};
-use crate::local_profile::MaterializationRoot;
 #[cfg(any(windows, test))]
-use crate::local_profile::{BridgeWorkspaceLock, LocalGenerationRecord, LocalProfileError};
+use crate::local_profile::{
+    BridgeWorkspaceLock, LocalGenerationRecord, LocalProfileError, MaterializationRoot,
+};
+use crate::shipping_control_plane::ShippingControlPlaneError;
+#[cfg(any(windows, test, feature = "synthetic-test-bin"))]
 use crate::shipping_control_plane::{
-    MachineHttpMethod, MachineHttpPort, MachineHttpResponse, ShippingControlPlaneError,
-    safe_machine_problem_code,
+    MachineHttpMethod, MachineHttpPort, MachineHttpResponse, safe_machine_problem_code,
 };
 #[cfg(any(windows, test))]
+use crate::shipping_generation_save::CommittedGenerationSuccessor;
+#[cfg(any(windows, test, feature = "synthetic-test-bin"))]
+use crate::shipping_generation_save::GenerationSuccessorCommitOutcome;
+#[cfg(any(test, feature = "synthetic-test-bin"))]
+use crate::shipping_generation_save::GenerationSuccessorControlPort;
+#[cfg(any(windows, test))]
+use crate::shipping_generation_save::SignedGenerationObjectStreamPutPort;
 use crate::shipping_generation_save::{
-    CommittedGenerationSuccessor, SignedGenerationObjectStreamPutPort,
-};
-use crate::shipping_generation_save::{
-    GenerationSuccessorCommitOutcome, GenerationSuccessorControlPort,
     GenerationUploadAuthorization, SignedGenerationUploadCapability,
 };
 #[cfg(any(windows, test))]
 use crate::shipping_save_attempt::{ReadOnlySaveAttempt, discover_unresolved_exact_save_attempt};
+#[cfg(any(windows, test))]
 use crate::shipping_save_attempt::{
     ReadOnlyStreamedSaveAttempt, discover_unresolved_streaming_exact_save_attempt,
-    inspect_streaming_exact_save_attempt,
 };
 #[cfg(any(windows, test))]
 use crate::shipping_save_attempt::{
@@ -38,13 +46,13 @@ use crate::shipping_save_attempt::{
     retire_matching_local_unsynced_after_restart,
     retire_matching_streamed_local_unsynced_after_restart,
 };
+use control_plane_contract::profile_generation_api::BridgeGenerationUploadCapabilityResponse;
+#[cfg(any(windows, test, feature = "synthetic-test-bin"))]
 use control_plane_contract::profile_generation_api::{
     BRIDGE_PROFILE_GENERATION_COMMIT_PATH_TEMPLATE,
-    BRIDGE_PROFILE_GENERATION_OBSERVE_PATH_TEMPLATE,
     BRIDGE_PROFILE_GENERATION_UPLOAD_CAPABILITY_PATH_TEMPLATE,
     BridgeGenerationSuccessorCommitOutcomeDto, BridgeGenerationSuccessorCommitResponse,
-    BridgeGenerationSuccessorObserveRequest, BridgeGenerationSuccessorObserveResponse,
-    BridgeGenerationUploadCapabilityResponse, BridgeProfileGenerationSuccessorRequest,
+    BridgeProfileGenerationSuccessorRequest,
 };
 #[cfg(any(windows, test))]
 use control_plane_contract::profile_generation_api::{
@@ -55,20 +63,32 @@ use control_plane_contract::profile_generation_api::{
     BridgeGenerationSuccessorRetryVerdict,
 };
 #[cfg(any(windows, test))]
+use control_plane_contract::profile_generation_api::{
+    BRIDGE_PROFILE_GENERATION_OBSERVE_PATH_TEMPLATE, BridgeGenerationSuccessorObserveRequest,
+    BridgeGenerationSuccessorObserveResponse,
+};
+#[cfg(any(windows, test))]
 use profile_platform_primitives::UnixMillis;
+#[cfg(any(windows, test, feature = "synthetic-test-bin"))]
 use profile_platform_primitives::{CorrelationId, GenerationId, ProfileId, TenantId};
+#[cfg(any(windows, test, feature = "synthetic-test-bin"))]
 use session_domain::ProfileLease;
 use std::fmt;
+#[cfg(any(windows, test, feature = "synthetic-test-bin"))]
 use std::sync::atomic::{AtomicU64, Ordering};
 
+#[cfg(any(windows, test, feature = "synthetic-test-bin"))]
 const MAX_UPLOAD_CAPABILITY_RESPONSE_BYTES: usize = 16_384;
+#[cfg(any(windows, test, feature = "synthetic-test-bin"))]
 const MAX_COMMIT_RESPONSE_BYTES: usize = 1_024;
+#[cfg(any(windows, test))]
 const MAX_OBSERVE_RESPONSE_BYTES: usize = 256;
 const MAX_SIGNED_UPLOAD_URL_BYTES: usize = 8_192;
 const MAX_SIGNED_UPLOAD_HEADERS: usize = 16;
 const MAX_SIGNED_UPLOAD_HEADER_NAME_BYTES: usize = 128;
 const MAX_SIGNED_UPLOAD_HEADER_VALUE_BYTES: usize = 1_024;
 const MAX_UPLOAD_CAPABILITY_EXPIRES_SECONDS: u32 = 300;
+#[cfg(any(windows, test, feature = "synthetic-test-bin"))]
 static SAVE_REQUEST_SEQUENCE: AtomicU64 = AtomicU64::new(1);
 
 /// Evidence-driven post-commit local completion, never a new server write grant.
@@ -153,6 +173,7 @@ fn first_seal_recovery_failure(
 /// No variant is a retry capability, a new lease, local browser readiness,
 /// or a claim that `CLOUD_SAVED` has been reached.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[cfg(any(windows, test))]
 pub enum RestartExactCommitObservation {
     /// No canonical exact checkpoint was discovered. This does NOT overrule
     /// the independent conservative guard for torn/pending siblings.
@@ -191,11 +212,13 @@ impl<S: std::error::Error> std::error::Error for GenerationSuccessorControlError
 /// It is intentionally not a coordinator. The live coordinator remains the sole lease/fence and
 /// sealing-material owner; this adapter only serializes the canonical successor request and
 /// delegates sealing material back to that existing owner.
+#[cfg(any(test, feature = "synthetic-test-bin"))]
 pub struct ControlPlaneGenerationSuccessor<'a, T, S> {
     transport: T,
     sealer: &'a mut S,
 }
 
+#[cfg(any(test, feature = "synthetic-test-bin"))]
 impl<'a, T, S> ControlPlaneGenerationSuccessor<'a, T, S> {
     #[must_use]
     pub const fn new(transport: T, sealer: &'a mut S) -> Self {
@@ -203,6 +226,7 @@ impl<'a, T, S> ControlPlaneGenerationSuccessor<'a, T, S> {
     }
 }
 
+#[cfg(any(test, feature = "synthetic-test-bin"))]
 impl<T, S> GenerationSealingMaterialPort for ControlPlaneGenerationSuccessor<'_, T, S>
 where
     S: GenerationSealingMaterialPort,
@@ -229,6 +253,7 @@ where
     }
 }
 
+#[cfg(any(test, feature = "synthetic-test-bin"))]
 impl<T, S> GenerationSuccessorControlPort for ControlPlaneGenerationSuccessor<'_, T, S>
 where
     T: MachineHttpPort,
@@ -294,6 +319,199 @@ where
     }
 }
 
+/// Streaming successor for the one CLOSED native CURRENT. The request,
+/// signed R2 upload, server verification, Coordinator witness and atomic
+/// D1 CAS are the SAME existing generation-successor contract. Only the
+/// BPGC body source is a verified file instead of an in-memory Vec.
+#[cfg(windows)]
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn publish_closed_streamed_successor<T, U>(
+    tenant: &TenantId,
+    profile: &ProfileId,
+    base: &GenerationId,
+    candidate: &GenerationId,
+    encrypted: &crate::generation_snapshot::ClosedProfileEncryptedStream,
+    lease: &ProfileLease,
+    transport: &mut T,
+    uploader: &mut U,
+) -> Result<(), ShippingControlPlaneError>
+where
+    T: MachineHttpPort,
+    U: SignedGenerationObjectStreamPutPort,
+{
+    if lease.tenant_id() != tenant
+        || lease.profile_id() != profile
+        || lease.epoch() == 0
+        || candidate == base
+        || encrypted.metadata().tenant_id() != tenant
+        || encrypted.metadata().profile_id() != profile
+        || encrypted.metadata().generation_id() != candidate
+        || encrypted.metadata().base_generation_id() != Some(base)
+    {
+        return Err(ShippingControlPlaneError::InvalidResponse);
+    }
+    let metadata_digest = lower_hex_stream(&encrypted.metadata_digest());
+    let container_digest = lower_hex_stream(&encrypted.container_digest());
+    let object_key = encrypted.object_key();
+    let request = BridgeProfileGenerationSuccessorRequest::new(
+        base.as_str(),
+        candidate.as_str(),
+        &object_key,
+        &metadata_digest,
+        &container_digest,
+        encrypted.container_bytes(),
+        lease.session_id().as_str(),
+        lease.fencing_token().as_str(),
+        lease.epoch(),
+    );
+    let post = |transport: &mut T, path: &str, body: &BridgeProfileGenerationSuccessorRequest| {
+        post_json::<T, core::convert::Infallible, _>(transport, path, body).map_err(|reason| {
+            match reason {
+                GenerationSuccessorControlError::ControlPlane(error) => error,
+                GenerationSuccessorControlError::Sealing(never) => match never {},
+            }
+        })
+    };
+    let upload_path = successor_path(
+        BRIDGE_PROFILE_GENERATION_UPLOAD_CAPABILITY_PATH_TEMPLATE,
+        tenant,
+        profile,
+    );
+    let authorization =
+        |transport: &mut T| -> Result<GenerationUploadAuthorization, ShippingControlPlaneError> {
+            let response = post(transport, &upload_path, &request)?;
+            if response.len() > MAX_UPLOAD_CAPABILITY_RESPONSE_BYTES {
+                return Err(ShippingControlPlaneError::InvalidResponse);
+            }
+            let parsed: BridgeGenerationUploadCapabilityResponse =
+                serde_json::from_slice(&response)
+                    .map_err(|_| ShippingControlPlaneError::InvalidResponse)?;
+            decode_upload_authorization::<core::convert::Infallible>(parsed).map_err(|reason| {
+                match reason {
+                    GenerationSuccessorControlError::ControlPlane(error) => error,
+                    GenerationSuccessorControlError::Sealing(never) => match never {},
+                }
+            })
+        };
+    match authorization(transport)? {
+        GenerationUploadAuthorization::Verified => {}
+        GenerationUploadAuthorization::UploadRequired(capability) => {
+            let mut exact = encrypted
+                .verified_file()
+                .map_err(|_| ShippingControlPlaneError::InvalidResponse)?;
+            uploader
+                .put_verified_stream(&capability, &mut exact)
+                .map_err(|_| ShippingControlPlaneError::Transport)?;
+            // A completed HTTP PUT is NOT verified storage.
+            if !matches!(
+                authorization(transport)?,
+                GenerationUploadAuthorization::Verified
+            ) {
+                return Err(ShippingControlPlaneError::HttpServerUncertain);
+            }
+        }
+    }
+    let commit_path = successor_path(
+        BRIDGE_PROFILE_GENERATION_COMMIT_PATH_TEMPLATE,
+        tenant,
+        profile,
+    );
+    let committed = post(transport, &commit_path, &request).and_then(|response| {
+        if response.len() > MAX_COMMIT_RESPONSE_BYTES {
+            return Err(ShippingControlPlaneError::InvalidResponse);
+        }
+        serde_json::from_slice::<BridgeGenerationSuccessorCommitResponse>(&response)
+            .map_err(|_| ShippingControlPlaneError::InvalidResponse)
+    });
+    if committed.is_ok() {
+        return Ok(());
+    }
+    // Lost reply might follow a real D1 CAS. Only exact read-only D1
+    // ACTIVE_EXACT observation of this original object grants completion.
+    let observation = BridgeGenerationSuccessorObserveRequest {
+        base_generation_id: base.as_str().to_owned(),
+        generation_id: candidate.as_str().to_owned(),
+        object_key,
+        metadata_digest,
+        container_digest,
+        container_bytes: encrypted.container_bytes(),
+    };
+    let bytes = post_json::<T, core::convert::Infallible, _>(
+        transport,
+        &successor_path(
+            BRIDGE_PROFILE_GENERATION_OBSERVE_PATH_TEMPLATE,
+            tenant,
+            profile,
+        ),
+        &observation,
+    )
+    .map_err(|reason| match reason {
+        GenerationSuccessorControlError::ControlPlane(error) => error,
+        GenerationSuccessorControlError::Sealing(never) => match never {},
+    })?;
+    if bytes.len() > MAX_OBSERVE_RESPONSE_BYTES {
+        return Err(ShippingControlPlaneError::InvalidResponse);
+    }
+    let observed: BridgeGenerationSuccessorObserveResponse =
+        serde_json::from_slice(&bytes).map_err(|_| ShippingControlPlaneError::InvalidResponse)?;
+    if !observed.active_exact {
+        return Err(ShippingControlPlaneError::HttpServerUncertain);
+    }
+    Ok(())
+}
+
+#[cfg(windows)]
+fn lower_hex_stream(input: &[u8; 32]) -> String {
+    input.iter().map(|byte| format!("{byte:02x}")).collect()
+}
+
+/// Reuse the EXISTING read-only D1 exact-successor observation after an
+/// ambiguous local-first Sync response. This never uploads, commits, retries
+/// an unknown mutation, creates a candidate or changes CURRENT.
+#[cfg(windows)]
+#[cfg(test)]
+pub(crate) fn observe_closed_current_exact<T: MachineHttpPort>(
+    tenant: &TenantId,
+    profile: &ProfileId,
+    base: &GenerationId,
+    prepared: &PreparedDirtyGeneration,
+    transport: &mut T,
+) -> Result<bool, ShippingControlPlaneError> {
+    let request = BridgeGenerationSuccessorObserveRequest {
+        base_generation_id: base.as_str().to_owned(),
+        generation_id: prepared
+            .sealed()
+            .metadata()
+            .generation_id()
+            .as_str()
+            .to_owned(),
+        object_key: prepared.object_key(),
+        metadata_digest: prepared.metadata_digest().to_owned(),
+        container_digest: prepared.container_digest().to_owned(),
+        container_bytes: u64::try_from(prepared.sealed().container().len())
+            .map_err(|_| ShippingControlPlaneError::InvalidResponse)?,
+    };
+    let bytes = post_json::<T, core::convert::Infallible, _>(
+        transport,
+        &successor_path(
+            BRIDGE_PROFILE_GENERATION_OBSERVE_PATH_TEMPLATE,
+            tenant,
+            profile,
+        ),
+        &request,
+    )
+    .map_err(|error| match error {
+        GenerationSuccessorControlError::ControlPlane(reason) => reason,
+        GenerationSuccessorControlError::Sealing(never) => match never {},
+    })?;
+    if bytes.len() > MAX_OBSERVE_RESPONSE_BYTES {
+        return Err(ShippingControlPlaneError::InvalidResponse);
+    }
+    let observed: BridgeGenerationSuccessorObserveResponse =
+        serde_json::from_slice(&bytes).map_err(|_| ShippingControlPlaneError::InvalidResponse)?;
+    Ok(observed.active_exact)
+}
+
 /// Discover one durable exact checkpoint without requiring a surviving in-memory
 /// successor/lease and observe the server's exact active-generation descriptor.
 /// Only the signed-in machine transport is used; this function NEVER replays the
@@ -301,6 +519,7 @@ where
 /// a NOT ACTIVE_EXACT observation leaves original bytes and attempt untouched.
 /// This result cannot authorize a retry; server-positive authorization must be
 /// implemented separately in the existing D1 owner before any resume/commit.
+#[cfg(test)]
 pub fn observe_discovered_successor_after_restart<T: MachineHttpPort>(
     root: &MaterializationRoot,
     tenant_id: &TenantId,
@@ -1235,6 +1454,7 @@ fn request_fresh_retry_decision_for_descriptor<T: MachineHttpPort>(
 /// Read-only server probe from crash checkpoint after a lost response.
 /// Requires fresh machine CNG authentication via the transport. Never submits
 /// the old fence, mutates the Profile, or grants permission to repeat PUT.
+#[cfg(test)]
 pub fn observe_retained_successor_after_restart<T: MachineHttpPort>(
     root: &MaterializationRoot,
     tenant_id: &TenantId,
@@ -1242,9 +1462,14 @@ pub fn observe_retained_successor_after_restart<T: MachineHttpPort>(
     successor_id: &GenerationId,
     transport: &mut T,
 ) -> Result<bool, ShippingControlPlaneError> {
-    let attempt = inspect_streaming_exact_save_attempt(root, tenant_id, profile_id, successor_id)
-        .map_err(|_| ShippingControlPlaneError::InvalidResponse)?
-        .ok_or(ShippingControlPlaneError::InvalidResponse)?;
+    let attempt = crate::shipping_save_attempt::inspect_streaming_exact_save_attempt(
+        root,
+        tenant_id,
+        profile_id,
+        successor_id,
+    )
+    .map_err(|_| ShippingControlPlaneError::InvalidResponse)?
+    .ok_or(ShippingControlPlaneError::InvalidResponse)?;
     observe_verified_streamed_attempt(tenant_id, profile_id, &attempt, transport)
 }
 
@@ -1271,6 +1496,7 @@ fn observe_verified_exact_attempt<T: MachineHttpPort>(
 
 /// The same typed observer accepts a verified file-backed BPAT descriptor:
 /// no generation-sized ciphertext allocation and no cloud write authority.
+#[cfg(any(windows, test))]
 fn observe_verified_streamed_attempt<T: MachineHttpPort>(
     tenant_id: &TenantId,
     profile_id: &ProfileId,
@@ -1290,6 +1516,7 @@ fn observe_verified_streamed_attempt<T: MachineHttpPort>(
 
 /// One existing D1 ACTIVE_EXACT query. Both inspectors must prove the
 /// ciphertext/local inventory *before* this read-only request is constructed.
+#[cfg(any(windows, test))]
 fn observe_exact_descriptor<T: MachineHttpPort>(
     tenant_id: &TenantId,
     profile_id: &ProfileId,
@@ -1317,6 +1544,7 @@ fn observe_exact_descriptor<T: MachineHttpPort>(
     Ok(result.active_exact)
 }
 
+#[cfg(any(test, feature = "synthetic-test-bin"))]
 fn successor_request<S>(
     base_generation_id: &GenerationId,
     prepared: &PreparedDirtyGeneration,
@@ -1339,6 +1567,7 @@ fn successor_request<S>(
 
 /// Only fixed route names appear in support logs; never print a tenant,
 /// profile, token, capability URL, R2 key, or untrusted HTTP response body.
+#[cfg(any(windows, test, feature = "synthetic-test-bin"))]
 fn save_control_operation(path: &str) -> &'static str {
     if path.ends_with("/generation-successor/upload-capability") {
         "UPLOAD_CAPABILITY"
@@ -1357,6 +1586,7 @@ fn save_control_operation(path: &str) -> &'static str {
 /// Reuse the existing bounded/allowlisted machine decoder, bound to the
 /// correlation issued for this exact request. Logs are evidence only and
 /// never change authorization, retry, or reconciliation decisions.
+#[cfg(any(windows, test, feature = "synthetic-test-bin"))]
 fn report_save_control_refusal(
     path: &str,
     correlation_id: &CorrelationId,
@@ -1372,6 +1602,7 @@ fn report_save_control_refusal(
     );
 }
 
+#[cfg(any(windows, test, feature = "synthetic-test-bin"))]
 fn post_json<T, S, B>(
     transport: &mut T,
     path: &str,
@@ -1484,12 +1715,14 @@ fn valid_header_value(value: &str) -> bool {
             .any(|byte| byte == b'\r' || byte == b'\n' || byte == 0)
 }
 
+#[cfg(any(windows, test, feature = "synthetic-test-bin"))]
 fn successor_path(template: &str, tenant_id: &TenantId, profile_id: &ProfileId) -> String {
     template
         .replace("{tenantId}", tenant_id.as_str())
         .replace("{profileId}", profile_id.as_str())
 }
 
+#[cfg(any(windows, test, feature = "synthetic-test-bin"))]
 fn next_correlation_id<S>() -> Result<CorrelationId, GenerationSuccessorControlError<S>> {
     let sequence = SAVE_REQUEST_SEQUENCE.fetch_add(1, Ordering::Relaxed);
     CorrelationId::parse(format!("corr_p3_generation_save_{sequence:020}"))

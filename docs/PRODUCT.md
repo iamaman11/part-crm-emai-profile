@@ -1,289 +1,163 @@
-# Product Definition
+# CRM Browser Profiles — Product and Architecture Contract
 
-**Статус:** normative product boundary  
-**Дата:** 2026-08-27
+**Статус:** normative architecture boundary  
+**Дата:** 2026-11-09  
+**Канонический план:** [Issue #830](https://github.com/iamaman11/part-crm-emai-profile/issues/830)
 
-## 1. Назначение
+## 1. Единое приложение
 
-Browser Profile Platform — самостоятельное приложение для управляемого жизненного
-цикла browser profiles: создание и безопасный импорт, назначение клиенту, выдача
-доступа пользователю, локальный запуск через Windows Profile Bridge, сохранение
-immutable generations, восстановление, сертификация и audit.
+CRM — одно модульное приложение. Browser Profiles — его встроенный модуль, а не отдельный продукт, самостоятельный сервис или будущий внешний bounded context.
 
-Платформа развивается как одно модульное приложение с одним защищённым `main`,
-одной архитектурой, одной schema/compatibility lineage и независимым поэтапным
-production enablement capabilities:
+CRM владеет UI, бизнес-логикой профилей, назначением профилей клиентам, разрешениями и пользовательскими сценариями. Browser runtime не становится вторым приложением и не дублирует CRM-бизнес-логику.
 
-```text
-source_present != production_enabled
-```
+Главный принцип: **одна реализация каждой функции и один владелец каждого состояния**.
 
-Наличие mailbox/outbound/другого capability-кода в репозитории не делает его частью
-первого production release и не разрешает его backend execution.
+## 2. Владельцы ответственности
 
-Платформа не является CRM и не становится владельцем канонических коммуникаций.
-Она проектируется как будущий внешний bounded context Universal CRM со стабильными
-contracts/events и заменяемыми adapters.
+| Компонент | Единственная ответственность |
+|---|---|
+| **CRM** | UI, клиенты и профили как бизнес-сущности, assignment, grants, ACL, выбор разрешённого профиля и запуск пользовательского сценария |
+| **Worker / D1 / R2** | Серверная проверка ACL, authoritative CURRENT, immutable generation metadata, upload capabilities, проверка объекта и атомарный CAS/Commit |
+| **Rust / ProfileBridge** | Единственная локальная папка профиля, файловые операции, эксклюзивный доступ, закрытый snapshot, encryption, Sync, Restore и локальное recovery |
+| **Camouhost** | Тонкий адаптер официального Camoufox SDK и Playwright: передать проверенные параметры запуска, запустить runtime и получить публичные события |
+| **Camoufox + Playwright** | Единственный владелец браузера, persistent context, окон, вкладок, навигации, cookies, SessionStore, автоматизации и штатного завершения |
 
-## 2. Основная Ценность
+Worker, D1 и R2 — серверная часть единого приложения, а не второй профильный сервис. Camouhost не является вторым browser engine и не содержит бизнес-логику CRM.
 
-Owner организации получает контролируемый каталог профилей и может доказуемо
-ответить:
+## 3. Обычный Open
 
-- кому разрешено видеть и запускать профиль;
-- на каком устройстве и runtime он использовался;
-- какое generation является активным;
-- был ли profile закрыт и синхронизирован корректно;
-- почему профиль quarantined или требует recovery;
-- какое evidence подтверждает certification;
-- кто изменил assignment, grant, generation или policy.
+1. CRM проверяет актуальный доступ пользователя и формирует локальную команду Open для выбранного профиля.
+2. Rust проверяет tenant/actor/device binding, ожидаемую локальную версию и целостность существующей папки.
+3. Rust получает эксклюзивный Bridge-доступ и запускает Camouhost.
+4. Camouhost вызывает официальный Camoufox SDK с существующим Playwright runtime и создаёт один persistent BrowserContext.
+5. Управление браузером полностью принадлежит Camoufox + Playwright.
 
-Member получает только явно выданные profiles и минимально необходимую связанную
-client projection.
+Обычный Open:
 
-## 2.1. Принятый продуктовый принцип: Firefox local-first resilience
+- использует существующую локальную папку;
+- не создаёт новое поколение и не копирует профиль;
+- не ждёт R2, Worker, D1 или Coordinator;
+- не выполняет облачный Restore, если локальная версия уже допущена;
+- не управляет вкладками, окнами или навигацией;
+- не отправляет собственные команды закрытия браузера;
+- не отслеживает PID и видимые окна;
+- не читает внутренние файлы Firefox или SessionStore.
 
-**Локальная аварийная устойчивость Firefox — базовое свойство приложения;
-зашифрованная облачная синхронизация — надстройка, а не предварительное
-условие сохранности рабочего локального профиля.**
+Playwright используется только через публичный API. Событие закрытия BrowserContext и событие Browser disconnected сообщают о завершении/отключении браузера. Событие Page crash само по себе не означает завершение всей браузерной сессии и не запускает Sync.
 
-При сбое Windows, браузера, Bridge или сети исходные файлы локального
-`user_data`, включая SQLite/WAL и session recovery, сохраняются без
-автоматического удаления, подмены устаревшей облачной копией или
-ложного статуса `Saved`. Когда новый запуск допустим по текущим ACL,
-устройству, single-writer/fencing и актуальной cloud generation, Bridge
-должен дать Firefox восстановить те же рабочие локальные файлы.
-Если право на запуск не доказано, данные сохраняются для контролируемого
-recovery/conflict, а не уничтожаются и не открываются обходом авторизации.
+Событие Playwright не является доказательством освобождения файлов. Перед snapshot Rust отдельно проверяет нативные файловые блокировки. Именно файловая проверка разрешает доступ к закрытой папке.
 
-Обычный обрыв связи не равен доказанному отзыву fence. Приложение
-разделяет локальную доступность и подтверждённую облачную синхронизацию;
-восстановление после crash/выключения Windows должно быть не хуже нативного
-Firefox **при сравнимых разрешённых условиях работы**.
-Обязательная отрицательная приёмка — конфликт двух компьютеров,
-отзыв ACL, stale fence и сохранение несинхронизированных локальных веток.
-Нормативный технический контракт и Windows proof matrix:
-[LOCAL_PROFILE_LIFECYCLE.md](LOCAL_PROFILE_LIFECYCLE.md).
-Никакое это правило не выдаёт offline-право на запись или дополнительное
-Production/staging полномочие.
+## 4. Close и существующий Sync
 
+После подтверждённого завершения браузерной сессии и освобождения native file locks:
 
-**Принятое разделение heartbeat и сохранения (2026-10-25).** Heartbeat нужен
-только для продления серверного single-writer lease, обнаружения утраты
-полномочий и предотвращения записи двумя устройствами. Heartbeat **не**
-инициирует snapshot/upload и **не** доказывает сохранность данных. Bridge
-наблюдает завершение управляемого процесса Firefox независимо от очередного
-heartbeat: после подтверждённого штатного закрытия — освобождённого native
-writer lock и текущего Firefox CrashMonitor checkpoint
-`sessionstore-final-state-write-complete` — и проверки актуальных полномочий
-он автоматически пытается зашифровать, загрузить и подтвердить новую cloud
-generation. Освобождение lock само по себе не доказывает штатное закрытие.
-`Saved` допустим только
-после authoritative verify/CAS/commit; пока этого нет, локальные изменения
-остаются `Unsynced`/recovery, а не стираются.
+1. Rust фиксирует существующее локальное dirty-состояние `.local-unsynced`.
+2. Существующий streaming snapshot читает закрытую локальную папку.
+3. Существующий encryption pipeline создаёт зашифрованный объект.
+4. Существующий R2 upload передаёт точный объект.
+5. Worker проверяет descriptor и выполняет атомарный D1 CAS/Commit.
+6. Локальная подтверждённая generation/base/version обновляется только после точного подтверждения Worker.
 
-При аварийном завершении Firefox/Bridge/Windows гарантируется сохранение
-оригинального рабочего каталога; немедленная облачная отправка при power loss
-не обещается. После перезапуска Bridge восстанавливает незавершённый intent
-и выполняет **безопасное** продолжение только при свежей авторизации и
-отсутствии несовместимого другого writer. Таймаут heartbeat не является
-положительным revoke; confirmed revoke/expiry запрещает дальнейшие
-привилегированные операции. Упрощение heartbeat не отменяет ACL, fencing,
-epoch, CAS, device trust и запрет небезопасной offline-публикации.
+Никакой второй Sync, новый сервис, daemon или sidecar не создаётся.
 
-**Окончательно принятое правило автоматического продолжения и хранения
-(2026-10-25).** В обычном режиме на устройстве есть один постоянный рабочий
-каталог Firefox. Штатное закрытие независимо от heartbeat инициирует одну
-облачную попытку. При потере сети Bridge оставляет исходные файлы и
-минимальное доказуемое состояние `LOCAL_UNSYNCED`; при возвращении сети
-в работающем приложении или при следующем запуске приложение **само**
-сверяет и безопасно продолжает то же сохранение, после новых проверок
-ACL/CNG/lease/fencing/current generation. Если приложение полностью
-остановлено, мгновенная синхронизация по событию сети не обещается;
-отдельный фоновый сервис для этого не создаётся. Если доступ отозван или
-есть конкурентный writer, локальные данные сохраняются, но небезопасные
-запуск/публикация блокируются до разрешения конфликта.
+### 4.1 Единственный локальный checkpoint
 
-После завершения операций на Profile приходится **не больше двух полных
-облачных зашифрованных поколений**: одно актуальное и не больше одного
-независимо восстанавливаемого резерва `WORKING/LKG`. Резерв содержит
-полноценные cookies, SQLite/WAL, IndexedDB, сессии, расширения и настройки,
-сохраняет доступный для восстановления ключ и подтверждённую пригодность
-реальному Firefox; это может быть N-k, а не непосредственно N−1. Лишние
-локальные копии и полные облачные объекты очищаются автоматически **только
-после доказанного безопасного исхода**. Неизвестный commit, незавершённая
-отправка, конфликт и прерванная очистка временно могут требовать хранения
-дополнительных полных копий; удаление данных ради формального лимита
-запрещено. Небольшие журнальные/audit metadata могут храниться отдельно
-от полных поколений. Не обещать восстановление при физической утрате всех
-копий или необходимых ключей.
+`.profile-generation` остаётся единственным владельцем локальных generation/base/version. В нём же хранится небольшой typed pending descriptor незавершённого перехода:
 
-**Статус реализации:** правило принято как обязательный продуктовый
-результат, а не как подтверждение работающего offline→online автоповтора,
-аварийного локального reopen или безопасной очистки поколений. Их
-реализация/испытания относятся к текущему V2/#802; порядок и приёмка —
-[ARCHITECTURE_REBASELINE_V3_PLAN.md](ARCHITECTURE_REBASELINE_V3_PLAN.md) и
-[LOCAL_PROFILE_LIFECYCLE.md](LOCAL_PROFILE_LIFECYCLE.md).
+- candidate generation ID;
+- metadata и container digest;
+- размер зашифрованного объекта;
+- SHA-256 и размер исходного закрытого snapshot;
+- фаза Prepared или Committed.
 
-## 3. Приоритет Возможностей
+Checkpoint записывается в существующий marker до сетевого Commit. Фаза Committed выставляется только после подтверждения точного Worker CURRENT. Это не второй журнал, не копия профиля и не новый файл.
 
-1. Governed browser profile lifecycle.
-2. Device trust, single-writer coordination и recoverable local state.
-3. Encrypted cloud generations и multi-device materialization.
-4. Fingerprint/runtime certification.
-5. Provider-neutral mailbox operations.
-6. CRM integration.
+`.local-unsynced` остаётся только признаком локальных несинхронизированных изменений. Он не используется как cloud receipt или доказательство Commit.
 
-Mailbox Operations является вторичной capability. Предпочтительны Gmail API/OAuth,
-Microsoft Graph/OAuth и IMAP/application-password adapters там, где они соответствуют
-accepted security/product contracts; browser-assisted mailbox flow допускается только
-как управляемый fallback. Платформа не дублирует полные письма без отдельного product,
-privacy и retention решения.
+Формат marker — `profile-platform-generation-v3`. Старый v2 намеренно не читается и не мигрируется: тестовые профили для физической приёмки создаются заново. Совместимость и перенос тестовых поколений не являются частью этой модели.
 
-## 4. Первый production release — принятый CAP-12 vertical slice
+### 4.2 Повторное открытие во время Sync
 
-Первый release не обязан ждать завершения всех capability, код которых присутствует
-в `main`. Его пользовательская capability конечна:
+Локальный Open не ждёт сетевой операции. Если пользователь повторно открыл профиль, эксклюзивный Bridge lock не позволяет Sync менять локальный marker или читать открытую папку.
 
-```text
-managed login
--> create/find/view/edit Client
--> create Browser Profile
--> attach Profile to Client
--> see independently authorized attached Profiles in Client card
--> launch through local Windows Profile Bridge and pinned real Camoufox
--> controlled close and authoritative confirmed save
--> reopen the last confirmed state from Client card
--> detach or atomically reassign without deleting either entity
--> logout
-```
+После следующего Close существующий Sync сверяет pending descriptor с authoritative Worker CURRENT:
 
-Принятые product semantics:
+- **CURRENT точно совпадает с candidate:** локальная base/version продвигается к подтверждённой generation;
+- **локальный snapshot не изменился:** dirty marker удаляется после подтверждённого перехода;
+- **пользователь успел изменить локальные файлы:** новая base фиксируется, dirty marker сохраняется, затем обычный Sync создаёт следующий successor из новых файлов;
+- **CURRENT остался на прежней base:** pending-кандидат не был опубликован; checkpoint очищается и Sync повторно снимает текущую локальную папку;
+- **CURRENT указывает на другую generation или descriptor не совпадает:** операция прекращается, локальные данные сохраняются, конфликт не перезаписывается.
 
-- multi-user архитектура: один tenant owner и invited members;
-- для acceptance первого release достаточно одной product organization, без special-case
-  single-user архитектуры;
-- Cloudflare Access / managed external identity владеет credentials и account recovery;
-- приложение владеет membership lifecycle, resource authorization и revoke;
-- `Client 1 -> 0..N Profiles`, `Profile -> 0..1 Client`;
-- assignment не выдаёт ACL; видимость и launch требуют отдельной server authorization;
-- любой active member может создать независимый Profile и получает явный creator PROFILE_OPERATOR grant;
-- право открытия Profile определяется текущим Profile Operate ACL пользователя, независимо от создателя,
-  assignment, автора последнего сохранения и компьютера, на котором Profile использовался раньше;
-- зарегистрированный и неотозванный компьютер служит средой исполнения и локальным кэшем, а не владельцем
-  Profile; у пользователя может быть несколько одновременно зарегистрированных компьютеров;
-- перед Camoufox launch сервер выбирает active VERIFIED generation: соответствующая проверенная чистая
-  локальная копия используется без повторного скачивания; отсутствующая или устаревшая материализуется
-  из точной серверной версии; локальное время изменения не определяет актуальность;
-- несохранённое локальное состояние принадлежит recovery и не перезаписывается молча облачной копией;
-- подключение другого компьютера не отзывает предыдущий; отзыв конкретного устройства не отзывает остальные;
-- первый вход через браузер и подключение компьютера выполняются один раз; обычные последующие запуски
-  используют CNG proof и возобновляемую application session без повторного интерактивного входа;
-- обычный путь — создать Profile, нажать Open, работать и закрыть; подготовка первого поколения,
-  проверка локальной копии, загрузка и подтверждённое сохранение выполняются приложением;
-- один active writer на Profile;
-- обычный Profile по умолчанию использует подключение компьютера без обязательных proxy,
-  ограничений страны/ASN/типа сети и ручных файлов настройки; дополнительные сетевые ограничения
-  принадлежат конкретному Profile и не могут исчезнуть при ошибке чтения или отсутствии измерения;
-- локальный workspace не является canonical backup;
-- `Saved` существует только после exact verification successor generation и authoritative commit;
-- hard profile purge не входит в первый release без отдельного product/legal решения.
+Это закрывает окно между облачным Commit и локальным обновлением marker, включая аварийное завершение Bridge в этом промежутке.
 
-### 4.1 Обязательные supporting guarantees
+## 5. Поведение при отказах
 
-Supporting guarantee является release blocker только если он универсален либо достижим из
-выбранного effective capability set. Для принятого slice обязательны:
+| Ситуация | Обязательное поведение |
+|---|---|
+| Firefox аварийно завершился | Сохранить локальную папку; не считать Page crash закрытием всей сессии |
+| Camouhost завершился раньше события Playwright | Дождаться доказанного освобождения native file locks; не угадывать по PID/окнам |
+| Bridge завершился до Commit | При следующем Sync сверить CURRENT; если он остался на base, безопасно снять новый snapshot |
+| Commit прошёл, локальный marker не обновлён | Сверить exact pending descriptor с CURRENT и завершить локальное применение |
+| Bridge завершился после продвижения base, но до очистки dirty marker | Повторить только локальную cleanup-операцию по Committed checkpoint |
+| Сеть недоступна | Сохранить локальные данные и pending/dirty evidence; не сообщать Saved |
+| Другое устройство опубликовало другую generation | Сохранить локальную ветку и остановиться на конфликте; не перезаписывать данные |
 
-- tenant membership, grants и fail-closed backend admission до side effects;
-- immutable encrypted generations, fencing/CAS и сохранение последней подтверждённой generation
-  при partial failure;
-- device trust, claim, lease/fence, workspace lock и один shipping Bridge/runtime path;
-- immutable Windows/Bridge/runtime identity, trusted distribution, rollback и recovery;
-- точные D1/R2/Durable Object/Bridge migration, integrity, backup и recovery evidence для
-  реально достижимых данных;
-- hosted login/logout/recovery и membership-revocation evidence;
-- health/error/incident observation, достаточная для принятого сценария;
-- один exact Release Candidate и target-specific Production Authorization envelope.
+Никакой сетевой timeout, потерянный HTTP response или завершение процесса сами по себе не означают успешный Commit.
 
-Certification, audit, updater, notification или recovery infrastructure может быть supporting
-implementation detail только в объёме, необходимом перечисленным гарантиям. Это не превращает
-соответствующий полный пользовательский feature в scope первого release.
+## 6. Restore
 
-Обычное открытие Profile не требует полной fingerprint-сертификации. Camoufox исполняет браузер
-и применяет сохранённую конфигурацию; приложение отвечает за её точность, актуальную generation,
-доступ, единственного writer и подтверждённое сохранение. Наблюдаемые различия hardware, экрана/DPR,
-WebGL, fonts, locale и speech voices диагностируются без запрета обычного запуска и без обещания
-полного совпадения fingerprint. Отсутствие WebGL само по себе допустимо. Неверная browser/OS identity,
-повреждённые данные или runtime, отсутствие доступа и потеря writer ownership остаются блокерами.
-Приложение не переписывает сохранённый fingerprint под компьютер и не исправляет ограничения Camoufox
-собственными подменами браузерных API.
+Restore — отдельная операция существующего Rust/ProfileBridge Sync-владельца. Он использует точную серверную CURRENT, проверенный immutable descriptor, существующий decrypt/verification pipeline и эксклюзивный локальный доступ.
 
-Добавление второй независимой organization/tenant в product UX требует отдельного isolation/product
-решения; существующие tenant-safe boundaries при этом не ослабляются.
+Обычный Open не превращается в Restore и не скачивает облачную копию поверх локальных несинхронизированных данных.
 
-## 5. Source-present, но production-disabled в первом release
+## 7. Headless automation
 
-Следующие capability могут существовать, компилироваться и тестироваться в том же `main`, но не входят
-в выбранный effective set и не блокируют первый release своей независимой незавершённостью:
+Headless-проверки почты используют тот же Camoufox + Playwright runtime и те же публичные API. Для автоматизации используется отдельная изолированная папка профиля. Одновременная работа пользовательского браузера и headless automation над одной папкой запрещена.
 
-- Mailboxes, OAuth mailbox administration и client↔mailbox bindings;
-- mailbox jobs, Notifications, Automation и outbound side effects;
-- bulk profile operations как отдельный product feature;
-- tenant-wide Audit UI, global Sessions UI и Certification UI;
-- complex roles, mobile parity, generic export и hard Profile purge;
-- new providers и будущая CRM/communications integration.
+## 8. Диагностика
 
-Изменение принятой product boundary само по себе не изменяет runtime admission. До зависящей
-feature/candidate стадии оно обязано пройти explicit profile-impact reconciliation по §13.1
-[`APPLICATION_ARCHITECTURE_MANDATORY_REQUIREMENTS.md`](APPLICATION_ARCHITECTURE_MANDATORY_REQUIREMENTS.md)
-и immutable-profile правилам
-[`CAP01_CAPABILITY_POLICY_IMPLEMENTATION_CONTRACT.md`](CAP01_CAPABILITY_POLICY_IMPLEMENTATION_CONTRACT.md).
-Product wording, наличие исходного кода, UI или binding сами по себе не изменяют effective set.
+Диагностика показывает наблюдаемые события, стадии, длительность, безопасную причину отказа и результат Sync. Диагностические записи не являются владельцем ACL, generation, lock, lease, Commit или retry и не могут самостоятельно разрешать операции.
 
-Никакой `production-lite` ветки, mailbox fork, второй schema lineage или отдельной архитектуры для
-будущих capabilities не создаётся. Capability включается только через canonical Capability Policy,
-accepted Release Candidate и target-specific backend admission.
+Пользователь должен видеть различие между:
 
-## 6. Не Цели
+- Browser closed;
+- native file access released;
+- local changes retained;
+- cloud Commit confirmed;
+- local checkpoint reconciled;
+- Sync still pending / conflict.
 
-- обещание абсолютной невидимости или гарантированного обхода anti-fraud;
-- запуск Camoufox внутри Cloudflare Worker;
-- использование R2 как live Firefox filesystem;
-- удалённый generic `exec` на устройстве;
-- хранение открытых mailbox/proxy credentials;
-- автоматическое изменение original legacy profiles;
-- скрытая выдача profile access через client assignment;
-- прямой доступ к таблицам или profile payload из CRM;
-- ожидание завершения mailbox/outbound capability перед первым Production Core release.
+Нельзя показывать Saved только по факту закрытия браузера, успешного R2 PUT или запуска Sync-процесса.
 
-## 7. Definition Of Product Success
+## 9. Граница локальной авторизации
 
-### 7.1 Первый release
+CRM проверяет ACL до выдачи локальной команды Open. Rust проверяет tenant/actor/device binding и ожидаемую локальную версию перед запуском.
 
-Первый release успешен, когда все принятые CAP-12 B1–B10 доказаны на одном неизменном Release
-Candidate, Production target envelope содержит свежие universal/reachable evidence, named authority
-выдала GO/PILOT, а deployed candidate совпадает с авторизованным. Пользователь проходит весь сценарий
-без CLI; второй writer и unauthorized/replayed launch отвергаются; любая save failure сохраняет
-последнюю подтверждённую generation; UI не сообщает ложный `Saved`.
+Текущий Open URI является локальной командой внутри доверенной пользовательской сессии Windows, а не самостоятельным криптографически подписанным разрешением. Поэтому эта модель не обещает немедленный offline revoke против враждебного процесса, работающего от имени того же Windows-пользователя. Если такой threat model станет обязательным, потребуется отдельное решение: короткоживущее асимметрично подписанное разрешение либо online redemption. Нельзя незаметно добавлять такую систему или возвращать облачную зависимость в обычный Open.
 
-### 7.2 Full platform success
+## 10. Не цели
 
-Полный продукт развивается отдельными product decisions: последующие accepted capability profiles
-могут добавлять mailbox administration, mailbox jobs/automation, outbound и CRM integration без
-переписывания принятой domain/runtime architecture или создания второй истории данных/production-enable
-authority.
+- новый Browser Engine или второй Playwright runtime;
+- собственный browser lifecycle в CRM/Rust/Camouhost;
+- управление вкладками, окнами и навигацией из приложения;
+- PID/window tracking и чтение внутренних Firefox файлов;
+- второй Sync, второй lock manager или второй владелец generation;
+- дополнительные сервисы, daemon или sidecar;
+- облачное ожидание в обычном локальном Open;
+- копирование профиля при каждом запуске;
+- переписывание уже работающих snapshot, encryption, R2, Worker CAS, Restore или retry механизмов без доказанной необходимости.
 
-## 8. Status And Execution Authority
+## 11. Definition of Done
 
-Этот документ владеет стабильным product scope, но не текущим статусом. Binding program живёт в
-[`ARCHITECTURE_REBASELINE_V3_PLAN.md`](ARCHITECTURE_REBASELINE_V3_PLAN.md), единственный live transaction
-pointer — fresh [Issue #266](https://github.com/iamaman11/part-crm-emai-profile/issues/266), а
-Production state — в exact candidate decision/evidence его natural owners. `status.json`, Markdown,
-старый roadmap или green CI сами по себе не могут повысить readiness или выдать Production Authorization.
+Архитектура считается принятой только после проверки на точной установленной версии:
 
-## 9. Product/Legal Input Before Distribution
+1. Обычный Open использует официальный Camoufox + Playwright и существующую локальную папку.
+2. Обычная работа не перехватывается приложением; Page crash не вызывает преждевременный Sync.
+3. Close event плюс native lock proof запускают существующий Sync.
+4. Commit/reopen/edit/close корректно reconciles exact pending descriptor и сохраняет новые пользовательские изменения.
+5. Аварии до Commit, после Commit и во время локальной cleanup восстанавливаются без потери данных и ложного Saved.
+6. Повторный Sync работает без повторного открытия браузера.
+7. Headless automation работает на изолированной папке.
+8. Open/Close/Sync/Restore проходят Windows физическую приёмку, включая повторные циклы, потерю сети и второй чистый Windows.
 
-До публичной/коммерческой дистрибуции product owner должен выбрать и добавить совместимую repository
-и product license либо явно документировать иной legal режим. Автоматизированный агент не выбирает
-license по догадке. Отсутствие решения не расширяет source/runtime scope, но блокирует утверждение о
-разрешённой дистрибуции.
+CI PASS является необходимым, но не заменяет физическую приёмку установленного Release Candidate.

@@ -2,7 +2,6 @@ use crate::dirty_generation::{
     GenerationSealingMaterial, GenerationSealingMaterialPort, SealingMaterialFailure,
 };
 use crate::generation_reopen::{GenerationDownloadCapability, GenerationReopenControlPort};
-use crate::operator_flow::{EnrollmentFailureKind, EnrollmentPort, OperatorEnrollment};
 use application_ports::{ProfileCoordinatorPort, ProfileCoordinatorRuntimePort};
 use bridge_domain::ClaimUri;
 use control_plane_contract::coordinator_api::{
@@ -46,6 +45,74 @@ const MAX_SEALING_MATERIAL_RESPONSE_BYTES: usize = 1_024;
 const MAX_REOPEN_DOWNLOAD_CAPABILITY_RESPONSE_BYTES: usize = 8_192;
 const MAX_REOPEN_OPENING_MATERIAL_RESPONSE_BYTES: usize = 1_024;
 const MAX_SIGNED_GENERATION_DOWNLOAD_URL_BYTES: usize = 4_096;
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum SyncEnrollmentFailureKind {
+    LeaseConflict,
+    ServiceUncertain,
+    Other,
+}
+
+pub trait SyncEnrollmentPort {
+    type Error;
+
+    fn classify_error(_error: &Self::Error) -> SyncEnrollmentFailureKind {
+        SyncEnrollmentFailureKind::Other
+    }
+
+    fn redeem_claim(
+        &mut self,
+        claim: &ClaimUri,
+        device_id: &DeviceId,
+        now: UnixMillis,
+    ) -> Result<SyncEnrollment, Self::Error>;
+}
+
+/// Fresh server-side lease/launch result used only by the existing Sync path.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct SyncEnrollment {
+    actor: ActorContext,
+    profile_id: ProfileId,
+    generation_id: GenerationId,
+    launch_intent_id: LaunchIntentId,
+}
+
+impl SyncEnrollment {
+    #[must_use]
+    pub const fn new(
+        actor: ActorContext,
+        profile_id: ProfileId,
+        generation_id: GenerationId,
+        launch_intent_id: LaunchIntentId,
+    ) -> Self {
+        Self {
+            actor,
+            profile_id,
+            generation_id,
+            launch_intent_id,
+        }
+    }
+
+    #[must_use]
+    pub const fn actor(&self) -> &ActorContext {
+        &self.actor
+    }
+
+    #[must_use]
+    pub const fn profile_id(&self) -> &ProfileId {
+        &self.profile_id
+    }
+
+    #[must_use]
+    pub const fn generation_id(&self) -> &GenerationId {
+        &self.generation_id
+    }
+
+    #[must_use]
+    pub const fn launch_intent_id(&self) -> &LaunchIntentId {
+        &self.launch_intent_id
+    }
+}
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum MachineHttpMethod {
@@ -146,20 +213,22 @@ impl<T> ControlPlaneEnrollment<T> {
     }
 }
 
-impl<T> EnrollmentPort for ControlPlaneEnrollment<T>
+impl<T> SyncEnrollmentPort for ControlPlaneEnrollment<T>
 where
     T: MachineHttpPort,
 {
     type Error = ShippingControlPlaneError;
 
-    fn classify_error(error: &Self::Error) -> EnrollmentFailureKind {
+    fn classify_error(error: &Self::Error) -> SyncEnrollmentFailureKind {
         match error {
-            ShippingControlPlaneError::LaunchLeaseConflict => EnrollmentFailureKind::LeaseConflict,
+            ShippingControlPlaneError::LaunchLeaseConflict => {
+                SyncEnrollmentFailureKind::LeaseConflict
+            }
             ShippingControlPlaneError::Transport
             | ShippingControlPlaneError::HttpServerUncertain => {
-                EnrollmentFailureKind::ServiceUncertain
+                SyncEnrollmentFailureKind::ServiceUncertain
             }
-            _ => EnrollmentFailureKind::Other,
+            _ => SyncEnrollmentFailureKind::Other,
         }
     }
 
@@ -168,7 +237,7 @@ where
         claim: &ClaimUri,
         device_id: &DeviceId,
         _now: UnixMillis,
-    ) -> Result<OperatorEnrollment, Self::Error> {
+    ) -> Result<SyncEnrollment, Self::Error> {
         let correlation_id = next_correlation_id()?;
         let request = BridgeProfileLaunchRedemptionRequest::new(
             claim
@@ -230,7 +299,7 @@ where
             return Err(Self::Error::InvalidResponse);
         }
 
-        Ok(OperatorEnrollment::new(
+        Ok(SyncEnrollment::new(
             ActorContext::new(TenantScope::new(tenant_id), actor_id, correlation_id),
             profile_id,
             generation_id,
@@ -276,6 +345,9 @@ struct CoordinatorCursor {
 pub struct ControlPlaneCoordinator<T> {
     transport: T,
     cursor: Option<CoordinatorCursor>,
+    // Read-only CURRENT restore shares the existing exact R2 GET/decrypt
+    // owner but has no browser session, DO claim or coordinator lease.
+    local_current_restore: bool,
 }
 
 impl<T> ControlPlaneCoordinator<T> {
@@ -284,6 +356,18 @@ impl<T> ControlPlaneCoordinator<T> {
         Self {
             transport,
             cursor: None,
+            local_current_restore: false,
+        }
+    }
+
+    /// Same machine transport and generation reader; this mode cannot claim,
+    /// heartbeat, write a successor, or inspect historical candidates.
+    #[must_use]
+    pub const fn for_local_current_restore(transport: T) -> Self {
+        Self {
+            transport,
+            cursor: None,
+            local_current_restore: true,
         }
     }
 
@@ -439,7 +523,7 @@ where
         device_id: &DeviceId,
         launch_intent_id: &LaunchIntentId,
     ) -> Result<ProfileLease, Self::Error> {
-        if self.cursor.is_some() {
+        if self.local_current_restore || self.cursor.is_some() {
             return Err(Self::Error::InvalidResponse);
         }
         let snapshot = self.snapshot(actor, profile_id)?;
@@ -682,12 +766,19 @@ where
         profile_id: &ProfileId,
         historical: bool,
     ) -> Result<GenerationDownloadCapability, ShippingControlPlaneError> {
-        let cursor = self.exact_reopen_cursor(tenant_id, profile_id)?;
-        let request = BridgeGenerationDownloadCapabilityRequest::new(
-            cursor.session_id.as_str(),
-            cursor.fencing_token.as_str(),
-            cursor.epoch,
-        );
+        let request = if self.local_current_restore {
+            if historical {
+                return Err(ShippingControlPlaneError::InvalidResponse);
+            }
+            BridgeGenerationDownloadCapabilityRequest::local_restore()
+        } else {
+            let cursor = self.exact_reopen_cursor(tenant_id, profile_id)?;
+            BridgeGenerationDownloadCapabilityRequest::new(
+                cursor.session_id.as_str(),
+                cursor.fencing_token.as_str(),
+                cursor.epoch,
+            )
+        };
         let mut body =
             serde_json::to_vec(&request).map_err(|_| ShippingControlPlaneError::InvalidResponse)?;
         let correlation_id = next_correlation_id()?;
@@ -755,7 +846,12 @@ where
         metadata_prelude: &[u8],
         historical: bool,
     ) -> Result<GenerationDek, ShippingControlPlaneError> {
-        let cursor = self.exact_reopen_cursor(tenant_id, profile_id)?;
+        if self.local_current_restore && historical {
+            return Err(ShippingControlPlaneError::InvalidResponse);
+        }
+        if !self.local_current_restore {
+            self.exact_reopen_cursor(tenant_id, profile_id)?;
+        }
         if metadata_prelude.is_empty()
             || metadata_prelude.len() > MAX_GENERATION_METADATA_PRELUDE_BYTES
         {
@@ -776,12 +872,19 @@ where
             return Err(ShippingControlPlaneError::InvalidResponse);
         }
 
-        let request = BridgeGenerationOpeningMaterialRequest::new(
-            encode_lower_hex(metadata_prelude),
-            cursor.session_id.as_str(),
-            cursor.fencing_token.as_str(),
-            cursor.epoch,
-        );
+        let request = if self.local_current_restore {
+            BridgeGenerationOpeningMaterialRequest::local_restore(encode_lower_hex(
+                metadata_prelude,
+            ))
+        } else {
+            let cursor = self.exact_reopen_cursor(tenant_id, profile_id)?;
+            BridgeGenerationOpeningMaterialRequest::new(
+                encode_lower_hex(metadata_prelude),
+                cursor.session_id.as_str(),
+                cursor.fencing_token.as_str(),
+                cursor.epoch,
+            )
+        };
         let mut body =
             serde_json::to_vec(&request).map_err(|_| ShippingControlPlaneError::InvalidResponse)?;
         let correlation_id = next_correlation_id()?;
@@ -1949,6 +2052,7 @@ mod tests {
             ))
         };
         let shared = SharedControlPlaneCoordinator::new(ControlPlaneCoordinator {
+            local_current_restore: false,
             transport: SealingMachineHttp {
                 responses: VecDeque::from([accepted(14)?, accepted(15)?]),
                 requests: Vec::new(),
@@ -2090,6 +2194,7 @@ mod tests {
         // path. No initial result extends the confirmed lease.
         for initial_status in [None, Some(408), Some(429), Some(503)] {
             let mut coordinator = ControlPlaneCoordinator {
+                local_current_restore: false,
                 transport: LostHeartbeatResponseTransport {
                     requests: Vec::new(),
                     first_response: initial_status
@@ -2191,6 +2296,7 @@ mod tests {
             408, 429, 500, 502, 503, 504, 400, 401, 403, 404, 409, 410, 422,
         ] {
             let mut coordinator = ControlPlaneCoordinator {
+                local_current_restore: false,
                 transport: SealingMachineHttp {
                     responses: VecDeque::from([MachineHttpResponse::new(
                         status,
@@ -2282,6 +2388,7 @@ mod tests {
             };
             Ok(Self {
                 coordinator: ControlPlaneCoordinator {
+                    local_current_restore: false,
                     transport: SealingMachineHttp {
                         responses: VecDeque::from([response]),
                         requests: Vec::new(),
@@ -2521,6 +2628,7 @@ mod tests {
             )?;
             Ok((
                 ControlPlaneCoordinator {
+                    local_current_restore: false,
                     transport: SealingMachineHttp {
                         responses: VecDeque::from([release_response(
                             &tenant_id,

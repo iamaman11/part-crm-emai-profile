@@ -1,5 +1,10 @@
 #!/usr/bin/env python3
-"""Permanent Phase 2F guard for graceful-close retained writer ownership."""
+"""Phase 2F ownership guard for the accepted native Camoufox/Playwright model.
+
+The predecessor RetainedDirtyClose operator is a synthetic/unit-test fixture,
+not the user-facing browser or Save owner. Guard the real shipping Open/Close/
+Sync chain instead of requiring the retired production operator to return.
+"""
 
 from __future__ import annotations
 
@@ -7,51 +12,17 @@ import argparse
 import re
 from pathlib import Path
 
-OPERATOR = Path("apps/profile-bridge/src/operator_flow.rs")
-UNIT_TEST = Path("apps/profile-bridge/src/operator_flow.rs")
-ACCEPTANCE_TEST = Path("apps/profile-bridge/tests/operator_flow_acceptance.rs")
-SYNTHETIC = Path("apps/profile-bridge/src/bin/profile-bridge-synthetic.rs")
-
-AUTHORITATIVE_OPEN = "pub fn open_authoritative"
-SINGLE_OPEN_BODY = "fn open_with_materialization"
-OPEN_PENDING_GUARD = "self.active.is_some() || self.retained_dirty.is_some()"
-RETAINED_FIELD = "retained_dirty: Option<RetainedDirtyClose>"
-RETAINED_HANDOFF = "RetainedDirtyClose::begin_after_browser_close("
-RETAINED_ASSIGNMENT = "self.retained_dirty = Some(retained)"
-SAVE_METHOD = "pub fn save_retained_successor"
-SAVE_CONTROL = "ControlPlaneGenerationSuccessor::new(transport, &mut self.coordinator)"
-SAVE_PREPARE = "prepare_retained_generation_successor("
-SAVE_COMMIT = "publish_verify_and_commit_successor("
-SAVE_COMPLETE = ".complete_committed_successor("
-SAVE_CLEAR = "self.retained_dirty = None"
-LEGACY_FINALIZE = "pub async fn finalize_dirty_close"
-LEGACY_FINALIZE_GUARD = (
-    '#[cfg(any(test, feature = "synthetic-test-bin"))]\n'
-    "    #[allow(clippy::too_many_arguments)]\n"
-    "    pub async fn finalize_dirty_close"
-)
-SYNTHETIC_MARKER = "synthetic-operator-complete state=DIRTY_LOCAL_COMMITTED_GENERATION"
-
-REQUIRED_UNIT_TESTS = (
-    "composed_operator_close_retains_dirty_ownership_until_commit",
-    "pending_dirty_close_blocks_second_ownership_before_claim_replay",
-)
-REQUIRED_ACCEPTANCE_TESTS = (
-    "busy_invalid_and_replayed_claims_fail_before_second_ownership",
-)
-REQUIRED_SYNTHETIC_SURFACES = (
-    "finalize_dirty_close",
-    "DirtyCloseLocalOutcome::CandidateAccepted",
-    "LocalGenerationState::SupersededEvictable",
-    "workspace_lock_released()",
-    "coordinator_lease_released()",
-    "cleanup_failures().any()",
-    SYNTHETIC_MARKER,
-)
-
-
-def read(root: Path, relative: Path) -> str:
-    return (root / relative).read_text(encoding="utf-8")
+SOURCES = {
+    "cli": "apps/profile-bridge/src/main.rs",
+    "shipping": "apps/profile-bridge/src/shipping_composition.rs",
+    "local": "apps/profile-bridge/src/local_browser_open.rs",
+    "native": "runtime/camouhost/native_process.py",
+    "adapter": "runtime/camouhost/real.py",
+    "operator": "apps/profile-bridge/src/operator_flow.rs",
+    "locks": "apps/profile-bridge/src/local_profile/quiescence.rs",
+    "generation": "apps/profile-bridge/src/generation_initialization.rs",
+    "authoritative": "apps/profile-bridge/src/authoritative_generation.rs",
+}
 
 
 def function_body(source: str, marker: str) -> str:
@@ -63,204 +34,306 @@ def function_body(source: str, marker: str) -> str:
         return ""
     depth = 0
     for index in range(opening, len(source)):
-        character = source[index]
-        if character == "{":
+        if source[index] == "{":
             depth += 1
-        elif character == "}":
+        elif source[index] == "}":
             depth -= 1
             if depth == 0:
                 return source[opening : index + 1]
     return ""
 
 
-def regex_position(source: str, pattern: str) -> int:
-    match = re.search(pattern, source)
-    return -1 if match is None else match.start()
+LOCK_ACQUIRE = "BridgeWorkspaceLock::acquire_or_recover_interrupted("
+LOCK_BINDING = re.compile(
+    r"\blet\s+(writer|guard|lock)\s*=\s*" + re.escape(LOCK_ACQUIRE)
+)
 
 
-def failures_for_sources(
-    operator: str,
-    unit_test: str,
-    acceptance_test: str,
-    synthetic: str,
-) -> list[str]:
-    failures: list[str] = []
-    production = operator.split("#[cfg(test)]", 1)[0]
+def guarded_effect(body: str, effect: str, *, require_native_gate: bool = False) -> bool:
+    """Every matching filesystem effect must stay inside its own existing OS lock.
 
-    for fragment in (
-        RETAINED_FIELD,
-        AUTHORITATIVE_OPEN,
-        SINGLE_OPEN_BODY,
-        OPEN_PENDING_GUARD,
-        SAVE_METHOD,
-    ):
-        if fragment not in production:
-            failures.append(f"missing retained operator invariant: {fragment}")
+    This checks the ordering (acquire -> native file proof -> effect -> release),
+    not the number of scopes; retries and exact-Commit reconciliation can add
+    legitimately guarded operations without introducing another lock owner.
+    """
+    positions = [match.start() for match in re.finditer(re.escape(effect), body)]
+    if not positions:
+        return False
+    admissions = list(LOCK_BINDING.finditer(body))
+    for position in positions:
+        earlier = [match for match in admissions if match.end() <= position]
+        if not earlier:
+            return False
+        admitted = earlier[-1]
+        name = admitted.group(1)
+        release = re.compile(r"\b" + re.escape(name) + r"\s*\.release\s*\(")
+        inside = body[admitted.end():position]
+        # The latest matching admission must still be live at the effect.
+        if release.search(inside):
+            return False
+        if require_native_gate and "browser_writer_locks_absent(" not in inside:
+            return False
+        rest = body[position:]
+        released = release.search(rest)
+        if released is None or LOCK_BINDING.search(rest[:released.start()]):
+            return False
+    return True
 
-    if LEGACY_FINALIZE not in operator or LEGACY_FINALIZE_GUARD not in operator:
-        failures.append(
-            "historical DeviceJob finalize must exist only behind test/synthetic cfg during predecessor migration"
-        )
 
-    open_flow = function_body(production, SINGLE_OPEN_BODY)
-    pending_guard = open_flow.find(OPEN_PENDING_GUARD)
-    device_identity = open_flow.find(".device_identity")
-    enrollment = open_flow.find(".redeem_claim(")
-    if min(pending_guard, device_identity, enrollment) < 0 or not (
-        pending_guard < device_identity < enrollment
-    ):
-        failures.append(
-            "pending dirty ownership must block in the single launch body before device/enrollment claim processing"
-        )
-
-    authoritative_flow = function_body(production, AUTHORITATIVE_OPEN)
-    # The installed delivery-health witness now wraps, but cannot replace, the single
-    # authoritative owner path. Both wrapper -> health boundary and boundary -> real
-    # materialization -> one launch body must be present.
-    if "self.open_authoritative_with_runtime_health(" in authoritative_flow:
-        health_flow = function_body(
-            production, "pub fn open_authoritative_with_runtime_health"
-        )
-        delegate = health_flow.find("self.open_with_materialization(")
-        rematerialize = health_flow.find("ensure_authoritative_generation(")
-        if min(delegate, rematerialize) < 0 or delegate >= rematerialize:
-            failures.append(
-                "runtime health boundary must delegate to the single authoritative launch body"
-            )
-    else:
-        delegate = authoritative_flow.find("self.open_with_materialization(")
-        rematerialize = authoritative_flow.find("ensure_authoritative_generation(")
-        if min(delegate, rematerialize) < 0 or delegate >= rematerialize:
-            failures.append(
-                "production launch must delegate to the single launch body with authoritative generation rematerialization"
-            )
-
-    close_flow = function_body(production, "pub fn close(")
-    runtime_close = close_flow.find("RuntimeSessionOrchestrator::close(")
-    handoff = close_flow.find(RETAINED_HANDOFF)
-    assignment = close_flow.find(RETAINED_ASSIGNMENT)
-    failure_cleanup = close_flow.find("cleanup_active_session")
-    if min(runtime_close, handoff, assignment, failure_cleanup) < 0 or not (
-        runtime_close < handoff < assignment < failure_cleanup
-    ):
-        failures.append(
-            "graceful close must hand writer ownership to RetainedDirtyClose before failure-only cleanup"
-        )
-    success_region = close_flow[handoff:assignment] if handoff >= 0 and assignment >= 0 else ""
-    for forbidden in ("workspace_lock.release()", "coordinator.close_lease"):
-        if forbidden in success_region:
-            failures.append(
-                f"graceful retained-close handoff must not release ownership early: {forbidden}"
-            )
-
-    save_flow = function_body(production, SAVE_METHOD)
-    retained = regex_position(
-        save_flow,
-        r"self\s*\.\s*retained_dirty\s*\.\s*as_ref\s*\(\s*\)",
+def guarded_effects(body: str, effects: tuple[tuple[str, bool], ...]) -> bool:
+    return bool(body) and all(
+        guarded_effect(body, effect, require_native_gate=native)
+        for effect, native in effects
     )
-    control = save_flow.find(SAVE_CONTROL)
-    prepare = save_flow.find(SAVE_PREPARE)
-    commit = save_flow.find(SAVE_COMMIT)
-    complete = save_flow.find(SAVE_COMPLETE)
-    clear = save_flow.rfind(SAVE_CLEAR)
-    if min(retained, control, prepare, commit, complete, clear) < 0 or not (
-        retained < control < prepare < commit < complete < clear
-    ):
-        failures.append(
-            "canonical retained save must preserve prepare -> exact verify/commit -> post-commit completion -> clear ordering"
-        )
-    precommit_region = save_flow[:commit] if commit >= 0 else ""
-    if SAVE_CLEAR in precommit_region or "coordinator.close_lease" in precommit_region:
-        failures.append(
-            "pre-commit failure region must retain dirty writer and coordinator ownership"
-        )
-    if "generation_id: committed.generation_id().clone()" not in save_flow:
-        failures.append(
-            "post-commit terminal bookkeeping must use committed N+1 generation identity"
-        )
-    if "DirtyCloseLocalOutcome::RematerializationBlocked" not in save_flow:
-        failures.append(
-            "post-commit local rematerialization failure must remain fail-closed"
-        )
 
-    for test_name in REQUIRED_UNIT_TESTS:
-        if test_name not in unit_test:
-            failures.append(f"missing retained operator unit test: {test_name}")
-    for test_name in REQUIRED_ACCEPTANCE_TESTS:
-        if test_name not in acceptance_test:
-            failures.append(f"missing retained operator acceptance test: {test_name}")
-    for fragment in REQUIRED_SYNTHETIC_SURFACES:
-        if fragment not in synthetic:
-            failures.append(f"missing retained operator synthetic evidence: {fragment}")
+
+def mutate_one_admission(source: str, marker: str, ordinal: int) -> str:
+    """Negative fixture: bypass exactly ONE scoped recovery admission."""
+    body = function_body(source, marker)
+    admissions = list(LOCK_BINDING.finditer(body))
+    selected = admissions[ordinal]
+    original = body
+    body = (
+        body[:selected.start()]
+        + body[selected.start():selected.end()].replace(
+            LOCK_ACQUIRE, "BridgeWorkspaceLock::acquire("
+        )
+        + body[selected.end():]
+    )
+    return source.replace(original, body, 1)
+
+
+def mutation_guard_coverage(
+    sources: dict[str, str],
+    owner: str,
+    marker: str,
+    expected_failure: str,
+) -> list[str]:
+    """Removing ANY admission from a protected phase must fail the gate."""
+    failures: list[str] = []
+    body = function_body(sources[owner], marker)
+    count = len(list(LOCK_BINDING.finditer(body)))
+    if count == 0:
+        return [f"negative fixture has no admissions: {owner}/{marker}"]
+    for ordinal in range(count):
+        changed = dict(sources)
+        changed[owner] = mutate_one_admission(sources[owner], marker, ordinal)
+        if not any(expected_failure in failure for failure in check_sources(changed)):
+            failures.append(
+                f"unguarded phase unexpectedly accepted: {owner}/{marker} #{ordinal + 1}"
+            )
+    return failures
+
+
+def check_sources(sources: dict[str, str]) -> list[str]:
+    failures: list[str] = []
+    cli = sources["cli"]
+    shipping = sources["shipping"]
+    local = sources["local"]
+    native = sources["native"]
+    adapter = sources["adapter"]
+    operator = sources["operator"]
+    locks = sources["locks"]
+    generation = sources["generation"]
+    authoritative = sources["authoritative"]
+
+    for required in ("BridgeCommand::InitialProfile(intent)", "BridgeCommand::SyncClosed(intent)",
+                     "run_closed_profile_sync(&intent)", '"--sync-closed"'):
+        if required not in cli:
+            failures.append(f"shipping Bridge CLI lost single native Open/Sync dispatch: {required}")
+
+    initial = function_body(shipping, "pub fn run_initial(")
+    local_open = initial.find("crate::local_browser_open::open(")
+    sync_handoff = initial.find("start_sync_after_close(intent);")
+    if local_open < 0 or sync_handoff < local_open:
+        failures.append("normal native Open must hand off to the same post-close Sync")
+    if "Err(ShippingCompositionError::LocalOpen(error))" not in initial:
+        failures.append("abnormal adapter exit must retain the same fail-closed Sync handoff")
+
+    closed = function_body(shipping, "pub fn run_closed_sync(")
+    file_gate = closed.find("wait_for_native_writer_release(")
+    save = closed.find("sync_after_native_close(")
+    if file_gate < 0 or save < file_gate:
+        failures.append("native file-release proof must precede the existing closed-profile Sync")
+    if 'workspace.path().join(".local-unsynced")' not in closed:
+        failures.append("the existing persistent dirty marker must govern pending cloud Sync")
+    for required in ("seal_closed_workspace_streaming(", "publish_closed_streamed_successor(",
+                     "sync_closed_local_draft("):
+        if required not in shipping:
+            failures.append(f"single existing snapshot/cloud Save owner missing: {required}")
+
+    opened = function_body(local, "pub fn open(")
+    marker = opened.find("mark_local_unsynced(workspace.path())?;")
+    launch = opened.find('run_python(runtime_root, workspace.path(), "--local-open")')
+    if marker < 0 or launch < marker:
+        failures.append("durable local dirty evidence must precede native browser launch")
+    if "BridgeWorkspaceLock::acquire_or_recover_interrupted(&workspace" not in opened:
+        failures.append("native Open must hold the existing per-profile OS admission through the shared recovery owner")
+    lock_admission = function_body(locks, "pub(crate) fn acquire_or_recover_interrupted(")
+    if (
+        "Self::acquire(workspace, device_id, epoch)" not in lock_admission
+        or "Self::recover_interrupted_launch(workspace, device_id, epoch)" not in lock_admission
+    ):
+        failures.append("native Open must hold the existing per-profile OS admission through the shared recovery owner")
+    recovery = function_body(locks, "pub(crate) fn recover_interrupted_launch(")
+    if (
+        "generation.try_lock().map_err(map_try_lock_error)?" not in recovery
+        or "browser_writer_locks_absent(workspace)" not in recovery
+        or "filesystem::BridgeWorkspaceLock::replace_interrupted(" not in recovery
+    ):
+        failures.append("native Open must hold the existing per-profile OS admission through the shared recovery owner")
+    if opened.count("browser_writer_locks_absent(&workspace)") < 2:
+        failures.append("native Open must verify the existing Firefox file-access gate")
+
+    draft = function_body(generation, "pub fn sync_closed_local_draft<")
+    ready = function_body(shipping, "fn sync_closed_ready(")
+    draft_effects = (
+        ("root.clear_profile_current_pending_sync(&current)", True),
+        ("digest_closed_workspace_streaming(&workspace, &inventory)", True),
+        ("seal_closed_workspace_streaming(", True),
+        ("root.set_profile_current_pending_sync(&workspace", True),
+        ("finish_pending_sync_under_writer(root, &current", True),
+    )
+    ready_effects = (
+        ("finish_pending_sync_under_writer(root, &active", False),
+        ("root.clear_profile_current_pending_sync(&active)", True),
+        ("digest_closed_workspace_streaming(&workspace, &inventory)", True),
+        ("seal_closed_workspace_streaming(", True),
+        ("root.set_profile_current_pending_sync(&workspace", True),
+    )
+    if not guarded_effects(draft, draft_effects):
+        failures.append("closed DRAFT Sync must use the shared same-device Bridge recovery owner")
+    if not guarded_effects(ready, ready_effects):
+        failures.append("closed READY Sync must use the shared same-device Bridge recovery owner")
+
+    # The invoked finalizer must also enforce the native gate itself: the
+    # READY exact-CURRENT recovery path calls it without a duplicate outer probe.
+    finish = function_body(generation, "pub(crate) fn finish_pending_sync_under_writer(")
+    for requirement in (
+        "workspace.pending_sync() != Some(pending)",
+        "browser_writer_locks_absent(workspace)",
+        "root.mark_profile_current_pending_sync_committed(workspace)",
+        "root.clear_profile_current_pending_sync(&committed)",
+    ):
+        if requirement not in finish:
+            failures.append(f"exact committed Sync finalizer lost its native/marker gate: {requirement}")
+
+    classic_restore = function_body(authoritative, "fn ensure_authoritative_generation_to<")
+    streamed_restore = function_body(authoritative, "fn materialize_streamed_authoritative_generation<")
+    if (
+        "pub fn reconcile_closed_draft_with_confirmed_current<" not in authoritative
+        or "pub(crate) fn reconcile_closed_ready_with_confirmed_current<" not in authoritative
+        or not guarded_effects(
+            classic_restore,
+            (("verify_workspace_matches_snapshot(", True),
+             ("confirm_closed_current_matches_cloud(", True)),
+        )
+        or not guarded_effects(
+            streamed_restore,
+            (("verify_workspace_matches_streamed_snapshot(", True),
+             ("confirm_closed_current_matches_cloud(", True)),
+        )
+    ):
+        failures.append("confirmed-current DRAFT/READY reconciliation must use the shared Bridge recovery owner")
+
+    if "current.profile_version() != intent.expected_version" not in local:
+        failures.append("stale local CURRENT must fail closed before browser launch")
+
+    for required in ('from playwright.async_api import async_playwright',
+                     'from camoufox.async_api import AsyncNewBrowser',
+                     'persistent_context=True', 'self.context.on("close"',
+                     'self._browser.on("disconnected"'):
+        if required not in native:
+            failures.append(f"official native SDK/Playwright integration missing: {required}")
+    for forbidden in ("WindowsBrowserExitWitness", "has_visible_window(",
+                      "EnumWindows(", "sessionCheckpoints.json", "context.close("):
+        if forbidden in native:
+            failures.append(f"custom native browser lifecycle is forbidden: {forbidden}")
+
+    if 'return asyncio.run(run_local_profile(Path(sys.argv[2])))' not in adapter:
+        failures.append("user-native adapter must select exactly the local SDK path")
+    if 'print("user-native runtime requires --local-open"' not in adapter:
+        failures.append("user-native path must reject the legacy automation IPC")
+
+    if '#[cfg(any(test, feature = "synthetic-test-bin"))]\npub struct ProfileBridgeOperator' not in operator:
+        failures.append("retired operator must remain test/synthetic only")
+    if '#[cfg(any(test, feature = "synthetic-test-bin"))]\npub struct RuntimeSessionOrchestrator' not in sources.get("runtime", ""):
+        failures.append("retired managed runtime orchestrator must remain test/synthetic only")
 
     return failures
 
 
-def check(root: Path) -> list[str]:
-    try:
-        operator = read(root, OPERATOR)
-        unit_test = read(root, UNIT_TEST)
-        acceptance_test = read(root, ACCEPTANCE_TEST)
-        synthetic = read(root, SYNTHETIC)
-    except OSError as error:
-        return [f"could not read Phase 2F retained-operator source: {error}"]
-    return failures_for_sources(operator, unit_test, acceptance_test, synthetic)
+def read(root: Path) -> dict[str, str]:
+    sources = {key: (root / path).read_text(encoding="utf-8") for key, path in SOURCES.items()}
+    sources["runtime"] = (root / "apps/profile-bridge/src/runtime_bundle.rs").read_text(encoding="utf-8")
+    return sources
 
 
-def self_test(root: Path) -> list[str]:
-    try:
-        operator = read(root, OPERATOR)
-        unit_test = read(root, UNIT_TEST)
-        acceptance_test = read(root, ACCEPTANCE_TEST)
-        synthetic = read(root, SYNTHETIC)
-    except OSError as error:
-        return [f"could not read Phase 2F retained-operator source: {error}"]
-
-    # Target the canonical single-Open owner, not the first occurrence
-    # anywhere in the file: ancillary read-only maintenance operations also
-    # (correctly) reject an active/retained writer before claiming authority.
-    open_body = function_body(operator, SINGLE_OPEN_BODY)
-    if not open_body or OPEN_PENDING_GUARD not in open_body:
-        return ["retained-operator canonical pending-ownership guard is missing"]
-    fixture = operator.replace(
-        open_body,
-        open_body.replace(OPEN_PENDING_GUARD, "self.active.is_some()", 1),
-        1,
+def self_test(sources: dict[str, str]) -> list[str]:
+    failures: list[str] = []
+    mutations = (
+        ("local", "mark_local_unsynced(workspace.path())?;", "mark_removed();",
+         "durable local dirty evidence"),
+        ("local", "BridgeWorkspaceLock::acquire_or_recover_interrupted(&workspace",
+         "BridgeWorkspaceLock::acquire(&workspace",
+         "native Open must hold the existing per-profile OS admission through the shared recovery owner"),
+        ("locks", "Self::acquire(workspace, device_id, epoch)", "Ok(())",
+         "native Open must hold the existing per-profile OS admission through the shared recovery owner"),
+        ("locks", "Self::recover_interrupted_launch(workspace, device_id, epoch)", "Ok(())",
+         "native Open must hold the existing per-profile OS admission through the shared recovery owner"),
+        ("local", "current.profile_version() != intent.expected_version", "false",
+         "stale local CURRENT"),
+        ("shipping", "wait_for_native_writer_release(", "unsafe_file_assumption(",
+         "native file-release proof"),
+        ("native", 'self.context.on("close"', 'self.context.on("missing"',
+         "official native SDK/Playwright integration"),
+        ("adapter", "return asyncio.run(run_local_profile(Path(sys.argv[2])))",
+         "return run_ipc()", "user-native adapter"),
+        ("operator", '#[cfg(any(test, feature = "synthetic-test-bin"))]\npub struct ProfileBridgeOperator',
+         "pub struct ProfileBridgeOperator", "retired operator"),
     )
-    rejected = failures_for_sources(fixture, unit_test, acceptance_test, synthetic)
-    if not any("pending dirty ownership" in failure or OPEN_PENDING_GUARD in failure for failure in rejected):
-        return ["retained-operator premature second-ownership fixture unexpectedly passed"]
-
-    fixture = operator.replace("ensure_authoritative_generation(", "removed_rematerialization(", 1)
-    rejected = failures_for_sources(fixture, unit_test, acceptance_test, synthetic)
-    if not any(
-        "authoritative generation rematerialization" in failure
-        or "single authoritative launch body" in failure
-        for failure in rejected
+    for owner, before, after, expected in mutations:
+        if before not in sources[owner]:
+            failures.append(f"native ownership negative-fixture source missing: {owner} / {before}")
+            continue
+        modified = dict(sources)
+        modified[owner] = modified[owner].replace(before, after)
+        if not any(expected in failure for failure in check_sources(modified)):
+            failures.append(f"native ownership negative fixture unexpectedly passed: {expected}")
+    for owner, marker, expected in (
+        ("generation", "pub fn sync_closed_local_draft<",
+         "closed DRAFT Sync must use the shared same-device Bridge recovery owner"),
+        ("shipping", "fn sync_closed_ready(",
+         "closed READY Sync must use the shared same-device Bridge recovery owner"),
+        ("authoritative", "fn ensure_authoritative_generation_to<",
+         "confirmed-current DRAFT/READY reconciliation must use the shared Bridge recovery owner"),
+        ("authoritative", "fn materialize_streamed_authoritative_generation<",
+         "confirmed-current DRAFT/READY reconciliation must use the shared Bridge recovery owner"),
     ):
-        return ["retained-operator missing authoritative rematerialization fixture unexpectedly passed"]
+        failures.extend(mutation_guard_coverage(sources, owner, marker, expected))
 
-    fixture = operator.replace(RETAINED_HANDOFF, "RetainedDirtyClose::removed_handoff(", 1)
-    rejected = failures_for_sources(fixture, unit_test, acceptance_test, synthetic)
-    if not any("graceful close must hand writer ownership" in failure for failure in rejected):
-        return ["retained-operator missing graceful handoff fixture unexpectedly passed"]
+    # Removing one native-file gate must not be masked by another guarded phase.
+    for owner, marker, omitted, expected in (
+        ("generation", "pub fn sync_closed_local_draft<",
+         "browser_writer_locks_absent(&workspace)",
+         "closed DRAFT Sync must use the shared same-device Bridge recovery owner"),
+        ("shipping", "fn sync_closed_ready(",
+         "browser_writer_locks_absent(&workspace)",
+         "closed READY Sync must use the shared same-device Bridge recovery owner"),
+        ("generation", "pub(crate) fn finish_pending_sync_under_writer(",
+         "browser_writer_locks_absent(workspace)",
+         "exact committed Sync finalizer lost its native/marker gate"),
+    ):
+        body = function_body(sources[owner], marker)
+        if omitted not in body:
+            failures.append(f"native-gate negative fixture missing: {owner}/{marker}")
+            continue
+        changed = dict(sources)
+        changed[owner] = sources[owner].replace(body, body.replace(omitted, "native_gate_skipped"), 1)
+        if not any(expected in failure for failure in check_sources(changed)):
+            failures.append(f"missing native gate unexpectedly accepted: {owner}/{marker}")
 
-    fixture = operator.replace(SAVE_COMMIT, "removed_successor_commit(", 1)
-    rejected = failures_for_sources(fixture, unit_test, acceptance_test, synthetic)
-    if not any("canonical retained save" in failure for failure in rejected):
-        return ["retained-operator missing canonical successor commit fixture unexpectedly passed"]
-
-    fixture = operator.replace(LEGACY_FINALIZE_GUARD, LEGACY_FINALIZE, 1)
-    rejected = failures_for_sources(fixture, unit_test, acceptance_test, synthetic)
-    if not any("test/synthetic cfg" in failure for failure in rejected):
-        return ["retained-operator production legacy-finalize fixture unexpectedly passed"]
-
-    fixture = operator.replace(SAVE_CLEAR, "/* retained ownership clear removed */")
-    rejected = failures_for_sources(fixture, unit_test, acceptance_test, synthetic)
-    if not any("canonical retained save" in failure for failure in rejected):
-        return ["retained-operator missing post-commit clear fixture unexpectedly passed"]
-
-    return []
+    return failures
 
 
 def main() -> int:
@@ -269,16 +342,17 @@ def main() -> int:
     parser.add_argument("--self-test", action="store_true")
     args = parser.parse_args()
     root = args.root.resolve()
-
-    failures = self_test(root) if args.self_test else check(root)
+    try:
+        sources = read(root)
+    except OSError as error:
+        print(f"ERROR: native ProfileBridge ownership sources unavailable: {error}")
+        return 1
+    failures = self_test(sources) if args.self_test else check_sources(sources)
     if failures:
         for failure in failures:
             print(f"ERROR: {failure}")
         return 1
-    if args.self_test:
-        print("Phase 2F retained-operator negative fixtures were rejected.")
-    else:
-        print("Phase 2F retained operator ownership policy passed.")
+    print("Phase 2F native single-owner boundary and negative fixtures passed.")
     return 0
 
 

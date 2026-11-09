@@ -8,7 +8,7 @@ use profile_bridge::device_pairing::{
 };
 use profile_bridge::generation_initialization::{INITIAL_OPEN_URI_PREFIX, InitialProfileOpen};
 use profile_bridge::installed_connection::ControlPlaneOrigin;
-use profile_bridge::shipping_composition::run_claim;
+use profile_bridge::shipping_composition::run_closed_profile_sync;
 use profile_bridge::shipping_composition::{
     ShippingCompositionError, ShippingDeliveryCommand, run_delivery_command,
 };
@@ -31,18 +31,24 @@ use std::process::ExitCode;
 use zeroize::Zeroizing;
 
 fn main() -> ExitCode {
+    let internal_sync = env::args_os()
+        .nth(1)
+        .is_some_and(|arg| arg == "--sync-closed");
     match run(env::args()) {
         Ok(()) => ExitCode::SUCCESS,
         Err(error) => {
+            // The optional one-shot cloud Sync must never open a desktop dialog
+            // after a successful local Camoufox Close. The original dirty
+            // marker survives all cloud failures.
+            if internal_sync {
+                eprintln!("BRIDGE_CLOUD_SYNC_UNCONFIRMED;{error}");
+                return ExitCode::from(2);
+            }
             // S1 outcomes are machine-readable and fail closed without showing a
             // desktop dialog or writing a normal runtime diagnostic report.
             if matches!(error, BridgeCliError::S1NotReady) {
                 eprintln!("BRIDGE_S1_NOT_READY");
                 return ExitCode::from(3);
-            }
-            if let BridgeCliError::LaunchFailed(ShippingCompositionError::Operator(owner)) = error {
-                // This closed typed outcome contains no claims, paths, credentials or profile data.
-                eprintln!("BRIDGE_OPERATOR_OUTCOME={owner:?}");
             }
             eprintln!("{error}");
             error.diagnostic().show_desktop();
@@ -64,7 +70,8 @@ where
         BridgeCommand::PrepareInstallation(..) | BridgeCommand::ReadOnlyS1(..) => {
             Stage::InstallPrepare
         }
-        BridgeCommand::InitialProfile(_) | BridgeCommand::Claim(_) => Stage::OpenRequested,
+        BridgeCommand::InitialProfile(_) => Stage::OpenRequested,
+        BridgeCommand::SyncClosed(_) => Stage::CloudSaveAttempt,
         BridgeCommand::PairingStart(_) | BridgeCommand::PairingComplete(_) => Stage::Pairing,
         BridgeCommand::DeliveryActivateStaged => Stage::InstallActivate,
         BridgeCommand::DeliveryInstallStaged(_) | BridgeCommand::DeliveryHandoffArrived => {
@@ -132,7 +139,9 @@ where
             profile_bridge::shipping_composition::run_initial_profile(&intent)
                 .map_err(BridgeCliError::LaunchFailed)
         }
-        BridgeCommand::Claim(claim) => run_claim(&claim).map_err(BridgeCliError::LaunchFailed),
+        BridgeCommand::SyncClosed(intent) => {
+            run_closed_profile_sync(&intent).map_err(BridgeCliError::LaunchFailed)
+        }
         BridgeCommand::PairingStart(uri) => {
             run_pairing_start(&uri).map_err(BridgeCliError::PairingFailed)
         }
@@ -167,6 +176,15 @@ where
             (Err(_), _) => Outcome::Failed,
         };
         observe(outcome, cause, elapsed);
+        if result.is_ok() && stage == Stage::CloudSaveAttempt {
+            report::record_current(
+                Stage::CloudSaveConfirmed,
+                Outcome::Succeeded,
+                Cloud::CommittedExact,
+                Cause::None,
+                elapsed,
+            );
+        }
         if result.is_ok()
             && stage == Stage::InstallPrepare
             && let Some(root) = &installation_root
@@ -190,15 +208,6 @@ fn diagnostic_cause(result: &Result<(), BridgeCliError>) -> Cause {
     match result {
         Ok(()) => Cause::None,
         Err(BridgeCliError::InstallationFailed(_)) => Cause::InstallBlocked,
-        Err(BridgeCliError::LaunchFailed(
-            ShippingCompositionError::HeartbeatAuthorityUncertain,
-        )) => Cause::CoordinatorUncertain,
-        Err(BridgeCliError::LaunchFailed(ShippingCompositionError::CommittedRecoveryRequired)) => {
-            Cause::CloudSaveFailed
-        }
-        Err(BridgeCliError::LaunchFailed(ShippingCompositionError::Operator(
-            profile_bridge::operator_flow::OperatorFlowError::EnrollmentConflict,
-        ))) => Cause::CoordinatorLeaseConflict,
         Err(BridgeCliError::LaunchFailed(_)) => Cause::BrowserUnavailable,
         Err(_) => Cause::OtherSafeFailure,
     }
@@ -223,8 +232,8 @@ fn copy_diagnostics() -> Result<(), BridgeCliError> {
 enum BridgeCommand {
     PrepareInstallation(PathBuf, PathBuf),
     ReadOnlyS1(PathBuf, PathBuf, Option<PathBuf>),
-    Claim(ClaimUri),
     InitialProfile(InitialProfileOpen),
+    SyncClosed(InitialProfileOpen),
     PairingStart(DevicePairingStartUri),
     PairingComplete(DevicePairingCompleteUri),
     DeliveryActivateStaged,
@@ -295,6 +304,17 @@ where
             .map(BridgeCommand::DeliveryInstallStaged)
             .map_err(|_| BridgeCliError::InvalidInstallationArgument);
     }
+    if argument.as_str() == "--sync-closed" {
+        let uri = arguments
+            .next()
+            .ok_or(BridgeCliError::MissingLaunchArgument)?;
+        if arguments.next().is_some() {
+            return Err(BridgeCliError::UnexpectedArgument);
+        }
+        return InitialProfileOpen::parse(&uri)
+            .map(BridgeCommand::SyncClosed)
+            .map_err(|_| BridgeCliError::InvalidClaimUri);
+    }
     if arguments.next().is_some() {
         return Err(BridgeCliError::UnexpectedArgument);
     }
@@ -313,9 +333,13 @@ where
                 .map(BridgeCommand::PairingComplete)
                 .map_err(|_| BridgeCliError::InvalidPairingUri)
         }
-        _ => ClaimUri::parse(&argument)
-            .map(BridgeCommand::Claim)
-            .map_err(|_| BridgeCliError::InvalidClaimUri),
+        // Retain strict parsing only to reject obsolete claim handoffs at
+        // the protocol boundary. Never dispatch them to the retired managed
+        // Open/Save lifecycle.
+        _ => {
+            let _ = ClaimUri::parse(&argument);
+            Err(BridgeCliError::InvalidClaimUri)
+        }
     }
 }
 
@@ -364,48 +388,58 @@ impl std::error::Error for BridgeCliError {}
 #[cfg(test)]
 mod tests {
     use super::FIRST_INSTALL_ARGUMENT;
-    use super::{BridgeCliError, BridgeCommand, Cause, ShippingCompositionError, parse_command};
+    use super::{BridgeCliError, BridgeCommand, parse_command};
     use profile_bridge::windows_delivery_handoff::{
         HANDOFF_ACTIVATE_ARGUMENT, HANDOFF_ARRIVAL_ARGUMENT,
     };
 
     #[test]
-    fn native_lease_conflict_has_exact_safe_observation_cause() {
-        use profile_bridge::operator_flow::OperatorFlowError;
-
-        let conflict = BridgeCliError::LaunchFailed(ShippingCompositionError::Operator(
-            OperatorFlowError::EnrollmentConflict,
+    fn one_shot_sync_admits_only_exact_v2_native_profile() {
+        let uri = "profilebridge://open/v2/tenant_01JSYNC/actor_01JSYNC/profile_01JSYNC/1/DRAFT";
+        assert!(matches!(
+            parse_command([
+                "profile-bridge".to_owned(),
+                "--sync-closed".to_owned(),
+                uri.to_owned()
+            ]),
+            Ok(BridgeCommand::SyncClosed(_))
         ));
-        assert_eq!(
-            super::diagnostic_cause(&Err(conflict)),
-            Cause::CoordinatorLeaseConflict
-        );
-
-        // Do not mistake other launch failures for a verified lease conflict.
-        let generic = BridgeCliError::LaunchFailed(ShippingCompositionError::Configuration);
-        assert_eq!(
-            super::diagnostic_cause(&Err(generic)),
-            Cause::BrowserUnavailable
-        );
-        let uncertain =
-            BridgeCliError::LaunchFailed(ShippingCompositionError::HeartbeatAuthorityUncertain);
-        assert_eq!(
-            super::diagnostic_cause(&Err(uncertain)),
-            Cause::CoordinatorUncertain
+        for invalid in [
+            "profilebridge://open/v1/tenant_01JSYNC/actor_01JSYNC/profile_01JSYNC/1",
+            "profilebridge://open/v2/tenant_01JSYNC/actor_01JSYNC/profile_01JSYNC/1",
+            "profilebridge://claim/claim_01JSYNC",
+        ] {
+            assert!(
+                parse_command([
+                    "profile-bridge".to_owned(),
+                    "--sync-closed".to_owned(),
+                    invalid.to_owned(),
+                ])
+                .is_err()
+            );
+        }
+        assert!(
+            parse_command([
+                "profile-bridge".to_owned(),
+                "--sync-closed".to_owned(),
+                uri.to_owned(),
+                "extra".to_owned(),
+            ])
+            .is_err()
         );
     }
 
     #[test]
-    fn valid_claim_crosses_only_the_cli_boundary() -> Result<(), Box<dyn std::error::Error>> {
-        let BridgeCommand::Claim(claim) = parse_command([
-            "profile-bridge".to_owned(),
-            "profilebridge://claim/claim_01JBRIDGE_FEASIBILITY".to_owned(),
-        ])?
-        else {
-            return Err("expected claim command".into());
-        };
-        assert!(!format!("{claim:?}").contains("claim_01JBRIDGE_FEASIBILITY"));
-        Ok(())
+    fn old_claim_and_v1_user_open_are_not_supported_application_modes() {
+        for obsolete in [
+            "profilebridge://claim/claim_01JBRIDGE_FEASIBILITY",
+            "profilebridge://open/v1/tenant_01JBRIDGE/actor_01JBRIDGE/profile_01JBRIDGE/1",
+        ] {
+            assert_eq!(
+                parse_command(["profile-bridge".to_owned(), obsolete.to_owned()]).err(),
+                Some(BridgeCliError::InvalidClaimUri),
+            );
+        }
     }
 
     #[test]
@@ -667,15 +701,6 @@ mod tests {
             !BridgeCliError::InvalidClaimUri
                 .to_string()
                 .contains("secret")
-        );
-        assert!(
-            !BridgeCliError::LaunchFailed(super::ShippingCompositionError::Operator(
-                profile_bridge::operator_flow::OperatorFlowError::Stage(
-                    profile_bridge::operator_flow::OperatorFailureStage::CoordinatorClaim,
-                ),
-            ))
-            .to_string()
-            .contains("claim_")
         );
         assert!(
             !BridgeCliError::DeliveryFailed(super::ShippingCompositionError::DeliveryHandoff)

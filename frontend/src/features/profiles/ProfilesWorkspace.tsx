@@ -1,6 +1,6 @@
-import { openBrowserProfile } from './api';
+import { dispatchBrowserProfileOpen, launchProfile } from './api';
 import { newIdempotencyKey } from '../../shared/api/idempotency';
-import { useMutation, useQueryClient } from '@tanstack/react-query';
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useEffect, useRef, useState, type FormEvent } from 'react';
 import { useTenant } from '../../app/TenantContext';
 import {
@@ -57,7 +57,22 @@ export function ProfilesWorkspace({
   const selected = useRef({ tenantId, profileId, generationId });
   selected.current = { tenantId, profileId, generationId };
 
-  const launch = useMutation({ mutationFn: () => openBrowserProfile(tenantId, profileId, newIdempotencyKey()) });
+  const launchIntent = useQuery({
+    queryKey: ['operator-query', tenantId, 'profile-launch', profileId, profile?.version],
+    queryFn: () => launchProfile(tenantId, profileId, newIdempotencyKey()),
+    enabled: tenantId.length > 0 && profile !== null && profile.profileId === profileId
+      && ['DRAFT', 'READY'].includes(profile.status) && !generationRefreshUnconfirmed,
+    staleTime: 60_000,
+    retry: false,
+    refetchOnWindowFocus: false,
+    refetchOnReconnect: false,
+  });
+  const launch = useMutation({
+    mutationFn: async () => {
+      if (!launchIntent.data) throw new Error('The local browser open intent is not ready.');
+      dispatchBrowserProfileOpen(launchIntent.data.launchUri);
+    },
+  });
   const lookup = useMutation({
     mutationFn: (target: ProfileSelection) => getProfile(target.tenantId, target.profileId),
     onSuccess: (data, target) => {
@@ -216,13 +231,13 @@ export function ProfilesWorkspace({
         )}
         {profile && <>
           <div className="action-row">
-            <button type="button" disabled={launch.isPending || generationAction.isPending || generationRefreshUnconfirmed || !['DRAFT', 'READY'].includes(profile.status)} onClick={() => launch.mutate()}>{launch.isPending ? 'Opening…' : 'Open browser'}</button>
+            <button type="button" disabled={launch.isPending || launchIntent.isPending || !launchIntent.data || generationAction.isPending || generationRefreshUnconfirmed || !['DRAFT', 'READY'].includes(profile.status)} onClick={() => launch.mutate()}>{launch.isPending ? 'Opening…' : 'Open browser'}</button>
             <button type="button" disabled={lookup.isPending} onClick={() => {
               void cache.invalidateQueries({ queryKey: ['operator-query', tenantId, 'profiles'] });
               lookup.mutate({ tenantId, profileId });
             }}>Refresh status</button>
           </div>
-          <StatusMessage state={launch.error ?? (launch.isPending ? 'Preparing and opening your profile…' : null)} />
+          <StatusMessage state={launch.error ?? launchIntent.error ?? (launch.isPending ? 'Opening your profile…' : launchIntent.isPending ? 'Preparing local browser access…' : null)} />
         </>}
         {profile && (
           <dl className="projection">
