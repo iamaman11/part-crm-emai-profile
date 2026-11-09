@@ -27,9 +27,9 @@ use crate::local_profile::{
 };
 #[cfg(any(test, feature = "synthetic-test-bin"))]
 use crate::local_profile::{GenerationInventory, MaterializationRoot, RecoveryClone};
+use crate::runtime_bundle::RuntimeLaunchError;
 #[cfg(any(test, feature = "synthetic-test-bin"))]
 use crate::runtime_bundle::{ApprovedRuntimeBundle, RuntimeSessionOrchestrator};
-use crate::runtime_bundle::RuntimeLaunchError;
 use crate::shipping_control_plane::{MachineHttpPort, ShippingControlPlaneError};
 #[cfg(any(windows, test))]
 use crate::shipping_generation_save::SignedGenerationObjectStreamPutPort;
@@ -73,9 +73,9 @@ use application_ports::{ProfileCoordinatorPort, ProfileCoordinatorRuntimePort};
 use bridge_domain::{CamouhostPort, ClaimUri, DeviceIdentityPort, DeviceKeyPort};
 #[cfg(any(test, feature = "synthetic-test-bin"))]
 use profile_platform_primitives::TenantScope;
-use profile_platform_primitives::{GenerationId, SessionId};
 #[cfg(any(test, feature = "synthetic-test-bin"))]
 use profile_platform_primitives::{ActorContext, DeviceId, LaunchIntentId, ProfileId, UnixMillis};
+use profile_platform_primitives::{GenerationId, SessionId};
 use session_domain::ProfileLease;
 use std::fmt;
 
@@ -88,8 +88,7 @@ pub trait DeviceAuthenticationPort {
 
 pub use crate::runtime_bundle::RuntimeBundleSelectionPort;
 pub use crate::shipping_control_plane::{
-    SyncEnrollment as OperatorEnrollment,
-    SyncEnrollmentFailureKind as EnrollmentFailureKind,
+    SyncEnrollment as OperatorEnrollment, SyncEnrollmentFailureKind as EnrollmentFailureKind,
     SyncEnrollmentPort as EnrollmentPort,
 };
 

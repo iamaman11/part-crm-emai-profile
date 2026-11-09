@@ -4,8 +4,7 @@ use crate::generation_snapshot::{
     digest_closed_workspace_streaming, encode_workspace_snapshot, seal_closed_workspace_streaming,
 };
 use crate::local_profile::{BridgeWorkspaceLock, GenerationWorkspace, MaterializationRoot};
-use crate::runtime_bundle::RuntimeBundleSelectionPort;
-use crate::runtime_bundle::ApprovedRuntimeBundle;
+use crate::runtime_bundle::{ApprovedRuntimeBundle, RuntimeBundleSelectionPort};
 use crate::shipping_control_plane::{
     MachineHttpMethod, MachineHttpPort, MachineHttpResponse, sealing_material_from_response,
 };

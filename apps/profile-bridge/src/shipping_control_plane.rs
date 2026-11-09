@@ -47,7 +47,6 @@ const MAX_REOPEN_OPENING_MATERIAL_RESPONSE_BYTES: usize = 1_024;
 const MAX_SIGNED_GENERATION_DOWNLOAD_URL_BYTES: usize = 4_096;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum SyncEnrollmentFailureKind {
     LeaseConflict,
     ServiceUncertain,
@@ -58,7 +57,7 @@ pub trait SyncEnrollmentPort {
     type Error;
 
     fn classify_error(_error: &Self::Error) -> SyncEnrollmentFailureKind {
-        SyncSyncEnrollmentFailureKind::Other
+        SyncEnrollmentFailureKind::Other
     }
 
     fn redeem_claim(
@@ -115,6 +114,7 @@ impl SyncEnrollment {
     }
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum MachineHttpMethod {
     Get,
     PostJson,
@@ -221,7 +221,9 @@ where
 
     fn classify_error(error: &Self::Error) -> SyncEnrollmentFailureKind {
         match error {
-            ShippingControlPlaneError::LaunchLeaseConflict => SyncEnrollmentFailureKind::LeaseConflict,
+            ShippingControlPlaneError::LaunchLeaseConflict => {
+                SyncEnrollmentFailureKind::LeaseConflict
+            }
             ShippingControlPlaneError::Transport
             | ShippingControlPlaneError::HttpServerUncertain => {
                 SyncEnrollmentFailureKind::ServiceUncertain
