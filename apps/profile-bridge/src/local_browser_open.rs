@@ -424,7 +424,7 @@ mod tests {
     #[cfg(windows)]
     #[test]
     fn windows_python_stderr_ready_event_confirms_pending_delivery_health()
-        -> Result<(), Box<dyn std::error::Error>> {
+    -> Result<(), Box<dyn std::error::Error>> {
         use std::fs;
         use std::path::PathBuf;
 
@@ -473,7 +473,7 @@ sys.stderr.flush()
     #[cfg(windows)]
     #[test]
     fn windows_process_without_ready_event_cannot_confirm_delivery_health()
-        -> Result<(), Box<dyn std::error::Error>> {
+    -> Result<(), Box<dyn std::error::Error>> {
         use std::fs;
         use std::path::PathBuf;
 
