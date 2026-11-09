@@ -965,15 +965,16 @@ mod windows {
 mod tests {
     #[cfg(not(windows))]
     #[test]
-    fn non_windows_shipping_binary_has_no_browser_or_sync_fallback() {
+    fn non_windows_shipping_binary_has_no_browser_or_sync_fallback()
+    -> Result<(), Box<dyn std::error::Error>> {
         use super::{ShippingCompositionError, run_closed_profile_sync, run_initial_profile};
         use crate::generation_initialization::{InitialProfileOpen, InitialProfileStatus};
         use profile_platform_primitives::{ActorId, ProfileId, TenantId};
 
         let intent = InitialProfileOpen {
-            tenant_id: TenantId::parse("tenant_01JLOCAL").unwrap(),
-            actor_id: ActorId::parse("actor_01JLOCAL").unwrap(),
-            profile_id: ProfileId::parse("profile_01JLOCAL").unwrap(),
+            tenant_id: TenantId::parse("tenant_01JLOCAL")?,
+            actor_id: ActorId::parse("actor_01JLOCAL")?,
+            profile_id: ProfileId::parse("profile_01JLOCAL")?,
             expected_version: 1,
             status: InitialProfileStatus::Draft,
         };
@@ -985,5 +986,6 @@ mod tests {
             run_closed_profile_sync(&intent),
             Err(ShippingCompositionError::UnsupportedPlatform)
         ));
+        Ok(())
     }
 }
