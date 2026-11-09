@@ -1,6 +1,6 @@
 #[cfg(any(windows, test))]
 use crate::browser_execution::{browser_writer_locks_absent, persist_committed_successor_binding};
-#[cfg(any(windows, test))]
+#[cfg(any(windows, test, feature = "synthetic-test-bin"))]
 use crate::dirty_generation::PreparedDirtyGeneration;
 #[cfg(any(windows, test))]
 use crate::dirty_generation::recover_local_unsynced_native_clone;
@@ -18,6 +18,7 @@ use crate::shipping_control_plane::{
 };
 #[cfg(any(windows, test))]
 use crate::shipping_generation_save::CommittedGenerationSuccessor;
+#[cfg(any(windows, test))]
 use crate::shipping_generation_save::SignedGenerationObjectStreamPutPort;
 #[cfg(any(test, feature = "synthetic-test-bin"))]
 use crate::shipping_generation_save::{
@@ -43,12 +44,15 @@ use crate::shipping_save_attempt::{
     retire_matching_local_unsynced_after_restart,
     retire_matching_streamed_local_unsynced_after_restart,
 };
+#[cfg(any(windows, test))]
+use control_plane_contract::profile_generation_api::{
+    BRIDGE_PROFILE_GENERATION_OBSERVE_PATH_TEMPLATE,
+    BridgeGenerationSuccessorObserveRequest, BridgeGenerationSuccessorObserveResponse,
+};
 use control_plane_contract::profile_generation_api::{
     BRIDGE_PROFILE_GENERATION_COMMIT_PATH_TEMPLATE,
-    BRIDGE_PROFILE_GENERATION_OBSERVE_PATH_TEMPLATE,
     BRIDGE_PROFILE_GENERATION_UPLOAD_CAPABILITY_PATH_TEMPLATE,
     BridgeGenerationSuccessorCommitOutcomeDto, BridgeGenerationSuccessorCommitResponse,
-    BridgeGenerationSuccessorObserveRequest, BridgeGenerationSuccessorObserveResponse,
     BridgeGenerationUploadCapabilityResponse, BridgeProfileGenerationSuccessorRequest,
 };
 #[cfg(any(windows, test))]
