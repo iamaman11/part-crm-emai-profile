@@ -865,15 +865,15 @@ jobs:
           test "$(jq -r '.target_commitish' "$RUNNER_TEMP/target-release.json")" = "${{ steps.intent.outputs.main_sha }}"
           asset_root="$RUNNER_TEMP/target-assets"
           release_root="$RUNNER_TEMP/target-release-set"
-          python scripts/download-release-set-ar11.py \\
-            --repository "$GITHUB_REPOSITORY" \\
-            --release-set-id "$RELEASE_SET_ID" \\
+          python scripts/download-release-set-ar11.py \
+            --repository "$GITHUB_REPOSITORY" \
+            --release-set-id "$RELEASE_SET_ID" \
             --destination "$asset_root"
           bash scripts/release-set-assets-ar11.sh materialize current-v3 "$RELEASE_SET_ID" "$asset_root" "$release_root"
           cmp --silent "$release_root/release-set.json" "$RUNNER_TEMP/ready/release-set.json"
-          cargo run --locked --quiet --manifest-path tools/opsctl/Cargo.toml -- \\
-            --root . release verify --release-set "$RUNNER_TEMP/ready/release-set.json" \\
-            --source-root . --artifact-root "$release_root" \\
+          cargo run --locked --quiet --manifest-path tools/opsctl/Cargo.toml -- \
+            --root . release verify --release-set "$RUNNER_TEMP/ready/release-set.json" \
+            --source-root . --artifact-root "$release_root" \
             > "$RUNNER_TEMP/manual-release-verify.json"
           jq -e '.decision == "VALID" and .release_set_schema_version == 3 and .source_accepted == true and .mutation_executed == false' "$RUNNER_TEMP/manual-release-verify.json" >/dev/null
 
@@ -895,12 +895,12 @@ jobs:
           fi
           dispatch_authorized=false
           if [ "$GITHUB_EVENT_NAME" = workflow_dispatch ]; then dispatch_authorized=true; fi
-          jq -n \\
-            --arg source_sha "$source_sha" --arg release_set_id "$release_set_id" --arg promotion_id "$promotion_id" --arg target_profile "$target_profile" \\
-            --arg failed_boundary "$failed_boundary" --arg dispatch_digest "${{ steps.intent.outputs.dispatch_digest }}" --argjson dispatch_authorized "$dispatch_authorized" \\
-            --arg intent "${{ steps.intent.outcome }}" --arg ready "${{ steps.ready.outcome }}" \\
-            --arg source_checkout "${{ steps.source_checkout.outcome }}" --arg target_verify "${{ steps.target_verify.outcome }}" \\
-            '{schema_version:1,kind:"AR11_MANUAL_PHASE_STATE",phase:"RESOLVE_VERIFY",source_sha:$source_sha,release_set_id:(if $release_set_id=="" then null else $release_set_id end),promotion_id:(if $promotion_id=="" then null else $promotion_id end),target_capability_profile_id:(if $target_profile=="" then null else $target_profile end),dispatch_authorized:$dispatch_authorized,dispatch_digest:(if $dispatch_digest=="" then null else $dispatch_digest end),provider_mutation_started:false,provider_mutation_executed:false,production_mutation_executed:false,failed_boundary:(if $failed_boundary=="" then null else $failed_boundary end),step_outcomes:{intent:$intent,ready:$ready,source_checkout:$source_checkout,target_verify:$target_verify}}' \\
+          jq -n \
+            --arg source_sha "$source_sha" --arg release_set_id "$release_set_id" --arg promotion_id "$promotion_id" --arg target_profile "$target_profile" \
+            --arg failed_boundary "$failed_boundary" --arg dispatch_digest "${{ steps.intent.outputs.dispatch_digest }}" --argjson dispatch_authorized "$dispatch_authorized" \
+            --arg intent "${{ steps.intent.outcome }}" --arg ready "${{ steps.ready.outcome }}" \
+            --arg source_checkout "${{ steps.source_checkout.outcome }}" --arg target_verify "${{ steps.target_verify.outcome }}" \
+            '{schema_version:1,kind:"AR11_MANUAL_PHASE_STATE",phase:"RESOLVE_VERIFY",source_sha:$source_sha,release_set_id:(if $release_set_id=="" then null else $release_set_id end),promotion_id:(if $promotion_id=="" then null else $promotion_id end),target_capability_profile_id:(if $target_profile=="" then null else $target_profile end),dispatch_authorized:$dispatch_authorized,dispatch_digest:(if $dispatch_digest=="" then null else $dispatch_digest end),provider_mutation_started:false,provider_mutation_executed:false,production_mutation_executed:false,failed_boundary:(if $failed_boundary=="" then null else $failed_boundary end),step_outcomes:{intent:$intent,ready:$ready,source_checkout:$source_checkout,target_verify:$target_verify}}' \
             > "$RUNNER_TEMP/manual-resolve-state.json"
           phase_state_b64="$(base64 -w0 "$RUNNER_TEMP/manual-resolve-state.json")"
           echo "phase_state_b64=$phase_state_b64" >> "$GITHUB_OUTPUT"
