@@ -9,6 +9,7 @@ from __future__ import annotations
 import contextlib
 import importlib.util
 import io
+import json
 import os
 from pathlib import Path
 import sys
@@ -72,9 +73,15 @@ def main() -> int:
 
     # The canonical local-first user launch never redeems an online claim.
     # This is the same official async Playwright path, not a second engine.
-    async def local_open(_folder):
+    async def local_open(_folder, _config, _first_run):
         invoked.append("local")
         return 19
+
+    config = {key: {} for key in runtime.WEBGL_REQUIRED_KEYS}
+    config_json = runtime.canonical_json(config).decode("utf-8")
+    request = json.dumps({"config_json": config_json, "first_run": True})
+    with patch.object(sys, "stdin", io.StringIO(request)):
+        assert runtime.read_local_open_request() == (config, True)
 
     with tempfile.TemporaryDirectory() as folder:
         for environment, outcome in (
@@ -87,6 +94,7 @@ def main() -> int:
             invoked.clear()
             with (patch.dict(os.environ, environment, clear=True),
                   patch.object(sys, "argv", ["real.py", "--local-open", folder]),
+                  patch.object(sys, "stdin", io.StringIO(request)),
                   patch.object(runtime, "run_local_profile", side_effect=local_open),
                   contextlib.redirect_stderr(io.StringIO())):
                 assert runtime.main() == outcome
@@ -204,16 +212,15 @@ def main() -> int:
     assert "close_after_browser_exit" in local_runtime
     assert "WindowsBrowserExitWitness" not in local_runtime
     assert "profile_state" not in local_runtime
-    with tempfile.TemporaryDirectory() as directory:
-        virgin = Path(directory) / "user_data"
-        virgin.mkdir()
-        assert runtime.firefox_native_first_run_args(virgin) == [
-            "-new-tab", "about:blank"
-        ]
-        (virgin / "places.sqlite").write_bytes(b"synthetic existing Firefox state")
-        assert runtime.firefox_native_first_run_args(virgin) == []
+    assert not hasattr(runtime, "firefox_native_first_run_args")
+    local_runtime = SOURCE.read_text(encoding="utf-8").split(
+        "async def run_local_profile", 1
+    )[1].split("\n\ndef main", 1)[0]
+    assert "load_canonical_json" not in local_runtime
+    assert "require_bridge_writer_lock" not in local_runtime
+    assert ".mkdir(" not in local_runtime and ".write_bytes(" not in local_runtime
 
-    print("CAMOUHOST_EXECUTION_MODES=PASS")
+    print("CAMOUHOST_EXECUTION_MODES=PASS")    print("CAMOUHOST_EXECUTION_MODES=PASS")
     return 0
 
 

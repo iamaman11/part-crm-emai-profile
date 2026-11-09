@@ -806,16 +806,6 @@ def report_live_page_count(context: Any) -> None:
         return
 
 
-def firefox_native_first_run_args(user_data_dir: Path) -> list[str]:
-    """Ask Firefox itself for its ordinary blank tab only on a virgin profile.
-
-    Playwright's persistent context needs an initial native Page event; native
-    session restore (startup.page=3) has no previous page on first Open. Use
-    Firefox's standard CLI switch rather than opening, inspecting, closing or
-    navigating tabs through the application. All subsequent Opens preserve the
-    browser's own SessionStore without CLI startup overrides.
-    """
-    return ["-new-tab", "about:blank"] if not any(user_data_dir.iterdir()) else []
 
 
 def camoufox_launch_options(
@@ -824,6 +814,7 @@ def camoufox_launch_options(
     config: dict[str, Any],
     *,
     isolated: bool = False,
+    first_run: bool = False,
 ) -> dict[str, Any]:
     """Build one pinned option set through the official Camoufox SDK.
 
@@ -833,10 +824,9 @@ def camoufox_launch_options(
     """
     from camoufox.utils import get_env_vars, launch_options
 
+    # Rust owns the directory and has already admitted its native file state.
+    # The SDK receives the path and owns browser files inside it.
     user_data_dir = root / USER_DATA_NAME
-    if user_data_dir.is_symlink():
-        raise RuntimeContractError("browser user-data directory may not be a symlink")
-    user_data_dir.mkdir(exist_ok=True)
     browser_selector = camoufox_browser_selector(lock)
     browser_path = browser_selector.get("executable_path")
     firefox_prefs: dict[str, Any] = {
@@ -866,12 +856,10 @@ def camoufox_launch_options(
     if isolated:
         options["offline"] = True
         options["args"] = ["-new-tab", MANAGED_BOOTSTRAP_TAB_URL]
-    else:
-        # Firefox itself creates the one native first-run tab. Existing
-        # profiles receive no startup override and retain native SessionStore.
-        first_run_args = firefox_native_first_run_args(user_data_dir)
-        if first_run_args:
-            options["args"] = first_run_args
+    elif first_run:
+        # Rust determines virgin-profile state while holding the workspace lock.
+        # Firefox itself creates its one native first-run tab.
+        options["args"] = ["-new-tab", "about:blank"]
 
     official_env = options.get("env")
     if not isinstance(official_env, dict) or not any(
@@ -985,22 +973,16 @@ def close_context(manager: Any, _context: Any) -> None:
         manager.__exit__(None, None, None)
 
 
-def materialize_candidate_identity(root: Path) -> dict[str, str]:
-    """Create exact generation identity once under an already acquired Bridge writer lock."""
+def materialize_candidate_identity(root: Path) -> dict[str, Any]:
+    """Generate one Camoufox identity in memory; Rust persists the returned config."""
     from camoufox.fingerprints import generate_fingerprint
     from camoufox.utils import get_screen_cons, launch_options
 
     lock, runtime_lock_sha256 = load_runtime_lock()
     verify_python_components(lock)
-    if root.is_symlink() or not root.is_dir():
-        raise RuntimeContractError("candidate generation root is invalid")
-    root = root.resolve(strict=True)
-    require_bridge_writer_lock(root)
-    config_path = root / CONFIG_NAME
+    # This path is only an SDK option. Rust created/admitted the workspace and
+    # owns every write to the local profile folder.
     user_data_dir = root / USER_DATA_NAME
-    if config_path.exists() or config_path.is_symlink() or user_data_dir.is_symlink():
-        raise RuntimeContractError("candidate identity already exists or path is unsafe")
-    user_data_dir.mkdir(exist_ok=True)
     browser_selector = camoufox_browser_selector(lock)
     browser_env = browser_environment()
     headless_mode = resolve_headless_mode()
@@ -1021,21 +1003,17 @@ def materialize_candidate_identity(root: Path) -> dict[str, str]:
             user_data_dir=str(user_data_dir),
         )
     config = extract_camoufox_config(options)
-    # Persist the canonical Camoufox configuration once; never draw again on Reopen.
     generation_webgl2_enabled(config)
     config_bytes = canonical_json(config)
-    config_path.write_bytes(config_bytes)
     config_sha256 = sha256_bytes(config_bytes)
 
     # Native Firefox belongs to the subsequent user Open, never to a
-    # preparatory first-generation task. The SDK/fpgen owns the exact pinned
-    # fingerprint; no browser/Playwright window is spawned merely to sample
-    # its own configuration. Preserve this domain-separated provenance in the
-    # encrypted base generation and validate it again from the saved bytes.
+    # preparatory first-generation task. Preserve exact SDK/fpgen provenance.
     materialization_digest = sha256_bytes(
         b"profile-stability-v2-fpgen-config\0" + config_bytes
     )
     return {
+        "camoufox_config_json": config_bytes.decode("utf-8"),
         "fingerprint_config_sha256": config_sha256,
         "fingerprint_policy_version": str(lock["fingerprint_policy_version"]),
         "fingerprint_materialization_sha256": materialization_digest,
@@ -1579,7 +1557,36 @@ def run_ipc() -> int:
                 report_runtime_failure("cleanup", error)
 
 
-async def run_local_profile(root: Path) -> int:
+def read_local_open_request() -> tuple[dict[str, Any], bool]:
+    """Read Rust-owned canonical profile settings over the one-shot process stdin."""
+    maximum_input = MAX_CONFIG_BYTES * 12 + 8192
+    raw = sys.stdin.read(maximum_input)
+    if not raw or len(raw.encode("utf-8")) >= maximum_input:
+        raise RuntimeContractError("local Open configuration input is missing or oversized")
+    try:
+        request = json.loads(raw)
+    except json.JSONDecodeError as error:
+        raise RuntimeContractError("local Open configuration input is invalid") from error
+    if not isinstance(request, dict) or set(request) != {"config_json", "first_run"}:
+        raise RuntimeContractError("local Open configuration contract is invalid")
+    config_json = request.get("config_json")
+    first_run = request.get("first_run")
+    if not isinstance(config_json, str) or not isinstance(first_run, bool):
+        raise RuntimeContractError("local Open configuration fields are invalid")
+    config_bytes = config_json.encode("utf-8")
+    if len(config_bytes) > MAX_CONFIG_BYTES:
+        raise RuntimeContractError("local Open profile configuration exceeds its bound")
+    try:
+        config = json.loads(config_json)
+    except json.JSONDecodeError as error:
+        raise RuntimeContractError("local Open profile configuration is invalid") from error
+    if not isinstance(config, dict) or canonical_json(config) != config_bytes:
+        raise RuntimeContractError("local Open profile configuration is not canonical")
+    generation_webgl2_enabled(config)
+    return config, first_run
+
+
+async def run_local_profile(root: Path, config: dict[str, Any], first_run: bool) -> int:
     """Launch one local profile and wait passively for Playwright's close event."""
     from native_process import launch_native_camoufox
 
@@ -1588,14 +1595,9 @@ async def run_local_profile(root: Path) -> int:
     try:
         lock, _ = load_runtime_lock()
         verify_python_components(lock)
-        if root.is_symlink() or not root.is_dir():
-            raise RuntimeContractError("local browser folder unavailable")
-        root = root.resolve(strict=True)
-        # Rust holds exclusive local writer admission until Python exits.
-        require_bridge_writer_lock(root)
-        config, _ = load_canonical_json(root / CONFIG_NAME, MAX_CONFIG_BYTES)
-        generation_webgl2_enabled(config)
-        options = camoufox_launch_options(lock, root, config)
+        # Rust owns and holds exclusive local workspace admission. The
+        # canonical configuration and first-run decision arrive in memory.
+        options = camoufox_launch_options(lock, root, config, first_run=first_run)
         session = await launch_native_camoufox(
             workspace=root,
             options=options,
@@ -1641,7 +1643,12 @@ def main() -> int:
         if os.environ.get(HEADLESS_MODE_ENV, "false") != "false":
             print("local browser requires headful mode", file=sys.stderr)
             return 2
-        return asyncio.run(run_local_profile(Path(sys.argv[2])))
+        try:
+            config, first_run = read_local_open_request()
+        except Exception as error:
+            report_runtime_failure("startup", error)
+            return 4
+        return asyncio.run(run_local_profile(Path(sys.argv[2]), config, first_run))
     if len(sys.argv) == 3 and sys.argv[1] == "--materialize-identity":
         try:
             with contextlib.redirect_stdout(sys.stderr):

@@ -18,6 +18,8 @@ const PYTHON: &str = "python/python.exe";
 const ENTRYPOINT: &str = "camouhost/real.py";
 const LOCK: &str = "camouhost/runtime-lock.json";
 const CONFIG: &str = "camoufox-config.json";
+const USER_DATA: &str = "user_data";
+const MAX_CONFIG_BYTES: u64 = 1024 * 1024;
 const LOCAL_UNSYNCED: &str = ".local-unsynced";
 const LOCAL_UNSYNCED_CONTENT: &[u8] = b"local-unsynced-v2";
 const CAMOUHOST_LAUNCH_READY_EVENT: &str = "camouhost_stage phase=launch step=ready";
@@ -160,13 +162,138 @@ fn run_python(
             return Err(LocalOpenError::RuntimeUnavailable);
         }
     }
-    run_python_with_executable(
-        &runtime_root.join(PYTHON),
-        runtime_root,
-        folder,
-        action,
-        pending_health,
-    )
+
+    let executable = runtime_root.join(PYTHON);
+    if action == "--materialize-identity" {
+        return materialize_identity_with_executable(&executable, runtime_root, folder);
+    }
+    if action == "--local-open" {
+        let first_run = ensure_user_data_directory(folder)?;
+        let config_json = read_profile_config(folder)?;
+        let input = serde_json::to_vec(&serde_json::json!({
+            "config_json": config_json,
+            "first_run": first_run,
+        }))
+        .map_err(|_| LocalOpenError::IdentityPreparation)?;
+        return run_python_with_input(
+            &executable,
+            runtime_root,
+            folder,
+            action,
+            pending_health,
+            Some(&input),
+        );
+    }
+    run_python_with_input(&executable, runtime_root, folder, action, pending_health, None)
+}
+
+fn ensure_user_data_directory(folder: &Path) -> Result<bool, LocalOpenError> {
+    let user_data = folder.join(USER_DATA);
+    match fs::symlink_metadata(&user_data) {
+        Ok(metadata) => {
+            if metadata.file_type().is_symlink() || !metadata.is_dir() {
+                return Err(LocalOpenError::InvalidLocalWorkspace);
+            }
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            fs::create_dir(&user_data).map_err(|_| LocalOpenError::InvalidLocalWorkspace)?;
+        }
+        Err(_) => return Err(LocalOpenError::InvalidLocalWorkspace),
+    }
+    let mut entries =
+        fs::read_dir(&user_data).map_err(|_| LocalOpenError::InvalidLocalWorkspace)?;
+    match entries.next() {
+        None => Ok(true),
+        Some(Ok(_)) => Ok(false),
+        Some(Err(_)) => Err(LocalOpenError::InvalidLocalWorkspace),
+    }
+}
+
+fn read_profile_config(folder: &Path) -> Result<String, LocalOpenError> {
+    let path = folder.join(CONFIG);
+    let metadata = fs::symlink_metadata(&path).map_err(|_| LocalOpenError::IdentityPreparation)?;
+    if metadata.file_type().is_symlink()
+        || !metadata.is_file()
+        || metadata.len() > MAX_CONFIG_BYTES
+    {
+        return Err(LocalOpenError::IdentityPreparation);
+    }
+    let bytes = fs::read(path).map_err(|_| LocalOpenError::IdentityPreparation)?;
+    let value: serde_json::Value =
+        serde_json::from_slice(&bytes).map_err(|_| LocalOpenError::IdentityPreparation)?;
+    if !value.is_object() {
+        return Err(LocalOpenError::IdentityPreparation);
+    }
+    String::from_utf8(bytes).map_err(|_| LocalOpenError::IdentityPreparation)
+}
+
+fn materialize_identity_with_executable(
+    executable: &Path,
+    runtime_root: &Path,
+    folder: &Path,
+) -> Result<bool, LocalOpenError> {
+    let output = Command::new(executable)
+        .arg("-B")
+        .arg(runtime_root.join(ENTRYPOINT))
+        .arg("--materialize-identity")
+        .arg(folder)
+        .current_dir(runtime_root)
+        .env("CAMOUHOST_RUNTIME_LOCK", runtime_root.join(LOCK))
+        .env("CAMOUHOST_EXECUTION_MODE", "user-native")
+        .env("CAMOUHOST_HEADLESS_MODE", "false")
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .output()
+        .map_err(|_| LocalOpenError::RuntimeUnavailable)?;
+    if !output.status.success() {
+        return Ok(false);
+    }
+    let report: serde_json::Value =
+        serde_json::from_slice(&output.stdout).map_err(|_| LocalOpenError::IdentityPreparation)?;
+    let config_json = report
+        .get("camoufox_config_json")
+        .and_then(serde_json::Value::as_str)
+        .ok_or(LocalOpenError::IdentityPreparation)?;
+    let expected_digest = report
+        .get("fingerprint_config_sha256")
+        .and_then(serde_json::Value::as_str)
+        .ok_or(LocalOpenError::IdentityPreparation)?;
+    let config_bytes = config_json.as_bytes();
+    if config_bytes.is_empty()
+        || config_bytes.len() as u64 > MAX_CONFIG_BYTES
+        || !config_bytes.ends_with(b"\n")
+    {
+        return Err(LocalOpenError::IdentityPreparation);
+    }
+    let actual_digest = format!("{:x}", Sha256::digest(config_bytes));
+    if actual_digest != expected_digest {
+        return Err(LocalOpenError::IdentityPreparation);
+    }
+    let value: serde_json::Value =
+        serde_json::from_slice(config_bytes).map_err(|_| LocalOpenError::IdentityPreparation)?;
+    if !value.is_object() {
+        return Err(LocalOpenError::IdentityPreparation);
+    }
+
+    let destination = folder.join(CONFIG);
+    match fs::symlink_metadata(&destination) {
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+        _ => return Err(LocalOpenError::IdentityPreparation),
+    }
+    let mut temporary =
+        tempfile::NamedTempFile::new_in(folder).map_err(|_| LocalOpenError::IdentityPreparation)?;
+    temporary
+        .write_all(config_bytes)
+        .map_err(|_| LocalOpenError::IdentityPreparation)?;
+    temporary
+        .as_file()
+        .sync_all()
+        .map_err(|_| LocalOpenError::IdentityPreparation)?;
+    temporary
+        .persist_noclobber(&destination)
+        .map_err(|_| LocalOpenError::IdentityPreparation)?;
+    Ok(true)
 }
 
 fn run_python_with_executable(
@@ -175,6 +302,17 @@ fn run_python_with_executable(
     folder: &Path,
     action: &str,
     pending_health: Option<PendingWindowsDeliveryHealthConfirmation>,
+) -> Result<bool, LocalOpenError> {
+    run_python_with_input(executable, runtime_root, folder, action, pending_health, None)
+}
+
+fn run_python_with_input(
+    executable: &Path,
+    runtime_root: &Path,
+    folder: &Path,
+    action: &str,
+    pending_health: Option<PendingWindowsDeliveryHealthConfirmation>,
+    stdin_payload: Option<&[u8]>,
 ) -> Result<bool, LocalOpenError> {
     // Begin the existing activation-health attempt only after all local
     // runtime files have been admitted and immediately before process launch.
@@ -197,11 +335,28 @@ fn run_python_with_executable(
         .env("CAMOUHOST_RUNTIME_LOCK", runtime_root.join(LOCK))
         .env("CAMOUHOST_EXECUTION_MODE", "user-native")
         .env("CAMOUHOST_HEADLESS_MODE", "false")
-        .stdin(Stdio::null())
+        .stdin(if stdin_payload.is_some() {
+            Stdio::piped()
+        } else {
+            Stdio::null()
+        })
         .stdout(Stdio::null())
         .stderr(Stdio::piped())
         .spawn()
         .map_err(|_| LocalOpenError::RuntimeUnavailable)?;
+    if let Some(payload) = stdin_payload {
+        let Some(mut stdin) = child.stdin.take() else {
+            let _ = child.kill();
+            let _ = child.wait();
+            return Err(LocalOpenError::RuntimeUnavailable);
+        };
+        if stdin.write_all(payload).is_err() {
+            drop(stdin);
+            let _ = child.kill();
+            let _ = child.wait();
+            return Err(LocalOpenError::RuntimeUnavailable);
+        }
+    }
     let stderr = child
         .stderr
         .take()
