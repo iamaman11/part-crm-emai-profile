@@ -329,7 +329,6 @@ fn run_native_open_proof() -> Result<ApprovedRuntimeBundle, Box<dyn std::error::
             &launch,
             &device_for_open,
             &native_runtime,
-            None,
         )
         .map_err(|error| error.to_string())
     });

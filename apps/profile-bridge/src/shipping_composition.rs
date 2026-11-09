@@ -910,7 +910,7 @@ mod windows {
         }
         let root = MaterializationRoot::open_or_create(&config.materialization_root)
             .map_err(|_| ShippingCompositionError::Configuration)?;
-        match crate::local_browser_open::open(
+        match crate::local_browser_open::open_with_health(
             &root,
             intent,
             binding.device_id(),
@@ -961,7 +961,7 @@ mod windows {
                 .map_err(|_| ShippingCompositionError::RestoreUnavailable)?;
                 // Re-enter the SAME local native Open; no managed Camoufox path
                 // and no Coordinator lease are introduced by recovery.
-                match crate::local_browser_open::open(
+                match crate::local_browser_open::open_with_health(
                     &root,
                     intent,
                     &device,

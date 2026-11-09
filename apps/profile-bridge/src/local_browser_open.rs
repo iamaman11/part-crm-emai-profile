@@ -270,6 +270,15 @@ pub fn open(
     intent: &InitialProfileOpen,
     device: &DeviceId,
     runtime_root: &Path,
+) -> Result<(), LocalOpenError> {
+    open_with_health(root, intent, device, runtime_root, None)
+}
+
+pub(crate) fn open_with_health(
+    root: &MaterializationRoot,
+    intent: &InitialProfileOpen,
+    device: &DeviceId,
+    runtime_root: &Path,
     pending_health: Option<PendingWindowsDeliveryHealthConfirmation>,
 ) -> Result<(), LocalOpenError> {
     let generation = local_generation(intent)?;
