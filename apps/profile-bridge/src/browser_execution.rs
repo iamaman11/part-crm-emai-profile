@@ -61,6 +61,7 @@ impl std::error::Error for BrowserLaunchBlocker {}
 /// Persist the generation-owned browser identity first, then bind local materialization evidence to
 /// its exact SHA-256. The identity record lives inside the generation and therefore travels through
 /// the existing encrypted snapshot/save/reopen path; the sidecar remains host-local evidence only.
+#[cfg(test)]
 pub(crate) fn persist_browser_identity(
     workspace: &GenerationWorkspace,
     identity: &BrowserIdentityManifest,
