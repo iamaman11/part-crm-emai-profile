@@ -405,6 +405,8 @@ function promotionErrors(promotion) {
     'Execute exact candidate after owner dispatch and READY evidence',
     'TARGET_PROFILE: ${{ needs.resolve-verify.outputs.target_profile }}',
     'EXPECTED_CURRENT_PROFILE: ${{ needs.resolve-verify.outputs.expected_current_profile }}',
+    'DISPATCH_DIGEST: ${{ needs.resolve-verify.outputs.dispatch_digest }}',
+    'dispatch_digest:$dispatch_digest',
     'Download and bind prior READY evidence before provider credentials',
     'AR11_MUTATION_FENCE',
     'target_capability_profile_id:$target_profile',
