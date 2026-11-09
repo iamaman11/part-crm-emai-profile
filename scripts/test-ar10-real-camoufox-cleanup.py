@@ -183,6 +183,10 @@ def materialize(
     root: Path,
 ) -> dict[str, str]:
     root.mkdir()
+    # This test drives the official SDK directly, so it reproduces the local
+    # filesystem preparation that Rust/ProfileBridge performs before Open.
+    user_data = root / "user_data"
+    user_data.mkdir()
     (root / ".profile-platform.lock").write_text(
         BRIDGE_LOCK, encoding="utf-8", newline="\n"
     )
@@ -205,6 +209,7 @@ def materialize(
     except json.JSONDecodeError as error:
         raise AssertionError("materialization report is not JSON") from error
     required = {
+        "camoufox_config_json",
         "fingerprint_config_sha256",
         "fingerprint_policy_version",
         "fingerprint_materialization_sha256",
@@ -216,7 +221,22 @@ def materialize(
         raise AssertionError(f"unexpected materialization report keys: {sorted(report)}")
     import hashlib
 
-    canonical = (root / "camoufox-config.json").read_bytes()
+    canonical = report["camoufox_config_json"].encode("utf-8")
+    try:
+        decoded = json.loads(canonical)
+    except json.JSONDecodeError as error:
+        raise AssertionError("official SDK config is not JSON") from error
+    expected_canonical = (
+        json.dumps(decoded, ensure_ascii=True, separators=(",", ":"), sort_keys=True)
+        + "\n"
+    ).encode("utf-8")
+    if canonical != expected_canonical:
+        raise AssertionError("official SDK config is not canonical")
+    if hashlib.sha256(canonical).hexdigest() != report["fingerprint_config_sha256"]:
+        raise AssertionError("official SDK config digest does not match returned config")
+    # The production Rust owner persists this exact canonical payload. The
+    # test harness mirrors that write; Camouhost itself never writes the file.
+    (root / "camoufox-config.json").write_bytes(canonical)
     expected = hashlib.sha256(b"profile-stability-v2-fpgen-config\0" + canonical).hexdigest()
     if report["fingerprint_materialization_sha256"] != expected:
         raise AssertionError("official fpgen materialization was not bound to exact config")

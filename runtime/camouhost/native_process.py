@@ -110,16 +110,12 @@ async def launch_native_camoufox(
         raise NativeLaunchError("official Camoufox options unavailable")
     if options.get("headless") != headless:
         raise NativeLaunchError("Camoufox headless mode differs from approved runtime mode")
-    if not workspace.is_absolute() or workspace.is_symlink() or not workspace.is_dir():
-        raise NativeLaunchError("profile generation workspace unavailable")
+    # Rust has already validated the absolute workspace, user_data directory,
+    # symlink state and exclusive writer admission. Keep only a lexical binding
+    # check so the adapter does not inspect the profile filesystem.
     user_data_dir = workspace / "user_data"
-    if user_data_dir.is_symlink() or not user_data_dir.is_dir():
-        raise NativeLaunchError("browser user-data directory unavailable")
     option_profile = options.get("user_data_dir")
-    if (
-        not isinstance(option_profile, (str, Path))
-        or Path(option_profile).resolve() != user_data_dir.resolve()
-    ):
+    if not isinstance(option_profile, (str, Path)) or str(option_profile) != str(user_data_dir):
         raise NativeLaunchError("Camoufox options are not bound to the admitted profile")
     executable = options.get("executable_path")
     if not isinstance(executable, (str, Path)) or not Path(executable).is_absolute():

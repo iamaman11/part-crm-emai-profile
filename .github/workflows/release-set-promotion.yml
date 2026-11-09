@@ -130,8 +130,11 @@ jobs:
           asset_root="$RUNNER_TEMP/target-assets"
           release_root="$RUNNER_TEMP/target-release-set"
           policy_dir="$RUNNER_TEMP/release-policy-input"
-          mkdir -p "$asset_root" "$policy_dir"
-          gh release download "$RELEASE_SET_ID" --repo "$GITHUB_REPOSITORY" --dir "$asset_root"
+          mkdir -p "$policy_dir"
+          python scripts/download-release-set-ar11.py \
+            --repository "$GITHUB_REPOSITORY" \
+            --release-set-id "$RELEASE_SET_ID" \
+            --destination "$asset_root"
           bash scripts/release-set-assets-ar11.sh materialize current-v3 "$RELEASE_SET_ID" "$asset_root" "$release_root"
           cp "$release_root/release-set.json" "$policy_dir/release-set.json"
           gh api "repos/$GITHUB_REPOSITORY/compare/${{ steps.resolve.outputs.main_sha }}...${{ steps.resolve.outputs.main_sha }}" > "$RUNNER_TEMP/accepted-source-compare.json"
@@ -199,8 +202,11 @@ jobs:
           asset_root="$RUNNER_TEMP/target-assets"
           release_root="$RUNNER_TEMP/target-release-set"
           policy_dir="$RUNNER_TEMP/release-policy-input"
-          mkdir -p "$asset_root" "$policy_dir"
-          gh release download "$RELEASE_SET_ID" --repo "$GITHUB_REPOSITORY" --dir "$asset_root"
+          mkdir -p "$policy_dir"
+          python scripts/download-release-set-ar11.py \
+            --repository "$GITHUB_REPOSITORY" \
+            --release-set-id "$RELEASE_SET_ID" \
+            --destination "$asset_root"
           bash scripts/release-set-assets-ar11.sh materialize current-v3 "$RELEASE_SET_ID" "$asset_root" "$release_root"
           cp "$release_root/release-set.json" "$policy_dir/release-set.json"
           gh api "repos/$GITHUB_REPOSITORY/branches/main" > "$RUNNER_TEMP/protected-main.json"
@@ -323,8 +329,11 @@ jobs:
           asset_root="$RUNNER_TEMP/known-good-assets"
           release_root="$RUNNER_TEMP/known-good-release-set"
           policy_dir="$RUNNER_TEMP/known-good-policy"
-          mkdir -p "$asset_root" "$policy_dir"
-          gh release download "$current_id" --repo "$GITHUB_REPOSITORY" --dir "$asset_root"
+          mkdir -p "$policy_dir"
+          python scripts/download-release-set-ar11.py \
+            --repository "$GITHUB_REPOSITORY" \
+            --release-set-id "$current_id" \
+            --destination "$asset_root"
           bash scripts/release-set-assets-ar11.sh materialize known-good-v2-v3 "$current_id" "$asset_root" "$release_root"
           cp "$release_root/release-set.json" "$policy_dir/release-set.json"
           gh api "repos/$GITHUB_REPOSITORY/branches/main" > "$RUNNER_TEMP/kg-main.json"
@@ -842,8 +851,10 @@ jobs:
           test "$(jq -r '.target_commitish' "$RUNNER_TEMP/target-release.json")" = "${{ steps.intent.outputs.main_sha }}"
           asset_root="$RUNNER_TEMP/target-assets"
           release_root="$RUNNER_TEMP/target-release-set"
-          mkdir -p "$asset_root"
-          gh release download "$RELEASE_SET_ID" --repo "$GITHUB_REPOSITORY" --dir "$asset_root"
+          python scripts/download-release-set-ar11.py \
+            --repository "$GITHUB_REPOSITORY" \
+            --release-set-id "$RELEASE_SET_ID" \
+            --destination "$asset_root"
           bash scripts/release-set-assets-ar11.sh materialize current-v3 "$RELEASE_SET_ID" "$asset_root" "$release_root"
           cmp --silent "$release_root/release-set.json" "$RUNNER_TEMP/ready/release-set.json"
           cargo run --locked --quiet --manifest-path tools/opsctl/Cargo.toml -- \
@@ -948,8 +959,10 @@ jobs:
           set -euo pipefail
           asset_root="$RUNNER_TEMP/target-assets"
           release_root="$RUNNER_TEMP/mutation-release-set"
-          mkdir -p "$asset_root"
-          gh release download "$RELEASE_SET_ID" --repo "$GITHUB_REPOSITORY" --dir "$asset_root"
+          python scripts/download-release-set-ar11.py \
+            --repository "$GITHUB_REPOSITORY" \
+            --release-set-id "$RELEASE_SET_ID" \
+            --destination "$asset_root"
           bash scripts/release-set-assets-ar11.sh materialize current-v3 "$RELEASE_SET_ID" "$asset_root" "$release_root"
           cmp --silent "$release_root/release-set.json" "$RUNNER_TEMP/ready/release-set.json"
           cargo run --locked --quiet --manifest-path tools/opsctl/Cargo.toml -- \
@@ -1200,8 +1213,10 @@ jobs:
           test "$(jq -r '.target_capability_profile_id' "$ready_root/ready-to-mutate.json")" = "$TARGET_PROFILE"
           asset_root="$RUNNER_TEMP/target-assets"
           release_root="$RUNNER_TEMP/post-release-set"
-          mkdir -p "$asset_root"
-          gh release download "$RELEASE_SET_ID" --repo "$GITHUB_REPOSITORY" --dir "$asset_root"
+          python scripts/download-release-set-ar11.py \
+            --repository "$GITHUB_REPOSITORY" \
+            --release-set-id "$RELEASE_SET_ID" \
+            --destination "$asset_root"
           bash scripts/release-set-assets-ar11.sh materialize current-v3 "$RELEASE_SET_ID" "$asset_root" "$release_root"
           cmp --silent "$release_root/release-set.json" "$ready_root/release-set.json"
           cargo run --locked --quiet --manifest-path tools/opsctl/Cargo.toml -- --root . release verify \

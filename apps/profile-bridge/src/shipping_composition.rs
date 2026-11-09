@@ -693,10 +693,9 @@ mod windows {
     pub fn run_closed_sync(
         intent: &crate::generation_initialization::InitialProfileOpen,
     ) -> Result<(), ShippingCompositionError> {
-        // The same one-shot Bridge process retries transient offline failure
-        // without requiring the native browser to open again. This has no
-        // additional service, local state file, or independent cloud writer.
-        const RETRY_DELAYS_SECONDS: [u64; 4] = [2, 8, 20, 45];
+        // This same one-shot Bridge process remains alive until the existing
+        // dirty marker is cleared. Backoff is bounded; attempts are not.
+        // No daemon, local retry file, or independent cloud writer is added.
         let config = ShippingConfig::from_installation()?;
         let binding =
             WindowsDeviceApplicationBinding::open(&config.device_application_binding_path)
@@ -706,13 +705,9 @@ mod windows {
         }
         let root = MaterializationRoot::open_or_create(&config.materialization_root)
             .map_err(|_| ShippingCompositionError::Configuration)?;
-        for (attempt, pause) in RETRY_DELAYS_SECONDS
-            .iter()
-            .copied()
-            .map(Some)
-            .chain(std::iter::once(None))
-            .enumerate()
-        {
+        let mut retry_delay_seconds = 2_u64;
+        let mut attempt = 0_u64;
+        loop {
             let workspace = root
                 .open_profile_current(&intent.tenant_id, &intent.profile_id)
                 .map_err(|_| ShippingCompositionError::SyncUnconfirmed)?;
@@ -725,15 +720,14 @@ mod windows {
                 return Ok(());
             }
             // If Camouhost exited before Playwright could deliver its close
-            // event, this same one-shot Sync process waits for the native OS
-            // file lock to clear. It never guesses from a PID/window and never
-            // needs the CRM page or a second service to trigger another try.
+            // event, this same process waits for the native OS file lock to
+            // clear. It never guesses from a PID/window or needs CRM to retry.
             wait_for_native_writer_release(
                 || crate::browser_execution::browser_writer_locks_absent(&workspace),
                 thread::sleep,
             )?;
-            // A completed first DRAFT Commit advances the *same* local marker.
-            // Retry the outstanding native edits as READY without creating a
+            // A completed first DRAFT Commit advances the same local marker.
+            // Retry outstanding native edits as READY without creating a
             // second local folder or replaying the first DRAFT generation.
             let mut effective = intent.clone();
             if workspace.base_generation_id().is_some() {
@@ -754,16 +748,18 @@ mod windows {
                     return Ok(());
                 }
             }
-            if let Some(seconds) = pause {
-                eprintln!("BRIDGE_CLOUD_SYNC_RETRY_PENDING attempt={}", attempt + 1);
-                thread::sleep(Duration::from_secs(seconds));
-            }
+            eprintln!(
+                "BRIDGE_CLOUD_SYNC_RETRY_PENDING attempt={}",
+                attempt.saturating_add(1)
+            );
+            thread::sleep(Duration::from_secs(retry_delay_seconds));
+            retry_delay_seconds = next_sync_retry_delay(retry_delay_seconds);
+            attempt = attempt.saturating_add(1);
         }
-        // A non-confirmed cloud effect never changes the local success state.
-        // The original dirty marker survives for an explicit independent
-        // existing Bridge startup/recovery or an explicit --sync-closed retry;
-        // neither requires a browser window.
-        Err(ShippingCompositionError::SyncUnconfirmed)
+    }
+
+    fn next_sync_retry_delay(current_seconds: u64) -> u64 {
+        current_seconds.saturating_mul(2).min(300)
     }
 
     /// The same installed executable handles one ephemeral cloud Sync
@@ -889,13 +885,24 @@ mod windows {
         }
     }
 
+    fn delivery_health_before_launch(
+        pending: Option<crate::windows_delivery_runtime::PendingWindowsDeliveryHealthConfirmation>,
+    ) -> Option<crate::local_browser_open::BeforeLaunch> {
+        pending.map(|pending| {
+            Box::new(move || {
+                let started = pending.start_before_runtime_health().map_err(|_| ())?;
+                let ready: crate::local_browser_open::ReadyConfirmation =
+                    Box::new(move || started.confirm_after_runtime_ready().is_ok());
+                Ok(Some(ready))
+            }) as crate::local_browser_open::BeforeLaunch
+        })
+    }
+
     pub fn run_initial(
         intent: &crate::generation_initialization::InitialProfileOpen,
     ) -> Result<(), ShippingCompositionError> {
         // The CRM web page already supplied the selected profile. Opening the
-        // browser is now a local filesystem/process operation, not an R2
-        // initialization or a Coordinator lease. Sync belongs to a different
-        // operation and cannot block a local Firefox window.
+        // browser is a local filesystem/process operation; Sync remains separate.
         if recover_delivery_before_open()? {
             return Ok(());
         }
@@ -910,19 +917,19 @@ mod windows {
         }
         let root = MaterializationRoot::open_or_create(&config.materialization_root)
             .map_err(|_| ShippingCompositionError::Configuration)?;
-        match crate::local_browser_open::open(
-            &root,
-            intent,
-            binding.device_id(),
-            delivery.runtime_root(),
-        ) {
-            Ok(()) => {
-                start_sync_after_close(intent);
-                Ok(())
-            }
+
+        let open_local = || {
+            crate::local_browser_open::open_with_before_launch(
+                &root,
+                intent,
+                binding.device_id(),
+                delivery.runtime_root(),
+                delivery_health_before_launch(delivery.pending_health_confirmation()),
+            )
+        };
+        let result = match open_local() {
             Err(crate::local_browser_open::LocalOpenError::RestoreRequired) => {
                 // Only a missing READY local folder crosses the cloud boundary.
-                // Ordinary Open/Close never requires a network request.
                 let device = binding.device_id().clone();
                 let application = WindowsDeviceApplication::from_system(
                     config.control_plane_origin.clone(),
@@ -931,8 +938,6 @@ mod windows {
                 .map_err(|_| ShippingCompositionError::RestoreUnavailable)?;
                 let mut remote =
                     ControlPlaneCoordinator::for_local_current_restore(application.transport());
-                // Worker selects CURRENT; neither the browser URI nor local files
-                // may choose a cloud generation or an historical fallback.
                 let selected = remote
                     .download_capability(&intent.tenant_id, &intent.profile_id)
                     .map_err(|_| ShippingCompositionError::RestoreUnavailable)?;
@@ -952,36 +957,21 @@ mod windows {
                     &mut downloader,
                 )
                 .map_err(|_| ShippingCompositionError::RestoreUnavailable)?;
-                // Re-enter the SAME local native Open; no managed Camoufox path
-                // and no Coordinator lease are introduced by recovery.
-                match crate::local_browser_open::open(
-                    &root,
-                    intent,
-                    &device,
-                    delivery.runtime_root(),
-                ) {
-                    Ok(()) => {
-                        start_sync_after_close(intent);
-                        Ok(())
-                    }
-                    Err(error) => {
-                        // Every post-restore local failure may leave the
-                        // existing .local-unsynced marker. Start the same
-                        // idempotent Sync attempt; it exits cleanly when no
-                        // marker exists and otherwise waits for native file
-                        // release before snapshot. No CRM return is required.
-                        start_sync_after_close(intent);
-                        Err(ShippingCompositionError::LocalOpen(error))
-                    }
-                }
+                // Re-enter the same local Open with the same runtime and owners.
+                open_local()
+            }
+            result => result,
+        };
+
+        match result {
+            Ok(()) => {
+                start_sync_after_close(intent);
+                Ok(())
             }
             Err(error) => {
-                // A stale CRM launch intent must not start a cloud write for
-                // conflicting local bytes. Keep the original folder and dirty
-                // marker for the existing explicit recovery/Restore contract.
+                // One error path owns the existing Sync handoff. Stale CRM
+                // intents alone must not publish conflicting local bytes.
                 if error != crate::local_browser_open::LocalOpenError::StaleLocalWorkspace {
-                    // The adapter may fail before or after launch. The same
-                    // Sync checks the dirty marker and native file locks.
                     start_sync_after_close(intent);
                 }
                 Err(ShippingCompositionError::LocalOpen(error))
@@ -1111,6 +1101,23 @@ mod windows {
             .as_millis();
         let millis = u64::try_from(millis).map_err(|_| ShippingCompositionError::Clock)?;
         Ok(UnixMillis::new(millis))
+    }
+
+    #[cfg(test)]
+    mod closed_sync_retry_tests {
+        use super::next_sync_retry_delay;
+
+        #[test]
+        fn closed_sync_retry_backoff_is_capped_without_limiting_attempts() {
+            let mut delay = 2_u64;
+            let mut observed = Vec::new();
+            for _ in 0..10 {
+                observed.push(delay);
+                delay = next_sync_retry_delay(delay);
+            }
+            assert_eq!(observed, vec![2, 4, 8, 16, 32, 64, 128, 256, 300, 300]);
+            assert_eq!(next_sync_retry_delay(300), 300);
+        }
     }
 }
 

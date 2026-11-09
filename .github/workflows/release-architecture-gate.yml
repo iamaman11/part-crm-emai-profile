@@ -38,6 +38,8 @@ jobs:
           node .github/scripts/release-architecture-ar11.mjs --self-test
           python -m py_compile scripts/github-release-publication.py
           python scripts/github-release-publication.py self-test
+          python -m py_compile scripts/download-release-set-ar11.py
+          python scripts/download-release-set-ar11.py --self-test
 
       - name: Prove complete AR-11 behavioural certification traceability
         run: |

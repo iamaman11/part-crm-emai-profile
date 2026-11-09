@@ -143,7 +143,7 @@ def check_sources(sources: dict[str, str]) -> list[str]:
             failures.append(f"shipping Bridge CLI lost single native Open/Sync dispatch: {required}")
 
     initial = function_body(shipping, "pub fn run_initial(")
-    local_open = initial.find("crate::local_browser_open::open(")
+    local_open = initial.find("crate::local_browser_open::open_with_before_launch(")
     sync_handoff = initial.find("start_sync_after_close(intent);")
     if local_open < 0 or sync_handoff < local_open:
         failures.append("normal native Open must hand off to the same post-close Sync")
@@ -157,16 +157,28 @@ def check_sources(sources: dict[str, str]) -> list[str]:
         failures.append("native file-release proof must precede the existing closed-profile Sync")
     if 'workspace.path().join(".local-unsynced")' not in closed:
         failures.append("the existing persistent dirty marker must govern pending cloud Sync")
+    if "loop {" not in closed or "next_sync_retry_delay" not in closed:
+        failures.append("the existing closed Sync process must retry without requiring CRM to reopen")
+    if "RETRY_DELAYS_SECONDS" in closed:
+        failures.append("closed Sync must not abandon the existing dirty marker after a finite retry window")
     for required in ("seal_closed_workspace_streaming(", "publish_closed_streamed_successor(",
                      "sync_closed_local_draft("):
         if required not in shipping:
             failures.append(f"single existing snapshot/cloud Save owner missing: {required}")
 
-    opened = function_body(local, "pub fn open(")
+    opened = function_body(local, "pub(crate) fn open_with_before_launch(")
     marker = opened.find("mark_local_unsynced(workspace.path())?;")
-    launch = opened.find('run_python(runtime_root, workspace.path(), "--local-open")')
-    if marker < 0 or launch < marker:
-        failures.append("durable local dirty evidence must precede native browser launch")
+    launch = opened.find("run_python(", marker)
+    launch_call = opened[launch : launch + 256] if launch >= 0 else ""
+    if (
+        marker < 0
+        or launch < marker
+        or '"--local-open"' not in launch_call
+        or "before_launch" not in launch_call
+    ):
+        failures.append("durable local dirty evidence and health handoff must precede native browser launch")
+    if "windows_delivery_runtime" in local.split("#[cfg(test)]", 1)[0]:
+        failures.append("local Open must not own Windows delivery health state")
     if "BridgeWorkspaceLock::acquire_or_recover_interrupted(&workspace" not in opened:
         failures.append("native Open must hold the existing per-profile OS admission through the shared recovery owner")
     lock_admission = function_body(locks, "pub(crate) fn acquire_or_recover_interrupted(")
@@ -250,7 +262,7 @@ def check_sources(sources: dict[str, str]) -> list[str]:
         if forbidden in native:
             failures.append(f"custom native browser lifecycle is forbidden: {forbidden}")
 
-    if 'return asyncio.run(run_local_profile(Path(sys.argv[2])))' not in adapter:
+    if 'return asyncio.run(run_local_profile(Path(sys.argv[2]), config, first_run))' not in adapter:
         failures.append("user-native adapter must select exactly the local SDK path")
     if 'print("user-native runtime requires --local-open"' not in adapter:
         failures.append("user-native path must reject the legacy automation IPC")
@@ -287,7 +299,7 @@ def self_test(sources: dict[str, str]) -> list[str]:
          "native file-release proof"),
         ("native", 'self.context.on("close"', 'self.context.on("missing"',
          "official native SDK/Playwright integration"),
-        ("adapter", "return asyncio.run(run_local_profile(Path(sys.argv[2])))",
+        ("adapter", "return asyncio.run(run_local_profile(Path(sys.argv[2]), config, first_run))",
          "return run_ipc()", "user-native adapter"),
         ("operator", '#[cfg(any(test, feature = "synthetic-test-bin"))]\npub struct ProfileBridgeOperator',
          "pub struct ProfileBridgeOperator", "retired operator"),

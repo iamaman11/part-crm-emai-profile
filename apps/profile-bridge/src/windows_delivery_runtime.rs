@@ -535,7 +535,7 @@ impl fmt::Display for WindowsDeliveryRuntimeError {
 impl std::error::Error for WindowsDeliveryRuntimeError {}
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::{
         ExactHealthState, InstalledDeliveryLayout, RUNTIME_MANIFEST, RUNTIME_RELEASE_PREFIX,
         RuntimeBundleSelectionError, WindowsDeliveryRuntimeError, exact_arrived_activation_handoff,
@@ -610,6 +610,23 @@ mod tests {
         let arrived = started.arrived(&pending)?;
         store.persist_handoff(&pending, arrived)?;
         Ok(DeliveryStateStore::open(state_root)?)
+    }
+
+    pub(crate) fn pending_health_confirmation_for_test(
+        state_root: &Path,
+    ) -> Result<super::PendingWindowsDeliveryHealthConfirmation, Box<dyn std::error::Error>> {
+        let identity = delivery_identity('a');
+        let store = persist_arrived_pending(state_root, &identity)?;
+        pending_health_confirmation(&store, state_root, &identity)?
+            .ok_or_else(|| "test state did not expose pending delivery health".into())
+    }
+
+    pub(crate) fn active_health_confirmed_for_test(
+        state_root: &Path,
+    ) -> Result<bool, Box<dyn std::error::Error>> {
+        Ok(DeliveryStateStore::open(state_root)?
+            .state()
+            .active_health_confirmed())
     }
 
     #[test]

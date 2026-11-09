@@ -17,8 +17,15 @@ const PYTHON: &str = "python/python.exe";
 const ENTRYPOINT: &str = "camouhost/real.py";
 const LOCK: &str = "camouhost/runtime-lock.json";
 const CONFIG: &str = "camoufox-config.json";
+const USER_DATA: &str = "user_data";
+const MAX_CONFIG_BYTES: u64 = 1024 * 1024;
 const LOCAL_UNSYNCED: &str = ".local-unsynced";
 const LOCAL_UNSYNCED_CONTENT: &[u8] = b"local-unsynced-v2";
+const CAMOUHOST_LAUNCH_READY_EVENT: &str = "camouhost_stage phase=launch step=ready";
+
+pub(crate) type ReadyConfirmation = Box<dyn FnOnce() -> bool + Send + 'static>;
+pub(crate) type BeforeLaunch =
+    Box<dyn FnOnce() -> Result<Option<ReadyConfirmation>, ()> + Send + 'static>;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum LocalOpenError {
@@ -29,6 +36,7 @@ pub enum LocalOpenError {
     ProfileBusy,
     IdentityPreparation,
     BrowserNotClosedCleanly,
+    LaunchConfirmation,
 }
 impl fmt::Display for LocalOpenError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -42,6 +50,7 @@ impl fmt::Display for LocalOpenError {
             Self::BrowserNotClosedCleanly => {
                 "Browser close was not verified; local files were kept"
             }
+            Self::LaunchConfirmation => "Browser runtime launch confirmation was not completed",
         })
     }
 }
@@ -132,7 +141,22 @@ fn open_or_create_workspace(
     }
 }
 
-fn run_python(runtime_root: &Path, folder: &Path, action: &str) -> Result<bool, LocalOpenError> {
+fn observe_runtime_ready_line<F>(line: &str, confirmation: &mut Option<F>) -> Option<bool>
+where
+    F: FnOnce() -> bool,
+{
+    if line != CAMOUHOST_LAUNCH_READY_EVENT {
+        return None;
+    }
+    confirmation.take().map(|confirm| confirm())
+}
+
+fn run_python(
+    runtime_root: &Path,
+    folder: &Path,
+    action: &str,
+    before_launch: Option<BeforeLaunch>,
+) -> Result<bool, LocalOpenError> {
     // Never invoke a user-selected executable, shell or remote path.
     for relative in [PYTHON, ENTRYPOINT, LOCK] {
         let file = runtime_root.join(relative);
@@ -141,7 +165,195 @@ fn run_python(runtime_root: &Path, folder: &Path, action: &str) -> Result<bool, 
             return Err(LocalOpenError::RuntimeUnavailable);
         }
     }
-    let mut child = Command::new(runtime_root.join(PYTHON))
+
+    let executable = runtime_root.join(PYTHON);
+    if action == "--materialize-identity" {
+        // Never attach a newly generated identity to pre-existing browser data.
+        require_empty_user_data(folder)?;
+        return materialize_identity_with_executable(&executable, runtime_root, folder);
+    }
+    if action == "--local-open" {
+        let first_run = ensure_user_data_directory(folder)?;
+        let config_json = read_profile_config(folder)?;
+        let input = serde_json::to_vec(&serde_json::json!({
+            "config_json": config_json,
+            "first_run": first_run,
+        }))
+        .map_err(|_| LocalOpenError::IdentityPreparation)?;
+        return run_python_with_input(
+            &executable,
+            runtime_root,
+            folder,
+            action,
+            before_launch,
+            Some(&input),
+        );
+    }
+    run_python_with_input(
+        &executable,
+        runtime_root,
+        folder,
+        action,
+        before_launch,
+        None,
+    )
+}
+
+fn ensure_user_data_directory(folder: &Path) -> Result<bool, LocalOpenError> {
+    let user_data = folder.join(USER_DATA);
+    match fs::symlink_metadata(&user_data) {
+        Ok(metadata) => {
+            if metadata.file_type().is_symlink() || !metadata.is_dir() {
+                return Err(LocalOpenError::InvalidLocalWorkspace);
+            }
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            fs::create_dir(&user_data).map_err(|_| LocalOpenError::InvalidLocalWorkspace)?;
+        }
+        Err(_) => return Err(LocalOpenError::InvalidLocalWorkspace),
+    }
+    let mut entries =
+        fs::read_dir(&user_data).map_err(|_| LocalOpenError::InvalidLocalWorkspace)?;
+    match entries.next() {
+        None => Ok(true),
+        Some(Ok(_)) => Ok(false),
+        Some(Err(_)) => Err(LocalOpenError::InvalidLocalWorkspace),
+    }
+}
+
+fn require_empty_user_data(folder: &Path) -> Result<(), LocalOpenError> {
+    if ensure_user_data_directory(folder)? {
+        Ok(())
+    } else {
+        Err(LocalOpenError::IdentityPreparation)
+    }
+}
+
+fn read_profile_config(folder: &Path) -> Result<String, LocalOpenError> {
+    let path = folder.join(CONFIG);
+    let metadata = fs::symlink_metadata(&path).map_err(|_| LocalOpenError::IdentityPreparation)?;
+    if metadata.file_type().is_symlink() || !metadata.is_file() || metadata.len() > MAX_CONFIG_BYTES
+    {
+        return Err(LocalOpenError::IdentityPreparation);
+    }
+    let bytes = fs::read(path).map_err(|_| LocalOpenError::IdentityPreparation)?;
+    let value: serde_json::Value =
+        serde_json::from_slice(&bytes).map_err(|_| LocalOpenError::IdentityPreparation)?;
+    if !value.is_object() {
+        return Err(LocalOpenError::IdentityPreparation);
+    }
+    String::from_utf8(bytes).map_err(|_| LocalOpenError::IdentityPreparation)
+}
+
+fn materialize_identity_with_executable(
+    executable: &Path,
+    runtime_root: &Path,
+    folder: &Path,
+) -> Result<bool, LocalOpenError> {
+    let output = Command::new(executable)
+        .arg("-B")
+        .arg(runtime_root.join(ENTRYPOINT))
+        .arg("--materialize-identity")
+        .arg(folder)
+        .current_dir(runtime_root)
+        .env("CAMOUHOST_RUNTIME_LOCK", runtime_root.join(LOCK))
+        .env("CAMOUHOST_EXECUTION_MODE", "user-native")
+        .env("CAMOUHOST_HEADLESS_MODE", "false")
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .output()
+        .map_err(|_| LocalOpenError::RuntimeUnavailable)?;
+    if !output.status.success() {
+        return Ok(false);
+    }
+    let report: serde_json::Value =
+        serde_json::from_slice(&output.stdout).map_err(|_| LocalOpenError::IdentityPreparation)?;
+    let config_json = report
+        .get("camoufox_config_json")
+        .and_then(serde_json::Value::as_str)
+        .ok_or(LocalOpenError::IdentityPreparation)?;
+    let expected_digest = report
+        .get("fingerprint_config_sha256")
+        .and_then(serde_json::Value::as_str)
+        .ok_or(LocalOpenError::IdentityPreparation)?;
+    let config_bytes = config_json.as_bytes();
+    if config_bytes.is_empty()
+        || config_bytes.len() as u64 > MAX_CONFIG_BYTES
+        || !config_bytes.ends_with(b"\n")
+    {
+        return Err(LocalOpenError::IdentityPreparation);
+    }
+    let actual_digest = Sha256::digest(config_bytes)
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect::<Vec<_>>()
+        .join("");
+    if actual_digest != expected_digest {
+        return Err(LocalOpenError::IdentityPreparation);
+    }
+    let value: serde_json::Value =
+        serde_json::from_slice(config_bytes).map_err(|_| LocalOpenError::IdentityPreparation)?;
+    if !value.is_object() {
+        return Err(LocalOpenError::IdentityPreparation);
+    }
+
+    let destination = folder.join(CONFIG);
+    match fs::symlink_metadata(&destination) {
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+        _ => return Err(LocalOpenError::IdentityPreparation),
+    }
+    let mut temporary =
+        tempfile::NamedTempFile::new_in(folder).map_err(|_| LocalOpenError::IdentityPreparation)?;
+    temporary
+        .write_all(config_bytes)
+        .map_err(|_| LocalOpenError::IdentityPreparation)?;
+    temporary
+        .as_file()
+        .sync_all()
+        .map_err(|_| LocalOpenError::IdentityPreparation)?;
+    temporary
+        .persist_noclobber(&destination)
+        .map_err(|_| LocalOpenError::IdentityPreparation)?;
+    Ok(true)
+}
+
+fn run_python_with_executable(
+    executable: &Path,
+    runtime_root: &Path,
+    folder: &Path,
+    action: &str,
+    before_launch: Option<BeforeLaunch>,
+) -> Result<bool, LocalOpenError> {
+    run_python_with_input(
+        executable,
+        runtime_root,
+        folder,
+        action,
+        before_launch,
+        None,
+    )
+}
+
+fn run_python_with_input(
+    executable: &Path,
+    runtime_root: &Path,
+    folder: &Path,
+    action: &str,
+    before_launch: Option<BeforeLaunch>,
+    stdin_payload: Option<&[u8]>,
+) -> Result<bool, LocalOpenError> {
+    // Delivery health is supplied by the composition owner as a one-shot
+    // callback. Local Open knows only when the native runtime is launched and
+    // when the official Playwright Ready event arrives.
+    let mut health_confirmation = before_launch
+        .map(|before| before().map_err(|_| LocalOpenError::LaunchConfirmation))
+        .transpose()?
+        .flatten();
+    let health_required = health_confirmation.is_some();
+    let (health_result_tx, health_result_rx) = std::sync::mpsc::channel();
+
+    let mut child = Command::new(executable)
         .arg("-B")
         .arg(runtime_root.join(ENTRYPOINT))
         .arg(action)
@@ -150,17 +362,39 @@ fn run_python(runtime_root: &Path, folder: &Path, action: &str) -> Result<bool, 
         .env("CAMOUHOST_RUNTIME_LOCK", runtime_root.join(LOCK))
         .env("CAMOUHOST_EXECUTION_MODE", "user-native")
         .env("CAMOUHOST_HEADLESS_MODE", "false")
-        .stdin(Stdio::null())
+        .stdin(if stdin_payload.is_some() {
+            Stdio::piped()
+        } else {
+            Stdio::null()
+        })
         .stdout(Stdio::null())
         .stderr(Stdio::piped())
         .spawn()
         .map_err(|_| LocalOpenError::RuntimeUnavailable)?;
+    if let Some(payload) = stdin_payload {
+        let Some(mut stdin) = child.stdin.take() else {
+            let _ = child.kill();
+            let _ = child.wait();
+            return Err(LocalOpenError::RuntimeUnavailable);
+        };
+        if stdin.write_all(payload).is_err() {
+            drop(stdin);
+            let _ = child.kill();
+            let _ = child.wait();
+            return Err(LocalOpenError::RuntimeUnavailable);
+        }
+    }
     let stderr = child
         .stderr
         .take()
         .ok_or(LocalOpenError::RuntimeUnavailable)?;
     let diagnostics = std::thread::spawn(move || {
         for line in BufReader::new(stderr).lines().map_while(Result::ok) {
+            // Consume only the exact SDK/Playwright context-ready milestone.
+            // Option::take makes confirmation one-shot even if stderr repeats it.
+            if let Some(confirmed) = observe_runtime_ready_line(&line, &mut health_confirmation) {
+                let _ = health_result_tx.send(confirmed);
+            }
             // Runtime stderr can contain upstream/library detail. Forward only
             // the fixed, redacted milestones and typed failure categories.
             if cfg!(debug_assertions)
@@ -173,7 +407,13 @@ fn run_python(runtime_root: &Path, folder: &Path, action: &str) -> Result<bool, 
     let status = child.wait();
     let _ = diagnostics.join();
     let completed = status.map_err(|_| LocalOpenError::RuntimeUnavailable)?;
-    Ok(completed.success())
+    if !completed.success() {
+        return Ok(false);
+    }
+    if health_required && !matches!(health_result_rx.try_recv(), Ok(true)) {
+        return Err(LocalOpenError::LaunchConfirmation);
+    }
+    Ok(true)
 }
 
 fn mark_local_unsynced(folder: &Path) -> Result<(), LocalOpenError> {
@@ -212,6 +452,16 @@ pub fn open(
     intent: &InitialProfileOpen,
     device: &DeviceId,
     runtime_root: &Path,
+) -> Result<(), LocalOpenError> {
+    open_with_before_launch(root, intent, device, runtime_root, None)
+}
+
+pub(crate) fn open_with_before_launch(
+    root: &MaterializationRoot,
+    intent: &InitialProfileOpen,
+    device: &DeviceId,
+    runtime_root: &Path,
+    before_launch: Option<BeforeLaunch>,
 ) -> Result<(), LocalOpenError> {
     let generation = local_generation(intent)?;
     let workspace = open_or_create_workspace(root, intent, &generation)?;
@@ -253,7 +503,12 @@ pub fn open(
     if !config.exists() {
         // No R2 snapshot, cloud claim or generation initialization. Official
         // Camoufox fpgen creates the only local v2 identity once.
-        if !run_python(runtime_root, workspace.path(), "--materialize-identity")? {
+        if !run_python(
+            runtime_root,
+            workspace.path(),
+            "--materialize-identity",
+            None,
+        )? {
             return Err(LocalOpenError::IdentityPreparation);
         }
     }
@@ -266,7 +521,12 @@ pub fn open(
         return Err(LocalOpenError::ProfileBusy);
     }
     mark_local_unsynced(workspace.path())?;
-    if !run_python(runtime_root, workspace.path(), "--local-open")? {
+    if !run_python(
+        runtime_root,
+        workspace.path(),
+        "--local-open",
+        before_launch,
+    )? {
         // Adapter failure is not proof that the browser released its files.
         // The caller starts the existing Sync recovery; its Rust file gate
         // must still block snapshot while Firefox owns the profile.
@@ -286,8 +546,10 @@ pub fn open(
 #[cfg(test)]
 mod tests {
     use super::{
-        LocalOpenError, local_generation, mark_local_unsynced, open_or_create_workspace,
-        recheck_workspace_after_writer_admission,
+        BeforeLaunch, CAMOUHOST_LAUNCH_READY_EVENT, ENTRYPOINT, LOCK, LocalOpenError,
+        ReadyConfirmation, local_generation, mark_local_unsynced, observe_runtime_ready_line,
+        open_or_create_workspace, recheck_workspace_after_writer_admission,
+        run_python_with_executable,
     };
     use crate::generation_initialization::{InitialProfileOpen, InitialProfileStatus};
     use profile_platform_primitives::{ActorId, ProfileId, TenantId};
@@ -301,6 +563,211 @@ mod tests {
             status: InitialProfileStatus::Draft,
         }
     }
+
+    #[test]
+    fn rust_owns_user_data_creation_and_profile_config_read()
+    -> Result<(), Box<dyn std::error::Error>> {
+        use std::fs;
+
+        let directory = tempfile::tempdir()?;
+        let folder = directory.path();
+        assert!(super::ensure_user_data_directory(folder)?);
+        assert!(folder.join(super::USER_DATA).is_dir());
+        assert!(super::ensure_user_data_directory(folder)?);
+        fs::write(
+            folder.join(super::USER_DATA).join("prefs.js"),
+            b"native browser state",
+        )?;
+        assert!(!super::ensure_user_data_directory(folder)?);
+
+        let config = b"{\"fingerprint\":\"test\"}\n";
+        fs::write(folder.join(super::CONFIG), config)?;
+        assert_eq!(
+            super::read_profile_config(folder)?,
+            String::from_utf8(config.to_vec())?
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn identity_generation_requires_empty_user_data() -> Result<(), Box<dyn std::error::Error>> {
+        use std::fs;
+
+        let directory = tempfile::tempdir()?;
+        let folder = directory.path();
+        assert_eq!(super::require_empty_user_data(folder), Ok(()));
+        fs::write(
+            folder.join(super::USER_DATA).join("prefs.js"),
+            b"existing browser state",
+        )?;
+        assert_eq!(
+            super::require_empty_user_data(folder),
+            Err(LocalOpenError::IdentityPreparation)
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn only_the_exact_playwright_ready_event_confirms_health_once() {
+        use std::cell::Cell;
+
+        let calls = Cell::new(0);
+        let mut confirmation = Some(|| {
+            calls.set(calls.get() + 1);
+            true
+        });
+
+        assert_eq!(
+            observe_runtime_ready_line(
+                "camouhost_stage phase=launch step=ready-extra",
+                &mut confirmation
+            ),
+            None
+        );
+        assert_eq!(calls.get(), 0);
+        assert_eq!(
+            observe_runtime_ready_line(CAMOUHOST_LAUNCH_READY_EVENT, &mut confirmation),
+            Some(true)
+        );
+        assert_eq!(
+            observe_runtime_ready_line(CAMOUHOST_LAUNCH_READY_EVENT, &mut confirmation),
+            None
+        );
+        assert_eq!(calls.get(), 1);
+    }
+
+    #[test]
+    fn failed_health_confirmation_is_reported_and_not_retried() {
+        use std::cell::Cell;
+
+        let calls = Cell::new(0);
+        let mut confirmation = Some(|| {
+            calls.set(calls.get() + 1);
+            false
+        });
+        assert_eq!(
+            observe_runtime_ready_line(CAMOUHOST_LAUNCH_READY_EVENT, &mut confirmation),
+            Some(false)
+        );
+        assert_eq!(
+            observe_runtime_ready_line(CAMOUHOST_LAUNCH_READY_EVENT, &mut confirmation),
+            None
+        );
+        assert_eq!(calls.get(), 1);
+    }
+
+    #[cfg(windows)]
+    #[test]
+    #[ignore = "requires PROFILE_BRIDGE_TEST_PYTHON"]
+    fn windows_python_stderr_ready_event_confirms_pending_delivery_health()
+    -> Result<(), Box<dyn std::error::Error>> {
+        use std::fs;
+        use std::path::PathBuf;
+
+        let python = std::env::var_os("PROFILE_BRIDGE_TEST_PYTHON")
+            .map(PathBuf::from)
+            .ok_or_else(|| {
+                std::io::Error::new(
+                    std::io::ErrorKind::NotFound,
+                    "PROFILE_BRIDGE_TEST_PYTHON was not set by the Windows test job",
+                )
+            })?;
+        let directory = tempfile::tempdir()?;
+        let runtime_root = directory.path().join("runtime");
+        fs::create_dir_all(runtime_root.join("camouhost"))?;
+        fs::write(
+            runtime_root.join(ENTRYPOINT),
+            format!(
+                r#"import sys
+sys.stderr.write({:?} + '\n')
+sys.stderr.flush()
+"#,
+                CAMOUHOST_LAUNCH_READY_EVENT
+            ),
+        )?;
+        fs::write(runtime_root.join(LOCK), b"test-runtime-lock")?;
+        let folder = directory.path().join("profile");
+        fs::create_dir(&folder)?;
+        let state_root = directory.path().join("delivery-state");
+        let pending = crate::windows_delivery_runtime::tests::pending_health_confirmation_for_test(
+            &state_root,
+        )?;
+
+        let before_launch: BeforeLaunch = Box::new(move || {
+            let started = pending.start_before_runtime_health().map_err(|_| ())?;
+            let ready: ReadyConfirmation =
+                Box::new(move || started.confirm_after_runtime_ready().is_ok());
+            Ok(Some(ready))
+        });
+        assert!(run_python_with_executable(
+            &python,
+            &runtime_root,
+            &folder,
+            "--local-open",
+            Some(before_launch),
+        )?);
+        assert!(
+            crate::windows_delivery_runtime::tests::active_health_confirmed_for_test(&state_root,)?
+        );
+        Ok(())
+    }
+
+    #[cfg(windows)]
+    #[test]
+    #[ignore = "requires PROFILE_BRIDGE_TEST_PYTHON"]
+    fn windows_process_without_ready_event_cannot_confirm_delivery_health()
+    -> Result<(), Box<dyn std::error::Error>> {
+        use std::fs;
+        use std::path::PathBuf;
+
+        let python = std::env::var_os("PROFILE_BRIDGE_TEST_PYTHON")
+            .map(PathBuf::from)
+            .ok_or_else(|| {
+                std::io::Error::new(
+                    std::io::ErrorKind::NotFound,
+                    "PROFILE_BRIDGE_TEST_PYTHON was not set by the Windows test job",
+                )
+            })?;
+        let directory = tempfile::tempdir()?;
+        let runtime_root = directory.path().join("runtime");
+        fs::create_dir_all(runtime_root.join("camouhost"))?;
+        fs::write(
+            runtime_root.join(ENTRYPOINT),
+            r#"import sys
+sys.stderr.write('camouhost_stage phase=launch step=sdk_enter\n')
+sys.stderr.flush()
+"#,
+        )?;
+        fs::write(runtime_root.join(LOCK), b"test-runtime-lock")?;
+        let folder = directory.path().join("profile");
+        fs::create_dir(&folder)?;
+        let state_root = directory.path().join("delivery-state");
+        let pending = crate::windows_delivery_runtime::tests::pending_health_confirmation_for_test(
+            &state_root,
+        )?;
+
+        let before_launch: BeforeLaunch = Box::new(move || {
+            let started = pending.start_before_runtime_health().map_err(|_| ())?;
+            let ready: ReadyConfirmation =
+                Box::new(move || started.confirm_after_runtime_ready().is_ok());
+            Ok(Some(ready))
+        });
+        assert_eq!(
+            run_python_with_executable(
+                &python,
+                &runtime_root,
+                &folder,
+                "--local-open",
+                Some(before_launch),
+            ),
+            Err(LocalOpenError::LaunchConfirmation)
+        );
+        assert!(
+            !crate::windows_delivery_runtime::tests::active_health_confirmed_for_test(&state_root,)?
+        );
+        Ok(())
+    }
+
     #[test]
     fn pending_local_data_is_not_a_cloud_save_receipt() {
         let folder = tempfile::tempdir().unwrap();
