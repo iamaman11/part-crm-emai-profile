@@ -403,6 +403,7 @@ function promotionErrors(promotion) {
 
   errors.push(...requireMarkers(mutate, [
     'Execute exact candidate after owner dispatch and READY evidence',
+    'environment: staging',
     'TARGET_PROFILE: ${{ needs.resolve-verify.outputs.target_profile }}',
     'EXPECTED_CURRENT_PROFILE: ${{ needs.resolve-verify.outputs.expected_current_profile }}',
     'DISPATCH_DIGEST: ${{ needs.resolve-verify.outputs.dispatch_digest }}',
@@ -670,7 +671,9 @@ function selfTest(files) {
   const missingOwnerGuard = files.promotion.replace('test "$GITHUB_ACTOR" = "$GITHUB_REPOSITORY_OWNER"', 'echo owner-guard-removed');
   if (!promotionErrors(missingOwnerGuard).some((error) => error.includes('promotion invocation router'))) throw new Error('missing owner access guard fixture passed');
   const missingStagingEnvironment = files.promotion.replace('    environment: staging\n    permissions:\n      actions: read\n      contents: read\n      issues: read', '    permissions:\n      actions: read\n      contents: read\n      issues: read');
-  if (!promotionErrors(missingStagingEnvironment).some((error) => error.includes('dispatch READY binder'))) throw new Error('missing staging Environment guard fixture passed');
+  if (!promotionErrors(missingStagingEnvironment).some((error) => error.includes('dispatch READY binder'))) throw new Error('missing staging resolver Environment guard fixture passed');
+  const missingMutationEnvironment = files.promotion.replace('    environment: staging\n    permissions:\n      actions: read\n      contents: read\n      deployments: write', '    permissions:\n      actions: read\n      contents: read\n      deployments: write');
+  if (!promotionErrors(missingMutationEnvironment).some((error) => error.includes('protected mutation executor'))) throw new Error('missing staging mutation Environment guard fixture passed');
   const missingCandidateBinding = files.promotion.replaceAll('STAGING_CANDIDATE', 'STAGING_TARGET_REMOVED');
   if (!promotionErrors(missingCandidateBinding).some((error) => error.includes('dispatch READY binder'))) throw new Error('missing canonical staging candidate fixture passed');
   const commentAuthorizationRestored = files.promotion.replace('STAGING_CANDIDATE', 'WORKER_PROMOTION_AUTHORIZATION_V2\\n          STAGING_CANDIDATE');
