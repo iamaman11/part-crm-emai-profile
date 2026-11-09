@@ -16,6 +16,7 @@ import stat
 import subprocess
 import sys
 import tempfile
+import time
 import urllib.error
 import urllib.request
 import zipfile
@@ -285,16 +286,37 @@ def pin_official_fpgen_model(python_root: Path) -> None:
         "ensure_fpgen_model();"
         "assert is_pinned(), 'pinned Camoufox fpgen model verification failed'"
     )
-    result = subprocess.run(
-        [str(python), "-I", "-c", program],
-        cwd=python_root,
-        text=True,
-        capture_output=True,
-        check=False,
-        timeout=90,
+    build_env = os.environ.copy()
+    custom_model_override = bool(build_env.pop("FPGEN_MODEL_URL", None))
+    if custom_model_override:
+        print("Ignoring FPGEN_MODEL_URL for the checksum-locked runtime build.", file=sys.stderr)
+    last_diagnostic = ""
+    for attempt in range(1, 4):
+        try:
+            result = subprocess.run(
+                [str(python), "-I", "-c", program],
+                cwd=python_root,
+                text=True,
+                capture_output=True,
+                check=False,
+                timeout=90,
+                env=build_env,
+            )
+        except subprocess.TimeoutExpired as error:
+            last_diagnostic = f"attempt {attempt}: pinned fpgen model install timed out"
+        else:
+            if result.returncode == 0:
+                return
+            last_diagnostic = (result.stderr or result.stdout or "").strip()
+            last_diagnostic = "\n".join(last_diagnostic.splitlines()[-12:])
+            if not last_diagnostic:
+                last_diagnostic = f"attempt {attempt}: no subprocess diagnostic output"
+        if attempt < 3:
+            time.sleep(float(attempt))
+    fail(
+        "official Camoufox fpgen model pre-install failed after 3 attempts; "
+        f"custom_model_override={int(custom_model_override)}; {last_diagnostic}"
     )
-    if result.returncode != 0:
-        fail(f"official Camoufox fpgen model pre-install failed: exit={result.returncode}")
 
 
 
