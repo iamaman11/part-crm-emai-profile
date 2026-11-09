@@ -827,10 +827,14 @@ mod windows {
                 }
             }
             Err(error) => {
-                // The local adapter may fail before or after launch. Sync
-                // checks the existing dirty marker itself: no marker means
-                // no-op; a marker means native lock proof then same Sync.
-                start_sync_after_close(intent);
+                // A stale CRM launch intent must not start a cloud write for
+                // conflicting local bytes. Keep the original folder and dirty
+                // marker for the existing explicit recovery/Restore contract.
+                if error != crate::local_browser_open::LocalOpenError::StaleLocalWorkspace {
+                    // The adapter may fail before or after launch. The same
+                    // Sync checks the dirty marker and native file locks.
+                    start_sync_after_close(intent);
+                }
                 Err(ShippingCompositionError::LocalOpen(error))
             }
         }

@@ -24,6 +24,7 @@ const LOCAL_UNSYNCED_CONTENT: &[u8] = b"local-unsynced-v2";
 pub enum LocalOpenError {
     InvalidLocalWorkspace,
     RestoreRequired,
+    StaleLocalWorkspace,
     RuntimeUnavailable,
     ProfileBusy,
     IdentityPreparation,
@@ -34,6 +35,7 @@ impl fmt::Display for LocalOpenError {
         f.write_str(match self {
             Self::InvalidLocalWorkspace => "Local browser folder is unavailable",
             Self::RestoreRequired => "This READY profile has no local copy. Restore the confirmed current version before opening",
+            Self::StaleLocalWorkspace => "Local profile version differs from the authorized CRM version; preserve local data and resolve Sync or Restore before opening",
             Self::RuntimeUnavailable => "Installed Camoufox runtime is unavailable",
             Self::ProfileBusy => "This local browser profile is already in use",
             Self::IdentityPreparation => "Local Camoufox identity could not be prepared",
@@ -59,13 +61,30 @@ fn local_generation(intent: &InitialProfileOpen) -> Result<GenerationId, LocalOp
         .map_err(|_| LocalOpenError::InvalidLocalWorkspace)
 }
 
+fn admit_existing_workspace(
+    current: crate::local_profile::GenerationWorkspace,
+    intent: &InitialProfileOpen,
+) -> Result<crate::local_profile::GenerationWorkspace, LocalOpenError> {
+    // A valid local folder is not automatically the Worker-selected CURRENT.
+    // Use the already-authorized launch version; never silently open an older
+    // generation or claim that pending local bytes can be overwritten.
+    let matches_status = match intent.status {
+        InitialProfileStatus::Draft => current.base_generation_id().is_none(),
+        InitialProfileStatus::Ready => current.base_generation_id().is_some(),
+    };
+    if current.profile_version() != intent.expected_version || !matches_status {
+        return Err(LocalOpenError::StaleLocalWorkspace);
+    }
+    Ok(current)
+}
+
 fn open_or_create_workspace(
     root: &MaterializationRoot,
     intent: &InitialProfileOpen,
     generation: &GenerationId,
 ) -> Result<crate::local_profile::GenerationWorkspace, LocalOpenError> {
     match root.open_profile_current(&intent.tenant_id, &intent.profile_id) {
-        Ok(current) => Ok(current),
+        Ok(current) => admit_existing_workspace(current, intent),
         Err(LocalProfileError::Io(std::io::ErrorKind::NotFound))
             if intent.status == InitialProfileStatus::Draft =>
         {
@@ -79,9 +98,12 @@ fn open_or_create_workspace(
                 // Another ordinary Open may have created CURRENT since our
                 // first lookup. Reuse only a fully admitted existing folder;
                 // the existing OS writer lock resolves competing launches.
-                Err(LocalProfileError::TargetAlreadyExists) => root
-                    .open_profile_current(&intent.tenant_id, &intent.profile_id)
-                    .map_err(|_| LocalOpenError::InvalidLocalWorkspace),
+                Err(LocalProfileError::TargetAlreadyExists) => {
+                    let current = root
+                        .open_profile_current(&intent.tenant_id, &intent.profile_id)
+                        .map_err(|_| LocalOpenError::InvalidLocalWorkspace)?;
+                    admit_existing_workspace(current, intent)
+                }
                 Err(_) => Err(LocalOpenError::InvalidLocalWorkspace),
             }
         }
@@ -307,5 +329,39 @@ mod tests {
         selected.profile_id = ProfileId::parse("profile_02JLOCAL").unwrap();
         assert_ne!(local_generation(&selected).unwrap(), first);
         let _ = LocalOpenError::ProfileBusy.to_string();
+    }
+
+    #[test]
+    fn stale_launch_cannot_open_or_replace_an_existing_local_workspace() {
+        let directory = tempfile::tempdir().unwrap();
+        let root =
+            crate::local_profile::MaterializationRoot::open_or_create(directory.path()).unwrap();
+        let draft = intent();
+        let generation = local_generation(&draft).unwrap();
+        let workspace = open_or_create_workspace(&root, &draft, &generation).unwrap();
+        std::fs::write(workspace.path().join(".local-unsynced"), b"local-unsynced-v2")
+            .unwrap();
+        let mut advanced = draft.clone();
+        advanced.status = InitialProfileStatus::Ready;
+        advanced.expected_version = 2;
+        assert!(matches!(
+            open_or_create_workspace(&root, &advanced, &generation),
+            Err(LocalOpenError::StaleLocalWorkspace)
+        ));
+        assert_eq!(
+            std::fs::read(workspace.path().join(".local-unsynced")).unwrap(),
+            b"local-unsynced-v2"
+        );
+        // A stale READY status may not admit an uncommitted local DRAFT either.
+        advanced.expected_version = draft.expected_version;
+        assert!(matches!(
+            open_or_create_workspace(&root, &advanced, &generation),
+            Err(LocalOpenError::StaleLocalWorkspace)
+        ));
+        // The original DRAFT remains the same local folder; no cloud is needed.
+        assert_eq!(
+            open_or_create_workspace(&root, &draft, &generation).unwrap().path(),
+            workspace.path()
+        );
     }
 }
