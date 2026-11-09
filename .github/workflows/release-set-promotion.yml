@@ -44,6 +44,8 @@ concurrency:
 jobs:
   route:
     name: Classify automatic READY vs zero-field mutation vs internal evidence
+    # GitHub permits Write collaborators to dispatch; only the repository owner may authorize staging.
+    if: github.event_name != 'workflow_dispatch' || github.actor == github.repository_owner
     runs-on: ubuntu-latest
     outputs:
       mode: ${{ steps.route.outputs.mode }}
@@ -67,9 +69,7 @@ jobs:
             echo 'mode=preflight' >> "$GITHUB_OUTPUT"
             echo "source_sha=$READY_SOURCE_SHA" >> "$GITHUB_OUTPUT"
           elif [ "$GITHUB_EVENT_NAME" = workflow_dispatch ]; then
-            # workflow_dispatch is available to users with Write; only the repository owner may authorize staging.
             # The staging Environment's native deployment-branch policy is the main-branch gate.
-            test "$GITHUB_ACTOR" = "$GITHUB_REPOSITORY_OWNER"
             test -z "$INTERNAL_OPERATION"
             echo 'mode=promote' >> "$GITHUB_OUTPUT"
             echo "source_sha=$GITHUB_SHA" >> "$GITHUB_OUTPUT"
