@@ -80,7 +80,7 @@ impl LocalGenerationRecord {
     /// Reconstruct only the ephemeral in-memory DirtyLocal lifecycle after
     /// native browser quiescence, verified original intent and fresh exclusive
     /// admission. It neither restores an expired lease nor mutates disk state.
-    #[cfg(test)]
+    #[cfg(any(windows, test))]
     pub(crate) fn from_verified_unsynced_close(
         generation_id: GenerationId,
         bytes: u64,

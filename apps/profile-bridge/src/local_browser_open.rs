@@ -339,8 +339,11 @@ mod tests {
         let draft = intent();
         let generation = local_generation(&draft).unwrap();
         let workspace = open_or_create_workspace(&root, &draft, &generation).unwrap();
-        std::fs::write(workspace.path().join(".local-unsynced"), b"local-unsynced-v2")
-            .unwrap();
+        std::fs::write(
+            workspace.path().join(".local-unsynced"),
+            b"local-unsynced-v2",
+        )
+        .unwrap();
         let mut advanced = draft.clone();
         advanced.status = InitialProfileStatus::Ready;
         advanced.expected_version = 2;
@@ -360,7 +363,9 @@ mod tests {
         ));
         // The original DRAFT remains the same local folder; no cloud is needed.
         assert_eq!(
-            open_or_create_workspace(&root, &draft, &generation).unwrap().path(),
+            open_or_create_workspace(&root, &draft, &generation)
+                .unwrap()
+                .path(),
             workspace.path()
         );
     }

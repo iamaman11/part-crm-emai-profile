@@ -32,7 +32,6 @@ use crate::shipping_save_attempt::{ReadOnlySaveAttempt, discover_unresolved_exac
 #[cfg(any(windows, test))]
 use crate::shipping_save_attempt::{
     ReadOnlyStreamedSaveAttempt, discover_unresolved_streaming_exact_save_attempt,
-    inspect_streaming_exact_save_attempt,
 };
 #[cfg(any(windows, test))]
 use crate::shipping_save_attempt::{
@@ -43,11 +42,6 @@ use crate::shipping_save_attempt::{
     retire_active_exact_attempt_after_restart, retire_active_streamed_attempt_after_restart,
     retire_matching_local_unsynced_after_restart,
     retire_matching_streamed_local_unsynced_after_restart,
-};
-#[cfg(any(windows, test))]
-use control_plane_contract::profile_generation_api::{
-    BRIDGE_PROFILE_GENERATION_OBSERVE_PATH_TEMPLATE,
-    BridgeGenerationSuccessorObserveRequest, BridgeGenerationSuccessorObserveResponse,
 };
 use control_plane_contract::profile_generation_api::{
     BRIDGE_PROFILE_GENERATION_COMMIT_PATH_TEMPLATE,
@@ -62,6 +56,11 @@ use control_plane_contract::profile_generation_api::{
     BridgeGenerationLocalUnsyncedRetryDecisionRequest,
     BridgeGenerationSuccessorRetryDecisionRequest, BridgeGenerationSuccessorRetryDecisionResponse,
     BridgeGenerationSuccessorRetryVerdict,
+};
+#[cfg(any(windows, test))]
+use control_plane_contract::profile_generation_api::{
+    BRIDGE_PROFILE_GENERATION_OBSERVE_PATH_TEMPLATE, BridgeGenerationSuccessorObserveRequest,
+    BridgeGenerationSuccessorObserveResponse,
 };
 #[cfg(any(windows, test))]
 use profile_platform_primitives::UnixMillis;
@@ -1451,7 +1450,7 @@ pub fn observe_retained_successor_after_restart<T: MachineHttpPort>(
     successor_id: &GenerationId,
     transport: &mut T,
 ) -> Result<bool, ShippingControlPlaneError> {
-    let attempt = inspect_streaming_exact_save_attempt(root, tenant_id, profile_id, successor_id)
+    let attempt = crate::shipping_save_attempt::inspect_streaming_exact_save_attempt(root, tenant_id, profile_id, successor_id)
         .map_err(|_| ShippingControlPlaneError::InvalidResponse)?
         .ok_or(ShippingControlPlaneError::InvalidResponse)?;
     observe_verified_streamed_attempt(tenant_id, profile_id, &attempt, transport)
