@@ -173,7 +173,7 @@ fn workspace_root(workspace: &GenerationWorkspace) -> Result<&Path, LocalProfile
 /// Persistent marker version, not mere lock-file existence, distinguishes
 /// root-only Bridge543 from a generation-scoped writer. Corruption or an
 /// unreadable/symlinked marker may never authorize a weaker admission check.
-#[cfg(any(test, feature = "synthetic-test-bin"))]
+#[cfg(any(windows, test, feature = "synthetic-test-bin"))]
 fn generation_scoped_marker_present(
     workspace: &GenerationWorkspace,
 ) -> Result<bool, LocalProfileError> {
