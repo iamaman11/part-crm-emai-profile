@@ -157,6 +157,10 @@ def check_sources(sources: dict[str, str]) -> list[str]:
         failures.append("native file-release proof must precede the existing closed-profile Sync")
     if 'workspace.path().join(".local-unsynced")' not in closed:
         failures.append("the existing persistent dirty marker must govern pending cloud Sync")
+    if "loop {" not in closed or "next_sync_retry_delay" not in closed:
+        failures.append("the existing closed Sync process must retry without requiring CRM to reopen")
+    if "RETRY_DELAYS_SECONDS" in closed:
+        failures.append("closed Sync must not abandon the existing dirty marker after a finite retry window")
     for required in ("seal_closed_workspace_streaming(", "publish_closed_streamed_successor(",
                      "sync_closed_local_draft("):
         if required not in shipping:
