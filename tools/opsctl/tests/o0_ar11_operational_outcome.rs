@@ -38,7 +38,7 @@ fn write_json(path: &Path, value: &Value) -> Result<(), String> {
 
 fn manual_phase_state(
     phase: &str,
-    authorization_bound: bool,
+    dispatch_authorized: bool,
     provider_mutation_started: bool,
     provider_mutation_executed: bool,
     failed_boundary: Option<&str>,
@@ -50,7 +50,7 @@ fn manual_phase_state(
         "source_sha": SOURCE_SHA,
         "release_set_id": RELEASE_SET_ID,
         "promotion_id": PROMOTION_ID,
-        "authorization_bound": authorization_bound,
+        "dispatch_authorized": dispatch_authorized,
         "provider_mutation_started": provider_mutation_started,
         "provider_mutation_executed": provider_mutation_executed,
         "production_mutation_executed": false,
@@ -211,22 +211,23 @@ fn ar11_manual_operational_outcome_cli_proves_composed_effect_boundaries_without
         Some("POST_VERIFY_SKIPPED"),
     );
 
-    let resolve_auth_failed = manual_phase_state(
+    let resolve_candidate_failed = manual_phase_state(
         "RESOLVE_VERIFY",
+        true,
         false,
         false,
-        false,
-        Some("AUTHORIZATION_BINDING"),
+        Some("CANDIDATE_BINDING"),
     );
     let outcome = run_manual_cli_case(
-        "authorization-failure",
-        &resolve_auth_failed,
+        "candidate-binding-failure",
+        &resolve_candidate_failed,
         &mutation_not_started,
         &post_skipped,
         None,
     )?;
     assert_eq!(outcome["status"], "FAILED_NO_EFFECT");
-    assert_eq!(outcome["phase"], "AUTHORIZATION_BINDING");
+    assert_eq!(outcome["phase"], "CANDIDATE_BINDING");
+    assert_eq!(outcome["authorization_state"], "GITHUB_WORKFLOW_DISPATCH");
     assert_eq!(outcome["effect_state"], "EXACT_NO_EFFECT");
     assert_eq!(outcome["provider_mutation_started"], false);
     assert_eq!(outcome["provider_mutation_executed"], false);
@@ -300,6 +301,7 @@ fn ar11_manual_operational_outcome_cli_proves_composed_effect_boundaries_without
         Some(&verified),
     )?;
     assert_eq!(outcome["status"], "COMPLETED");
+    assert_eq!(outcome["authorization_state"], "GITHUB_WORKFLOW_DISPATCH");
     assert_eq!(outcome["phase"], "POST_VERIFY");
     assert_eq!(outcome["effect_state"], "EFFECT_VERIFIED");
     assert_eq!(outcome["owner"], "opsctl.promotion.verify");
@@ -330,6 +332,24 @@ fn ar11_workflow_terminalizes_after_owner_capture_and_before_final_assertion() -
     assert!(workflow.contains("manual-outcome:"));
     assert!(workflow.contains("AR11_RELEASE_SET_PROMOTION"));
     assert!(workflow.contains("Mark provider mutation invocation boundary"));
+    assert!(workflow.contains("test \"$GITHUB_ACTOR\" = \"$GITHUB_REPOSITORY_OWNER\""));
+    assert!(workflow.contains("test \"$GITHUB_REF\" = refs/heads/main"));
+    assert!(workflow.contains("GITHUB_WORKFLOW_DISPATCH"));
+    assert!(workflow.contains("dispatch_digest"));
+    assert!(workflow.contains("EXPECTED_CURRENT"));
+    assert!(workflow.contains("exact-current-fence.json"));
+
+    let resolve = workflow
+        .split("  resolve-verify:\\n")
+        .nth(1)
+        .and_then(|tail| tail.split("  mutate:\\n").next())
+        .ok_or_else(|| "manual resolve-verify job must exist".to_string())?;
+    assert!(resolve.contains("environment: staging"));
+    assert!(resolve.contains("STAGING_CANDIDATE"));
+    assert!(!resolve.contains("AUTHORITY_COMMENT"));
+    assert!(!resolve.contains("authorization_comment_id"));
+    assert!(!resolve.contains("issues/comments/"));
+    assert!(!resolve.contains("branches/main"));
     assert!(!workflow.contains("promotion-verify.json\" | jq -e '.verified == true"));
 
     let terminalize = workflow
