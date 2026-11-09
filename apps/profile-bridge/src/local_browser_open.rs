@@ -279,7 +279,8 @@ fn materialize_identity_with_executable(
     let actual_digest = Sha256::digest(config_bytes)
         .iter()
         .map(|byte| format!("{byte:02x}"))
-        .collect::<String>();
+        .collect::<Vec<_>>()
+        .join("");
     if actual_digest != expected_digest {
         return Err(LocalOpenError::IdentityPreparation);
     }
@@ -579,6 +580,7 @@ mod tests {
         );
         Ok(())
     }
+
     #[test]
     fn only_the_exact_playwright_ready_event_confirms_health_once() {
         use std::cell::Cell;
