@@ -200,7 +200,14 @@ def main() -> int:
     assert "close_after_browser_exit" in local_runtime
     assert "WindowsBrowserExitWitness" not in local_runtime
     assert "profile_state" not in local_runtime
-    assert "firefox_native_first_run_args" not in SOURCE.read_text(encoding="utf-8")
+    with tempfile.TemporaryDirectory() as directory:
+        virgin = Path(directory) / "user_data"
+        virgin.mkdir()
+        assert runtime.firefox_native_first_run_args(virgin) == [
+            "-new-tab", "about:blank"
+        ]
+        (virgin / "places.sqlite").write_bytes(b"synthetic existing Firefox state")
+        assert runtime.firefox_native_first_run_args(virgin) == []
 
     print("CAMOUHOST_EXECUTION_MODES=PASS")
     return 0

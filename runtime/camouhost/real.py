@@ -806,6 +806,18 @@ def report_live_page_count(context: Any) -> None:
         return
 
 
+def firefox_native_first_run_args(user_data_dir: Path) -> list[str]:
+    """Ask Firefox itself for its ordinary blank tab only on a virgin profile.
+
+    Playwright's persistent context needs an initial native Page event; native
+    session restore (startup.page=3) has no previous page on first Open. Use
+    Firefox's standard CLI switch rather than opening, inspecting, closing or
+    navigating tabs through the application. All subsequent Opens preserve the
+    browser's own SessionStore without CLI startup overrides.
+    """
+    return ["-new-tab", "about:blank"] if not any(user_data_dir.iterdir()) else []
+
+
 def camoufox_launch_options(
     lock: dict[str, Any],
     root: Path,
@@ -854,8 +866,12 @@ def camoufox_launch_options(
     if isolated:
         options["offline"] = True
         options["args"] = ["-new-tab", MANAGED_BOOTSTRAP_TAB_URL]
-    # Normal user Open does not inject a tab, URL or startup argument.
-    # Firefox owns its native first-run and session-restore behavior.
+    else:
+        # Firefox itself creates the one native first-run tab. Existing
+        # profiles receive no startup override and retain native SessionStore.
+        first_run_args = firefox_native_first_run_args(user_data_dir)
+        if first_run_args:
+            options["args"] = first_run_args
 
     official_env = options.get("env")
     if not isinstance(official_env, dict) or not any(
