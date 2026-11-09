@@ -1,14 +1,14 @@
-#[cfg(test)]
+#[cfg(any(windows, test))]
 use crate::browser_execution::{browser_writer_locks_absent, persist_committed_successor_binding};
-#[cfg(test)]
-use crate::dirty_generation::recover_local_unsynced_native_clone;
-#[cfg(any(test, feature = "synthetic-test-bin"))]
-use crate::dirty_generation::{GenerationSealingMaterial, GenerationSealingMaterialPort};
-#[cfg(test)]
+#[cfg(any(windows, test))]
 use crate::dirty_generation::PreparedDirtyGeneration;
-#[cfg(test)]
+#[cfg(any(windows, test))]
+use crate::dirty_generation::recover_local_unsynced_native_clone;
+#[cfg(any(windows, test, feature = "synthetic-test-bin"))]
+use crate::dirty_generation::{GenerationSealingMaterial, GenerationSealingMaterialPort};
+#[cfg(any(windows, test))]
 use crate::generation_snapshot::{GenerationSnapshotError, WorkspaceSnapshotReader};
-#[cfg(test)]
+#[cfg(any(windows, test))]
 use crate::local_profile::{
     BridgeWorkspaceLock, LocalGenerationRecord, LocalProfileError, MaterializationRoot,
 };
@@ -16,7 +16,7 @@ use crate::shipping_control_plane::{
     MachineHttpMethod, MachineHttpPort, MachineHttpResponse, ShippingControlPlaneError,
     safe_machine_problem_code,
 };
-#[cfg(test)]
+#[cfg(any(windows, test))]
 use crate::shipping_generation_save::CommittedGenerationSuccessor;
 use crate::shipping_generation_save::SignedGenerationObjectStreamPutPort;
 #[cfg(any(test, feature = "synthetic-test-bin"))]
@@ -26,14 +26,14 @@ use crate::shipping_generation_save::{
 use crate::shipping_generation_save::{
     GenerationUploadAuthorization, SignedGenerationUploadCapability,
 };
-#[cfg(test)]
+#[cfg(any(windows, test))]
 use crate::shipping_save_attempt::{ReadOnlySaveAttempt, discover_unresolved_exact_save_attempt};
-#[cfg(test)]
+#[cfg(any(windows, test))]
 use crate::shipping_save_attempt::{
     ReadOnlyStreamedSaveAttempt, discover_unresolved_streaming_exact_save_attempt,
     inspect_streaming_exact_save_attempt,
 };
-#[cfg(test)]
+#[cfg(any(windows, test))]
 use crate::shipping_save_attempt::{
     SaveAttemptEvidenceError, ScopedPendingSaveEvidence, classify_scoped_pending_save_evidence,
     deterministic_lone_unsynced_successor, local_unsynced_matches_fresh_lease,
@@ -51,7 +51,7 @@ use control_plane_contract::profile_generation_api::{
     BridgeGenerationSuccessorObserveRequest, BridgeGenerationSuccessorObserveResponse,
     BridgeGenerationUploadCapabilityResponse, BridgeProfileGenerationSuccessorRequest,
 };
-#[cfg(test)]
+#[cfg(any(windows, test))]
 use control_plane_contract::profile_generation_api::{
     BRIDGE_PROFILE_GENERATION_LOCAL_UNSYNCED_RETRY_DECISION_PATH_TEMPLATE,
     BRIDGE_PROFILE_GENERATION_RETRY_DECISION_PATH_TEMPLATE,
@@ -59,7 +59,7 @@ use control_plane_contract::profile_generation_api::{
     BridgeGenerationSuccessorRetryDecisionRequest, BridgeGenerationSuccessorRetryDecisionResponse,
     BridgeGenerationSuccessorRetryVerdict,
 };
-#[cfg(test)]
+#[cfg(any(windows, test))]
 use profile_platform_primitives::UnixMillis;
 use profile_platform_primitives::{CorrelationId, GenerationId, ProfileId, TenantId};
 use session_domain::ProfileLease;
@@ -77,7 +77,7 @@ const MAX_UPLOAD_CAPABILITY_EXPIRES_SECONDS: u32 = 300;
 static SAVE_REQUEST_SEQUENCE: AtomicU64 = AtomicU64::new(1);
 
 /// Evidence-driven post-commit local completion, never a new server write grant.
-#[cfg(test)]
+#[cfg(any(windows, test))]
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum RestartExactLocalCompletion {
     NoCanonicalCheckpoint,
@@ -158,7 +158,7 @@ fn first_seal_recovery_failure(
 /// No variant is a retry capability, a new lease, local browser readiness,
 /// or a claim that `CLOUD_SAVED` has been reached.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-#[cfg(test)]
+#[cfg(any(windows, test))]
 pub enum RestartExactCommitObservation {
     /// No canonical exact checkpoint was discovered. This does NOT overrule
     /// the independent conservative guard for torn/pending siblings.
@@ -1476,7 +1476,7 @@ fn observe_verified_exact_attempt<T: MachineHttpPort>(
 
 /// The same typed observer accepts a verified file-backed BPAT descriptor:
 /// no generation-sized ciphertext allocation and no cloud write authority.
-#[cfg(test)]
+#[cfg(any(windows, test))]
 fn observe_verified_streamed_attempt<T: MachineHttpPort>(
     tenant_id: &TenantId,
     profile_id: &ProfileId,
@@ -1496,7 +1496,7 @@ fn observe_verified_streamed_attempt<T: MachineHttpPort>(
 
 /// One existing D1 ACTIVE_EXACT query. Both inspectors must prove the
 /// ciphertext/local inventory *before* this read-only request is constructed.
-#[cfg(test)]
+#[cfg(any(windows, test))]
 fn observe_exact_descriptor<T: MachineHttpPort>(
     tenant_id: &TenantId,
     profile_id: &ProfileId,

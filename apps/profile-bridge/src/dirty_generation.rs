@@ -242,7 +242,7 @@ pub fn prepare_dirty_generation_candidate<K: GenerationSealingMaterialPort>(
     )
 }
 
-#[cfg(test)]
+#[cfg(any(windows, test))]
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn recover_local_unsynced_native_clone(
     record: &LocalGenerationRecord,
