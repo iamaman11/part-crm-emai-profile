@@ -140,7 +140,7 @@ impl PreparedDirtyGeneration {
 
 /// Same deterministic N+1 object identity for both bounded-memory and
 /// original-file streaming Sync; a retry may never choose a second successor.
-#[cfg(test)]
+#[cfg(any(windows, test))]
 pub(crate) fn closed_current_candidate_id(
     tenant: &TenantId,
     profile: &ProfileId,
