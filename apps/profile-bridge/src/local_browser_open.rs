@@ -556,7 +556,8 @@ mod tests {
     }
 
     #[test]
-    fn rust_owns_user_data_creation_and_profile_config_read() -> Result<(), Box<dyn std::error::Error>> {
+    fn rust_owns_user_data_creation_and_profile_config_read()
+    -> Result<(), Box<dyn std::error::Error>> {
         use std::fs;
 
         let directory = tempfile::tempdir()?;
@@ -564,12 +565,18 @@ mod tests {
         assert!(super::ensure_user_data_directory(folder)?);
         assert!(folder.join(super::USER_DATA).is_dir());
         assert!(super::ensure_user_data_directory(folder)?);
-        fs::write(folder.join(super::USER_DATA).join("prefs.js"), b"native browser state")?;
+        fs::write(
+            folder.join(super::USER_DATA).join("prefs.js"),
+            b"native browser state",
+        )?;
         assert!(!super::ensure_user_data_directory(folder)?);
 
         let config = b"{\"fingerprint\":\"test\"}\n";
         fs::write(folder.join(super::CONFIG), config)?;
-        assert_eq!(super::read_profile_config(folder)?, String::from_utf8(config.to_vec())?);
+        assert_eq!(
+            super::read_profile_config(folder)?,
+            String::from_utf8(config.to_vec())?
+        );
         Ok(())
     }
     #[test]
