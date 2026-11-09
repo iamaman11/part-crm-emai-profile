@@ -1,34 +1,38 @@
-#[cfg(any(windows, test))]
+#[cfg(test)]
 use crate::browser_execution::{browser_writer_locks_absent, persist_committed_successor_binding};
-#[cfg(any(windows, test))]
+#[cfg(test)]
 use crate::dirty_generation::recover_local_unsynced_native_clone;
-use crate::dirty_generation::{
-    GenerationSealingMaterial, GenerationSealingMaterialPort, PreparedDirtyGeneration,
-};
-#[cfg(any(windows, test))]
+#[cfg(any(test, feature = "synthetic-test-bin"))]
+use crate::dirty_generation::{GenerationSealingMaterial, GenerationSealingMaterialPort};
+use crate::dirty_generation::PreparedDirtyGeneration;
+#[cfg(test)]
 use crate::generation_snapshot::{GenerationSnapshotError, WorkspaceSnapshotReader};
-use crate::local_profile::MaterializationRoot;
-#[cfg(any(windows, test))]
-use crate::local_profile::{BridgeWorkspaceLock, LocalGenerationRecord, LocalProfileError};
+#[cfg(test)]
+use crate::local_profile::{
+    BridgeWorkspaceLock, LocalGenerationRecord, LocalProfileError, MaterializationRoot,
+};
 use crate::shipping_control_plane::{
     MachineHttpMethod, MachineHttpPort, MachineHttpResponse, ShippingControlPlaneError,
     safe_machine_problem_code,
 };
-#[cfg(any(windows, test))]
-use crate::shipping_generation_save::{
-    CommittedGenerationSuccessor, SignedGenerationObjectStreamPutPort,
-};
+#[cfg(test)]
+use crate::shipping_generation_save::CommittedGenerationSuccessor;
+use crate::shipping_generation_save::SignedGenerationObjectStreamPutPort;
+#[cfg(any(test, feature = "synthetic-test-bin"))]
 use crate::shipping_generation_save::{
     GenerationSuccessorCommitOutcome, GenerationSuccessorControlPort,
+};
+use crate::shipping_generation_save::{
     GenerationUploadAuthorization, SignedGenerationUploadCapability,
 };
-#[cfg(any(windows, test))]
+#[cfg(test)]
 use crate::shipping_save_attempt::{ReadOnlySaveAttempt, discover_unresolved_exact_save_attempt};
+#[cfg(test)]
 use crate::shipping_save_attempt::{
     ReadOnlyStreamedSaveAttempt, discover_unresolved_streaming_exact_save_attempt,
     inspect_streaming_exact_save_attempt,
 };
-#[cfg(any(windows, test))]
+#[cfg(test)]
 use crate::shipping_save_attempt::{
     SaveAttemptEvidenceError, ScopedPendingSaveEvidence, classify_scoped_pending_save_evidence,
     deterministic_lone_unsynced_successor, local_unsynced_matches_fresh_lease,
@@ -46,7 +50,7 @@ use control_plane_contract::profile_generation_api::{
     BridgeGenerationSuccessorObserveRequest, BridgeGenerationSuccessorObserveResponse,
     BridgeGenerationUploadCapabilityResponse, BridgeProfileGenerationSuccessorRequest,
 };
-#[cfg(any(windows, test))]
+#[cfg(test)]
 use control_plane_contract::profile_generation_api::{
     BRIDGE_PROFILE_GENERATION_LOCAL_UNSYNCED_RETRY_DECISION_PATH_TEMPLATE,
     BRIDGE_PROFILE_GENERATION_RETRY_DECISION_PATH_TEMPLATE,
@@ -54,7 +58,7 @@ use control_plane_contract::profile_generation_api::{
     BridgeGenerationSuccessorRetryDecisionRequest, BridgeGenerationSuccessorRetryDecisionResponse,
     BridgeGenerationSuccessorRetryVerdict,
 };
-#[cfg(any(windows, test))]
+#[cfg(test)]
 use profile_platform_primitives::UnixMillis;
 use profile_platform_primitives::{CorrelationId, GenerationId, ProfileId, TenantId};
 use session_domain::ProfileLease;
@@ -72,7 +76,7 @@ const MAX_UPLOAD_CAPABILITY_EXPIRES_SECONDS: u32 = 300;
 static SAVE_REQUEST_SEQUENCE: AtomicU64 = AtomicU64::new(1);
 
 /// Evidence-driven post-commit local completion, never a new server write grant.
-#[cfg(any(windows, test))]
+#[cfg(test)]
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum RestartExactLocalCompletion {
     NoCanonicalCheckpoint,
@@ -153,6 +157,7 @@ fn first_seal_recovery_failure(
 /// No variant is a retry capability, a new lease, local browser readiness,
 /// or a claim that `CLOUD_SAVED` has been reached.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[cfg(test)]
 pub enum RestartExactCommitObservation {
     /// No canonical exact checkpoint was discovered. This does NOT overrule
     /// the independent conservative guard for torn/pending siblings.
@@ -191,11 +196,13 @@ impl<S: std::error::Error> std::error::Error for GenerationSuccessorControlError
 /// It is intentionally not a coordinator. The live coordinator remains the sole lease/fence and
 /// sealing-material owner; this adapter only serializes the canonical successor request and
 /// delegates sealing material back to that existing owner.
+#[cfg(any(test, feature = "synthetic-test-bin"))]
 pub struct ControlPlaneGenerationSuccessor<'a, T, S> {
     transport: T,
     sealer: &'a mut S,
 }
 
+#[cfg(any(test, feature = "synthetic-test-bin"))]
 impl<'a, T, S> ControlPlaneGenerationSuccessor<'a, T, S> {
     #[must_use]
     pub const fn new(transport: T, sealer: &'a mut S) -> Self {
@@ -203,6 +210,7 @@ impl<'a, T, S> ControlPlaneGenerationSuccessor<'a, T, S> {
     }
 }
 
+#[cfg(any(test, feature = "synthetic-test-bin"))]
 impl<T, S> GenerationSealingMaterialPort for ControlPlaneGenerationSuccessor<'_, T, S>
 where
     S: GenerationSealingMaterialPort,
@@ -229,6 +237,7 @@ where
     }
 }
 
+#[cfg(any(test, feature = "synthetic-test-bin"))]
 impl<T, S> GenerationSuccessorControlPort for ControlPlaneGenerationSuccessor<'_, T, S>
 where
     T: MachineHttpPort,
@@ -444,6 +453,7 @@ fn lower_hex_stream(input: &[u8; 32]) -> String {
 /// ambiguous local-first Sync response. This never uploads, commits, retries
 /// an unknown mutation, creates a candidate or changes CURRENT.
 #[cfg(windows)]
+#[cfg(test)]
 pub(crate) fn observe_closed_current_exact<T: MachineHttpPort>(
     tenant: &TenantId,
     profile: &ProfileId,
@@ -493,6 +503,7 @@ pub(crate) fn observe_closed_current_exact<T: MachineHttpPort>(
 /// a NOT ACTIVE_EXACT observation leaves original bytes and attempt untouched.
 /// This result cannot authorize a retry; server-positive authorization must be
 /// implemented separately in the existing D1 owner before any resume/commit.
+#[cfg(test)]
 pub fn observe_discovered_successor_after_restart<T: MachineHttpPort>(
     root: &MaterializationRoot,
     tenant_id: &TenantId,
@@ -1427,6 +1438,7 @@ fn request_fresh_retry_decision_for_descriptor<T: MachineHttpPort>(
 /// Read-only server probe from crash checkpoint after a lost response.
 /// Requires fresh machine CNG authentication via the transport. Never submits
 /// the old fence, mutates the Profile, or grants permission to repeat PUT.
+#[cfg(test)]
 pub fn observe_retained_successor_after_restart<T: MachineHttpPort>(
     root: &MaterializationRoot,
     tenant_id: &TenantId,
@@ -1463,6 +1475,7 @@ fn observe_verified_exact_attempt<T: MachineHttpPort>(
 
 /// The same typed observer accepts a verified file-backed BPAT descriptor:
 /// no generation-sized ciphertext allocation and no cloud write authority.
+#[cfg(test)]
 fn observe_verified_streamed_attempt<T: MachineHttpPort>(
     tenant_id: &TenantId,
     profile_id: &ProfileId,
@@ -1482,6 +1495,7 @@ fn observe_verified_streamed_attempt<T: MachineHttpPort>(
 
 /// One existing D1 ACTIVE_EXACT query. Both inspectors must prove the
 /// ciphertext/local inventory *before* this read-only request is constructed.
+#[cfg(test)]
 fn observe_exact_descriptor<T: MachineHttpPort>(
     tenant_id: &TenantId,
     profile_id: &ProfileId,
@@ -1509,6 +1523,7 @@ fn observe_exact_descriptor<T: MachineHttpPort>(
     Ok(result.active_exact)
 }
 
+#[cfg(any(test, feature = "synthetic-test-bin"))]
 fn successor_request<S>(
     base_generation_id: &GenerationId,
     prepared: &PreparedDirtyGeneration,
