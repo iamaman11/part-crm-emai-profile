@@ -83,7 +83,10 @@ use application_ports::{ProfileCoordinatorPort, ProfileCoordinatorRuntimePort};
 use bridge_domain::{CamouhostPort, ClaimUri, DeviceIdentityPort, DeviceKeyPort};
 #[cfg(any(test, feature = "synthetic-test-bin"))]
 use profile_platform_primitives::TenantScope;
-use profile_platform_primitives::{DeviceId, GenerationId, ProfileId, SessionId, UnixMillis};
+use profile_platform_primitives::{DeviceId, GenerationId, SessionId};
+#[cfg(any(test, feature = "synthetic-test-bin"))]
+use profile_platform_primitives::{ProfileId, UnixMillis};
+#[cfg(any(test, feature = "synthetic-test-bin"))]
 use session_domain::ProfileLease;
 use std::fmt;
 
