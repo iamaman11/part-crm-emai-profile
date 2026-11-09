@@ -139,9 +139,9 @@ fn run_python(runtime_root: &Path, folder: &Path, action: &str) -> Result<bool, 
 }
 
 fn mark_local_unsynced(folder: &Path) -> Result<(), LocalOpenError> {
-    // This is NOT a cloud Save receipt. Persist the pending-sync evidence
-    // before any user bytes can change, including on interrupted/dirty close.
-    // No background service, online/offline mode or retry state machine.
+    // This is NOT a cloud Save receipt. Persist the existing pending-sync
+    // marker before user bytes can change. The same existing Sync operation
+    // owns retries; this marker adds no service or parallel retry state.
     let file = folder.join(LOCAL_UNSYNCED);
     match OpenOptions::new().create_new(true).write(true).open(&file) {
         Ok(mut stream) => {
