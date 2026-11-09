@@ -829,13 +829,14 @@ mod windows {
         }
         // A non-confirmed cloud effect never changes the local success state.
         // The original dirty marker survives for an explicit independent
-        // --sync-closed retry (which also needs no browser window).
+        // existing Bridge startup/recovery or an explicit --sync-closed retry;
+        // neither requires a browser window.
         Err(ShippingCompositionError::SyncUnconfirmed)
     }
 
     /// The same installed executable handles one ephemeral cloud Sync
     /// invocation. No daemon, extra binary or new browser writer is created.
-    /// A failed child start leaves local files and the durable dirty marker.
+    /// A failed child start falls back to the same Sync inline.
     fn start_sync_after_close(intent: &crate::generation_initialization::InitialProfileOpen) {
         use std::process::{Command, Stdio};
         let status = match intent.status {
