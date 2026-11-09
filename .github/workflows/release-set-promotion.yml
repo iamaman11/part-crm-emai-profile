@@ -725,14 +725,14 @@ jobs:
           def parse(block):
               fields = {}
               for raw in block.splitlines():
-                  match = re.fullmatch(r'\\s*([A-Z0-9_]+)\\s*=\\s*(.*?)\\s*', raw)
+                  match = re.fullmatch(r'\s*([A-Z0-9_]+)\s*=\s*(.*?)\s*', raw)
                   if match:
                       key, value = match.groups()
                       if key in fields:
                           raise SystemExit(f'duplicate candidate field: {key}')
                       fields[key] = value
               return fields
-          parsed = [parse(block) for block in re.findall(r'```(?:text)?\\s*\\n(.*?)```', body, flags=re.S)]
+          parsed = [parse(block) for block in re.findall(r'```(?:text)?\s*\n(.*?)```', body, flags=re.S)]
           candidates = [item for item in parsed if item.get('STAGING_CANDIDATE') == 'RELEASE_SET_V3']
           if len(candidates) != 1:
               raise SystemExit('Issue #830 must contain exactly one current STAGING_CANDIDATE')
@@ -792,7 +792,7 @@ jobs:
               'excluded_effects': ['D1_PHASE_D_0032', 'ACCESS_MTLS', 'OTHER_PROVIDER_MUTATION', 'PRODUCTION']
           }
           json.dump(document, open(output_path, 'w', encoding='utf-8'), sort_keys=True, indent=2)
-          open(output_path, 'a', encoding='utf-8').write('\\n')
+          open(output_path, 'a', encoding='utf-8').write('\n')
           PY
           release_set_id="$(jq -er '.release_set_id' "$RUNNER_TEMP/dispatch-intent.json")"
           expected_current="$(jq -er '.expected_current_release_set_id' "$RUNNER_TEMP/dispatch-intent.json")"
