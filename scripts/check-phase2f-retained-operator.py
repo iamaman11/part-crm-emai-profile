@@ -168,7 +168,7 @@ def self_test(sources: dict[str, str]) -> list[str]:
          "closed READY Sync must use the shared same-device Bridge recovery owner"),
         ("authoritative", "BridgeWorkspaceLock::acquire_or_recover_interrupted(",
          "BridgeWorkspaceLock::acquire(",
-         "confirmed-current DRAFT reconciliation must use the shared Bridge recovery owner"),
+         "confirmed-current DRAFT/READY reconciliation must use the shared Bridge recovery owner"),
         ("locks", "Self::acquire(workspace, device_id, epoch)", "Ok(())",
          "native Open must hold the existing per-profile OS admission through the shared recovery owner"),
         ("locks", "Self::recover_interrupted_launch(workspace, device_id, epoch)", "Ok(())",
