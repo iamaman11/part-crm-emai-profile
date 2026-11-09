@@ -166,12 +166,13 @@ def _download_asset(
     asset: dict,
     token: str,
     staging: Path,
+    partials: Path,
     opener: Callable,
     sleep_fn: Callable[[float], None],
     attempts: int,
 ) -> None:
     target = staging / asset["name"]
-    part_path = staging / (asset["name"] + ".part")
+    part_path = partials / f"{asset['id']}.part"
     for attempt in range(1, attempts + 1):
         part_path.unlink(missing_ok=True)
         try:
@@ -248,10 +249,12 @@ def download_release_set(
         prefix=".ar11-release-set-download-", dir=destination.parent
     ) as temporary:
         staging = Path(temporary) / "assets"
+        partials = Path(temporary) / "partials"
         staging.mkdir()
+        partials.mkdir()
         for asset in metadata["assets"]:
             _download_asset(
-                repository, asset, token, staging, opener, sleep_fn, attempts
+                repository, asset, token, staging, partials, opener, sleep_fn, attempts
             )
         if destination.exists():
             destination.rmdir()
@@ -302,7 +305,7 @@ def _self_test() -> None:
         "assets": [
             {
                 "id": 77,
-                "name": "release-set.json",
+                "name": "release-set.json.part",
                 "size": len(payload),
                 "state": "uploaded",
             }
@@ -323,7 +326,7 @@ def _self_test() -> None:
             if calls["asset"] == 1:
                 return PartialThenErrorResponse(payload)
             partial_files = list(
-                Path(directory).glob(".ar11-release-set-download-*/assets/*.part")
+                Path(directory).glob(".ar11-release-set-download-*/partials/*.part")
             )
             assert not partial_files, "partial asset was not removed before retry"
             return FakeResponse(payload, "application/octet-stream")
@@ -340,7 +343,7 @@ def _self_test() -> None:
             sleep_fn=sleeps.append,
             attempts=3,
         )
-        assert (destination / "release-set.json").read_bytes() == payload
+        assert (destination / "release-set.json.part").read_bytes() == payload
         assert calls == {"metadata": 2, "asset": 2}
         assert sleeps == [1, 1]
 
