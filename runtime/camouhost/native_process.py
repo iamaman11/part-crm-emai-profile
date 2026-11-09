@@ -27,21 +27,37 @@ class NativeProfileSession:
     manager: Any = field(repr=False)
     context: Any = field(repr=False)
     _closed: asyncio.Event = field(default_factory=asyncio.Event, repr=False)
+    _browser: Any = field(default=None, repr=False)
+    _browser_disconnected: bool = field(default=False, repr=False)
 
     def __post_init__(self) -> None:
         if self.context is None:
             raise NativeLaunchError("official Playwright context unavailable")
-        # Passive SDK event only: no page, window, process or Firefox internals.
+        # Passive public SDK events only: no page, window, process or Firefox internals.
         self.context.on("close", self._on_context_close)
+        self._browser = getattr(self.context, "browser", None)
+        if self._browser is not None:
+            self._browser.on("disconnected", self._on_browser_disconnected)
         if self.context.is_closed():
             self._closed.set()
 
     def _on_context_close(self, *_args: Any) -> None:
         self._closed.set()
 
+    def _on_browser_disconnected(self, *_args: Any) -> None:
+        # A browser disconnect is an official Playwright signal for a crash or
+        # browser shutdown. Rust still requires native file-lock proof before
+        # it may snapshot; this callback never claims the files are released.
+        self._browser_disconnected = True
+        self._closed.set()
+
     def context_is_closed(self) -> bool:
         context = self.context
-        return context is None or bool(context.is_closed())
+        return (
+            self._browser_disconnected
+            or context is None
+            or bool(context.is_closed())
+        )
 
     async def wait_for_browser_close(self) -> None:
         if self.context_is_closed():
@@ -59,6 +75,7 @@ class NativeProfileSession:
         # BrowserContext.close() and cannot close a live browser.
         self.manager = None
         self.context = None
+        self._browser = None
         try:
             with contextlib.redirect_stdout(sys.stderr):
                 await manager.__aexit__(None, None, None)
