@@ -46,6 +46,7 @@ use crate::shipping_save_attempt::{
     retire_matching_local_unsynced_after_restart,
     retire_matching_streamed_local_unsynced_after_restart,
 };
+use control_plane_contract::profile_generation_api::BridgeGenerationUploadCapabilityResponse;
 #[cfg(any(windows, test, feature = "synthetic-test-bin"))]
 use control_plane_contract::profile_generation_api::{
     BRIDGE_PROFILE_GENERATION_COMMIT_PATH_TEMPLATE,
@@ -53,7 +54,6 @@ use control_plane_contract::profile_generation_api::{
     BridgeGenerationSuccessorCommitOutcomeDto, BridgeGenerationSuccessorCommitResponse,
     BridgeProfileGenerationSuccessorRequest,
 };
-use control_plane_contract::profile_generation_api::BridgeGenerationUploadCapabilityResponse;
 #[cfg(any(windows, test))]
 use control_plane_contract::profile_generation_api::{
     BRIDGE_PROFILE_GENERATION_LOCAL_UNSYNCED_RETRY_DECISION_PATH_TEMPLATE,
