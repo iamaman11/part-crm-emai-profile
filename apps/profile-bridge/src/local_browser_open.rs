@@ -590,8 +590,7 @@ mod tests {
     }
 
     #[test]
-    fn identity_generation_requires_empty_user_data()
-    -> Result<(), Box<dyn std::error::Error>> {
+    fn identity_generation_requires_empty_user_data() -> Result<(), Box<dyn std::error::Error>> {
         use std::fs;
 
         let directory = tempfile::tempdir()?;
