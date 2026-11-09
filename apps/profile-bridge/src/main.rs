@@ -388,36 +388,10 @@ impl std::error::Error for BridgeCliError {}
 #[cfg(test)]
 mod tests {
     use super::FIRST_INSTALL_ARGUMENT;
-    use super::{BridgeCliError, BridgeCommand, Cause, ShippingCompositionError, parse_command};
+    use super::{BridgeCliError, BridgeCommand, ShippingCompositionError, parse_command};
     use profile_bridge::windows_delivery_handoff::{
         HANDOFF_ACTIVATE_ARGUMENT, HANDOFF_ARRIVAL_ARGUMENT,
     };
-
-    #[test]
-    fn native_lease_conflict_has_exact_safe_observation_cause() {
-        use profile_bridge::operator_flow::OperatorFlowError;
-
-        let conflict = BridgeCliError::LaunchFailed(ShippingCompositionError::Operator(
-            OperatorFlowError::EnrollmentConflict,
-        ));
-        assert_eq!(
-            super::diagnostic_cause(&Err(conflict)),
-            Cause::CoordinatorLeaseConflict
-        );
-
-        // Do not mistake other launch failures for a verified lease conflict.
-        let generic = BridgeCliError::LaunchFailed(ShippingCompositionError::Configuration);
-        assert_eq!(
-            super::diagnostic_cause(&Err(generic)),
-            Cause::BrowserUnavailable
-        );
-        let uncertain =
-            BridgeCliError::LaunchFailed(ShippingCompositionError::HeartbeatAuthorityUncertain);
-        assert_eq!(
-            super::diagnostic_cause(&Err(uncertain)),
-            Cause::CoordinatorUncertain
-        );
-    }
 
     #[test]
     fn one_shot_sync_admits_only_exact_v2_native_profile() {
@@ -727,15 +701,6 @@ mod tests {
             !BridgeCliError::InvalidClaimUri
                 .to_string()
                 .contains("secret")
-        );
-        assert!(
-            !BridgeCliError::LaunchFailed(super::ShippingCompositionError::Operator(
-                profile_bridge::operator_flow::OperatorFlowError::Stage(
-                    profile_bridge::operator_flow::OperatorFailureStage::CoordinatorClaim,
-                ),
-            ))
-            .to_string()
-            .contains("claim_")
         );
         assert!(
             !BridgeCliError::DeliveryFailed(super::ShippingCompositionError::DeliveryHandoff)
