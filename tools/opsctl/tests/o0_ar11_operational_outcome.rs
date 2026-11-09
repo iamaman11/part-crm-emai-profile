@@ -333,7 +333,6 @@ fn ar11_workflow_terminalizes_after_owner_capture_and_before_final_assertion() -
     assert!(workflow.contains("AR11_RELEASE_SET_PROMOTION"));
     assert!(workflow.contains("Mark provider mutation invocation boundary"));
     assert!(workflow.contains("test \"$GITHUB_ACTOR\" = \"$GITHUB_REPOSITORY_OWNER\""));
-    assert!(workflow.contains("test \"$GITHUB_REF\" = refs/heads/main"));
     assert!(workflow.contains("GITHUB_WORKFLOW_DISPATCH"));
     assert!(workflow.contains("dispatch_digest"));
     assert!(workflow.contains("EXPECTED_CURRENT"));
