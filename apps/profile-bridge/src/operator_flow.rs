@@ -602,6 +602,7 @@ impl fmt::Display for OperatorFlowError {
 
 impl std::error::Error for OperatorFlowError {}
 
+#[cfg(any(test, feature = "synthetic-test-bin"))]
 struct ActiveOperatorSession {
     lease: ProfileLease,
     workspace_lock: Option<BridgeWorkspaceLock>,
