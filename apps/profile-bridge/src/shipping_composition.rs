@@ -915,10 +915,15 @@ mod windows {
             intent,
             binding.device_id(),
             delivery.runtime_root(),
+            delivery.pending_health_confirmation(),
         ) {
             Ok(()) => {
                 start_sync_after_close(intent);
                 Ok(())
+            }
+            Err(crate::local_browser_open::LocalOpenError::DeliveryHealth) => {
+                start_sync_after_close(intent);
+                Err(ShippingCompositionError::DeliveryHealth)
             }
             Err(crate::local_browser_open::LocalOpenError::RestoreRequired) => {
                 // Only a missing READY local folder crosses the cloud boundary.
@@ -959,10 +964,15 @@ mod windows {
                     intent,
                     &device,
                     delivery.runtime_root(),
+                    delivery.pending_health_confirmation(),
                 ) {
                     Ok(()) => {
                         start_sync_after_close(intent);
                         Ok(())
+                    }
+                    Err(crate::local_browser_open::LocalOpenError::DeliveryHealth) => {
+                        start_sync_after_close(intent);
+                        Err(ShippingCompositionError::DeliveryHealth)
                     }
                     Err(error) => {
                         // Every post-restore local failure may leave the

@@ -324,7 +324,13 @@ fn run_native_open_proof() -> Result<ApprovedRuntimeBundle, Box<dyn std::error::
     let opened = thread::spawn(move || -> Result<(), String> {
         let owner =
             MaterializationRoot::open_or_create(target).map_err(|error| error.to_string())?;
-        profile_bridge::local_browser_open::open(&owner, &launch, &device_for_open, &native_runtime)
+        profile_bridge::local_browser_open::open(
+            &owner,
+            &launch,
+            &device_for_open,
+            &native_runtime,
+            None,
+        )
             .map_err(|error| error.to_string())
     });
 
