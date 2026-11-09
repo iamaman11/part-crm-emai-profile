@@ -1423,7 +1423,7 @@ mod tests {
             coordinator.recover_or_resume_started_with(
                 43,
                 &fixture.first_executable,
-                |_| panic!("no LKG must not schedule a handoff"),
+                |_| Err(DeliveryHandoffError::HelperLaunchFailed),
             )?,
             DeliveryHandoffRestartDisposition::RecoveryRequired
         );
@@ -1444,7 +1444,7 @@ mod tests {
             coordinator.recover_or_resume_started_with(
                 44,
                 &fixture.first_executable,
-                |_| panic!("RecoveryRequired must not schedule a handoff"),
+                |_| Err(DeliveryHandoffError::HelperLaunchFailed),
             )?,
             DeliveryHandoffRestartDisposition::RecoveryRequired
         );
