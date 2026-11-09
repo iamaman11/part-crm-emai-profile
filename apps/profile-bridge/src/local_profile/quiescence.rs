@@ -51,7 +51,7 @@ impl BridgeWorkspaceLock {
     /// Acquire the normal Bridge writer admission, recovering only an exact
     /// same-device interrupted marker after OS and native-file checks prove the
     /// previous writer is gone. Unknown or foreign writers remain blocked.
-    pub fn acquire_or_recover_interrupted(
+    pub(crate) fn acquire_or_recover_interrupted(
         workspace: &GenerationWorkspace,
         device_id: &DeviceId,
         epoch: u64,

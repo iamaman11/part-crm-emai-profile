@@ -19,6 +19,8 @@ SOURCES = {
     "adapter": "runtime/camouhost/real.py",
     "operator": "apps/profile-bridge/src/operator_flow.rs",
     "locks": "apps/profile-bridge/src/local_profile/quiescence.rs",
+    "generation": "apps/profile-bridge/src/generation_initialization.rs",
+    "authoritative": "apps/profile-bridge/src/authoritative_generation.rs",
 }
 
 
@@ -49,6 +51,8 @@ def check_sources(sources: dict[str, str]) -> list[str]:
     adapter = sources["adapter"]
     operator = sources["operator"]
     locks = sources["locks"]
+    generation = sources["generation"]
+    authoritative = sources["authoritative"]
 
     for required in ("BridgeCommand::InitialProfile(intent)", "BridgeCommand::SyncClosed(intent)",
                      "run_closed_profile_sync(&intent)", '"--sync-closed"'):
@@ -82,7 +86,7 @@ def check_sources(sources: dict[str, str]) -> list[str]:
         failures.append("durable local dirty evidence must precede native browser launch")
     if "BridgeWorkspaceLock::acquire_or_recover_interrupted(&workspace" not in opened:
         failures.append("native Open must hold the existing per-profile OS admission through the shared recovery owner")
-    lock_admission = function_body(locks, "pub fn acquire_or_recover_interrupted(")
+    lock_admission = function_body(locks, "pub(crate) fn acquire_or_recover_interrupted(")
     if (
         "Self::acquire(workspace, device_id, epoch)" not in lock_admission
         or "Self::recover_interrupted_launch(workspace, device_id, epoch)" not in lock_admission
@@ -97,6 +101,24 @@ def check_sources(sources: dict[str, str]) -> list[str]:
         failures.append("native Open must hold the existing per-profile OS admission through the shared recovery owner")
     if opened.count("browser_writer_locks_absent(&workspace)") < 2:
         failures.append("native Open must verify the existing Firefox file-access gate")
+
+    draft_sync = function_body(generation, "pub fn sync_closed_local_draft(")
+    if draft_sync.count("BridgeWorkspaceLock::acquire_or_recover_interrupted(") != 3:
+        failures.append("closed DRAFT Sync must use the shared same-device Bridge recovery owner")
+    ready_sync = function_body(shipping, "fn sync_closed_ready(")
+    if ready_sync.count("BridgeWorkspaceLock::acquire_or_recover_interrupted(") != 3:
+        failures.append("closed READY Sync must use the shared same-device Bridge recovery owner")
+    draft_reconcile = function_body(
+        authoritative, "pub fn reconcile_closed_draft_with_confirmed_current<"
+    )
+    if "BridgeWorkspaceLock::acquire_or_recover_interrupted(" not in draft_reconcile:
+        failures.append("confirmed-current DRAFT reconciliation must use the shared Bridge recovery owner")
+    ready_reconcile = function_body(
+        authoritative, "pub(crate) fn reconcile_closed_ready_with_confirmed_current<"
+    )
+    if "BridgeWorkspaceLock::acquire_or_recover_interrupted(" not in ready_reconcile:
+        failures.append("confirmed-current READY reconciliation must use the shared Bridge recovery owner")
+
     if "current.profile_version() != intent.expected_version" not in local:
         failures.append("stale local CURRENT must fail closed before browser launch")
 
@@ -138,6 +160,15 @@ def self_test(sources: dict[str, str]) -> list[str]:
         ("local", "BridgeWorkspaceLock::acquire_or_recover_interrupted(&workspace",
          "BridgeWorkspaceLock::acquire(&workspace",
          "native Open must hold the existing per-profile OS admission through the shared recovery owner"),
+        ("generation", "BridgeWorkspaceLock::acquire_or_recover_interrupted(&workspace",
+         "BridgeWorkspaceLock::acquire(&workspace",
+         "closed DRAFT Sync must use the shared same-device Bridge recovery owner"),
+        ("shipping", "BridgeWorkspaceLock::acquire_or_recover_interrupted(",
+         "BridgeWorkspaceLock::acquire(",
+         "closed READY Sync must use the shared same-device Bridge recovery owner"),
+        ("authoritative", "BridgeWorkspaceLock::acquire_or_recover_interrupted(",
+         "BridgeWorkspaceLock::acquire(",
+         "confirmed-current DRAFT reconciliation must use the shared Bridge recovery owner"),
         ("locks", "Self::acquire(workspace, device_id, epoch)", "Ok(())",
          "native Open must hold the existing per-profile OS admission through the shared recovery owner"),
         ("locks", "Self::recover_interrupted_launch(workspace, device_id, epoch)", "Ok(())",

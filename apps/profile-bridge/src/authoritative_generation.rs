@@ -512,7 +512,7 @@ where
     if let Some(workspace) = incomplete_local {
         // The caller holds the precise coordinator lease. Take this device's local lock
         // and compare ALL workspace bytes, including mutable user_data, with cloud truth.
-        let lock = BridgeWorkspaceLock::acquire(&workspace, device_id, workspace_epoch)
+        let lock = BridgeWorkspaceLock::acquire_or_recover_interrupted(&workspace, device_id, workspace_epoch)
             .map_err(|_| AuthoritativeGenerationMaterializationError::IncompleteLocalEvidence)?;
         let restored = (|| {
             if !matches!(browser_writer_locks_absent(&workspace), Ok(true)) {
@@ -686,7 +686,7 @@ where
     if let Some(workspace) = incomplete_local {
         // No original native bytes may be replaced. Recover just the sidecar
         // after exact decrypted BPGW equality under the existing OS writer lock.
-        let lock = BridgeWorkspaceLock::acquire(&workspace, device_id, workspace_epoch)
+        let lock = BridgeWorkspaceLock::acquire_or_recover_interrupted(&workspace, device_id, workspace_epoch)
             .map_err(|_| Error::IncompleteLocalEvidence)?;
         let verified = (|| {
             if !matches!(browser_writer_locks_absent(&workspace), Ok(true)) {

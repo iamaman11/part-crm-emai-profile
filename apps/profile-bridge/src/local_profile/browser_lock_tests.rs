@@ -96,6 +96,60 @@ fn acquire_or_recover_keeps_live_native_and_foreign_writers_blocked()
 }
 
 #[test]
+fn acquire_or_recover_keeps_malformed_marker_blocked()
+-> Result<(), Box<dyn std::error::Error>> {
+    let root_path = test_root("recover-malformed")?;
+    let root = MaterializationRoot::open_or_create(&root_path)?;
+    let (tenant_id, profile_id) = ids()?;
+    let generation_id = GenerationId::parse("generation_01JSTEP8F")?;
+    let workspace = root.create_generation(&tenant_id, &profile_id, &generation_id)?;
+    let device_id = DeviceId::parse("device_01JSTEP8")?;
+    let marker = workspace.path().join(".profile-platform.lock");
+    let malformed = b"not-a-profile-platform-lock";
+    fs::write(&marker, malformed)?;
+
+    assert!(matches!(
+        BridgeWorkspaceLock::acquire_or_recover_interrupted(&workspace, &device_id, 2),
+        Err(LocalProfileError::LockBusy)
+    ));
+    assert_eq!(fs::read(&marker)?, malformed);
+
+    cleanup(root_path)?;
+    Ok(())
+}
+
+#[cfg(unix)]
+#[test]
+fn acquire_or_recover_never_follows_or_replaces_symlink_marker()
+-> Result<(), Box<dyn std::error::Error>> {
+    let root_path = test_root("recover-symlink")?;
+    let root = MaterializationRoot::open_or_create(&root_path)?;
+    let (tenant_id, profile_id) = ids()?;
+    let generation_id = GenerationId::parse("generation_01JSTEP8G")?;
+    let workspace = root.create_generation(&tenant_id, &profile_id, &generation_id)?;
+    let device_id = DeviceId::parse("device_01JSTEP8")?;
+    let marker = workspace.path().join(".profile-platform.lock");
+    let target = root_path.join("marker-target");
+    let target_contents = format!(
+        "profile-platform-bridge-lock-v2\n{}\n1\n",
+        device_id.as_str()
+    );
+    fs::write(&target, target_contents.as_bytes())?;
+    std::os::unix::fs::symlink(&target, &marker)?;
+    let before = fs::read(&target)?;
+
+    assert!(matches!(
+        BridgeWorkspaceLock::acquire_or_recover_interrupted(&workspace, &device_id, 2),
+        Err(LocalProfileError::LockBusy)
+    ));
+    assert_eq!(fs::read(&target)?, before);
+    assert!(fs::symlink_metadata(&marker)?.file_type().is_symlink());
+
+    cleanup(root_path)?;
+    Ok(())
+}
+
+#[test]
 fn inventory_is_deterministic_and_includes_browser_owned_locks()
 -> Result<(), Box<dyn std::error::Error>> {
     let root_path = test_root("inventory")?;
