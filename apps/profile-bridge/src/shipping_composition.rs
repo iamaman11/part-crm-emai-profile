@@ -109,9 +109,7 @@ pub fn run_delivery_command(
 
 #[cfg(windows)]
 mod windows {
-    use super::{
-        ShippingCompositionError, ShippingDeliveryCommand,
-    };
+    use super::{ShippingCompositionError, ShippingDeliveryCommand};
     use crate::authoritative_generation::{
         ensure_authoritative_current, reconcile_closed_draft_with_confirmed_current,
         reconcile_closed_ready_with_confirmed_current,
@@ -128,8 +126,8 @@ mod windows {
     };
     use crate::local_profile::{DeliveryActivationGuard, MaterializationRoot};
     use crate::shipping_control_plane::{
-        ControlPlaneCoordinator, ControlPlaneEnrollment,
-        SharedControlPlaneCoordinator, ShippingControlPlaneError,
+        ControlPlaneCoordinator, ControlPlaneEnrollment, SharedControlPlaneCoordinator,
+        ShippingControlPlaneError,
     };
     use crate::shipping_generation_successor_control::publish_closed_streamed_successor;
     use crate::shipping_generation_successor_control::{
