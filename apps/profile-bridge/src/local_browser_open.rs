@@ -185,9 +185,8 @@ fn run_python_with_executable(
         .map_err(|_| LocalOpenError::DeliveryHealth)?;
     let health_required = started_health.is_some();
     let (health_result_tx, health_result_rx) = std::sync::mpsc::channel();
-    let mut health_confirmation = started_health.map(|confirmation| {
-        move || confirmation.confirm_after_runtime_ready().is_ok()
-    });
+    let mut health_confirmation = started_health
+        .map(|confirmation| move || confirmation.confirm_after_runtime_ready().is_ok());
 
     let mut child = Command::new(executable)
         .arg("-B")
