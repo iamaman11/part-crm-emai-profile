@@ -406,6 +406,7 @@ function promotionErrors(promotion) {
     'TARGET_PROFILE: ${{ needs.resolve-verify.outputs.target_profile }}',
     'EXPECTED_CURRENT_PROFILE: ${{ needs.resolve-verify.outputs.expected_current_profile }}',
     'DISPATCH_DIGEST: ${{ needs.resolve-verify.outputs.dispatch_digest }}',
+    '[[ "$DISPATCH_DIGEST" =~ ^[0-9a-f]{64}$ ]]',
     'dispatch_digest:$dispatch_digest',
     'Download and bind prior READY evidence before provider credentials',
     'AR11_MUTATION_FENCE',
