@@ -2,7 +2,7 @@
 
 **Document status:** HISTORICAL_PROVENANCE / SUPERSEDED EXECUTION PLAN
 
-**Current execution authority:** none; use `docs/ARCHITECTURE_REBASELINE_V3_PLAN.md` and Issue #266
+**Current execution authority:** NONE. This plan is historical only; fresh [#266](https://github.com/iamaman11/part-crm-emai-profile/issues/266) selects [#849](https://github.com/iamaman11/part-crm-emai-profile/issues/849) for installed Windows 559.
 
 **Historical trackers:** #399 and #421
 

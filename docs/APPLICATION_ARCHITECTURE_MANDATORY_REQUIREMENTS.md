@@ -1,7 +1,7 @@
 # Mandatory Application Architecture Requirements
 
 **Document status:** SUBORDINATE_NORMATIVE_CONTRACT  
-**Program authority:** `docs/ARCHITECTURE_REBASELINE_V3_PLAN.md`  
+**Live work:** [#266](https://github.com/iamaman11/part-crm-emai-profile/issues/266) selects one active issue ([#849](https://github.com/iamaman11/part-crm-emai-profile/issues/849) for Windows 559). The former CAP v3 execution program is **historical only**.  
 **Quality contract:** `docs/ARCHITECTURE_EVOLUTION_QUALITY_CONTRACT.md`  
 **opsctl boundary:** `docs/OPSCTL_ARCHITECTURE_BOUNDARY.md`  
 **opsctl doctor:** `docs/OPSCTL_DOCTOR_CONTRACT.md`  

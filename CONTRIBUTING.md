@@ -1,5 +1,8 @@
 # Contributing
 
+> **Current correction:** The old CAP v3 execution program is archived. The sole current selector is [#266](https://github.com/iamaman11/part-crm-emai-profile/issues/266), which points to [#849](https://github.com/iamaman11/part-crm-emai-profile/issues/849) for installed Windows 559. The older references below to stage program authority are historical, not current. CI PASS is not installed-browser PASS.
+
+
 ## Authority and current work
 
 Changes are delivered as bounded implementation transactions through a branch and pull request inside
