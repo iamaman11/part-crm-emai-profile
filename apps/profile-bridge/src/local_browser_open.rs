@@ -4,7 +4,6 @@
 
 use crate::generation_initialization::{InitialProfileOpen, InitialProfileStatus};
 use crate::local_profile::{BridgeWorkspaceLock, LocalProfileError, MaterializationRoot};
-use crate::windows_delivery_runtime::PendingWindowsDeliveryHealthConfirmation;
 use profile_platform_primitives::{DeviceId, GenerationId};
 use sha2::{Digest, Sha256};
 use std::fmt;
@@ -24,6 +23,10 @@ const LOCAL_UNSYNCED: &str = ".local-unsynced";
 const LOCAL_UNSYNCED_CONTENT: &[u8] = b"local-unsynced-v2";
 const CAMOUHOST_LAUNCH_READY_EVENT: &str = "camouhost_stage phase=launch step=ready";
 
+pub(crate) type ReadyConfirmation = Box<dyn FnOnce() -> bool + Send + 'static>;
+pub(crate) type BeforeLaunch =
+    Box<dyn FnOnce() -> Result<Option<ReadyConfirmation>, ()> + Send + 'static>;
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum LocalOpenError {
     InvalidLocalWorkspace,
@@ -33,7 +36,7 @@ pub enum LocalOpenError {
     ProfileBusy,
     IdentityPreparation,
     BrowserNotClosedCleanly,
-    DeliveryHealth,
+    LaunchConfirmation,
 }
 impl fmt::Display for LocalOpenError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -47,7 +50,7 @@ impl fmt::Display for LocalOpenError {
             Self::BrowserNotClosedCleanly => {
                 "Browser close was not verified; local files were kept"
             }
-            Self::DeliveryHealth => "Installed browser runtime health could not be confirmed",
+            Self::LaunchConfirmation => "Browser runtime launch confirmation was not completed",
         })
     }
 }
@@ -152,7 +155,7 @@ fn run_python(
     runtime_root: &Path,
     folder: &Path,
     action: &str,
-    pending_health: Option<PendingWindowsDeliveryHealthConfirmation>,
+    before_launch: Option<BeforeLaunch>,
 ) -> Result<bool, LocalOpenError> {
     // Never invoke a user-selected executable, shell or remote path.
     for relative in [PYTHON, ENTRYPOINT, LOCK] {
@@ -180,11 +183,11 @@ fn run_python(
             runtime_root,
             folder,
             action,
-            pending_health,
+            before_launch,
             Some(&input),
         );
     }
-    run_python_with_input(&executable, runtime_root, folder, action, pending_health, None)
+    run_python_with_input(&executable, runtime_root, folder, action, before_launch, None)
 }
 
 fn ensure_user_data_directory(folder: &Path) -> Result<bool, LocalOpenError> {
@@ -299,7 +302,7 @@ fn run_python_with_executable(
     runtime_root: &Path,
     folder: &Path,
     action: &str,
-    pending_health: Option<PendingWindowsDeliveryHealthConfirmation>,
+    before_launch: Option<BeforeLaunch>,
 ) -> Result<bool, LocalOpenError> {
     run_python_with_input(
         executable,
@@ -316,20 +319,18 @@ fn run_python_with_input(
     runtime_root: &Path,
     folder: &Path,
     action: &str,
-    pending_health: Option<PendingWindowsDeliveryHealthConfirmation>,
+    before_launch: Option<BeforeLaunch>,
     stdin_payload: Option<&[u8]>,
 ) -> Result<bool, LocalOpenError> {
-    // Begin the existing activation-health attempt only after all local
-    // runtime files have been admitted and immediately before process launch.
-    // If spawn or SDK launch fails, no Ready event can confirm this attempt.
-    let started_health = pending_health
-        .map(|pending| pending.start_before_runtime_health())
-        .transpose()
-        .map_err(|_| LocalOpenError::DeliveryHealth)?;
-    let health_required = started_health.is_some();
+    // Delivery health is supplied by the composition owner as a one-shot
+    // callback. Local Open knows only when the native runtime is launched and
+    // when the official Playwright Ready event arrives.
+    let mut health_confirmation = before_launch
+        .map(|before| before().map_err(|_| LocalOpenError::LaunchConfirmation))
+        .transpose()?
+        .flatten();
+    let health_required = health_confirmation.is_some();
     let (health_result_tx, health_result_rx) = std::sync::mpsc::channel();
-    let mut health_confirmation = started_health
-        .map(|confirmation| move || confirmation.confirm_after_runtime_ready().is_ok());
 
     let mut child = Command::new(executable)
         .arg("-B")
@@ -389,7 +390,7 @@ fn run_python_with_input(
         return Ok(false);
     }
     if health_required && !matches!(health_result_rx.try_recv(), Ok(true)) {
-        return Err(LocalOpenError::DeliveryHealth);
+        return Err(LocalOpenError::LaunchConfirmation);
     }
     Ok(true)
 }
@@ -431,15 +432,15 @@ pub fn open(
     device: &DeviceId,
     runtime_root: &Path,
 ) -> Result<(), LocalOpenError> {
-    open_with_health(root, intent, device, runtime_root, None)
+    open_with_before_launch(root, intent, device, runtime_root, None)
 }
 
-pub(crate) fn open_with_health(
+pub(crate) fn open_with_before_launch(
     root: &MaterializationRoot,
     intent: &InitialProfileOpen,
     device: &DeviceId,
     runtime_root: &Path,
-    pending_health: Option<PendingWindowsDeliveryHealthConfirmation>,
+    before_launch: Option<BeforeLaunch>,
 ) -> Result<(), LocalOpenError> {
     let generation = local_generation(intent)?;
     let workspace = open_or_create_workspace(root, intent, &generation)?;
@@ -503,7 +504,7 @@ pub(crate) fn open_with_health(
         runtime_root,
         workspace.path(),
         "--local-open",
-        pending_health,
+        before_launch,
     )? {
         // Adapter failure is not proof that the browser released its files.
         // The caller starts the existing Sync recovery; its Rust file gate
@@ -526,7 +527,8 @@ mod tests {
     use super::{
         CAMOUHOST_LAUNCH_READY_EVENT, ENTRYPOINT, LOCK, LocalOpenError, local_generation,
         mark_local_unsynced, observe_runtime_ready_line, open_or_create_workspace,
-        recheck_workspace_after_writer_admission, run_python_with_executable,
+        recheck_workspace_after_writer_admission, run_python_with_executable, BeforeLaunch,
+        ReadyConfirmation,
     };
     use crate::generation_initialization::{InitialProfileOpen, InitialProfileStatus};
     use profile_platform_primitives::{ActorId, ProfileId, TenantId};
@@ -626,12 +628,18 @@ sys.stderr.flush()
             &state_root,
         )?;
 
+        let before_launch: BeforeLaunch = Box::new(move || {
+            let started = pending.start_before_runtime_health().map_err(|_| ())?;
+            let ready: ReadyConfirmation =
+                Box::new(move || started.confirm_after_runtime_ready().is_ok());
+            Ok(Some(ready))
+        });
         assert!(run_python_with_executable(
             &python,
             &runtime_root,
             &folder,
             "--local-open",
-            Some(pending),
+            Some(before_launch),
         )?);
         assert!(
             crate::windows_delivery_runtime::tests::active_health_confirmed_for_test(&state_root,)?
@@ -673,15 +681,21 @@ sys.stderr.flush()
             &state_root,
         )?;
 
+        let before_launch: BeforeLaunch = Box::new(move || {
+            let started = pending.start_before_runtime_health().map_err(|_| ())?;
+            let ready: ReadyConfirmation =
+                Box::new(move || started.confirm_after_runtime_ready().is_ok());
+            Ok(Some(ready))
+        });
         assert_eq!(
             run_python_with_executable(
                 &python,
                 &runtime_root,
                 &folder,
                 "--local-open",
-                Some(pending),
+                Some(before_launch),
             ),
-            Err(LocalOpenError::DeliveryHealth)
+            Err(LocalOpenError::LaunchConfirmation)
         );
         assert!(
             !crate::windows_delivery_runtime::tests::active_health_confirmed_for_test(&state_root,)?

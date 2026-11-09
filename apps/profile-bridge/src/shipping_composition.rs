@@ -889,13 +889,26 @@ mod windows {
         }
     }
 
+    fn delivery_health_before_launch(
+        pending: Option<
+            crate::windows_delivery_runtime::PendingWindowsDeliveryHealthConfirmation,
+        >,
+    ) -> Option<crate::local_browser_open::BeforeLaunch> {
+        pending.map(|pending| {
+            Box::new(move || {
+                let started = pending.start_before_runtime_health().map_err(|_| ())?;
+                let ready: crate::local_browser_open::ReadyConfirmation =
+                    Box::new(move || started.confirm_after_runtime_ready().is_ok());
+                Ok(Some(ready))
+            }) as crate::local_browser_open::BeforeLaunch
+        })
+    }
+
     pub fn run_initial(
         intent: &crate::generation_initialization::InitialProfileOpen,
     ) -> Result<(), ShippingCompositionError> {
         // The CRM web page already supplied the selected profile. Opening the
-        // browser is now a local filesystem/process operation, not an R2
-        // initialization or a Coordinator lease. Sync belongs to a different
-        // operation and cannot block a local Firefox window.
+        // browser is a local filesystem/process operation; Sync remains separate.
         if recover_delivery_before_open()? {
             return Ok(());
         }
@@ -910,26 +923,19 @@ mod windows {
         }
         let root = MaterializationRoot::open_or_create(&config.materialization_root)
             .map_err(|_| ShippingCompositionError::Configuration)?;
-        match crate::local_browser_open::open_with_health(
-            &root,
-            intent,
-            binding.device_id(),
-            delivery.runtime_root(),
-            delivery.pending_health_confirmation(),
-        ) {
-            Ok(()) => {
-                start_sync_after_close(intent);
-                Ok(())
-            }
-            Err(crate::local_browser_open::LocalOpenError::DeliveryHealth) => {
-                start_sync_after_close(intent);
-                Err(ShippingCompositionError::LocalOpen(
-                    crate::local_browser_open::LocalOpenError::DeliveryHealth,
-                ))
-            }
+
+        let open_local = || {
+            crate::local_browser_open::open_with_before_launch(
+                &root,
+                intent,
+                binding.device_id(),
+                delivery.runtime_root(),
+                delivery_health_before_launch(delivery.pending_health_confirmation()),
+            )
+        };
+        let result = match open_local() {
             Err(crate::local_browser_open::LocalOpenError::RestoreRequired) => {
                 // Only a missing READY local folder crosses the cloud boundary.
-                // Ordinary Open/Close never requires a network request.
                 let device = binding.device_id().clone();
                 let application = WindowsDeviceApplication::from_system(
                     config.control_plane_origin.clone(),
@@ -938,8 +944,6 @@ mod windows {
                 .map_err(|_| ShippingCompositionError::RestoreUnavailable)?;
                 let mut remote =
                     ControlPlaneCoordinator::for_local_current_restore(application.transport());
-                // Worker selects CURRENT; neither the browser URI nor local files
-                // may choose a cloud generation or an historical fallback.
                 let selected = remote
                     .download_capability(&intent.tenant_id, &intent.profile_id)
                     .map_err(|_| ShippingCompositionError::RestoreUnavailable)?;
@@ -959,43 +963,21 @@ mod windows {
                     &mut downloader,
                 )
                 .map_err(|_| ShippingCompositionError::RestoreUnavailable)?;
-                // Re-enter the SAME local native Open; no managed Camoufox path
-                // and no Coordinator lease are introduced by recovery.
-                match crate::local_browser_open::open_with_health(
-                    &root,
-                    intent,
-                    &device,
-                    delivery.runtime_root(),
-                    delivery.pending_health_confirmation(),
-                ) {
-                    Ok(()) => {
-                        start_sync_after_close(intent);
-                        Ok(())
-                    }
-                    Err(crate::local_browser_open::LocalOpenError::DeliveryHealth) => {
-                        start_sync_after_close(intent);
-                        Err(ShippingCompositionError::LocalOpen(
-                            crate::local_browser_open::LocalOpenError::DeliveryHealth,
-                        ))
-                    }
-                    Err(error) => {
-                        // Every post-restore local failure may leave the
-                        // existing .local-unsynced marker. Start the same
-                        // idempotent Sync attempt; it exits cleanly when no
-                        // marker exists and otherwise waits for native file
-                        // release before snapshot. No CRM return is required.
-                        start_sync_after_close(intent);
-                        Err(ShippingCompositionError::LocalOpen(error))
-                    }
-                }
+                // Re-enter the same local Open with the same runtime and owners.
+                open_local()
+            }
+            result => result,
+        };
+
+        match result {
+            Ok(()) => {
+                start_sync_after_close(intent);
+                Ok(())
             }
             Err(error) => {
-                // A stale CRM launch intent must not start a cloud write for
-                // conflicting local bytes. Keep the original folder and dirty
-                // marker for the existing explicit recovery/Restore contract.
+                // One error path owns the existing Sync handoff. Stale CRM
+                // intents alone must not publish conflicting local bytes.
                 if error != crate::local_browser_open::LocalOpenError::StaleLocalWorkspace {
-                    // The adapter may fail before or after launch. The same
-                    // Sync checks the dirty marker and native file locks.
                     start_sync_after_close(intent);
                 }
                 Err(ShippingCompositionError::LocalOpen(error))

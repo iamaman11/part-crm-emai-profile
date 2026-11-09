@@ -103,20 +103,21 @@ def main() -> int:
     local_source = (SOURCE.parents[2] / "apps/profile-bridge/src/local_browser_open.rs").read_text(
         encoding="utf-8"
     )
-    local_owner = local_source.split("pub(crate) fn open_with_health(", 1)[1].split("\n}\n", 1)[0]
+    local_owner = local_source.split("pub(crate) fn open_with_before_launch(", 1)[1].split("\n}\n", 1)[0]
     local_open_after_dirty = local_owner.split("mark_local_unsynced(workspace.path())?;", 1)[1]
     assert 'run_python(' in local_open_after_dirty
     assert '"--local-open"' in local_open_after_dirty
-    assert 'pending_health' in local_open_after_dirty
+    assert 'before_launch' in local_open_after_dirty
     assert ".local-unsynced" in local_source
     assert "ControlPlaneEnrollment" not in local_owner
     assert "MachineHttpPort" not in local_owner and "SharedControlPlaneCoordinator" not in local_owner
+    assert "windows_delivery_runtime" not in local_source.split("#[cfg(test)]", 1)[0]
     composition = (SOURCE.parents[2] /
                    "apps/profile-bridge/src/shipping_composition.rs").read_text(encoding="utf-8")
     local_first = composition.split("    pub fn run_initial(", 1)[1].split(
         "    pub fn run_delivery_command(", 1
     )[0]
-    assert "local_browser_open::open" in local_first
+    assert "local_browser_open::open_with_before_launch" in local_first
     assert "generation_initialization::initialize(" not in local_first
     assert "ControlPlaneEnrollment" not in local_first
     assert "claim_launch_intent" not in local_first

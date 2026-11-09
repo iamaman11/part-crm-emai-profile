@@ -143,7 +143,7 @@ def check_sources(sources: dict[str, str]) -> list[str]:
             failures.append(f"shipping Bridge CLI lost single native Open/Sync dispatch: {required}")
 
     initial = function_body(shipping, "pub fn run_initial(")
-    local_open = initial.find("crate::local_browser_open::open_with_health(")
+    local_open = initial.find("crate::local_browser_open::open_with_before_launch(")
     sync_handoff = initial.find("start_sync_after_close(intent);")
     if local_open < 0 or sync_handoff < local_open:
         failures.append("normal native Open must hand off to the same post-close Sync")
@@ -162,7 +162,7 @@ def check_sources(sources: dict[str, str]) -> list[str]:
         if required not in shipping:
             failures.append(f"single existing snapshot/cloud Save owner missing: {required}")
 
-    opened = function_body(local, "pub(crate) fn open_with_health(")
+    opened = function_body(local, "pub(crate) fn open_with_before_launch(")
     marker = opened.find("mark_local_unsynced(workspace.path())?;")
     launch = opened.find("run_python(", marker)
     launch_call = opened[launch : launch + 256] if launch >= 0 else ""
@@ -170,9 +170,11 @@ def check_sources(sources: dict[str, str]) -> list[str]:
         marker < 0
         or launch < marker
         or '"--local-open"' not in launch_call
-        or "pending_health" not in launch_call
+        or "before_launch" not in launch_call
     ):
         failures.append("durable local dirty evidence and health handoff must precede native browser launch")
+    if "windows_delivery_runtime" in local.split("#[cfg(test)]", 1)[0]:
+        failures.append("local Open must not own Windows delivery health state")
     if "BridgeWorkspaceLock::acquire_or_recover_interrupted(&workspace" not in opened:
         failures.append("native Open must hold the existing per-profile OS admission through the shared recovery owner")
     lock_admission = function_body(locks, "pub(crate) fn acquire_or_recover_interrupted(")
