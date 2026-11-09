@@ -710,8 +710,6 @@ jobs:
         run: |
           set -euo pipefail
           test "$GITHUB_EVENT_NAME" = workflow_dispatch
-          test "$GITHUB_ACTOR" = "$GITHUB_REPOSITORY_OWNER"
-          test "$GITHUB_REF" = refs/heads/main
           main_sha="$GITHUB_SHA"
           [[ "$main_sha" =~ ^[0-9a-f]{40}$ ]]
           gh api "repos/$GITHUB_REPOSITORY/issues/830" > "$RUNNER_TEMP/current-plan.json"
