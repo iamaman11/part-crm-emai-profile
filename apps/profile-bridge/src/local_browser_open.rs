@@ -168,8 +168,8 @@ fn run_python(
 
     let executable = runtime_root.join(PYTHON);
     if action == "--materialize-identity" {
-        // The SDK receives an already-created directory; Rust owns its creation.
-        let _ = ensure_user_data_directory(folder)?;
+        // Never attach a newly generated identity to pre-existing browser data.
+        require_empty_user_data(folder)?;
         return materialize_identity_with_executable(&executable, runtime_root, folder);
     }
     if action == "--local-open" {
@@ -218,6 +218,14 @@ fn ensure_user_data_directory(folder: &Path) -> Result<bool, LocalOpenError> {
         None => Ok(true),
         Some(Ok(_)) => Ok(false),
         Some(Err(_)) => Err(LocalOpenError::InvalidLocalWorkspace),
+    }
+}
+
+fn require_empty_user_data(folder: &Path) -> Result<(), LocalOpenError> {
+    if ensure_user_data_directory(folder)? {
+        Ok(())
+    } else {
+        Err(LocalOpenError::IdentityPreparation)
     }
 }
 
@@ -577,6 +585,25 @@ mod tests {
         assert_eq!(
             super::read_profile_config(folder)?,
             String::from_utf8(config.to_vec())?
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn identity_generation_requires_empty_user_data()
+    -> Result<(), Box<dyn std::error::Error>> {
+        use std::fs;
+
+        let directory = tempfile::tempdir()?;
+        let folder = directory.path();
+        assert_eq!(super::require_empty_user_data(folder), Ok(()));
+        fs::write(
+            folder.join(super::USER_DATA).join("prefs.js"),
+            b"existing browser state",
+        )?;
+        assert_eq!(
+            super::require_empty_user_data(folder),
+            Err(LocalOpenError::IdentityPreparation)
         );
         Ok(())
     }

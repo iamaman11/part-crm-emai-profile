@@ -104,6 +104,10 @@ def main() -> int:
         encoding="utf-8"
     )
     local_owner = local_source.split("pub(crate) fn open_with_before_launch(", 1)[1].split("\n}\n", 1)[0]
+    materialize_branch = local_source.split(
+        'if action == "--materialize-identity"', 1
+    )[1].split('if action == "--local-open"', 1)[0]
+    assert "require_empty_user_data(folder)?" in materialize_branch
     local_open_after_dirty = local_owner.split("mark_local_unsynced(workspace.path())?;", 1)[1]
     assert 'run_python(' in local_open_after_dirty
     assert '"--local-open"' in local_open_after_dirty
