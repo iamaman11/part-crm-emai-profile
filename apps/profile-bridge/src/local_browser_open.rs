@@ -212,9 +212,7 @@ fn ensure_user_data_directory(folder: &Path) -> Result<bool, LocalOpenError> {
 fn read_profile_config(folder: &Path) -> Result<String, LocalOpenError> {
     let path = folder.join(CONFIG);
     let metadata = fs::symlink_metadata(&path).map_err(|_| LocalOpenError::IdentityPreparation)?;
-    if metadata.file_type().is_symlink()
-        || !metadata.is_file()
-        || metadata.len() > MAX_CONFIG_BYTES
+    if metadata.file_type().is_symlink() || !metadata.is_file() || metadata.len() > MAX_CONFIG_BYTES
     {
         return Err(LocalOpenError::IdentityPreparation);
     }
@@ -303,7 +301,14 @@ fn run_python_with_executable(
     action: &str,
     pending_health: Option<PendingWindowsDeliveryHealthConfirmation>,
 ) -> Result<bool, LocalOpenError> {
-    run_python_with_input(executable, runtime_root, folder, action, pending_health, None)
+    run_python_with_input(
+        executable,
+        runtime_root,
+        folder,
+        action,
+        pending_health,
+        None,
+    )
 }
 
 fn run_python_with_input(

@@ -256,7 +256,7 @@ def check_sources(sources: dict[str, str]) -> list[str]:
         if forbidden in native:
             failures.append(f"custom native browser lifecycle is forbidden: {forbidden}")
 
-    if 'return asyncio.run(run_local_profile(Path(sys.argv[2])))' not in adapter:
+    if 'return asyncio.run(run_local_profile(Path(sys.argv[2]), config, first_run))' not in adapter:
         failures.append("user-native adapter must select exactly the local SDK path")
     if 'print("user-native runtime requires --local-open"' not in adapter:
         failures.append("user-native path must reject the legacy automation IPC")
@@ -293,7 +293,7 @@ def self_test(sources: dict[str, str]) -> list[str]:
          "native file-release proof"),
         ("native", 'self.context.on("close"', 'self.context.on("missing"',
          "official native SDK/Playwright integration"),
-        ("adapter", "return asyncio.run(run_local_profile(Path(sys.argv[2])))",
+        ("adapter", "return asyncio.run(run_local_profile(Path(sys.argv[2]), config, first_run))",
          "return run_ipc()", "user-native adapter"),
         ("operator", '#[cfg(any(test, feature = "synthetic-test-bin"))]\npub struct ProfileBridgeOperator',
          "pub struct ProfileBridgeOperator", "retired operator"),
