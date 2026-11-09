@@ -624,7 +624,9 @@ pub(crate) mod tests {
     pub(crate) fn active_health_confirmed_for_test(
         state_root: &Path,
     ) -> Result<bool, Box<dyn std::error::Error>> {
-        Ok(DeliveryStateStore::open(state_root)?.state().active_health_confirmed())
+        Ok(DeliveryStateStore::open(state_root)?
+            .state()
+            .active_health_confirmed())
     }
 
     #[test]

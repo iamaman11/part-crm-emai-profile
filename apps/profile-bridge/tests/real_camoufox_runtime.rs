@@ -331,7 +331,7 @@ fn run_native_open_proof() -> Result<ApprovedRuntimeBundle, Box<dyn std::error::
             &native_runtime,
             None,
         )
-            .map_err(|error| error.to_string())
+        .map_err(|error| error.to_string())
     });
 
     // A hosted Windows runner cannot guarantee that its foreground desktop

@@ -383,7 +383,10 @@ mod tests {
         });
 
         assert_eq!(
-            observe_runtime_ready_line("camouhost_stage phase=launch step=ready-extra", &mut confirmation),
+            observe_runtime_ready_line(
+                "camouhost_stage phase=launch step=ready-extra",
+                &mut confirmation
+            ),
             None
         );
         assert_eq!(calls.get(), 0);
@@ -420,8 +423,8 @@ mod tests {
 
     #[cfg(windows)]
     #[test]
-    fn windows_python_stderr_ready_event_confirms_pending_delivery_health(
-    ) -> Result<(), Box<dyn std::error::Error>> {
+    fn windows_python_stderr_ready_event_confirms_pending_delivery_health()
+        -> Result<(), Box<dyn std::error::Error>> {
         use std::fs;
         use std::path::PathBuf;
 
@@ -461,16 +464,16 @@ sys.stderr.flush()
             "--local-open",
             Some(pending),
         )?);
-        assert!(crate::windows_delivery_runtime::tests::active_health_confirmed_for_test(
-            &state_root,
-        )?);
+        assert!(
+            crate::windows_delivery_runtime::tests::active_health_confirmed_for_test(&state_root,)?
+        );
         Ok(())
     }
 
     #[cfg(windows)]
     #[test]
-    fn windows_process_without_ready_event_cannot_confirm_delivery_health(
-    ) -> Result<(), Box<dyn std::error::Error>> {
+    fn windows_process_without_ready_event_cannot_confirm_delivery_health()
+        -> Result<(), Box<dyn std::error::Error>> {
         use std::fs;
         use std::path::PathBuf;
 
@@ -510,9 +513,9 @@ sys.stderr.flush()
             ),
             Err(LocalOpenError::DeliveryHealth)
         );
-        assert!(!crate::windows_delivery_runtime::tests::active_health_confirmed_for_test(
-            &state_root,
-        )?);
+        assert!(
+            !crate::windows_delivery_runtime::tests::active_health_confirmed_for_test(&state_root,)?
+        );
         Ok(())
     }
 

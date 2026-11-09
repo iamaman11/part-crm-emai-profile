@@ -418,6 +418,7 @@ impl UserDiagnostic {
                         Local::ProfileBusy => "BRIDGE_LOCAL_BROWSER_BUSY",
                         Local::IdentityPreparation => "BRIDGE_LOCAL_IDENTITY_NOT_READY",
                         Local::BrowserNotClosedCleanly => "BRIDGE_LOCAL_CLOSE_UNVERIFIED",
+                        Local::DeliveryHealth => "BRIDGE_RUNTIME_NOT_READY",
                     }
                 }
                 ShippingCompositionError::SyncUnconfirmed => "BRIDGE_CLOUD_SYNC_UNCONFIRMED",
@@ -861,6 +862,9 @@ impl UserDiagnostic {
                     }
                     Local::BrowserNotClosedCleanly => {
                         "The native Firefox close was not verified. Local browser data was preserved; no cloud Save receipt was issued."
+                    }
+                    Local::DeliveryHealth => {
+                        "The installed browser runtime did not confirm its Playwright-ready event. The activation was not marked healthy; keep local profile files and use the existing delivery recovery path."
                     }
                 }
             }
