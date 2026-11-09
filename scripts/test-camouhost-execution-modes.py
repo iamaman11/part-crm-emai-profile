@@ -102,7 +102,7 @@ def main() -> int:
     composition = (SOURCE.parents[2] /
                    "apps/profile-bridge/src/shipping_composition.rs").read_text(encoding="utf-8")
     local_first = composition.split("    pub fn run_initial(", 1)[1].split(
-        "    pub fn run(claim:", 1
+        "    pub fn run_delivery_command(", 1
     )[0]
     assert "local_browser_open::open" in local_first
     assert "generation_initialization::initialize(" not in local_first
@@ -128,15 +128,16 @@ def main() -> int:
         assert run({runtime.EXECUTION_MODE_ENV: runtime.USER_NATIVE_MODE,
                     runtime.HEADLESS_MODE_ENV: invalid}, 2, []), "no headless fallback"
 
-    # The old managed SDK remains reachable *only* through the explicit
-    # automation execution mode. It is not wired to shipping Windows Open.
+    # The isolated Python Playwright automation IPC remains reachable only
+    # through its explicit disposable-profile execution mode. It is not wired
+    # to shipping Windows Open.
     assert run({runtime.EXECUTION_MODE_ENV: runtime.AUTOMATION_PLAYWRIGHT_MODE},
                2, []), "automation must not open a managed context without a job"
     run({runtime.EXECUTION_MODE_ENV: runtime.AUTOMATION_PLAYWRIGHT_MODE,
          runtime.AGENT_DIRECTORY_ENV: "/tmp/authorized-test-inbox"},
         18, ["automation"])
-    # C09 runs the official SDK on an isolated, exclusively owned R2
-    # historical restore; no generic scripts or user-browser attachment.
+    # The isolated cold-probe adapter is test/automation-only and cannot be
+    # reached from the user-native Rust Open path.
     run({runtime.EXECUTION_MODE_ENV: runtime.ISOLATED_COLD_PROBE_MODE},
         18, ["automation"])
     for env in (
