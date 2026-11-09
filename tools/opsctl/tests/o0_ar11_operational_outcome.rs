@@ -340,9 +340,9 @@ fn ar11_workflow_terminalizes_after_owner_capture_and_before_final_assertion() -
     assert!(workflow.contains("exact-current-fence.json"));
 
     let resolve = workflow
-        .split("  resolve-verify:\\n")
+        .split("  resolve-verify:\n")
         .nth(1)
-        .and_then(|tail| tail.split("  mutate:\\n").next())
+        .and_then(|tail| tail.split("  mutate:\n").next())
         .ok_or_else(|| "manual resolve-verify job must exist".to_string())?;
     assert!(resolve.contains("environment: staging"));
     assert!(resolve.contains("STAGING_CANDIDATE"));
