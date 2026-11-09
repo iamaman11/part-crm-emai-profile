@@ -97,18 +97,17 @@ jobs:
         if: needs.scope.outputs.heavy == 'true'
         run: cargo test --locked -p profile-bridge --lib
 
-  bridge-regression-windows:
-    name: Profile Bridge Windows regression
+  runtime-package-windows:
+    name: Build and verify official Windows Camoufox runtime
     needs: scope
-    if: always()
+    if: needs.scope.outputs.heavy == 'true'
     runs-on: windows-2025
     timeout-minutes: 90
     steps:
       - name: Require successful scope classification
         shell: pwsh
         run: |
-          if ('${{ needs.scope.result }}' -ne 'success') { throw 'Camoufox scope classification failed' }
-          if ('${{ needs.scope.outputs.heavy }}' -notin @('true','false')) { throw 'invalid Camoufox scope classification' }
+          if ('${{ needs.scope.result }}' -ne 'success' -or '${{ needs.scope.outputs.heavy }}' -ne 'true') { throw 'Camoufox scope classification failed' }
 
       - name: Checkout exact candidate
         uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a
@@ -122,13 +121,11 @@ jobs:
         run: python -c "import os, subprocess; actual = subprocess.check_output(['git', 'rev-parse', 'HEAD'], text=True).strip(); expected = os.environ['EXPECTED_SOURCE_SHA']; assert actual == expected, f'expected {expected}, got {actual}'"
 
       - name: Set up exact build Python
-        if: needs.scope.outputs.heavy == 'true'
         uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
         with:
           python-version: '3.12.10'
 
       - name: Validate existing runtime owners
-        if: needs.scope.outputs.heavy == 'true'
         shell: pwsh
         run: |
           python -m py_compile runtime/camouhost/real.py runtime/camouhost/native_process.py scripts/camouhost-runtime-build-windows.py scripts/camouhost-runtime-package.py scripts/test-camouhost-native-process.py scripts/test-camouhost-native-ipc.py scripts/test-camouhost-execution-modes.py
@@ -145,7 +142,6 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw 'compressed runtime packager self-test failed' }
 
       - name: Materialize official browser and verified offline fpgen model
-        if: needs.scope.outputs.heavy == 'true'
         shell: pwsh
         run: |
           $root = Join-Path $env:RUNNER_TEMP 'camouhost-runtime'
@@ -156,12 +152,8 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw 'offline fpgen model pin failed' }
 
       - name: Prove official Firefox native restored tabs and POST safety on exact runtime
-        if: needs.scope.outputs.heavy == 'true'
         shell: pwsh
         run: |
-          # Use the exact already built official 158 runtime BEFORE expensive Rust regressions.
-          # The fixture uses real SessionStore/no-store pages and actual form POST,
-          # not mocked routes, synthetic browser metadata or a second owner.
           $root = Join-Path $env:RUNNER_TEMP 'camouhost-runtime'
           $python = Join-Path $root 'python/python.exe'
           $log = Join-Path $env:RUNNER_TEMP 'native-sessionstore-restore.log'
@@ -179,7 +171,6 @@ jobs:
           }
 
       - name: Package exact compressed Release Set runtime input
-        if: needs.scope.outputs.heavy == 'true'
         shell: pwsh
         run: |
           $root = Join-Path $env:RUNNER_TEMP 'camouhost-runtime'
@@ -191,12 +182,62 @@ jobs:
           python scripts/camouhost-runtime-package.py verify-manifest --manifest "$manifest"
           if ($LASTEXITCODE -ne 0) { throw 'compressed runtime manifest invalid' }
 
-      - name: Read actual compressed official runtime via shipping Rust delivery reader
-        if: needs.scope.outputs.heavy == 'true'
+      - name: Upload exact-head official runtime for downstream Windows proofs
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: official-158-runtime-${{ github.event.pull_request.head.sha || github.sha }}
+          path: |
+            ${{ runner.temp }}/runtime-bundle.tar.gz
+            ${{ runner.temp }}/runtime-manifest.json
+          if-no-files-found: error
+          retention-days: 7
+
+  shipping-archive-reader-windows:
+    name: Rust shipping reader verifies exact compressed Windows runtime
+    needs: [scope, runtime-package-windows]
+    if: needs.scope.outputs.heavy == 'true'
+    runs-on: windows-2025
+    timeout-minutes: 45
+    steps:
+      - name: Require exact runtime package
         shell: pwsh
         run: |
-          $env:AR10_PACKAGED_RUNTIME_ARCHIVE = Join-Path $env:RUNNER_TEMP 'runtime-bundle.tar.gz'
-          $env:AR10_PACKAGED_RUNTIME_MANIFEST = Join-Path $env:RUNNER_TEMP 'runtime-manifest.json'
+          if ('${{ needs.scope.result }}' -ne 'success' -or '${{ needs.runtime-package-windows.result }}' -ne 'success') { throw 'exact Windows runtime package is not available' }
+
+      - name: Checkout exact candidate
+        uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+
+      - name: Verify exact source checkout
+        env:
+          EXPECTED_SOURCE_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: python -c "import os, subprocess; actual = subprocess.check_output(['git', 'rev-parse', 'HEAD'], text=True).strip(); expected = os.environ['EXPECTED_SOURCE_SHA']; assert actual == expected, f'expected {expected}, got {actual}'"
+
+      - name: Restore versioned Rust dependencies
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6
+        with:
+          shared-key: profile-bridge-ci-v1
+          workspaces: |
+            . -> target
+          cache-on-failure: 'true'
+
+      - name: Download exact official runtime artifact
+        uses: actions/download-artifact@70fc10c6e5e1ce46ad2ea6f2b72d43f7d47b13c3
+        with:
+          name: official-158-runtime-${{ github.event.pull_request.head.sha || github.sha }}
+          path: ${{ runner.temp }}/camouhost-runtime-artifact
+
+      - name: Run Windows Bridge library tests and production archive reader
+        shell: pwsh
+        run: |
+          cargo test --locked -p profile-bridge --lib
+          if ($LASTEXITCODE -ne 0) { throw 'Windows Bridge library tests failed' }
+          $archive = Join-Path $env:RUNNER_TEMP 'camouhost-runtime-artifact/runtime-bundle.tar.gz'
+          $manifest = Join-Path $env:RUNNER_TEMP 'camouhost-runtime-artifact/runtime-manifest.json'
+          $env:AR10_PACKAGED_RUNTIME_ARCHIVE = $archive
+          $env:AR10_PACKAGED_RUNTIME_MANIFEST = $manifest
           $log = Join-Path $env:RUNNER_TEMP 'shipping-runtime-archive-reader.log'
           cargo test --locked -p profile-bridge --test real_camoufox_runtime shipping_windows_runtime_archive_is_readable_by_production_delivery_reader -- --exact --nocapture 2>&1 |
             Tee-Object -FilePath $log
@@ -207,32 +248,107 @@ jobs:
             throw 'REAL_SHIPPING_ARCHIVE_READER_NOT_EXECUTED_OR_NOT_PASSED'
           }
 
+  bridge-regression-windows:
+    name: Profile Bridge Windows regression
+    needs: [scope, runtime-package-windows, shipping-archive-reader-windows]
+    if: always()
+    runs-on: windows-2025
+    timeout-minutes: 90
+    steps:
+      - name: Require successful prerequisites
+        shell: pwsh
+        run: |
+          if ('${{ needs.scope.result }}' -ne 'success') { throw 'Camoufox scope classification failed' }
+          if ('${{ needs.scope.outputs.heavy }}' -notin @('true','false')) { throw 'invalid Camoufox proof scope' }
+          if ('${{ needs.scope.outputs.heavy }}' -eq 'true') {
+            if ('${{ needs.runtime-package-windows.result }}' -ne 'success') { throw 'official runtime package failed' }
+            if ('${{ needs.shipping-archive-reader-windows.result }}' -ne 'success') { throw 'production runtime archive reader failed' }
+          } else {
+            Write-Host 'Runtime-unrelated PR: exact scope classification is sufficient.'
+          }
+
+      - name: Checkout exact candidate
+        if: needs.scope.outputs.heavy == 'true'
+        uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+
+      - name: Verify exact source checkout
+        if: needs.scope.outputs.heavy == 'true'
+        env:
+          EXPECTED_SOURCE_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: python -c "import os, subprocess; actual = subprocess.check_output(['git', 'rev-parse', 'HEAD'], text=True).strip(); expected = os.environ['EXPECTED_SOURCE_SHA']; assert actual == expected, f'expected {expected}, got {actual}'"
+
+      - name: Restore versioned Rust dependencies
+        if: needs.scope.outputs.heavy == 'true'
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6
+        with:
+          shared-key: profile-bridge-ci-v1
+          workspaces: |
+            . -> target
+          cache-on-failure: 'true'
+
+      - name: Download exact official runtime artifact
+        if: needs.scope.outputs.heavy == 'true'
+        uses: actions/download-artifact@70fc10c6e5e1ce46ad2ea6f2b72d43f7d47b13c3
+        with:
+          name: official-158-runtime-${{ github.event.pull_request.head.sha || github.sha }}
+          path: ${{ runner.temp }}/camouhost-runtime-artifact
+
+      - name: Extract and verify exact official runtime
+        if: needs.scope.outputs.heavy == 'true'
+        shell: pwsh
+        run: |
+          $artifact = Join-Path $env:RUNNER_TEMP 'camouhost-runtime-artifact'
+          $archive = Join-Path $artifact 'runtime-bundle.tar.gz'
+          $externalManifest = Join-Path $artifact 'runtime-manifest.json'
+          $root = Join-Path $env:RUNNER_TEMP 'camouhost-runtime'
+          New-Item -ItemType Directory -Path $root -Force | Out-Null
+          tar.exe -xzf $archive -C $root
+          if ($LASTEXITCODE -ne 0) { throw 'official runtime archive extraction failed' }
+          $embedded = Join-Path $root 'runtime-manifest.json'
+          if (-not (Test-Path -LiteralPath $embedded -PathType Leaf)) { throw 'embedded runtime manifest missing' }
+          if ((Get-FileHash -Algorithm SHA256 $embedded).Hash -ne (Get-FileHash -Algorithm SHA256 $externalManifest).Hash) {
+            throw 'embedded runtime manifest differs from exact packaged manifest'
+          }
+          python scripts/camouhost-runtime-package.py verify-manifest --manifest $externalManifest
+          if ($LASTEXITCODE -ne 0) { throw 'exact runtime manifest verification failed' }
+
       - name: Run official Camoufox Playwright user Open/Close through production Bridge crates
         if: needs.scope.outputs.heavy == 'true'
         shell: pwsh
         run: |
-          cargo test --locked -p profile-bridge --lib
-          if ($LASTEXITCODE -ne 0) { throw 'Windows Bridge library tests failed' }
           $root = Join-Path $env:RUNNER_TEMP 'camouhost-runtime'
-          # Only the existing packager owns the exact runtime manifest.
-          Copy-Item -LiteralPath (Join-Path $env:RUNNER_TEMP 'runtime-manifest.json') -Destination (Join-Path $root 'runtime-manifest.json') -ErrorAction Stop
           $env:AR10_REAL_CAMOUFOX = '1'
           $env:AR10_PYTHON = Join-Path $root 'python/python.exe'
           $env:AR10_RUNTIME_ROOT = $root
           $env:AR10_REAL_CAMOUFOX_HEADLESS = 'false'
-          cargo test --locked -p profile-bridge --test real_camoufox_runtime bridge_preflight_launches_real_camoufox_through_official_playwright_without_page_inspection -- --exact --nocapture
+          $log = Join-Path $env:RUNNER_TEMP 'real-camoufox-open-close.log'
+          cargo test --locked -p profile-bridge --test real_camoufox_runtime bridge_preflight_launches_real_camoufox_through_official_playwright_without_page_inspection -- --exact --nocapture 2>&1 |
+            Tee-Object -FilePath $log
           if ($LASTEXITCODE -ne 0) { throw 'official Camoufox Playwright Bridge integration failed' }
+          $text = Get-Content -Raw -LiteralPath $log
+          if ($text -notmatch 'AR10_COLD_CYCLE_COMPLETED=PASS;ordinal=3') {
+            throw 'REAL_CAMOUFOX_THREE_COLD_OPEN_CLOSE_CYCLES_NOT_CONFIRMED'
+          }
 
-      - name: Upload exact PR candidate for installed Windows evaluation
-        if: needs.scope.outputs.heavy == 'true'
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
-        with:
-          name: official-158-runtime-${{ github.event.pull_request.head.sha || github.sha }}
-          path: |
-            ${{ runner.temp }}/runtime-bundle.tar.gz
-            ${{ runner.temp }}/runtime-manifest.json
-          if-no-files-found: error
-          retention-days: 7
+  camoufox-required-proof:
+    # Branch protection retains the canonical cold-launch check name. The Windows
+    # package, archive-reader and user Open/Close jobs jointly own the real proof.
+    name: Real Camoufox cold-launch proof
+    needs: [scope, runtime-package-windows, shipping-archive-reader-windows, bridge-regression-windows]
+    if: always()
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Require exact official Camoufox and Bridge Windows proof
+        run: |
+          test "${{ needs.scope.result }}" = success
+          if [ "${{ needs.scope.outputs.heavy }}" = "true" ]; then
+            test "${{ needs.runtime-package-windows.result }}" = success
+            test "${{ needs.shipping-archive-reader-windows.result }}" = success
+          fi
+          test "${{ needs.bridge-regression-windows.result }}" = success
 
   camoufox-required-proof:
     # Branch protection retains the canonical cold-launch check name. The single
