@@ -185,8 +185,9 @@ fn run_python_with_executable(
         .map_err(|_| LocalOpenError::DeliveryHealth)?;
     let health_required = started_health.is_some();
     let (health_result_tx, health_result_rx) = std::sync::mpsc::channel();
-    let mut health_confirmation = started_health
-        .map(|confirmation| move || confirmation.confirm_after_runtime_ready().is_ok());
+    let mut health_confirmation = started_health.map(|confirmation| {
+        move || confirmation.confirm_after_runtime_ready().is_ok()
+    });
 
     let mut child = Command::new(executable)
         .arg("-B")
@@ -355,9 +356,9 @@ pub fn open(
 #[cfg(test)]
 mod tests {
     use super::{
-        CAMOUHOST_LAUNCH_READY_EVENT, LocalOpenError, local_generation, mark_local_unsynced,
-        observe_runtime_ready_line, open_or_create_workspace, recheck_workspace_after_writer_admission,
-        run_python_with_executable, ENTRYPOINT, LOCK,
+        CAMOUHOST_LAUNCH_READY_EVENT, ENTRYPOINT, LOCK, LocalOpenError, local_generation,
+        mark_local_unsynced, observe_runtime_ready_line, open_or_create_workspace,
+        recheck_workspace_after_writer_admission, run_python_with_executable,
     };
     use crate::generation_initialization::{InitialProfileOpen, InitialProfileStatus};
     use profile_platform_primitives::{ActorId, ProfileId, TenantId};
@@ -419,21 +420,29 @@ mod tests {
 
     #[cfg(windows)]
     #[test]
-    fn windows_python_stderr_ready_event_confirms_pending_delivery_health() -> Result<(), Box<dyn std::error::Error>> {
+    fn windows_python_stderr_ready_event_confirms_pending_delivery_health(
+    ) -> Result<(), Box<dyn std::error::Error>> {
         use std::fs;
         use std::path::PathBuf;
 
-        let python = PathBuf::from(
-            std::env::var_os("PROFILE_BRIDGE_TEST_PYTHON")
-                .ok_or("PROFILE_BRIDGE_TEST_PYTHON was not set by the Windows test job")?,
-        );
+        let python = std::env::var_os("PROFILE_BRIDGE_TEST_PYTHON")
+            .map(PathBuf::from)
+            .ok_or_else(|| {
+                std::io::Error::new(
+                    std::io::ErrorKind::NotFound,
+                    "PROFILE_BRIDGE_TEST_PYTHON was not set by the Windows test job",
+                )
+            })?;
         let directory = tempfile::tempdir()?;
         let runtime_root = directory.path().join("runtime");
         fs::create_dir_all(runtime_root.join("camouhost"))?;
         fs::write(
             runtime_root.join(ENTRYPOINT),
             format!(
-                "import sys\\nsys.stderr.write({:?} + '\\\\n')\\nsys.stderr.flush()\\n",
+                r#"import sys
+sys.stderr.write({:?} + '\n')
+sys.stderr.flush()
+"#,
                 CAMOUHOST_LAUNCH_READY_EVENT
             ),
         )?;
@@ -460,20 +469,28 @@ mod tests {
 
     #[cfg(windows)]
     #[test]
-    fn windows_process_without_ready_event_cannot_confirm_delivery_health() -> Result<(), Box<dyn std::error::Error>> {
+    fn windows_process_without_ready_event_cannot_confirm_delivery_health(
+    ) -> Result<(), Box<dyn std::error::Error>> {
         use std::fs;
         use std::path::PathBuf;
 
-        let python = PathBuf::from(
-            std::env::var_os("PROFILE_BRIDGE_TEST_PYTHON")
-                .ok_or("PROFILE_BRIDGE_TEST_PYTHON was not set by the Windows test job")?,
-        );
+        let python = std::env::var_os("PROFILE_BRIDGE_TEST_PYTHON")
+            .map(PathBuf::from)
+            .ok_or_else(|| {
+                std::io::Error::new(
+                    std::io::ErrorKind::NotFound,
+                    "PROFILE_BRIDGE_TEST_PYTHON was not set by the Windows test job",
+                )
+            })?;
         let directory = tempfile::tempdir()?;
         let runtime_root = directory.path().join("runtime");
         fs::create_dir_all(runtime_root.join("camouhost"))?;
         fs::write(
             runtime_root.join(ENTRYPOINT),
-            "import sys\\nsys.stderr.write('camouhost_stage phase=launch step=sdk_enter\\\\n')\\nsys.stderr.flush()\\n",
+            r#"import sys
+sys.stderr.write('camouhost_stage phase=launch step=sdk_enter\n')
+sys.stderr.flush()
+"#,
         )?;
         fs::write(runtime_root.join(LOCK), b"test-runtime-lock")?;
         let folder = directory.path().join("profile");
