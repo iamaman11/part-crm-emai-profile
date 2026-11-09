@@ -646,15 +646,21 @@ fn parse_pending_sync(value: &str) -> Result<PendingSyncDescriptor, LocalProfile
         _ => return Err(LocalProfileError::GenerationMarkerMismatch),
     };
     let candidate_generation_id = GenerationId::parse(
-        parts.next().ok_or(LocalProfileError::GenerationMarkerMismatch)?,
+        parts
+            .next()
+            .ok_or(LocalProfileError::GenerationMarkerMismatch)?,
     )
     .map_err(|_| LocalProfileError::GenerationMarkerMismatch)?;
     let metadata_digest = decode_lower_hex_32(
-        parts.next().ok_or(LocalProfileError::GenerationMarkerMismatch)?,
+        parts
+            .next()
+            .ok_or(LocalProfileError::GenerationMarkerMismatch)?,
     )
     .ok_or(LocalProfileError::GenerationMarkerMismatch)?;
     let container_digest = decode_lower_hex_32(
-        parts.next().ok_or(LocalProfileError::GenerationMarkerMismatch)?,
+        parts
+            .next()
+            .ok_or(LocalProfileError::GenerationMarkerMismatch)?,
     )
     .ok_or(LocalProfileError::GenerationMarkerMismatch)?;
     let container_bytes = parts
@@ -663,7 +669,9 @@ fn parse_pending_sync(value: &str) -> Result<PendingSyncDescriptor, LocalProfile
         .filter(|value| *value > 0 && *value < i64::MAX as u64)
         .ok_or(LocalProfileError::GenerationMarkerMismatch)?;
     let plaintext_digest = decode_lower_hex_32(
-        parts.next().ok_or(LocalProfileError::GenerationMarkerMismatch)?,
+        parts
+            .next()
+            .ok_or(LocalProfileError::GenerationMarkerMismatch)?,
     )
     .ok_or(LocalProfileError::GenerationMarkerMismatch)?;
     let plaintext_bytes = parts
@@ -808,7 +816,10 @@ impl GenerationWorkspace {
         {
             return Err(LocalProfileError::GenerationMarkerMismatch);
         }
-        replace_generation_marker(&marker, &render_generation_marker(generation_id, None, 0, None)?)?;
+        replace_generation_marker(
+            &marker,
+            &render_generation_marker(generation_id, None, 0, None)?,
+        )?;
         self.generation_id = generation_id.clone();
         Ok(())
     }
@@ -1226,9 +1237,14 @@ fn render_generation_marker(
     if let Some(pending) = pending_sync {
         let valid = match pending.phase {
             PendingSyncPhase::Prepared => {
-                profile_version.checked_add(1).is_some_and(|next| next < i64::MAX as u64)
+                profile_version
+                    .checked_add(1)
+                    .is_some_and(|next| next < i64::MAX as u64)
                     && match base_generation_id {
-                        Some(base) => base == generation_id && pending.candidate_generation_id != *generation_id,
+                        Some(base) => {
+                            base == generation_id
+                                && pending.candidate_generation_id != *generation_id
+                        }
                         None => pending.candidate_generation_id == *generation_id,
                     }
             }
@@ -1254,7 +1270,15 @@ fn render_generation_marker(
 
 fn read_generation_marker(
     path: &Path,
-) -> Result<(GenerationId, Option<GenerationId>, u64, Option<PendingSyncDescriptor>), LocalProfileError> {
+) -> Result<
+    (
+        GenerationId,
+        Option<GenerationId>,
+        u64,
+        Option<PendingSyncDescriptor>,
+    ),
+    LocalProfileError,
+> {
     let metadata = fs::symlink_metadata(path)?;
     if metadata.file_type().is_symlink() {
         return Err(LocalProfileError::SymbolicLinkRejected);
@@ -1307,9 +1331,14 @@ fn read_generation_marker(
     if let Some(pending) = pending_sync.as_ref() {
         let valid = match pending.phase {
             PendingSyncPhase::Prepared => {
-                profile_version.checked_add(1).is_some_and(|next| next < i64::MAX as u64)
+                profile_version
+                    .checked_add(1)
+                    .is_some_and(|next| next < i64::MAX as u64)
                     && match base_generation_id.as_ref() {
-                        Some(base) => base == &generation_id && pending.candidate_generation_id != generation_id,
+                        Some(base) => {
+                            base == &generation_id
+                                && pending.candidate_generation_id != generation_id
+                        }
                         None => pending.candidate_generation_id == generation_id,
                     }
             }
@@ -1323,7 +1352,12 @@ fn read_generation_marker(
             return Err(LocalProfileError::GenerationMarkerMismatch);
         }
     }
-    Ok((generation_id, base_generation_id, profile_version, pending_sync))
+    Ok((
+        generation_id,
+        base_generation_id,
+        profile_version,
+        pending_sync,
+    ))
 }
 
 fn replace_generation_marker(path: &Path, content: &str) -> Result<(), LocalProfileError> {

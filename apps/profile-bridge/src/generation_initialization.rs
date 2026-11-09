@@ -622,8 +622,7 @@ pub(crate) fn finish_pending_sync_under_writer(
                 fs::remove_file(&dirty).map_err(|_| InitialProfileError::SavedRecovery)?;
             }
         }
-        Err(error)
-            if unchanged && error.kind() == std::io::ErrorKind::NotFound => {}
+        Err(error) if unchanged && error.kind() == std::io::ErrorKind::NotFound => {}
         Err(_) => return Err(InitialProfileError::SavedRecovery),
     }
     root.clear_profile_current_pending_sync(&committed)
@@ -1059,7 +1058,10 @@ mod tests {
         let device = DeviceId::parse("device_pending_draft")?;
         let draft = root.create_profile_current(&tenant, &profile, &local, 1)?;
         std::fs::create_dir_all(draft.path().join("user_data"))?;
-        std::fs::write(draft.path().join("user_data/cookies.sqlite"), b"original snapshot")?;
+        std::fs::write(
+            draft.path().join("user_data/cookies.sqlite"),
+            b"original snapshot",
+        )?;
         std::fs::write(draft.path().join(".local-unsynced"), b"local-unsynced-v2")?;
         let inventory = draft.inventory()?;
         let (plaintext_bytes, plaintext_digest) =
@@ -1079,7 +1081,11 @@ mod tests {
             .cloned()
             .ok_or("committed checkpoint missing")?;
         let writer = BridgeWorkspaceLock::acquire(&committed, &device, 1)?;
-        assert!(finish_pending_sync_under_writer(&root, &committed, &committed_pending)?);
+        assert!(finish_pending_sync_under_writer(
+            &root,
+            &committed,
+            &committed_pending
+        )?);
         writer.release()?;
 
         let recovered = root.open_profile_current(&tenant, &profile)?;
@@ -1127,12 +1133,17 @@ mod tests {
             plaintext_bytes,
         )?;
         let prepared = root.set_profile_current_pending_sync(&ready, pending)?;
-        std::fs::write(prepared.path().join("user_data/cookies.sqlite"), b"new user edits")?;
+        std::fs::write(
+            prepared.path().join("user_data/cookies.sqlite"),
+            b"new user edits",
+        )?;
         let writer = BridgeWorkspaceLock::acquire(&prepared, &device, 2)?;
         assert!(!finish_pending_sync_under_writer(
             &root,
             &prepared,
-            prepared.pending_sync().ok_or("pending checkpoint missing")?,
+            prepared
+                .pending_sync()
+                .ok_or("pending checkpoint missing")?,
         )?);
         writer.release()?;
 

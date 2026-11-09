@@ -217,26 +217,13 @@ fn draft_pending_sync_must_bind_its_original_local_generation()
     let local = GenerationId::parse("generation_draft_pending")?;
     let wrong = GenerationId::parse("generation_draft_wrong")?;
     let draft = root.create_profile_current(&tenant, &profile, &local, 1)?;
-    let invalid = PendingSyncDescriptor::new(
-        wrong,
-        [0x11; 32],
-        [0x22; 32],
-        4_096,
-        [0x33; 32],
-        0,
-    )?;
+    let invalid = PendingSyncDescriptor::new(wrong, [0x11; 32], [0x22; 32], 4_096, [0x33; 32], 0)?;
     assert!(matches!(
         root.set_profile_current_pending_sync(&draft, invalid),
         Err(LocalProfileError::InvalidPolicy)
     ));
-    let valid = PendingSyncDescriptor::new(
-        local.clone(),
-        [0x11; 32],
-        [0x22; 32],
-        4_096,
-        [0x33; 32],
-        0,
-    )?;
+    let valid =
+        PendingSyncDescriptor::new(local.clone(), [0x11; 32], [0x22; 32], 4_096, [0x33; 32], 0)?;
     let pending = root.set_profile_current_pending_sync(&draft, valid)?;
     assert_eq!(
         pending
