@@ -201,6 +201,8 @@ function authorityErrors(authority) {
     'ready_to_mutate_evidence_required_for_dispatch',
     'dispatch_intent_binds_ready_evidence',
     'workflow_dispatch_is_staging_authorization',
+    'owner_only_manual_dispatch',
+    'staging_environment_main_only',
     'expected_current_refence_immediately_before_mutation',
     'd1_refence_immediately_before_mutation',
     'accepted_main_heavy_runtime_replay',
@@ -648,7 +650,7 @@ function validateAll({ build, promotion, camoufox, camoufoxClassifier, authority
 function selfTest(files) {
   void AR11_N24_CERTIFICATION_LOCATOR;
   const missingRecovery = files.promotion.replace('.recovery_strategy == $recovery', 'true');
-  if (!promotionErrors(missingRecovery).some((error) => error.includes('authorized READY binder'))) {
+  if (!promotionErrors(missingRecovery).some((error) => error.includes('dispatch READY binder'))) {
     throw new Error('missing native recovery binding fixture passed');
   }
   const missingRecoveryProjection = files.promotion.replace('recovery_strategy:$recovery_strategy', 'recovery_strategy:null');
@@ -667,7 +669,7 @@ function selfTest(files) {
   if (!promotionErrors(missingOwnerGuard).some((error) => error.includes('promotion invocation router'))) throw new Error('missing owner access guard fixture passed');
   const missingStagingEnvironment = files.promotion.replace('    environment: staging\n    permissions:\n      actions: read\n      contents: read\n      issues: read', '    permissions:\n      actions: read\n      contents: read\n      issues: read');
   if (!promotionErrors(missingStagingEnvironment).some((error) => error.includes('dispatch READY binder'))) throw new Error('missing staging Environment guard fixture passed');
-  const missingCandidateBinding = files.promotion.replace('STAGING_CANDIDATE', 'STAGING_TARGET_REMOVED');
+  const missingCandidateBinding = files.promotion.replaceAll('STAGING_CANDIDATE', 'STAGING_TARGET_REMOVED');
   if (!promotionErrors(missingCandidateBinding).some((error) => error.includes('dispatch READY binder'))) throw new Error('missing canonical staging candidate fixture passed');
   const commentAuthorizationRestored = files.promotion.replace('STAGING_CANDIDATE', 'WORKER_PROMOTION_AUTHORIZATION_V2\\n          STAGING_CANDIDATE');
   if (!promotionErrors(commentAuthorizationRestored).some((error) => error.includes('dispatch READY binder'))) throw new Error('comment-based authorization fixture passed');
