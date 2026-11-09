@@ -388,7 +388,7 @@ impl std::error::Error for BridgeCliError {}
 #[cfg(test)]
 mod tests {
     use super::FIRST_INSTALL_ARGUMENT;
-    use super::{BridgeCliError, BridgeCommand, ShippingCompositionError, parse_command};
+    use super::{BridgeCliError, BridgeCommand, parse_command};
     use profile_bridge::windows_delivery_handoff::{
         HANDOFF_ACTIVATE_ARGUMENT, HANDOFF_ARRIVAL_ARGUMENT,
     };
