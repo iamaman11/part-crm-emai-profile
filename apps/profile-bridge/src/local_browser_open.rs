@@ -78,6 +78,22 @@ fn admit_existing_workspace(
     Ok(current)
 }
 
+fn recheck_workspace_after_writer_admission(
+    root: &MaterializationRoot,
+    observed: &crate::local_profile::GenerationWorkspace,
+    intent: &InitialProfileOpen,
+) -> Result<crate::local_profile::GenerationWorkspace, LocalOpenError> {
+    // Read the *current* marker while holding the exclusive workspace lock.
+    // Sync may have advanced CURRENT between the first fast lookup and admission.
+    let current = root
+        .open_profile_current(&intent.tenant_id, &intent.profile_id)
+        .map_err(|_| LocalOpenError::InvalidLocalWorkspace)?;
+    if current.path() != observed.path() {
+        return Err(LocalOpenError::StaleLocalWorkspace);
+    }
+    admit_existing_workspace(current, intent)
+}
+
 fn open_or_create_workspace(
     root: &MaterializationRoot,
     intent: &InitialProfileOpen,
@@ -212,6 +228,19 @@ pub fn open(
         }
         Err(_) => return Err(LocalOpenError::InvalidLocalWorkspace),
     };
+    // Re-read the single existing generation marker under the acquired OS
+    // writer lock. The earlier lookup is only a fast preliminary check.
+    let workspace = match recheck_workspace_after_writer_admission(root, &workspace, intent) {
+        Ok(current) => current,
+        Err(error) => {
+            // Browser has not started: never leave a synthetic stale writer
+            // marker behind after a rejected launch intent.
+            writer
+                .release()
+                .map_err(|_| LocalOpenError::InvalidLocalWorkspace)?;
+            return Err(error);
+        }
+    };
     // Rust owns the native Firefox file-access proof before any
     // identity materialization or browser launch.
     if !matches!(
@@ -256,7 +285,10 @@ pub fn open(
 
 #[cfg(test)]
 mod tests {
-    use super::{LocalOpenError, local_generation, mark_local_unsynced, open_or_create_workspace};
+    use super::{
+        LocalOpenError, local_generation, mark_local_unsynced, open_or_create_workspace,
+        recheck_workspace_after_writer_admission,
+    };
     use crate::generation_initialization::{InitialProfileOpen, InitialProfileStatus};
     use profile_platform_primitives::{ActorId, ProfileId, TenantId};
 
@@ -329,6 +361,33 @@ mod tests {
         selected.profile_id = ProfileId::parse("profile_02JLOCAL").unwrap();
         assert_ne!(local_generation(&selected).unwrap(), first);
         let _ = LocalOpenError::ProfileBusy.to_string();
+    }
+
+    #[test]
+    fn readback_under_writer_lock_rejects_cloud_base_advanced_after_first_lookup() {
+        let directory = tempfile::tempdir().unwrap();
+        let root =
+            crate::local_profile::MaterializationRoot::open_or_create(directory.path()).unwrap();
+        let draft = intent();
+        let generation = local_generation(&draft).unwrap();
+        let observed = open_or_create_workspace(&root, &draft, &generation).unwrap();
+        // Simulate a completed Sync between preliminary lookup and OS admission,
+        // using the existing atomic generation marker update.
+        root.update_profile_current_sync_base(&observed, &generation, 2)
+            .unwrap();
+        assert!(matches!(
+            recheck_workspace_after_writer_admission(&root, &observed, &draft),
+            Err(LocalOpenError::StaleLocalWorkspace)
+        ));
+        let mut ready = draft.clone();
+        ready.status = InitialProfileStatus::Ready;
+        ready.expected_version = 2;
+        assert_eq!(
+            recheck_workspace_after_writer_admission(&root, &observed, &ready)
+                .unwrap()
+                .profile_version(),
+            2
+        );
     }
 
     #[test]

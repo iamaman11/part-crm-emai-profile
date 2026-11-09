@@ -207,7 +207,9 @@ describe('ProfilesWorkspace generation refresh (#802 F06)', () => {
     });
     expect(screen.queryByText('profile_old')).toBeNull();
     expect(screen.getByText('profile_new')).toBeTruthy();
-    expect((screen.getByRole('button', { name: 'Open browser' }) as HTMLButtonElement).disabled).toBe(false);
+    // Profile projection and prefetched Worker launch authorization are distinct
+    // asynchronous reads. A correct Open stays disabled until both have arrived.
+    await waitFor(() => expect((screen.getByRole('button', { name: 'Open browser' }) as HTMLButtonElement).disabled).toBe(false));
   });
 
   it('does not render stale generation or coordinator after switching profiles', async () => {
