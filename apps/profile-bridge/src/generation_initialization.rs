@@ -1,22 +1,24 @@
 //! Automatic first-open preparation. Reuses the snapshot, cipher, immutable upload and launch owners.
 #[cfg(any(test, feature = "synthetic-test-bin"))]
 use crate::browser_execution::{persist_browser_identity, persist_materialization_binding};
-use crate::generation_snapshot::{digest_closed_workspace_streaming, seal_closed_workspace_streaming};
 #[cfg(any(test, feature = "synthetic-test-bin"))]
 use crate::generation_snapshot::encode_workspace_snapshot;
-use crate::local_profile::{BridgeWorkspaceLock, MaterializationRoot};
+use crate::generation_snapshot::{
+    digest_closed_workspace_streaming, seal_closed_workspace_streaming,
+};
 #[cfg(any(test, feature = "synthetic-test-bin"))]
 use crate::local_profile::GenerationWorkspace;
+use crate::local_profile::{BridgeWorkspaceLock, MaterializationRoot};
 #[cfg(any(test, feature = "synthetic-test-bin"))]
 use crate::runtime_bundle::{ApprovedRuntimeBundle, RuntimeBundleSelectionPort};
 use crate::shipping_control_plane::{
     MachineHttpMethod, MachineHttpPort, MachineHttpResponse, sealing_material_from_response,
 };
+#[cfg(any(test, feature = "synthetic-test-bin"))]
+use crate::shipping_generation_save::SignedGenerationObjectPutPort;
 use crate::shipping_generation_save::{
     GenerationUploadAuthorization, SignedGenerationObjectStreamPutPort,
 };
-#[cfg(any(test, feature = "synthetic-test-bin"))]
-use crate::shipping_generation_save::SignedGenerationObjectPutPort;
 use crate::shipping_generation_successor_control::decode_upload_authorization;
 use bridge_domain::{BridgePortError, ClaimUri};
 #[cfg(any(test, feature = "synthetic-test-bin"))]
