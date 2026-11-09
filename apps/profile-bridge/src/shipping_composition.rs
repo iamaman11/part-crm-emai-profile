@@ -771,15 +771,6 @@ mod windows {
                 start_sync_after_close(intent);
                 Ok(())
             }
-            Err(error @ crate::local_browser_open::LocalOpenError::BrowserNotClosedCleanly) => {
-                // The adapter may have died before reporting the official
-                // Playwright close event. Keep .local-unsynced and launch the
-                // same file-gated Sync/recovery anyway: it must not snapshot
-                // while Firefox still owns the folder. CRM is not the retry
-                // trigger, and the browser is never closed by this path.
-                start_sync_after_close(intent);
-                Err(ShippingCompositionError::LocalOpen(error))
-            }
             Err(crate::local_browser_open::LocalOpenError::RestoreRequired) => {
                 // Only a missing READY local folder crosses the cloud boundary.
                 // Ordinary Open/Close never requires a network request.
@@ -824,20 +815,24 @@ mod windows {
                         start_sync_after_close(intent);
                         Ok(())
                     }
-                    Err(
-                        error @ crate::local_browser_open::LocalOpenError::BrowserNotClosedCleanly,
-                    ) => {
-                        // Adapter failure is not proof that Firefox released
-                        // its files. The existing Sync owner must be started;
-                        // its native file-lock gate decides whether snapshot
-                        // can proceed and retains dirty evidence otherwise.
+                    Err(error) => {
+                        // Every post-restore local failure may leave the
+                        // existing .local-unsynced marker. Start the same
+                        // idempotent Sync attempt; it exits cleanly when no
+                        // marker exists and otherwise waits for native file
+                        // release before snapshot. No CRM return is required.
                         start_sync_after_close(intent);
                         Err(ShippingCompositionError::LocalOpen(error))
                     }
-                    Err(error) => Err(ShippingCompositionError::LocalOpen(error)),
                 }
             }
-            Err(error) => Err(ShippingCompositionError::LocalOpen(error)),
+            Err(error) => {
+                // The local adapter may fail before or after launch. Sync
+                // checks the existing dirty marker itself: no marker means
+                // no-op; a marker means native lock proof then same Sync.
+                start_sync_after_close(intent);
+                Err(ShippingCompositionError::LocalOpen(error))
+            }
         }
     }
 
