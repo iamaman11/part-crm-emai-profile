@@ -188,13 +188,14 @@ def main() -> int:
     assert "ManagedCamouhostProcess" not in composition
     assert "ManagedCamouhostIpc" not in composition
     assert "pub fn run_claim(" not in composition
-    assert "local_browser_open::open" in composition
+    assert "local_browser_open::open_with_before_launch" in composition
     assert "start_sync_after_close(intent)" in composition
     run_initial = composition.split("    pub fn run_initial(", 1)[1].split(
         "    pub fn run_delivery_command(", 1
     )[0]
-    assert run_initial.count("start_sync_after_close(intent)") >= 4
-    assert "Every post-restore local failure may leave the" in run_initial
+    assert run_initial.count("start_sync_after_close(intent)") == 2
+    assert "if error != crate::local_browser_open::LocalOpenError::StaleLocalWorkspace {" in run_initial
+    assert "DeliveryHealth" not in run_initial
     assert "if error != crate::local_browser_open::LocalOpenError::StaleLocalWorkspace {" in run_initial
     app = (SOURCE.parents[2] / "apps/profile-bridge/src/main.rs").read_text(
         encoding="utf-8"
