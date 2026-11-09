@@ -372,8 +372,8 @@ def compose(
         ),
         "remediation": "No read-only remediation is required.",
         "exact_next_action": (
-            "STOP at the existing explicit one-shot authorization boundary; do not execute provider "
-            "mutation unless the owning stage records a fresh exact authorization."
+            "STOP before provider mutation. The repository owner authorizes staging by selecting Run workflow "
+            "on main; that workflow dispatch is the authorization and is bound to the exact candidate and READY evidence."
         ),
     }
 
@@ -390,7 +390,7 @@ def valid_manual_state(value: dict[str, Any], phase: str, source_sha: str) -> bo
         and value.get("source_sha") == source_sha
         and (release_set_id is None or (isinstance(release_set_id, str) and RELEASE_SET_ID.fullmatch(release_set_id)))
         and (promotion_id is None or (isinstance(promotion_id, str) and bool(promotion_id)))
-        and isinstance(value.get("authorization_bound"), bool)
+        and isinstance(value.get("dispatch_authorized"), bool)
         and isinstance(value.get("provider_mutation_started"), bool)
         and isinstance(value.get("provider_mutation_executed"), bool)
         and value.get("production_mutation_executed") is False
@@ -429,7 +429,7 @@ def manual_base(
     promotion_id: str | None,
     environment: str,
     profile_id: str,
-    authorization_bound: bool,
+    dispatch_authorized: bool,
     provider_mutation_started: bool,
     provider_mutation_executed: bool,
     evidence_refs: dict[str, str],
@@ -444,7 +444,7 @@ def manual_base(
         "release_set_id": release_set_id,
         "promotion_id": promotion_id,
         "target_identity": {"environment": environment, "capability_profile_id": profile_id},
-        "authorization_state": "BOUND_ONE_SHOT" if authorization_bound else "NOT_BOUND",
+        "authorization_state": "GITHUB_WORKFLOW_DISPATCH" if dispatch_authorized else "NOT_AUTHORIZED",
         "provider_mutation_started": provider_mutation_started,
         "provider_mutation_executed": provider_mutation_executed,
         "production_mutation_executed": False,
@@ -465,8 +465,8 @@ def manual_failed_no_effect(base: dict[str, Any], phase: str, diagnostic: dict[s
         "owner_reason_code": None,
         "owner_diagnostic": {"verdict_available": False, **diagnostic},
         "summary": f"Manual AR11 stopped at {phase} before the provider mutation invocation boundary.",
-        "remediation": "Resolve the exact failed boundary and obtain a fresh exact READY/authorization fence before any new mutation attempt.",
-        "exact_next_action": "Return to the current stage owner; do not retry provider mutation until the existing READY, authorization, and exact-current fences are valid again.",
+        "remediation": "Resolve the exact failed boundary and confirm the provider mutation boundary was not crossed. A new Run workflow click is a new explicit staging authorization.",
+        "exact_next_action": "After reviewing the no-effect evidence, the owner may select Run workflow again on main if the exact candidate and READY evidence are still current. If provider mutation started, use AR-14 recovery instead of retrying.",
     }
 
 
@@ -542,7 +542,7 @@ def compose_manual_values(
                 promotion_id=None,
                 environment=environment,
                 profile_id=profile_id,
-                authorization_bound=False,
+                dispatch_authorized=False,
                 provider_mutation_started=started,
                 provider_mutation_executed=executed,
                 evidence_refs=evidence_refs,
@@ -566,7 +566,7 @@ def compose_manual_values(
             promotion_id=None,
             environment=environment,
             profile_id=profile_id,
-            authorization_bound=resolve["authorization_bound"],
+            dispatch_authorized=resolve["dispatch_authorized"],
             provider_mutation_started=started,
             provider_mutation_executed=mutation["provider_mutation_executed"],
             evidence_refs=evidence_refs,
@@ -587,7 +587,7 @@ def compose_manual_values(
         promotion_id=promotion_id,
         environment=environment,
         profile_id=profile_id,
-        authorization_bound=resolve["authorization_bound"],
+        dispatch_authorized=resolve["dispatch_authorized"],
         provider_mutation_started=mutation["provider_mutation_started"],
         provider_mutation_executed=mutation["provider_mutation_executed"],
         evidence_refs=evidence_refs,
@@ -604,7 +604,7 @@ def compose_manual_values(
         return manual_failed_no_effect(base, "MUTATION_INVOCATION_BOUNDARY", mutation)
     if not mutation["provider_mutation_executed"]:
         return manual_recovery_required(base, "PROVIDER_DEPLOY", mutation)
-    if not resolve["authorization_bound"]:
+    if not resolve["dispatch_authorized"]:
         return manual_recovery_required(base, "AUTHORIZATION_INVARIANT", resolve)
 
     verify_valid = verify is not None and valid_promotion_verify(verify, environment, profile_id, release_set_id)
@@ -1042,7 +1042,7 @@ def self_test() -> None:
         "source_sha": manual_source,
         "release_set_id": manual_release,
         "promotion_id": manual_promotion,
-        "authorization_bound": True,
+        "dispatch_authorized": True,
         "provider_mutation_started": False,
         "provider_mutation_executed": False,
         "production_mutation_executed": False,
@@ -1056,7 +1056,7 @@ def self_test() -> None:
         "source_sha": manual_source,
         "release_set_id": manual_release,
         "promotion_id": manual_promotion,
-        "authorization_bound": True,
+        "dispatch_authorized": True,
         "provider_mutation_started": True,
         "provider_mutation_executed": True,
         "production_mutation_executed": False,
@@ -1070,7 +1070,7 @@ def self_test() -> None:
         "source_sha": manual_source,
         "release_set_id": manual_release,
         "promotion_id": manual_promotion,
-        "authorization_bound": True,
+        "dispatch_authorized": True,
         "provider_mutation_started": True,
         "provider_mutation_executed": True,
         "production_mutation_executed": False,
@@ -1106,15 +1106,15 @@ def self_test() -> None:
         )
 
     pre_effect = dict(resolve_state)
-    pre_effect["failed_boundary"] = "AUTHORIZATION_BINDING"
-    pre_effect["authorization_bound"] = False
+    pre_effect["failed_boundary"] = "CANDIDATE_BINDING"
+    pre_effect["dispatch_authorized"] = False
     not_started = dict(mutation_state)
     not_started["provider_mutation_started"] = False
     not_started["provider_mutation_executed"] = False
     not_started["failed_boundary"] = "MUTATE_SKIPPED"
     outcome = manual_case(pre_effect, not_started, post_state, None)
     assert outcome["status"] == "FAILED_NO_EFFECT"
-    assert outcome["phase"] == "AUTHORIZATION_BINDING"
+    assert outcome["phase"] == "CANDIDATE_BINDING"
     assert_zero_effect(outcome)
 
     fence_fail = dict(mutation_state)
