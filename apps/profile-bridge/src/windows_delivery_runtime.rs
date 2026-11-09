@@ -1,6 +1,6 @@
 #![forbid(unsafe_code)]
 
-use crate::operator_flow::RuntimeBundleSelectionPort;
+use crate::runtime_bundle::RuntimeBundleSelectionPort;
 use crate::runtime_bundle::{
     ApprovedRuntimeBundle, FilesystemRuntimeBundleSelection, RuntimeBundleSelectionError,
 };

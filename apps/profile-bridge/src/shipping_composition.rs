@@ -136,7 +136,7 @@ mod windows {
         digest_closed_workspace_streaming, seal_closed_workspace_streaming,
     };
     use crate::local_profile::{DeliveryActivationGuard, MaterializationRoot};
-    use crate::operator_flow::EnrollmentPort;
+    use crate::shipping_control_plane::SyncEnrollmentPort;
     use crate::shipping_control_plane::{
         ControlPlaneCoordinator, ControlPlaneEnrollment, SharedControlPlaneCoordinator,
         ShippingControlPlaneError,

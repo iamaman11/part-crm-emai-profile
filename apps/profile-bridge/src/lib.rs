@@ -4,6 +4,7 @@ pub mod authoritative_generation;
 pub mod browser_execution;
 pub mod browser_mail_query;
 pub mod browser_mail_runtime;
+#[cfg(any(test, feature = "synthetic-test-bin"))]
 pub mod browser_preflight;
 pub mod device_pairing;
 pub mod dirty_close;
@@ -74,9 +75,12 @@ pub mod windows_generation_put;
 #[cfg(windows)]
 pub mod windows_native;
 
+#[cfg(any(test, feature = "synthetic-test-bin"))]
 use bridge_domain::BridgePortError;
+#[cfg(any(test, feature = "synthetic-test-bin"))]
 use profile_platform_primitives::SessionId;
 
+#[cfg(any(test, feature = "synthetic-test-bin"))]
 pub trait ProcessControlPort {
     fn spawn(&mut self, session_id: &SessionId) -> Result<(), BridgePortError>;
     fn is_running(&mut self, session_id: &SessionId) -> Result<bool, BridgePortError>;

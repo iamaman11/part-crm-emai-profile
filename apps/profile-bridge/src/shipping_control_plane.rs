@@ -2,7 +2,6 @@ use crate::dirty_generation::{
     GenerationSealingMaterial, GenerationSealingMaterialPort, SealingMaterialFailure,
 };
 use crate::generation_reopen::{GenerationDownloadCapability, GenerationReopenControlPort};
-use crate::operator_flow::{EnrollmentFailureKind, EnrollmentPort, OperatorEnrollment};
 use application_ports::{ProfileCoordinatorPort, ProfileCoordinatorRuntimePort};
 use bridge_domain::ClaimUri;
 use control_plane_contract::coordinator_api::{
@@ -48,6 +47,74 @@ const MAX_REOPEN_OPENING_MATERIAL_RESPONSE_BYTES: usize = 1_024;
 const MAX_SIGNED_GENERATION_DOWNLOAD_URL_BYTES: usize = 4_096;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum SyncEnrollmentFailureKind {
+    LeaseConflict,
+    ServiceUncertain,
+    Other,
+}
+
+pub trait SyncEnrollmentPort {
+    type Error;
+
+    fn classify_error(_error: &Self::Error) -> SyncEnrollmentFailureKind {
+        SyncSyncEnrollmentFailureKind::Other
+    }
+
+    fn redeem_claim(
+        &mut self,
+        claim: &ClaimUri,
+        device_id: &DeviceId,
+        now: UnixMillis,
+    ) -> Result<SyncEnrollment, Self::Error>;
+}
+
+/// Fresh server-side lease/launch result used only by the existing Sync path.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct SyncEnrollment {
+    actor: ActorContext,
+    profile_id: ProfileId,
+    generation_id: GenerationId,
+    launch_intent_id: LaunchIntentId,
+}
+
+impl SyncEnrollment {
+    #[must_use]
+    pub const fn new(
+        actor: ActorContext,
+        profile_id: ProfileId,
+        generation_id: GenerationId,
+        launch_intent_id: LaunchIntentId,
+    ) -> Self {
+        Self {
+            actor,
+            profile_id,
+            generation_id,
+            launch_intent_id,
+        }
+    }
+
+    #[must_use]
+    pub const fn actor(&self) -> &ActorContext {
+        &self.actor
+    }
+
+    #[must_use]
+    pub const fn profile_id(&self) -> &ProfileId {
+        &self.profile_id
+    }
+
+    #[must_use]
+    pub const fn generation_id(&self) -> &GenerationId {
+        &self.generation_id
+    }
+
+    #[must_use]
+    pub const fn launch_intent_id(&self) -> &LaunchIntentId {
+        &self.launch_intent_id
+    }
+}
+
 pub enum MachineHttpMethod {
     Get,
     PostJson,
@@ -146,18 +213,18 @@ impl<T> ControlPlaneEnrollment<T> {
     }
 }
 
-impl<T> EnrollmentPort for ControlPlaneEnrollment<T>
+impl<T> SyncEnrollmentPort for ControlPlaneEnrollment<T>
 where
     T: MachineHttpPort,
 {
     type Error = ShippingControlPlaneError;
 
-    fn classify_error(error: &Self::Error) -> EnrollmentFailureKind {
+    fn classify_error(error: &Self::Error) -> SyncEnrollmentFailureKind {
         match error {
-            ShippingControlPlaneError::LaunchLeaseConflict => EnrollmentFailureKind::LeaseConflict,
+            ShippingControlPlaneError::LaunchLeaseConflict => SyncEnrollmentFailureKind::LeaseConflict,
             ShippingControlPlaneError::Transport
             | ShippingControlPlaneError::HttpServerUncertain => {
-                EnrollmentFailureKind::ServiceUncertain
+                SyncEnrollmentFailureKind::ServiceUncertain
             }
             _ => EnrollmentFailureKind::Other,
         }
@@ -168,7 +235,7 @@ where
         claim: &ClaimUri,
         device_id: &DeviceId,
         _now: UnixMillis,
-    ) -> Result<OperatorEnrollment, Self::Error> {
+    ) -> Result<SyncEnrollment, Self::Error> {
         let correlation_id = next_correlation_id()?;
         let request = BridgeProfileLaunchRedemptionRequest::new(
             claim
@@ -230,7 +297,7 @@ where
             return Err(Self::Error::InvalidResponse);
         }
 
-        Ok(OperatorEnrollment::new(
+        Ok(SyncEnrollment::new(
             ActorContext::new(TenantScope::new(tenant_id), actor_id, correlation_id),
             profile_id,
             generation_id,

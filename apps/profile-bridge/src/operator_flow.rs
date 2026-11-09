@@ -1,7 +1,9 @@
+#[cfg(any(test, feature = "synthetic-test-bin"))]
 use crate::ProcessControlPort;
-use crate::authoritative_generation::{
-    AuthoritativeGenerationMaterializationError, ensure_authoritative_generation,
-};
+use crate::authoritative_generation::AuthoritativeGenerationMaterializationError;
+#[cfg(any(test, feature = "synthetic-test-bin"))]
+use crate::authoritative_generation::ensure_authoritative_generation;
+#[cfg(any(test, feature = "synthetic-test-bin"))]
 use crate::browser_execution::browser_writer_locks_absent;
 #[cfg(any(test, feature = "synthetic-test-bin"))]
 use crate::browser_mail_query::BrowserMailExecutionProof;
@@ -17,17 +19,17 @@ use crate::generation_reopen::{
     GenerationObjectDownloadError, GenerationObjectDownloadPort, GenerationReopenControlError,
     GenerationReopenControlPort,
 };
-#[cfg(any(windows, test))]
+#[cfg(any(test, feature = "synthetic-test-bin"))]
 use crate::generation_snapshot::{GenerationSnapshotError, WorkspaceSnapshotReader};
 use crate::local_profile::{
     BridgeWorkspaceLock, GenerationWorkspace, LocalGenerationRecord, LocalGenerationState,
-    LocalProfileError, MaterializationRoot,
+    LocalProfileError,
 };
-#[cfg(any(windows, test))]
-use crate::local_profile::{GenerationInventory, RecoveryClone};
-use crate::runtime_bundle::{
-    ApprovedRuntimeBundle, RuntimeLaunchError, RuntimeSessionOrchestrator,
-};
+#[cfg(any(test, feature = "synthetic-test-bin"))]
+use crate::local_profile::{GenerationInventory, MaterializationRoot, RecoveryClone};
+#[cfg(any(test, feature = "synthetic-test-bin"))]
+use crate::runtime_bundle::{ApprovedRuntimeBundle, RuntimeSessionOrchestrator};
+use crate::runtime_bundle::RuntimeLaunchError;
 use crate::shipping_control_plane::{MachineHttpPort, ShippingControlPlaneError};
 #[cfg(any(windows, test))]
 use crate::shipping_generation_save::SignedGenerationObjectStreamPutPort;
@@ -65,49 +67,31 @@ use crate::shipping_save_attempt::{
 use application_ports::generation_objects::{
     GenerationObjectExactVerifyPort, GenerationObjectUploadPort,
 };
+#[cfg(any(test, feature = "synthetic-test-bin"))]
 use application_ports::{ProfileCoordinatorPort, ProfileCoordinatorRuntimePort};
+#[cfg(any(test, feature = "synthetic-test-bin"))]
 use bridge_domain::{CamouhostPort, ClaimUri, DeviceIdentityPort, DeviceKeyPort};
 #[cfg(any(test, feature = "synthetic-test-bin"))]
 use profile_platform_primitives::TenantScope;
-use profile_platform_primitives::{
-    ActorContext, DeviceId, GenerationId, LaunchIntentId, ProfileId, SessionId, UnixMillis,
-};
+use profile_platform_primitives::{GenerationId, SessionId};
+#[cfg(any(test, feature = "synthetic-test-bin"))]
+use profile_platform_primitives::{ActorContext, DeviceId, LaunchIntentId, ProfileId, UnixMillis};
 use session_domain::ProfileLease;
 use std::fmt;
 
+#[cfg(any(test, feature = "synthetic-test-bin"))]
 pub trait DeviceAuthenticationPort {
     type Error;
 
     fn authenticate(&mut self, device_id: &DeviceId, key_handle: &str) -> Result<(), Self::Error>;
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum EnrollmentFailureKind {
-    LeaseConflict,
-    ServiceUncertain,
-    Other,
-}
-
-pub trait EnrollmentPort {
-    fn classify_error(_error: &Self::Error) -> EnrollmentFailureKind {
-        EnrollmentFailureKind::Other
-    }
-
-    type Error;
-
-    fn redeem_claim(
-        &mut self,
-        claim: &ClaimUri,
-        device_id: &DeviceId,
-        now: UnixMillis,
-    ) -> Result<OperatorEnrollment, Self::Error>;
-}
-
-pub trait RuntimeBundleSelectionPort {
-    type Error;
-
-    fn select_bundle(&mut self) -> Result<ApprovedRuntimeBundle, Self::Error>;
-}
+pub use crate::runtime_bundle::RuntimeBundleSelectionPort;
+pub use crate::shipping_control_plane::{
+    SyncEnrollment as OperatorEnrollment,
+    SyncEnrollmentFailureKind as EnrollmentFailureKind,
+    SyncEnrollmentPort as EnrollmentPort,
+};
 
 /// Ephemeral result from the existing, freshly authorized pending-Save owner.
 /// Neither a persisted phase nor independent permission to open a browser.
@@ -164,6 +148,7 @@ impl OperationalRejectionReason {
     }
 }
 
+#[cfg(any(test, feature = "synthetic-test-bin"))]
 pub trait BrowserLaunchPreflightPort {
     type Error;
 
@@ -179,51 +164,6 @@ pub trait BrowserLaunchPreflightPort {
         workspace_epoch: u64,
         runtime_bundle: &ApprovedRuntimeBundle,
     ) -> Result<(), Self::Error>;
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct OperatorEnrollment {
-    actor: ActorContext,
-    profile_id: ProfileId,
-    generation_id: GenerationId,
-    launch_intent_id: LaunchIntentId,
-}
-
-impl OperatorEnrollment {
-    #[must_use]
-    pub const fn new(
-        actor: ActorContext,
-        profile_id: ProfileId,
-        generation_id: GenerationId,
-        launch_intent_id: LaunchIntentId,
-    ) -> Self {
-        Self {
-            actor,
-            profile_id,
-            generation_id,
-            launch_intent_id,
-        }
-    }
-
-    #[must_use]
-    pub const fn actor(&self) -> &ActorContext {
-        &self.actor
-    }
-
-    #[must_use]
-    pub const fn profile_id(&self) -> &ProfileId {
-        &self.profile_id
-    }
-
-    #[must_use]
-    pub const fn generation_id(&self) -> &GenerationId {
-        &self.generation_id
-    }
-
-    #[must_use]
-    pub const fn launch_intent_id(&self) -> &LaunchIntentId {
-        &self.launch_intent_id
-    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -430,6 +370,7 @@ impl GenerationSaveFailureReason {
     }
 }
 
+#[cfg(any(test, feature = "synthetic-test-bin"))]
 fn save_control_reason<S>(
     source: GenerationSuccessorControlError<S>,
 ) -> GenerationSaveFailureReason {
@@ -447,6 +388,7 @@ fn save_control_reason<S>(
     }
 }
 
+#[cfg(any(test, feature = "synthetic-test-bin"))]
 fn save_generation_reason<S, U>(
     source: ShippingGenerationSaveError<GenerationSuccessorControlError<S>, U>,
 ) -> GenerationSaveFailureReason {
@@ -473,6 +415,7 @@ fn save_generation_reason<S, U>(
     }
 }
 
+#[cfg(any(test, feature = "synthetic-test-bin"))]
 fn save_checkpoint_reason(source: SaveAttemptEvidenceError) -> GenerationSaveFailureReason {
     match source {
         SaveAttemptEvidenceError::Io(_) | SaveAttemptEvidenceError::Unavailable => {
@@ -495,6 +438,7 @@ fn save_checkpoint_reason(source: SaveAttemptEvidenceError) -> GenerationSaveFai
     }
 }
 
+#[cfg(any(test, feature = "synthetic-test-bin"))]
 fn save_checkpoint_read_reason(source: SaveAttemptEvidenceError) -> GenerationSaveFailureReason {
     match source {
         SaveAttemptEvidenceError::Io(_) | SaveAttemptEvidenceError::Unavailable => {
@@ -522,6 +466,7 @@ fn save_checkpoint_read_reason(source: SaveAttemptEvidenceError) -> GenerationSa
 /// a second generation-sized RecoveryClone. This is a preflight only, never
 /// a Save, cloud retry, local repair or permission to open stale N.
 #[cfg(any(windows, test))]
+#[cfg(any(test, feature = "synthetic-test-bin"))]
 fn preflight_retained_native_before_clone(
     source: &GenerationWorkspace,
     inventory: &GenerationInventory,
@@ -671,6 +616,7 @@ pub(crate) struct OperatorDiagnosticFacts {
     pub(crate) cleanup_blocked: bool,
 }
 
+#[cfg(any(test, feature = "synthetic-test-bin"))]
 pub struct ProfileBridgeOperator<D, K, A, E, C, R, B, P, H> {
     device_identity: D,
     device_keys: K,
@@ -687,6 +633,7 @@ pub struct ProfileBridgeOperator<D, K, A, E, C, R, B, P, H> {
     cleanup_blocked: bool,
 }
 
+#[cfg(any(test, feature = "synthetic-test-bin"))]
 impl<D, K, A, E, C, R, B, P, H> ProfileBridgeOperator<D, K, A, E, C, R, B, P, H>
 where
     D: DeviceIdentityPort,
