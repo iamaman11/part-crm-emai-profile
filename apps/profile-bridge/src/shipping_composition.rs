@@ -977,13 +977,13 @@ mod tests {
             expected_version: 1,
             status: InitialProfileStatus::Draft,
         };
-        assert_eq!(
+        assert!(matches!(
             run_initial_profile(&intent),
             Err(ShippingCompositionError::UnsupportedPlatform)
-        );
-        assert_eq!(
+        ));
+        assert!(matches!(
             run_closed_profile_sync(&intent),
             Err(ShippingCompositionError::UnsupportedPlatform)
-        );
+        ));
     }
 }
