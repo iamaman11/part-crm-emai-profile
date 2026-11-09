@@ -1,7 +1,6 @@
 #![forbid(unsafe_code)]
 
-/// Internal one-shot maintenance command, never a normal Profile Open.
-/// It requires a fresh ordinary device-bound one-time launch claim.
+/// Existing one-shot installation and activation commands; not browser Open or Sync.
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum ShippingDeliveryCommand {
@@ -162,17 +161,13 @@ mod windows {
     const NETWORK_POLICY_PATH_ENV: &str = "PROFILE_BRIDGE_NETWORK_POLICY_PATH";
     const PROXY_CONFIG_PATH_ENV: &str = "PROFILE_BRIDGE_PROXY_CONFIG_PATH";
     const PACKAGED_PYTHON_EXECUTABLE: &str = "python/python.exe";
-    // Exactly one protected staging slot. A crashed/uncertain cold probe
-    // leaves this slot occupied rather than silently deleting a potentially
-    // still-running Firefox workspace or accumulating unlimited full clones.
     const HEARTBEAT_TRANSPORT_RETRY_MS: u64 = 1_000;
     const SAVE_RECONNECT_AUTHORITY_RESERVE_MS: u64 = 5_000;
     const SAVE_HEARTBEAT_PERIOD_MS: u64 = 5_000;
 
-    /// A scoped helper for the long, synchronous native-seal/R2-PUT path.
-    /// It shares the operator's actual cursor. There is no additional writer,
-    /// persisted state or independent sequence; dropping the scope joins the
-    /// heartbeat before the Bridge process exits.
+    /// A scoped helper for the existing one-shot Sync's long native-seal/R2-PUT path.
+    /// It shares that Sync's coordinator cursor; it creates no second writer or
+    /// persisted state. Dropping the scope joins the heartbeat before exit.
     struct RetainedSaveHeartbeat {
         stop: mpsc::Sender<()>,
         thread: Option<thread::JoinHandle<()>>,
@@ -973,10 +968,24 @@ mod tests {
     #[cfg(not(windows))]
     #[test]
     fn non_windows_shipping_binary_has_no_browser_or_sync_fallback() {
-        use super::{ShippingCompositionError, run_closed_profile_sync};
-        use crate::generation_initialization::InitialProfileOpen;
-        let _sync_entrypoint = run_closed_profile_sync;
-        let _error_type = core::mem::size_of::<ShippingCompositionError>();
-        let _intent_type = core::mem::size_of::<InitialProfileOpen>();
+        use super::{ShippingCompositionError, run_closed_profile_sync, run_initial_profile};
+        use crate::generation_initialization::{InitialProfileOpen, InitialProfileStatus};
+        use profile_platform_primitives::{ActorId, ProfileId, TenantId};
+
+        let intent = InitialProfileOpen {
+            tenant_id: TenantId::parse("tenant_01JLOCAL").unwrap(),
+            actor_id: ActorId::parse("actor_01JLOCAL").unwrap(),
+            profile_id: ProfileId::parse("profile_01JLOCAL").unwrap(),
+            expected_version: 1,
+            status: InitialProfileStatus::Draft,
+        };
+        assert_eq!(
+            run_initial_profile(&intent),
+            Err(ShippingCompositionError::UnsupportedPlatform)
+        );
+        assert_eq!(
+            run_closed_profile_sync(&intent),
+            Err(ShippingCompositionError::UnsupportedPlatform)
+        );
     }
 }
