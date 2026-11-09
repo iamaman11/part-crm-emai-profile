@@ -22,7 +22,7 @@ class NativeLaunchError(RuntimeError):
 
 @dataclass
 class NativeProfileSession:
-    """Hold the Playwright driver connection and observe its native close event."""
+    """Hold the Playwright driver and observe its public close/disconnect events."""
 
     manager: Any = field(repr=False)
     context: Any = field(repr=False)
