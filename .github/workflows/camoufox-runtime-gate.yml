@@ -227,31 +227,27 @@ jobs:
           cargo test --locked -p profile-bridge --test real_camoufox_runtime bridge_preflight_launches_real_camoufox_through_official_playwright_without_page_inspection -- --exact --nocapture
           if ($LASTEXITCODE -ne 0) { throw 'official Camoufox Playwright Bridge integration failed' }
 
-      - name: Prove official Playwright profile state survives encrypted Save and cold Reopen
+      - name: Prove native Firefox SessionStore restore on an isolated disposable profile
         if: needs.scope.outputs.heavy == 'true'
         shell: pwsh
         run: |
-          # Reuse the existing production Bridge + pinned official runtime from
-          # this exact job, with isolated ephemeral control-plane test ports.
-          # This is a physical browser/state proof, NOT a deployed GUI/R2 proof.
+          # This is a disposable browser-state fixture, not the product's
+          # Open/Sync owner. It verifies native Firefox SessionStore behavior
+          # with the pinned official runtime. Cloud Save/Restore acceptance is
+          # covered only by the W00-W24 physical Windows matrix in Issue #844.
           $root = Join-Path $env:RUNNER_TEMP 'camouhost-runtime'
-          $env:AR10_REAL_CAMOUFOX = '1'
-          $env:AR10_PYTHON = Join-Path $root 'python/python.exe'
-          $env:AR10_RUNTIME_ROOT = $root
-          $env:AR10_BROWSER_STATE_HEADLESS = 'false'
-          $test = 'p3_fixture::real_cookie_local_storage_and_indexed_db_survive_authoritative_p3_reopen'
-          $log = Join-Path $env:RUNNER_TEMP 'camoufox-real-native-reopen.log'
-          # Cargo exits successfully when a test filter matches *zero* cases.
-          # Prove the exact fixture actually executed and passed before CI can go green.
-          cargo test --locked -p profile-bridge --test portable_browser_state $test -- --exact --nocapture 2>&1 |
+          $python = Join-Path $root 'python/python.exe'
+          $camouhost = Join-Path $root 'camouhost/real.py'
+          $runtimeLock = Join-Path $root 'camouhost/runtime-lock.json'
+          $log = Join-Path $env:RUNNER_TEMP 'camoufox-native-sessionstore.log'
+          python scripts/test-ar10-real-camoufox-cleanup.py --python $python --camouhost $camouhost --runtime-lock $runtimeLock --headless false --native-restore-only 2>&1 |
             Tee-Object -FilePath $log
-          if ($LASTEXITCODE -ne 0) { throw 'real Camoufox encrypted Save/Reopen or native storage persistence failed' }
+          if ($LASTEXITCODE -ne 0) { throw 'native Firefox SessionStore restore proof failed' }
           $text = Get-Content -Raw -LiteralPath $log
-          if ($text -notmatch 'test p3_fixture::real_cookie_local_storage_and_indexed_db_survive_authoritative_p3_reopen \.\.\. ok' -or
-              $text -notmatch 'test result: ok\. 1 passed; 0 failed; 0 ignored; 0 measured; [0-9]+ filtered out;') {
-            throw 'REAL_BROWSER_SAVE_REOPEN_NOT_EXECUTED_OR_NOT_PASSED'
+          if ($text -notmatch 'AR10_NATIVE_FIREFOX_SESSIONSTORE=PHYSICAL_PASS') {
+            throw 'REAL_NATIVE_SESSIONSTORE_NOT_EXECUTED_OR_NOT_PASSED'
           }
-          Write-Output 'REAL_BROWSER_SAVE_REOPEN=PHYSICAL_PASS'
+          Write-Output 'REAL_NATIVE_SESSIONSTORE=PHYSICAL_PASS'
 
       - name: Upload exact PR candidate for installed Windows evaluation
         if: needs.scope.outputs.heavy == 'true'
