@@ -11,7 +11,7 @@ use crate::dirty_generation::{
 use crate::generation_object_spool::VerifiedGenerationObjectFile;
 use crate::generation_snapshot::{GenerationSnapshotError, WorkspaceSnapshotReader};
 use crate::local_profile::{GenerationWorkspace, MaterializationRoot};
-#[cfg(any(windows, test, feature = "synthetic-test-bin"))]
+#[cfg(any(windows, test))]
 use crate::local_profile::{LocalProfileError, RecoveryClone};
 use crate::shipping_generation_save::CommittedGenerationSuccessor;
 use encrypted_generation_domain::{
@@ -133,13 +133,13 @@ pub(crate) struct ReadOnlySaveAttempt {
 }
 
 impl ReadOnlySaveAttempt {
-    #[cfg(any(windows, test, feature = "synthetic-test-bin"))]
+    #[cfg(any(windows, test))]
     #[must_use]
     pub(crate) fn prior_epoch(&self) -> u64 {
         self.header.epoch
     }
 
-    #[cfg(any(windows, test, feature = "synthetic-test-bin"))]
+    #[cfg(any(windows, test))]
     #[must_use]
     pub(crate) fn matches_fresh_device(&self, lease: &ProfileLease) -> bool {
         let digest = credential_fingerprint(b"device", lease.device_id().as_str());
@@ -157,31 +157,31 @@ impl ReadOnlySaveAttempt {
     }
 
     #[must_use]
-    #[cfg(any(windows, test, feature = "synthetic-test-bin"))]
+    #[cfg(any(windows, test))]
     pub(crate) fn base_generation_id(&self) -> &str {
         &self.header.base_generation
     }
 
     #[must_use]
-    #[cfg(any(windows, test, feature = "synthetic-test-bin"))]
+    #[cfg(any(windows, test))]
     pub(crate) fn successor_id(&self) -> &str {
         &self.header.successor
     }
 
     #[must_use]
-    #[cfg(any(windows, test, feature = "synthetic-test-bin"))]
+    #[cfg(any(windows, test))]
     pub(crate) fn object_key(&self) -> &str {
         &self.header.object_key
     }
 
     #[must_use]
-    #[cfg(any(windows, test, feature = "synthetic-test-bin"))]
+    #[cfg(any(windows, test))]
     pub(crate) fn metadata_digest(&self) -> &str {
         &self.header.metadata_digest
     }
 
     #[must_use]
-    #[cfg(any(windows, test, feature = "synthetic-test-bin"))]
+    #[cfg(any(windows, test))]
     pub(crate) fn container_bytes(&self) -> u64 {
         self.header.container_bytes
     }
@@ -396,7 +396,7 @@ pub(crate) fn retire_local_unsynced_after_exact_checkpoint(
 }
 
 /// The same exact checkpoint/intent pairing, with no full-ciphertext read.
-#[cfg(any(windows, test, feature = "synthetic-test-bin"))]
+#[cfg(any(windows, test))]
 pub(crate) fn retire_local_unsynced_after_streamed_checkpoint(
     root: &MaterializationRoot,
     source: &GenerationWorkspace,
@@ -527,7 +527,7 @@ fn matching_local_unsynced_for_header(
 /// native writer/Bridge root admission after affirmative D1 ACTIVE_EXACT.
 /// Retire only its matching predecessor intent; never touch Firefox files
 /// or the complete ciphertext checkpoint needed after a further crash.
-#[cfg(any(windows, test, feature = "synthetic-test-bin"))]
+#[cfg(any(windows, test))]
 pub(crate) fn retire_matching_local_unsynced_after_restart(
     root: &MaterializationRoot,
     tenant: &TenantId,
@@ -543,7 +543,7 @@ pub(crate) fn retire_matching_local_unsynced_after_restart(
 
 /// Read-only original-device provenance proof for an unsealed local close.
 /// The previous session/fence is never recoverable or re-authorized.
-#[cfg(any(windows, test, feature = "synthetic-test-bin"))]
+#[cfg(any(windows, test))]
 pub(crate) fn local_unsynced_matches_fresh_lease(
     root: &MaterializationRoot,
     tenant: &TenantId,
@@ -569,7 +569,7 @@ pub(crate) fn local_unsynced_matches_fresh_lease(
 
 /// Immutable and separately fsynced source material for native rescue.
 /// Deterministic across renewed epochs; not a cloud generation or Open grant.
-#[cfg(any(windows, test, feature = "synthetic-test-bin"))]
+#[cfg(any(windows, test))]
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct NativeRescueReserve {
     pub(crate) generation_id: GenerationId,
@@ -581,7 +581,7 @@ pub(crate) struct NativeRescueReserve {
 /// and OS-backed Bridge admission are held by the caller. Only the original
 /// canonical LOCAL_UNSYNCED is accepted; no BPAT or torn sibling is permitted.
 /// If a previous reserve is incomplete, do not repair over unknown bytes.
-#[cfg(any(windows, test, feature = "synthetic-test-bin"))]
+#[cfg(any(windows, test))]
 pub(crate) fn reserve_original_native_for_rescue(
     root: &MaterializationRoot,
     source: &GenerationWorkspace,
@@ -752,7 +752,7 @@ fn replace_native_rescue_intent(
 /// Only the existing Coordinator claim owner may call this under native OS
 /// admission and a positive independent D1 nonapplication observation.
 /// Publishing Editing is mandatory BEFORE managed Camoufox mutates Firefox.
-#[cfg(any(windows, test, feature = "synthetic-test-bin"))]
+#[cfg(any(windows, test))]
 pub(crate) fn begin_native_rescue_edit(
     root: &MaterializationRoot,
     source: &GenerationWorkspace,
@@ -822,7 +822,7 @@ pub(crate) fn begin_native_rescue_edit(
 }
 
 /// Read-only diagnosis of an interrupted edit; not a browser Open grant.
-#[cfg(any(windows, test, feature = "synthetic-test-bin"))]
+#[cfg(any(windows, test))]
 pub(crate) fn native_rescue_interrupted_under_fresh_lease(
     root: &MaterializationRoot,
     tenant: &TenantId,
@@ -917,7 +917,7 @@ pub(crate) fn original_local_unsynced_successor(
 /// The generation is fixed by original immutable local-close evidence,
 /// NOT by a subsequently renewed session/fence. Repeated authorized startups
 /// can never silently choose N+2 after a partly created N+1.
-#[cfg(any(windows, test, feature = "synthetic-test-bin"))]
+#[cfg(any(windows, test))]
 pub(crate) fn deterministic_lone_unsynced_successor(
     root: &MaterializationRoot,
     tenant: &TenantId,
@@ -996,7 +996,7 @@ pub(crate) fn persist_exact_save_attempt(
     persist_exact_save_attempt_with_origin(root, source, prepared, lease, None)
 }
 
-#[cfg(any(windows, test, feature = "synthetic-test-bin"))]
+#[cfg(any(windows, test))]
 fn verified_recovered_lone_origin(
     root: &MaterializationRoot,
     source: &GenerationWorkspace,
@@ -1344,7 +1344,7 @@ pub(crate) fn retire_fully_saved_attempt(
 /// Retire only the same completed exact save after the existing D1 owner
 /// confirmed ACTIVE_EXACT, the Bridge identity/binding owner accepted N+1,
 /// and its fresh OS workspace lock was released. This method grants nothing.
-#[cfg(any(windows, test, feature = "synthetic-test-bin"))]
+#[cfg(any(windows, test))]
 pub(crate) fn retire_active_exact_attempt_after_restart(
     root: &MaterializationRoot,
     tenant: &TenantId,
@@ -1386,7 +1386,7 @@ pub(crate) fn retire_active_exact_attempt_after_restart(
 /// Retire only the original local intent paired with this independently
 /// inspected streaming BPAT after fresh D1 ACTIVE_EXACT and root admission.
 /// Never discard a foreign or torn marker, or any source browser bytes.
-#[cfg(any(windows, test, feature = "synthetic-test-bin"))]
+#[cfg(any(windows, test))]
 pub(crate) fn retire_matching_streamed_local_unsynced_after_restart(
     root: &MaterializationRoot,
     tenant: &TenantId,
@@ -1404,7 +1404,7 @@ pub(crate) fn retire_matching_streamed_local_unsynced_after_restart(
 /// generation binding and release of the fresh OS writer admission.
 /// The candidate now contains its approved binding sidecar, so no reread of
 /// the *pre-binding* inventory is valid. Preserve BPAT if any proof fails.
-#[cfg(any(windows, test, feature = "synthetic-test-bin"))]
+#[cfg(any(windows, test))]
 pub(crate) fn retire_active_streamed_attempt_after_restart(
     root: &MaterializationRoot,
     tenant: &TenantId,
@@ -1427,7 +1427,7 @@ pub(crate) fn retire_active_streamed_attempt_after_restart(
 /// Physical retirement of a streamed BPAT only AFTER authoritative D1
 /// commit, native local binding, and BOTH release acknowledgements. A
 /// replaced, changed or uncertain file is left in place as recovery evidence.
-#[cfg(any(windows, test, feature = "synthetic-test-bin"))]
+#[cfg(any(windows, test))]
 pub(crate) fn retire_fully_saved_streaming_attempt(
     root: &MaterializationRoot,
     checkpoint: &mut ReadOnlyStreamedSaveAttempt,
@@ -1451,7 +1451,7 @@ pub(crate) fn retire_fully_saved_streaming_attempt(
     retire_verified_streaming_binding(root, checkpoint, candidate)
 }
 
-#[cfg(any(windows, test, feature = "synthetic-test-bin"))]
+#[cfg(any(windows, test))]
 fn retire_verified_streaming_binding(
     root: &MaterializationRoot,
     checkpoint: &mut ReadOnlyStreamedSaveAttempt,
@@ -1570,7 +1570,7 @@ pub(crate) enum ScopedPendingSaveEvidence {
 
 /// Keep the original exact-only API fail-closed: callers that cannot
 /// handle a lone LOCAL_UNSYNCED never silently mistake it for no evidence.
-#[cfg(any(windows, test, feature = "synthetic-test-bin"))]
+#[cfg(any(windows, test))]
 pub(crate) fn discover_unresolved_exact_save_attempt(
     root: &MaterializationRoot,
     tenant: &TenantId,
@@ -1727,7 +1727,7 @@ pub(crate) fn classify_scoped_pending_save_evidence(
 
 /// S1 summary of every on-disk P3 pending identity under the original root.
 /// Counts are evidence only: neither checkpoint nor intent authorizes cloud commit.
-#[cfg(any(windows, test, feature = "synthetic-test-bin"))]
+#[cfg(any(windows, test))]
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Serialize)]
 pub(crate) struct S1PendingInventory {
     pub(crate) exact_checkpoints: u64,
@@ -1741,7 +1741,7 @@ pub(crate) struct S1PendingInventory {
 ///
 /// Reuse the existing scope-aware owner to reject torn/foreign siblings and
 /// verify encrypted BPAT in a streaming manner. No lease, migration or write.
-#[cfg(any(windows, test, feature = "synthetic-test-bin"))]
+#[cfg(any(windows, test))]
 pub(crate) fn inspect_all_pending_for_s1(
     root: &MaterializationRoot,
 ) -> Result<S1PendingInventory, SaveAttemptEvidenceError> {
@@ -1979,7 +1979,7 @@ pub(crate) fn persist_streaming_exact_save_attempt_from_native<K: GenerationSeal
 
 /// Fresh-authorized first seal of the *original* lone LOCAL_UNSYNCED N+1.
 /// The same fsynced BPAT checkpoint has a bounded header and on-disk ciphertext.
-#[cfg(any(windows, test, feature = "synthetic-test-bin"))]
+#[cfg(any(windows, test))]
 pub(crate) fn persist_streaming_exact_save_attempt_from_lone_intent<
     K: GenerationSealingMaterialPort,
 >(
