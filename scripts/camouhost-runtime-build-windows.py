@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import io
 import json
 import os
 import re
@@ -20,6 +21,7 @@ import time
 import urllib.error
 import urllib.request
 import zipfile
+from unittest.mock import patch
 from pathlib import Path, PurePosixPath
 from typing import Any
 
@@ -133,15 +135,40 @@ def load_lock(path: Path) -> dict[str, Any]:
     return value
 
 
-def download_exact(url: str, expected_sha256: str, target: Path, cache: Path | None = None) -> None:
-    """Restore/download an exact locked public distribution, never trust a cache hit.
+def retryable_download_error(error: BaseException) -> bool:
+    if isinstance(error, urllib.error.HTTPError):
+        return error.code in {408, 425, 429, 500, 502, 503, 504}
+    if isinstance(error, urllib.error.URLError):
+        return True
+    return isinstance(error, (TimeoutError, ConnectionError))
 
-    The optional CI cache contains ONLY original public ZIP/wheel bytes indexed
-    by their locked digest, not a built/interpreted browser runtime or authority.
-    The release path (cache=None) retains the original fresh-download behavior.
+
+def safe_download_error_detail(error: BaseException) -> str:
+    if isinstance(error, urllib.error.HTTPError):
+        return f"http_status={error.code}"
+    reason = error.reason if isinstance(error, urllib.error.URLError) else error
+    return f"reason_type={type(reason).__name__}"
+
+
+def download_exact(
+    url: str,
+    expected_sha256: str,
+    target: Path,
+    cache: Path | None = None,
+    *,
+    label: str = "locked distribution",
+) -> None:
+    """Download exact locked bytes; retry only transient transport errors.
+
+    The optional cache contains original public artifact bytes indexed by their
+    locked digest. Cache hits are always re-hashed; corruption fails closed.
+    Every network attempt writes a disposable target which is removed before a
+    retry. A successful download is accepted only after its exact SHA-256 check.
     """
     if SHA256_RE.fullmatch(expected_sha256) is None:
         fail("distribution expected SHA-256 is invalid")
+    if target.exists() or target.is_symlink():
+        fail("distribution download target already exists")
     cached = None
     if cache is not None:
         if cache.is_symlink():
@@ -160,21 +187,42 @@ def download_exact(url: str, expected_sha256: str, target: Path, cache: Path | N
             return
 
     request = urllib.request.Request(url, headers={"User-Agent": "profile-bridge-release-build/1"})
-    digest = hashlib.sha256(); total = 0
-    try:
-        with urllib.request.urlopen(request, timeout=60) as response, target.open("xb") as output:
-            while True:
-                chunk = response.read(CHUNK_BYTES)
-                if not chunk: break
-                total += len(chunk)
-                if total > MAX_DOWNLOAD_BYTES: fail("distribution download exceeds bounded size")
-                digest.update(chunk); output.write(chunk)
-    except RuntimeBuildError:
-        raise
-    except (OSError, urllib.error.URLError) as error:
-        raise RuntimeBuildError("distribution download failed") from error
-    if total == 0 or digest.hexdigest() != expected_sha256:
-        fail("distribution download digest mismatch")
+    for attempt in range(1, 4):
+        digest = hashlib.sha256()
+        total = 0
+        try:
+            with urllib.request.urlopen(request, timeout=60) as response, target.open("xb") as output:
+                while True:
+                    chunk = response.read(CHUNK_BYTES)
+                    if not chunk:
+                        break
+                    total += len(chunk)
+                    if total > MAX_DOWNLOAD_BYTES:
+                        fail("distribution download exceeds bounded size")
+                    digest.update(chunk)
+                    output.write(chunk)
+        except RuntimeBuildError:
+            target.unlink(missing_ok=True)
+            raise
+        except (OSError, urllib.error.URLError) as error:
+            target.unlink(missing_ok=True)
+            if not retryable_download_error(error) or attempt == 3:
+                raise RuntimeBuildError(
+                    f"{label} download failed after {attempt} attempt(s); "
+                    f"{safe_download_error_detail(error)}"
+                ) from error
+            print(
+                f"Retrying {label} download after transient transport failure "
+                f"(attempt {attempt}/3; {safe_download_error_detail(error)}).",
+                file=sys.stderr,
+            )
+            time.sleep(float(attempt))
+            continue
+
+        if total == 0 or digest.hexdigest() != expected_sha256:
+            target.unlink(missing_ok=True)
+            fail(f"{label} download digest mismatch")
+        return
 
     if cached is not None:
         # Publish only fully verified bytes; no replacement of any prior cache.
@@ -272,7 +320,14 @@ def install_python_components(build_python: Path, lock: dict[str, Any], python_r
         wheels: list[str] = []
         for row in packages:
             target = Path(directory) / row["filename"]
-            download_exact(row["url"], row["sha256"], target, distribution_cache); wheels.append(str(target))
+            download_exact(
+                row["url"],
+                row["sha256"],
+                target,
+                distribution_cache,
+                label=f"locked Python wheel {row['filename']}",
+            )
+            wheels.append(str(target))
         command = [str(build_python), "-m", "pip", "install", "--disable-pip-version-check", "--no-cache-dir", "--no-compile", "--no-deps", "--no-index", "--no-warn-script-location", "--target", str(site), *wheels]
         if subprocess.run(command, cwd=ROOT, check=False).returncode != 0: fail("exact locked Python wheel installation failed")
 
@@ -417,6 +472,7 @@ def materialize(
             browser_lock["artifact_sha256"],
             browser_archive,
             distribution_cache,
+            label="official Camoufox browser archive",
         )
         provenance = verify_official_archive(browser_archive, lock)
         download_exact(
@@ -424,6 +480,7 @@ def materialize(
             python_lock["artifact_sha256"],
             python_archive,
             distribution_cache,
+            label="official Python embeddable distribution",
         )
         output.mkdir(parents=True, exist_ok=False)
         try:
@@ -460,6 +517,35 @@ def self_test() -> None:
             try: extract_exact_zip(bad,root/(name+".out"))
             except RuntimeBuildError: pass
             else: fail("unsafe ZIP negative self-test unexpectedly passed")
+    # A transient transport failure is retried, but only checksum-matching
+    # bytes can become the resulting artifact. The test itself makes no network call.
+    with tempfile.TemporaryDirectory(prefix="camouhost-download-retry-test-") as directory:
+        target = Path(directory) / "retry.blob"
+        payload = b"exact-locked-artifact-after-transient-failure"
+        attempts = 0
+
+        def flaky_urlopen(_request, timeout):
+            nonlocal attempts
+            if timeout != 60:
+                fail("distribution download timeout contract changed")
+            attempts += 1
+            if attempts == 1:
+                raise urllib.error.URLError("synthetic transient transport failure")
+            return io.BytesIO(payload)
+
+        with (
+            patch.object(urllib.request, "urlopen", side_effect=flaky_urlopen),
+            patch.object(time, "sleep"),
+        ):
+            download_exact(
+                "https://invalid.example/retry",
+                hashlib.sha256(payload).hexdigest(),
+                target,
+                label="self-test artifact",
+            )
+        if attempts != 2 or target.read_bytes() != payload:
+            fail("transient download retry did not preserve exact artifact bytes")
+
     # Cache hits cannot grant trust or bypass an exact digest. No network
     # needed to prove a valid hit, nor to reject a corrupted prior cache.
     with tempfile.TemporaryDirectory(prefix="camouhost-locked-cache-test-") as directory:
