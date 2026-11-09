@@ -714,7 +714,7 @@ mod tests {
         // normal read/write code even inside our own Bridge process.
         assert_eq!(
             fs::read(live.path().join(".profile-generation"))?,
-            b"profile-platform-generation-v2\ngeneration_other_live\n-\n0\n"
+            b"profile-platform-generation-v3\ngeneration_other_live\n-\n0\n-\n"
         );
         assert!(
             live.inventory()?

@@ -1118,7 +1118,10 @@ mod tests {
         let device = DeviceId::parse("device_pending_ready")?;
         let draft = root.create_profile_current(&tenant, &profile, &base, 1)?;
         std::fs::create_dir_all(draft.path().join("user_data"))?;
-        std::fs::write(draft.path().join("user_data/cookies.sqlite"), b"original snapshot")?;
+        std::fs::write(
+            draft.path().join("user_data/cookies.sqlite"),
+            b"original snapshot",
+        )?;
         let ready = root.update_profile_current_sync_base(&draft, &base, 2)?;
         std::fs::write(ready.path().join(".local-unsynced"), b"local-unsynced-v2")?;
         let inventory = ready.inventory()?;
