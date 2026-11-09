@@ -541,10 +541,8 @@ impl DeliveryHandoffCoordinator {
                     return Err(DeliveryHandoffError::CurrentExecutableMismatch);
                 }
                 drop(store);
-                let recovery = DeliveryRecoveryCoordinator::new(
-                    self.staging_root.clone(),
-                    &self.state_root,
-                );
+                let recovery =
+                    DeliveryRecoveryCoordinator::new(self.staging_root.clone(), &self.state_root);
                 match recovery
                     .recover(
                         &source_candidate,
@@ -1373,11 +1371,9 @@ mod tests {
         let fixture = fixture("arrived-health-recovery-retry", false)?;
         let coordinator = arrived_interrupted_health_fixture(&fixture)?;
         assert_eq!(
-            coordinator.recover_or_resume_started_with(
-                43,
-                &fixture.second_executable,
-                |_| Err(DeliveryHandoffError::HelperLaunchFailed),
-            ),
+            coordinator.recover_or_resume_started_with(43, &fixture.second_executable, |_| Err(
+                DeliveryHandoffError::HelperLaunchFailed
+            ),),
             Err(DeliveryHandoffError::HelperLaunchFailed)
         );
         let rolled_back = DeliveryStateStore::open(&fixture.state_root)?;
@@ -1434,7 +1430,10 @@ mod tests {
         let failed = DeliveryStateStore::open(&fixture.state_root)?;
         assert_eq!(failed.state().active(), None);
         assert_eq!(
-            failed.state().last_activation().map(|activation| activation.outcome),
+            failed
+                .state()
+                .last_activation()
+                .map(|activation| activation.outcome),
             Some(DeliveryActivationOutcome::RecoveryRequired)
         );
         assert_eq!(

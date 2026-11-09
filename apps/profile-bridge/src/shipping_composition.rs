@@ -890,9 +890,7 @@ mod windows {
     }
 
     fn delivery_health_before_launch(
-        pending: Option<
-            crate::windows_delivery_runtime::PendingWindowsDeliveryHealthConfirmation,
-        >,
+        pending: Option<crate::windows_delivery_runtime::PendingWindowsDeliveryHealthConfirmation>,
     ) -> Option<crate::local_browser_open::BeforeLaunch> {
         pending.map(|pending| {
             Box::new(move || {

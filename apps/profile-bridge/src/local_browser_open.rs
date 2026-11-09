@@ -187,7 +187,14 @@ fn run_python(
             Some(&input),
         );
     }
-    run_python_with_input(&executable, runtime_root, folder, action, before_launch, None)
+    run_python_with_input(
+        &executable,
+        runtime_root,
+        folder,
+        action,
+        before_launch,
+        None,
+    )
 }
 
 fn ensure_user_data_directory(folder: &Path) -> Result<bool, LocalOpenError> {
@@ -525,10 +532,10 @@ pub(crate) fn open_with_before_launch(
 #[cfg(test)]
 mod tests {
     use super::{
-        CAMOUHOST_LAUNCH_READY_EVENT, ENTRYPOINT, LOCK, LocalOpenError, local_generation,
-        mark_local_unsynced, observe_runtime_ready_line, open_or_create_workspace,
-        recheck_workspace_after_writer_admission, run_python_with_executable, BeforeLaunch,
-        ReadyConfirmation,
+        BeforeLaunch, CAMOUHOST_LAUNCH_READY_EVENT, ENTRYPOINT, LOCK, LocalOpenError,
+        ReadyConfirmation, local_generation, mark_local_unsynced, observe_runtime_ready_line,
+        open_or_create_workspace, recheck_workspace_after_writer_admission,
+        run_python_with_executable,
     };
     use crate::generation_initialization::{InitialProfileOpen, InitialProfileStatus};
     use profile_platform_primitives::{ActorId, ProfileId, TenantId};
