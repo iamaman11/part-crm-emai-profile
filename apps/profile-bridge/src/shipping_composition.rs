@@ -975,8 +975,8 @@ mod windows {
                     Err(crate::local_browser_open::LocalOpenError::DeliveryHealth) => {
                         start_sync_after_close(intent);
                         Err(ShippingCompositionError::LocalOpen(
-                    crate::local_browser_open::LocalOpenError::DeliveryHealth,
-                ))
+                            crate::local_browser_open::LocalOpenError::DeliveryHealth,
+                        ))
                     }
                     Err(error) => {
                         // Every post-restore local failure may leave the
