@@ -140,7 +140,7 @@ impl PreparedDirtyGeneration {
 
 /// Same deterministic N+1 object identity for both bounded-memory and
 /// original-file streaming Sync; a retry may never choose a second successor.
-#[cfg(any(windows, test, feature = "synthetic-test-bin"))]
+#[cfg(any(windows, test))]
 pub(crate) fn closed_current_candidate_id(
     tenant: &TenantId,
     profile: &ProfileId,
@@ -167,7 +167,7 @@ pub(crate) fn closed_current_candidate_id(
 /// CURRENT. Unlike the former generation-folder model, this source folder
 /// remains stable: there is no secondary native browser workspace or second
 /// generation directory to create. Caller snapshots under the same writer lock.
-#[cfg(any(windows, test, feature = "synthetic-test-bin"))]
+#[cfg(any(windows, test))]
 #[allow(clippy::too_many_arguments)]
 pub fn prepare_closed_current_successor<K: GenerationSealingMaterialPort>(
     source: &GenerationWorkspace,
@@ -242,7 +242,7 @@ pub fn prepare_dirty_generation_candidate<K: GenerationSealingMaterialPort>(
     )
 }
 
-#[cfg(any(windows, test, feature = "synthetic-test-bin"))]
+#[cfg(any(windows, test))]
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn recover_local_unsynced_native_clone(
     record: &LocalGenerationRecord,
