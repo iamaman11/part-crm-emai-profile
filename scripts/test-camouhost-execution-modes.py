@@ -100,7 +100,7 @@ def main() -> int:
     assert 'run_python(' in local_open_after_dirty
     assert '"--local-open"' in local_open_after_dirty
     assert 'pending_health' in local_open_after_dirty
-    assert ".local-unsynced" in local_owner
+    assert ".local-unsynced" in local_source
     assert "ControlPlaneEnrollment" not in local_owner
     assert "MachineHttpPort" not in local_owner and "SharedControlPlaneCoordinator" not in local_owner
     composition = (SOURCE.parents[2] /
