@@ -52,6 +52,7 @@ impl BridgeWorkspaceLock {
     /// Only this generation requires OS exclusivity. A live OTHER profile must
     /// not block recovery of dirty bytes after browser/Bridge process death.
     /// The root shared lock still excludes installer activation across the whole root.
+    #[cfg(any(test, feature = "synthetic-test-bin"))]
     pub(crate) fn recover_interrupted_launch(
         workspace: &GenerationWorkspace,
         device_id: &DeviceId,
@@ -172,6 +173,7 @@ fn workspace_root(workspace: &GenerationWorkspace) -> Result<&Path, LocalProfile
 /// Persistent marker version, not mere lock-file existence, distinguishes
 /// root-only Bridge543 from a generation-scoped writer. Corruption or an
 /// unreadable/symlinked marker may never authorize a weaker admission check.
+#[cfg(any(test, feature = "synthetic-test-bin"))]
 fn generation_scoped_marker_present(
     workspace: &GenerationWorkspace,
 ) -> Result<bool, LocalProfileError> {
