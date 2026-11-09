@@ -6,7 +6,9 @@ use crate::dirty_generation::{
 use crate::generation_object_spool::VerifiedGenerationObjectFile;
 #[cfg(any(test, feature = "synthetic-test-bin"))]
 use crate::local_profile::{GenerationWorkspace, LocalGenerationRecord, MaterializationRoot};
-use profile_platform_primitives::{GenerationId, ProfileId, TenantId};
+use profile_platform_primitives::GenerationId;
+#[cfg(any(test, feature = "synthetic-test-bin"))]
+use profile_platform_primitives::{ProfileId, TenantId};
 #[cfg(any(test, feature = "synthetic-test-bin"))]
 use session_domain::ProfileLease;
 #[cfg(any(test, feature = "synthetic-test-bin"))]
