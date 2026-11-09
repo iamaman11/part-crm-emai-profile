@@ -18,6 +18,7 @@ SOURCES = {
     "native": "runtime/camouhost/native_process.py",
     "adapter": "runtime/camouhost/real.py",
     "operator": "apps/profile-bridge/src/operator_flow.rs",
+    "locks": "apps/profile-bridge/src/local_profile/quiescence.rs",
 }
 
 
@@ -47,6 +48,7 @@ def check_sources(sources: dict[str, str]) -> list[str]:
     native = sources["native"]
     adapter = sources["adapter"]
     operator = sources["operator"]
+    locks = sources["locks"]
 
     for required in ("BridgeCommand::InitialProfile(intent)", "BridgeCommand::SyncClosed(intent)",
                      "run_closed_profile_sync(&intent)", '"--sync-closed"'):
@@ -78,8 +80,21 @@ def check_sources(sources: dict[str, str]) -> list[str]:
     launch = opened.find('run_python(runtime_root, workspace.path(), "--local-open")')
     if marker < 0 or launch < marker:
         failures.append("durable local dirty evidence must precede native browser launch")
-    if "BridgeWorkspaceLock::acquire(&workspace" not in opened:
-        failures.append("native Open must hold the existing per-profile OS admission")
+    if "BridgeWorkspaceLock::acquire_or_recover_interrupted(&workspace" not in opened:
+        failures.append("native Open must hold the existing per-profile OS admission through the shared recovery owner")
+    lock_admission = function_body(locks, "pub fn acquire_or_recover_interrupted(")
+    if (
+        "Self::acquire(workspace, device_id, epoch)" not in lock_admission
+        or "Self::recover_interrupted_launch(workspace, device_id, epoch)" not in lock_admission
+    ):
+        failures.append("native Open must hold the existing per-profile OS admission through the shared recovery owner")
+    recovery = function_body(locks, "pub(crate) fn recover_interrupted_launch(")
+    if (
+        "generation.try_lock().map_err(map_try_lock_error)?" not in recovery
+        or "browser_writer_locks_absent(workspace)" not in recovery
+        or "filesystem::BridgeWorkspaceLock::replace_interrupted(" not in recovery
+    ):
+        failures.append("native Open must hold the existing per-profile OS admission through the shared recovery owner")
     if opened.count("browser_writer_locks_absent(&workspace)") < 2:
         failures.append("native Open must verify the existing Firefox file-access gate")
     if "current.profile_version() != intent.expected_version" not in local:
@@ -120,6 +135,13 @@ def self_test(sources: dict[str, str]) -> list[str]:
     mutations = (
         ("local", "mark_local_unsynced(workspace.path())?;", "mark_removed();",
          "durable local dirty evidence"),
+        ("local", "BridgeWorkspaceLock::acquire_or_recover_interrupted(&workspace",
+         "BridgeWorkspaceLock::acquire(&workspace",
+         "native Open must hold the existing per-profile OS admission through the shared recovery owner"),
+        ("locks", "Self::acquire(workspace, device_id, epoch)", "Ok(())",
+         "native Open must hold the existing per-profile OS admission through the shared recovery owner"),
+        ("locks", "Self::recover_interrupted_launch(workspace, device_id, epoch)", "Ok(())",
+         "native Open must hold the existing per-profile OS admission through the shared recovery owner"),
         ("local", "current.profile_version() != intent.expected_version", "false",
          "stale local CURRENT"),
         ("shipping", "wait_for_native_writer_release(", "unsafe_file_assumption(",

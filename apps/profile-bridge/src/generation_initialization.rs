@@ -1449,7 +1449,10 @@ mod tests {
         let workspace =
             root.create_profile_current(&intent.tenant_id, &intent.profile_id, &generation, 1)?;
         std::fs::create_dir(workspace.path().join("user_data"))?;
-        std::fs::write(workspace.path().join("user_data/cookies.sqlite"), b"native-browser-state")?;
+        std::fs::write(
+            workspace.path().join("user_data/cookies.sqlite"),
+            b"native-browser-state",
+        )?;
         let dirty = workspace.path().join(".local-unsynced");
         std::fs::write(&dirty, b"local-unsynced-v2")?;
 
@@ -1466,7 +1469,10 @@ mod tests {
             &mut NoUpload,
         );
         assert!(result.is_err()); // The fake Worker transport deliberately refuses Prepare.
-        assert_eq!(transport.calls, 1, "Sync must pass local lock admission before Worker I/O");
+        assert_eq!(
+            transport.calls, 1,
+            "Sync must pass local lock admission before Worker I/O"
+        );
         assert!(
             !workspace.path().join(".profile-platform.lock").exists(),
             "the recovered Bridge marker must be released after the closed snapshot"
@@ -1476,5 +1482,4 @@ mod tests {
         std::fs::remove_dir_all(&path)?;
         Ok(())
     }
-
 }

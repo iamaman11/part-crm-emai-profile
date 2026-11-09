@@ -42,8 +42,7 @@ fn acquire_or_recover_replaces_only_same_device_interrupted_marker()
     drop(interrupted); // Simulate process death: OS locks drop, durable marker remains.
     let marker = workspace.path().join(".profile-platform.lock");
     let before = fs::read(&marker)?;
-    let recovered =
-        BridgeWorkspaceLock::acquire_or_recover_interrupted(&workspace, &device_id, 2)?;
+    let recovered = BridgeWorkspaceLock::acquire_or_recover_interrupted(&workspace, &device_id, 2)?;
     let after = fs::read(&marker)?;
     assert_ne!(after, before);
     assert!(String::from_utf8(after)?.contains("\n2\n"));
@@ -77,16 +76,15 @@ fn acquire_or_recover_keeps_live_native_and_foreign_writers_blocked()
     let before = fs::read(&marker)?;
     let foreign_device = DeviceId::parse("device_foreign")?;
     assert!(matches!(
-        BridgeWorkspaceLock::acquire_or_recover_interrupted(
-            &workspace,
-            &foreign_device,
-            4
-        ),
+        BridgeWorkspaceLock::acquire_or_recover_interrupted(&workspace, &foreign_device, 4),
         Err(LocalProfileError::LockBusy)
     ));
     assert_eq!(fs::read(&marker)?, before);
 
-    fs::write(workspace.path().join(".parentlock"), b"native-writer-present")?;
+    fs::write(
+        workspace.path().join(".parentlock"),
+        b"native-writer-present",
+    )?;
     assert!(matches!(
         BridgeWorkspaceLock::acquire_or_recover_interrupted(&workspace, &device_id, 5),
         Err(LocalProfileError::LockBusy)
