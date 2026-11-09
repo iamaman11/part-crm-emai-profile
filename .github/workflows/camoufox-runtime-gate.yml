@@ -350,13 +350,3 @@ jobs:
           fi
           test "${{ needs.bridge-regression-windows.result }}" = success
 
-  camoufox-required-proof:
-    # Branch protection retains the canonical cold-launch check name. The single
-    # physical Windows runtime job above owns all real Camoufox/Bridge tests.
-    name: Real Camoufox cold-launch proof
-    needs: bridge-regression-windows
-    if: always()
-    runs-on: ubuntu-24.04
-    steps:
-      - name: Require real official Camoufox and Bridge Windows proof
-        run: test "${{ needs.bridge-regression-windows.result }}" = success
