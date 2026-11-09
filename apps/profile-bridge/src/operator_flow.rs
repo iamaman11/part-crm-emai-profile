@@ -1475,8 +1475,8 @@ where
         })
     }
 
-    /// Legacy in-memory Save exists only in debug/test or explicitly synthetic builds.
-    /// Installed production release uses `save_retained_successor_streaming` only.
+    /// The retired operator's Save paths are test-only. Installed production
+    /// uses the closed-profile streaming Sync in shipping_composition, not this operator.
     #[cfg(any(test, feature = "synthetic-test-bin", debug_assertions))]
     pub fn save_retained_successor<T, U>(
         &mut self,
@@ -1702,7 +1702,7 @@ where
     /// coordinator, but seals its original Firefox files directly to a durable
     /// BPAT instead of constructing a generation-sized plaintext/ciphertext Vec.
     /// Retries reuse the exact saved attempt; no second save owner or N+2.
-    #[cfg(any(windows, test))]
+    #[cfg(test)]
     pub fn save_retained_successor_streaming<T, U>(
         &mut self,
         root: &MaterializationRoot,

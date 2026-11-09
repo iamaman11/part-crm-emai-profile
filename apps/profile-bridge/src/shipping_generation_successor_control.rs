@@ -73,6 +73,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 const MAX_UPLOAD_CAPABILITY_RESPONSE_BYTES: usize = 16_384;
 const MAX_COMMIT_RESPONSE_BYTES: usize = 1_024;
+#[cfg(any(windows, test))]
 const MAX_OBSERVE_RESPONSE_BYTES: usize = 256;
 const MAX_SIGNED_UPLOAD_URL_BYTES: usize = 8_192;
 const MAX_SIGNED_UPLOAD_HEADERS: usize = 16;
