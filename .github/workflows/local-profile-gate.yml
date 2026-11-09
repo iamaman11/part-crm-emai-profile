@@ -130,7 +130,7 @@ jobs:
         shell: pwsh
         run: |
           $env:PROFILE_BRIDGE_TEST_PYTHON = (Get-Command python).Source
-          cargo test --locked -p profile-bridge --features synthetic-test-bin --lib local_browser_open::tests
+          cargo test --locked -p profile-bridge --features synthetic-test-bin --lib local_browser_open::tests -- --include-ignored
           if ($LASTEXITCODE -ne 0) { throw 'native Playwright Ready health-confirmation tests failed' }
 
       - name: Prove K2 256/512 MiB file streaming on Windows with peak RAM and disk limits
