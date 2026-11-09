@@ -348,9 +348,9 @@ fn ar11_workflow_terminalizes_after_owner_capture_and_before_final_assertion() -
     assert!(resolve.contains("environment: staging"));
     assert!(resolve.contains("STAGING_CANDIDATE"));
     let mutate = workflow
-        .split("  mutate:\\n")
+        .split("  mutate:\n")
         .nth(1)
-        .and_then(|tail| tail.split("  post-verify:\\n").next())
+        .and_then(|tail| tail.split("  post-verify:\n").next())
         .ok_or_else(|| "manual mutate job must exist".to_string())?;
     assert!(mutate.contains("environment: staging"));
     assert!(!resolve.contains("AUTHORITY_COMMENT"));
