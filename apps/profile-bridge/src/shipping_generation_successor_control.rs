@@ -1,13 +1,13 @@
 #[cfg(any(windows, test))]
 use crate::browser_execution::{browser_writer_locks_absent, persist_committed_successor_binding};
 #[cfg(any(test, feature = "synthetic-test-bin"))]
-use crate::dirty_generation::PreparedDirtyGeneration;
-#[cfg(any(windows, test))]
-use crate::dirty_generation::recover_local_unsynced_native_clone;
-#[cfg(any(test, feature = "synthetic-test-bin"))]
 use crate::dirty_generation::GenerationSealingMaterial;
 #[cfg(any(windows, test, feature = "synthetic-test-bin"))]
 use crate::dirty_generation::GenerationSealingMaterialPort;
+#[cfg(any(test, feature = "synthetic-test-bin"))]
+use crate::dirty_generation::PreparedDirtyGeneration;
+#[cfg(any(windows, test))]
+use crate::dirty_generation::recover_local_unsynced_native_clone;
 #[cfg(any(windows, test))]
 use crate::generation_snapshot::{GenerationSnapshotError, WorkspaceSnapshotReader};
 #[cfg(any(windows, test))]
@@ -20,12 +20,12 @@ use crate::shipping_control_plane::{
 };
 #[cfg(any(windows, test))]
 use crate::shipping_generation_save::CommittedGenerationSuccessor;
-#[cfg(any(windows, test))]
-use crate::shipping_generation_save::SignedGenerationObjectStreamPutPort;
 #[cfg(any(windows, test, feature = "synthetic-test-bin"))]
 use crate::shipping_generation_save::GenerationSuccessorCommitOutcome;
 #[cfg(any(test, feature = "synthetic-test-bin"))]
 use crate::shipping_generation_save::GenerationSuccessorControlPort;
+#[cfg(any(windows, test))]
+use crate::shipping_generation_save::SignedGenerationObjectStreamPutPort;
 use crate::shipping_generation_save::{
     GenerationUploadAuthorization, SignedGenerationUploadCapability,
 };
