@@ -6,9 +6,9 @@ use crate::generation_snapshot::encode_workspace_snapshot;
 use crate::generation_snapshot::{
     digest_closed_workspace_streaming, seal_closed_workspace_streaming,
 };
-#[cfg(test)]
-use crate::local_profile::GenerationWorkspace;
-use crate::local_profile::{BridgeWorkspaceLock, MaterializationRoot};
+use crate::local_profile::{
+    BridgeWorkspaceLock, GenerationWorkspace, MaterializationRoot, PendingSyncDescriptor,
+};
 #[cfg(test)]
 use crate::runtime_bundle::{ApprovedRuntimeBundle, RuntimeBundleSelectionPort};
 use crate::shipping_control_plane::{
@@ -350,7 +350,7 @@ pub fn sync_closed_local_draft<T: MachineHttpPort, U: SignedGenerationObjectStre
     {
         return Err(InitialProfileError::Authorization);
     }
-    let workspace = root
+    let mut workspace = root
         .open_profile_current(&intent.tenant_id, &intent.profile_id)
         .map_err(|_| InitialProfileError::Snapshot)?;
     if workspace.base_generation_id().is_some()
@@ -361,6 +361,64 @@ pub fn sync_closed_local_draft<T: MachineHttpPort, U: SignedGenerationObjectStre
     let dirty = workspace.path().join(".local-unsynced");
     if fs::read(&dirty).map_err(|_| InitialProfileError::Snapshot)? != b"local-unsynced-v2" {
         return Err(InitialProfileError::Snapshot);
+    }
+    let path = format!(
+        "/bridge/v1/tenants/{}/profiles/{}/generation-initialization",
+        intent.tenant_id.as_str(),
+        intent.profile_id.as_str(),
+    );
+    if let Some(pending) = workspace.pending_sync().cloned() {
+        if pending.is_committed() {
+            return Err(InitialProfileError::SavedRecovery);
+        }
+        let prepared: InitialGenerationPrepared = decode(post(
+            transport,
+            &path,
+            &Request::Prepare {
+                generation_id: workspace.generation_id().as_str().to_owned(),
+                expected_profile_version: intent.expected_version,
+            },
+        )?)?;
+        match prepared {
+            InitialGenerationPrepared::Initialize {
+                generation_id,
+                expected_profile_version,
+            } if generation_id == workspace.generation_id().as_str()
+                && expected_profile_version == intent.expected_version =>
+            {
+                let writer = BridgeWorkspaceLock::acquire_or_recover_interrupted(
+                    &workspace,
+                    device,
+                    SystemTime::now()
+                        .duration_since(UNIX_EPOCH)
+                        .map_err(|_| InitialProfileError::Snapshot)?
+                        .as_millis()
+                        .try_into()
+                        .map_err(|_| InitialProfileError::Snapshot)?,
+                )
+                .map_err(|_| InitialProfileError::Snapshot)?;
+                let cleared = (|| {
+                    if !matches!(browser_writer_locks_absent(&workspace), Ok(true)) {
+                        return Err(InitialProfileError::Snapshot);
+                    }
+                    let current = root
+                        .open_profile_current(&intent.tenant_id, &intent.profile_id)
+                        .map_err(|_| InitialProfileError::Snapshot)?;
+                    if current.pending_sync() != Some(&pending) {
+                        return Err(InitialProfileError::SavedRecovery);
+                    }
+                    root.clear_profile_current_pending_sync(&current)
+                        .map_err(|_| InitialProfileError::SavedRecovery)
+                })();
+                let released = writer.release().map_err(|_| InitialProfileError::Snapshot);
+                cleared?;
+                released?;
+                workspace = root
+                    .open_profile_current(&intent.tenant_id, &intent.profile_id)
+                    .map_err(|_| InitialProfileError::Snapshot)?;
+            }
+            _ => return Err(InitialProfileError::SavedRecovery),
+        }
     }
     let stamp = || -> Result<u64, InitialProfileError> {
         let since_epoch = SystemTime::now()
@@ -386,11 +444,6 @@ pub fn sync_closed_local_draft<T: MachineHttpPort, U: SignedGenerationObjectStre
     released?;
 
     let generation = workspace.generation_id().clone();
-    let path = format!(
-        "/bridge/v1/tenants/{}/profiles/{}/generation-initialization",
-        intent.tenant_id.as_str(),
-        intent.profile_id.as_str(),
-    );
     let prepared: InitialGenerationPrepared = decode(post(
         transport,
         &path,
@@ -426,7 +479,7 @@ pub fn sync_closed_local_draft<T: MachineHttpPort, U: SignedGenerationObjectStre
         if !matches!(browser_writer_locks_absent(&workspace), Ok(true)) {
             return Err(InitialProfileError::Snapshot);
         }
-        seal_closed_workspace_streaming(
+        let encrypted = seal_closed_workspace_streaming(
             &workspace,
             &inventory,
             &generation,
@@ -435,10 +488,22 @@ pub fn sync_closed_local_draft<T: MachineHttpPort, U: SignedGenerationObjectStre
             plaintext_bytes,
             digest,
         )
-        .map_err(|_| InitialProfileError::Snapshot)
+        .map_err(|_| InitialProfileError::Snapshot)?;
+        let pending = PendingSyncDescriptor::new(
+            generation.clone(),
+            encrypted.metadata_digest(),
+            encrypted.container_digest(),
+            encrypted.container_bytes(),
+            digest,
+            plaintext_bytes,
+        )
+        .map_err(|_| InitialProfileError::Snapshot)?;
+        root.set_profile_current_pending_sync(&workspace, pending.clone())
+            .map_err(|_| InitialProfileError::Snapshot)?;
+        Ok((encrypted, pending))
     })();
     let released = writer.release().map_err(|_| InitialProfileError::Snapshot);
-    let encrypted = encrypted?;
+    let (encrypted, pending) = encrypted?;
     released?;
 
     let metadata_digest = hex(&encrypted.metadata_digest());
@@ -494,20 +559,58 @@ pub fn sync_closed_local_draft<T: MachineHttpPort, U: SignedGenerationObjectStre
         if current.base_generation_id().is_some()
             || current.generation_id() != &generation
             || current.profile_version() != intent.expected_version
+            || current.pending_sync() != Some(&pending)
             || !matches!(browser_writer_locks_absent(&current), Ok(true))
         {
             return Err(InitialProfileError::SavedRecovery);
         }
-        let unchanged = current
-            .inventory()
-            .map_err(|_| InitialProfileError::SavedRecovery)?
-            == inventory;
-        root.update_profile_current_sync_base(&current, &generation, receipt.profile_version)
+        finish_pending_sync_under_writer(root, &current, &pending)
+    })();
+    let unlocked = guard
+        .release()
+        .map_err(|_| InitialProfileError::SavedRecovery);
+    let unchanged = applied?;
+    unlocked?;
+    if !unchanged {
+        return Err(InitialProfileError::SavedRecovery);
+    }
+    Ok(())
+}
+
+/// Complete the existing local Sync checkpoint after the caller has
+/// obtained the exclusive Bridge workspace lock. The marker is advanced only
+/// after the exact cloud descriptor has been confirmed by the Sync owner.
+pub(crate) fn finish_pending_sync_under_writer(
+    root: &MaterializationRoot,
+    workspace: &GenerationWorkspace,
+    pending: &PendingSyncDescriptor,
+) -> Result<bool, InitialProfileError> {
+    use crate::browser_execution::browser_writer_locks_absent;
+    use std::fs;
+
+    if workspace.pending_sync() != Some(pending)
+        || !matches!(browser_writer_locks_absent(workspace), Ok(true))
+    {
+        return Err(InitialProfileError::SavedRecovery);
+    }
+    let inventory = workspace
+        .inventory()
+        .map_err(|_| InitialProfileError::SavedRecovery)?;
+    let (plaintext_bytes, plaintext_digest) =
+        digest_closed_workspace_streaming(workspace, &inventory)
             .map_err(|_| InitialProfileError::SavedRecovery)?;
-        // Never clear a dirty marker if user data changed during R2 upload.
-        if unchanged {
-            let metadata =
-                fs::symlink_metadata(&dirty).map_err(|_| InitialProfileError::SavedRecovery)?;
+    let unchanged = plaintext_bytes == pending.plaintext_bytes()
+        && plaintext_digest == *pending.plaintext_digest();
+
+    let committed = if pending.is_committed() {
+        workspace.clone()
+    } else {
+        root.mark_profile_current_pending_sync_committed(workspace)
+            .map_err(|_| InitialProfileError::SavedRecovery)?
+    };
+    let dirty = committed.path().join(".local-unsynced");
+    match fs::symlink_metadata(&dirty) {
+        Ok(metadata) => {
             if metadata.file_type().is_symlink()
                 || !metadata.is_file()
                 || fs::read(&dirty).map_err(|_| InitialProfileError::SavedRecovery)?
@@ -515,15 +618,17 @@ pub fn sync_closed_local_draft<T: MachineHttpPort, U: SignedGenerationObjectStre
             {
                 return Err(InitialProfileError::SavedRecovery);
             }
-            fs::remove_file(&dirty).map_err(|_| InitialProfileError::SavedRecovery)?;
+            if unchanged {
+                fs::remove_file(&dirty).map_err(|_| InitialProfileError::SavedRecovery)?;
+            }
         }
-        Ok(())
-    })();
-    let unlocked = guard
-        .release()
-        .map_err(|_| InitialProfileError::SavedRecovery);
-    applied?;
-    unlocked
+        Err(error)
+            if unchanged && error.kind() == std::io::ErrorKind::NotFound => {}
+        Err(_) => return Err(InitialProfileError::SavedRecovery),
+    }
+    root.clear_profile_current_pending_sync(&committed)
+        .map_err(|_| InitialProfileError::SavedRecovery)?;
+    Ok(unchanged)
 }
 
 /// One existing Initial Generation encryption, signed R2 PUT and verified
@@ -929,10 +1034,120 @@ mod tests {
         assert_eq!(confirmed.path(), workspace.path());
         assert_eq!(confirmed.base_generation_id(), Some(&local_id));
         assert_eq!(confirmed.profile_version(), 2);
+        assert!(confirmed.pending_sync().is_none());
         assert!(!confirmed.path().join(".local-unsynced").exists());
         assert_eq!(
             std::fs::read(confirmed.path().join("user_data/cookies.sqlite"))?,
             b"persistent-cookie-data",
+        );
+        std::fs::remove_dir_all(path)?;
+        Ok(())
+    }
+
+    #[test]
+    fn pending_draft_commit_reconciles_after_restart_without_replacing_local_files()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let path = std::env::temp_dir().join(format!(
+            "bridge-pending-draft-{}-{}",
+            std::process::id(),
+            SystemTime::now().duration_since(UNIX_EPOCH)?.as_nanos()
+        ));
+        let root = MaterializationRoot::open_or_create(&path)?;
+        let tenant = TenantId::parse("tenant_pending_draft")?;
+        let profile = ProfileId::parse("profile_pending_draft")?;
+        let local = GenerationId::parse("generation_pending_draft")?;
+        let device = DeviceId::parse("device_pending_draft")?;
+        let draft = root.create_profile_current(&tenant, &profile, &local, 1)?;
+        std::fs::create_dir_all(draft.path().join("user_data"))?;
+        std::fs::write(draft.path().join("user_data/cookies.sqlite"), b"original snapshot")?;
+        std::fs::write(draft.path().join(".local-unsynced"), b"local-unsynced-v2")?;
+        let inventory = draft.inventory()?;
+        let (plaintext_bytes, plaintext_digest) =
+            digest_closed_workspace_streaming(&draft, &inventory)?;
+        let pending = PendingSyncDescriptor::new(
+            local.clone(),
+            [0x11; 32],
+            [0x22; 32],
+            4_096,
+            plaintext_digest,
+            plaintext_bytes,
+        )?;
+        let prepared = root.set_profile_current_pending_sync(&draft, pending)?;
+        let committed = root.mark_profile_current_pending_sync_committed(&prepared)?;
+        let committed_pending = committed
+            .pending_sync()
+            .cloned()
+            .ok_or("committed checkpoint missing")?;
+        let writer = BridgeWorkspaceLock::acquire(&committed, &device, 1)?;
+        assert!(finish_pending_sync_under_writer(&root, &committed, &committed_pending)?);
+        writer.release()?;
+
+        let recovered = root.open_profile_current(&tenant, &profile)?;
+        assert_eq!(recovered.generation_id(), &local);
+        assert_eq!(recovered.base_generation_id(), Some(&local));
+        assert_eq!(recovered.profile_version(), 2);
+        assert!(recovered.pending_sync().is_none());
+        assert!(!recovered.path().join(".local-unsynced").exists());
+        assert_eq!(
+            std::fs::read(recovered.path().join("user_data/cookies.sqlite"))?,
+            b"original snapshot"
+        );
+        std::fs::remove_dir_all(path)?;
+        Ok(())
+    }
+
+    #[test]
+    fn pending_ready_commit_advances_base_but_preserves_edits_made_after_snapshot()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let path = std::env::temp_dir().join(format!(
+            "bridge-pending-ready-{}-{}",
+            std::process::id(),
+            SystemTime::now().duration_since(UNIX_EPOCH)?.as_nanos()
+        ));
+        let root = MaterializationRoot::open_or_create(&path)?;
+        let tenant = TenantId::parse("tenant_pending_ready")?;
+        let profile = ProfileId::parse("profile_pending_ready")?;
+        let base = GenerationId::parse("generation_pending_ready_base")?;
+        let candidate = GenerationId::parse("generation_pending_ready_next")?;
+        let device = DeviceId::parse("device_pending_ready")?;
+        let draft = root.create_profile_current(&tenant, &profile, &base, 1)?;
+        std::fs::create_dir_all(draft.path().join("user_data"))?;
+        std::fs::write(draft.path().join("user_data/cookies.sqlite"), b"original snapshot")?;
+        let ready = root.update_profile_current_sync_base(&draft, &base, 2)?;
+        std::fs::write(ready.path().join(".local-unsynced"), b"local-unsynced-v2")?;
+        let inventory = ready.inventory()?;
+        let (plaintext_bytes, plaintext_digest) =
+            digest_closed_workspace_streaming(&ready, &inventory)?;
+        let pending = PendingSyncDescriptor::new(
+            candidate.clone(),
+            [0x31; 32],
+            [0x42; 32],
+            8_192,
+            plaintext_digest,
+            plaintext_bytes,
+        )?;
+        let prepared = root.set_profile_current_pending_sync(&ready, pending)?;
+        std::fs::write(prepared.path().join("user_data/cookies.sqlite"), b"new user edits")?;
+        let writer = BridgeWorkspaceLock::acquire(&prepared, &device, 2)?;
+        assert!(!finish_pending_sync_under_writer(
+            &root,
+            &prepared,
+            prepared.pending_sync().ok_or("pending checkpoint missing")?,
+        )?);
+        writer.release()?;
+
+        let recovered = root.open_profile_current(&tenant, &profile)?;
+        assert_eq!(recovered.generation_id(), &candidate);
+        assert_eq!(recovered.base_generation_id(), Some(&candidate));
+        assert_eq!(recovered.profile_version(), 3);
+        assert!(recovered.pending_sync().is_none());
+        assert_eq!(
+            std::fs::read(recovered.path().join("user_data/cookies.sqlite"))?,
+            b"new user edits"
+        );
+        assert_eq!(
+            std::fs::read(recovered.path().join(".local-unsynced"))?,
+            b"local-unsynced-v2"
         );
         std::fs::remove_dir_all(path)?;
         Ok(())

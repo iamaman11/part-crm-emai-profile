@@ -1,7 +1,7 @@
 use super::{
     BridgeWorkspaceLock, ForgottenWindowAction, ForgottenWindowPolicy, LocalGenerationRecord,
-    LocalGenerationState, LocalProfileError, MaterializationRoot, QuotaPolicy, RecoveryClone,
-    SupportBundleSummary,
+    LocalGenerationState, LocalProfileError, MaterializationRoot, PendingSyncDescriptor,
+    QuotaPolicy, RecoveryClone, SupportBundleSummary,
 };
 use profile_platform_primitives::{DeviceId, GenerationId, ProfileId, TenantId, UnixMillis};
 use std::fs;
@@ -154,6 +154,95 @@ fn profile_current_uses_one_existing_marker_for_generation_and_cloud_base()
     assert_eq!(
         fs::read(stable_path.join("browser-state.bin"))?,
         b"local browser data"
+    );
+    fs::remove_dir_all(path)?;
+    Ok(())
+}
+
+#[test]
+fn profile_current_pending_sync_recovers_exact_commit_without_replacing_local_files()
+-> Result<(), Box<dyn std::error::Error>> {
+    let path = test_root("profile-current-pending-sync")?;
+    let root = MaterializationRoot::open_or_create(&path)?;
+    let (tenant, profile) = ids()?;
+    let base = GenerationId::parse("generation_pending_base")?;
+    let candidate = GenerationId::parse("generation_pending_candidate")?;
+    let draft = root.create_profile_current(&tenant, &profile, &base, 4)?;
+    fs::write(draft.path().join("browser-state.bin"), b"snapshot bytes")?;
+    let ready = root.update_profile_current_sync_base(&draft, &base, 4)?;
+    let before = ready.inventory()?;
+    let pending = PendingSyncDescriptor::new(
+        candidate.clone(),
+        [0x11; 32],
+        [0x22; 32],
+        4_096,
+        [0x33; 32],
+        before.total_bytes(),
+    )?;
+
+    let prepared = root.set_profile_current_pending_sync(&ready, pending.clone())?;
+    assert_eq!(prepared.pending_sync(), Some(&pending));
+    assert_eq!(prepared.inventory()?, before);
+
+    let reopened = root.open_profile_current(&tenant, &profile)?;
+    assert_eq!(reopened.pending_sync(), Some(&pending));
+    let committed = root.mark_profile_current_pending_sync_committed(&reopened)?;
+    assert_eq!(committed.generation_id(), &candidate);
+    assert_eq!(committed.base_generation_id(), Some(&candidate));
+    assert_eq!(committed.profile_version(), 5);
+    assert!(
+        committed
+            .pending_sync()
+            .is_some_and(PendingSyncDescriptor::is_committed)
+    );
+    assert_eq!(committed.inventory()?, before);
+
+    let recovered = root.open_profile_current(&tenant, &profile)?;
+    let cleared = root.clear_profile_current_pending_sync(&recovered)?;
+    assert!(cleared.pending_sync().is_none());
+    assert_eq!(cleared.generation_id(), &candidate);
+    assert_eq!(cleared.base_generation_id(), Some(&candidate));
+    assert_eq!(cleared.profile_version(), 5);
+    assert_eq!(cleared.inventory()?, before);
+    fs::remove_dir_all(path)?;
+    Ok(())
+}
+
+#[test]
+fn draft_pending_sync_must_bind_its_original_local_generation()
+-> Result<(), Box<dyn std::error::Error>> {
+    let path = test_root("profile-current-draft-pending-sync")?;
+    let root = MaterializationRoot::open_or_create(&path)?;
+    let (tenant, profile) = ids()?;
+    let local = GenerationId::parse("generation_draft_pending")?;
+    let wrong = GenerationId::parse("generation_draft_wrong")?;
+    let draft = root.create_profile_current(&tenant, &profile, &local, 1)?;
+    let invalid = PendingSyncDescriptor::new(
+        wrong,
+        [0x11; 32],
+        [0x22; 32],
+        4_096,
+        [0x33; 32],
+        0,
+    )?;
+    assert!(matches!(
+        root.set_profile_current_pending_sync(&draft, invalid),
+        Err(LocalProfileError::InvalidPolicy)
+    ));
+    let valid = PendingSyncDescriptor::new(
+        local.clone(),
+        [0x11; 32],
+        [0x22; 32],
+        4_096,
+        [0x33; 32],
+        0,
+    )?;
+    let pending = root.set_profile_current_pending_sync(&draft, valid)?;
+    assert_eq!(
+        pending
+            .pending_sync()
+            .map(PendingSyncDescriptor::candidate_generation_id),
+        Some(&local)
     );
     fs::remove_dir_all(path)?;
     Ok(())

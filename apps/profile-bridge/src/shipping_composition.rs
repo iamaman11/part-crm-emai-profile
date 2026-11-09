@@ -127,7 +127,8 @@ mod windows {
     };
     use crate::dirty_generation::{GenerationSealingMaterialPort, closed_current_candidate_id};
     use crate::generation_initialization::{
-        InitialProfileStatus, reauthorize_current_ready_generation, sync_closed_local_draft,
+        InitialProfileStatus, finish_pending_sync_under_writer,
+        reauthorize_current_ready_generation, sync_closed_local_draft,
     };
     use crate::generation_reopen::{
         GenerationReopenControlPort, VerifiedGenerationObjectStreamDownloader,
@@ -135,7 +136,9 @@ mod windows {
     use crate::generation_snapshot::{
         digest_closed_workspace_streaming, seal_closed_workspace_streaming,
     };
-    use crate::local_profile::{DeliveryActivationGuard, MaterializationRoot};
+    use crate::local_profile::{
+        DeliveryActivationGuard, MaterializationRoot, PendingSyncDescriptor,
+    };
     use crate::shipping_control_plane::SyncEnrollmentPort;
     use crate::shipping_control_plane::{
         ControlPlaneCoordinator, ControlPlaneEnrollment, SharedControlPlaneCoordinator,
@@ -291,6 +294,16 @@ mod windows {
     ///
     /// This does not launch Camoufox, clone Firefox into a generation folder,
     /// introduce a daemon or replace the stable local current path.
+    fn pending_descriptor_matches_current(
+        pending: &PendingSyncDescriptor,
+        current: &crate::generation_reopen::GenerationDownloadCapability,
+    ) -> bool {
+        current.generation_id() == pending.candidate_generation_id()
+            && current.metadata_digest() == *pending.metadata_digest()
+            && current.container_digest() == *pending.container_digest()
+            && current.container_bytes() == pending.container_bytes()
+    }
+
     fn sync_closed_ready(
         intent: &crate::generation_initialization::InitialProfileOpen,
         binding: &WindowsDeviceApplicationBinding,
@@ -301,9 +314,72 @@ mod windows {
         use crate::local_profile::BridgeWorkspaceLock;
         use std::fs;
 
-        let workspace = root
+        let mut workspace = root
             .open_profile_current(&intent.tenant_id, &intent.profile_id)
             .map_err(|_| ())?;
+        if let Some(pending) = workspace.pending_sync().cloned() {
+            let reader_app =
+                WindowsDeviceApplication::from_system(origin.to_owned(), binding.clone())
+                    .map_err(|_| ())?;
+            let mut read_only =
+                ControlPlaneCoordinator::for_local_current_restore(reader_app.transport());
+            let current = read_only
+                .download_capability(&intent.tenant_id, &intent.profile_id)
+                .map_err(|_| ())?;
+            if pending_descriptor_matches_current(&pending, &current) {
+                let guard = BridgeWorkspaceLock::acquire_or_recover_interrupted(
+                    &workspace,
+                    binding.device_id(),
+                    now().map_err(|_| ())?.value(),
+                )
+                .map_err(|_| ())?;
+                let active = root
+                    .open_profile_current(&intent.tenant_id, &intent.profile_id)
+                    .map_err(|_| ())?;
+                let applied = (|| {
+                    if active.pending_sync() != Some(&pending) {
+                        return Err(());
+                    }
+                    finish_pending_sync_under_writer(root, &active, &pending).map_err(|_| ())
+                })();
+                let unlocked = guard.release().map_err(|_| ());
+                let unchanged = applied?;
+                unlocked?;
+                return if unchanged { Ok(()) } else { Err(()) };
+            }
+            if !pending.is_committed()
+                && workspace
+                    .base_generation_id()
+                    .is_some_and(|base| current.generation_id() == base)
+            {
+                let guard = BridgeWorkspaceLock::acquire_or_recover_interrupted(
+                    &workspace,
+                    binding.device_id(),
+                    now().map_err(|_| ())?.value(),
+                )
+                .map_err(|_| ())?;
+                let active = root
+                    .open_profile_current(&intent.tenant_id, &intent.profile_id)
+                    .map_err(|_| ())?;
+                let cleared = (|| {
+                    if active.pending_sync() != Some(&pending)
+                        || !matches!(browser_writer_locks_absent(&active), Ok(true))
+                    {
+                        return Err(());
+                    }
+                    root.clear_profile_current_pending_sync(&active)
+                        .map_err(|_| ())
+                })();
+                let unlocked = guard.release().map_err(|_| ());
+                cleared?;
+                unlocked?;
+                workspace = root
+                    .open_profile_current(&intent.tenant_id, &intent.profile_id)
+                    .map_err(|_| ())?;
+            } else {
+                return Err(());
+            }
+        }
         let Some(base) = workspace.base_generation_id().cloned() else {
             // First DRAFT -> READY committed in D1, but our HTTP response or
             // local receipt update was lost. Admit only the expected single
@@ -458,7 +534,7 @@ mod windows {
                 if !matches!(browser_writer_locks_absent(&workspace), Ok(true)) {
                     return Err(());
                 }
-                seal_closed_workspace_streaming(
+                let encrypted = seal_closed_workspace_streaming(
                     &workspace,
                     &original_inventory,
                     &candidate,
@@ -467,10 +543,22 @@ mod windows {
                     plaintext_bytes,
                     digest,
                 )
-                .map_err(|_| ())
+                .map_err(|_| ())?;
+                let pending = PendingSyncDescriptor::new(
+                    candidate.clone(),
+                    encrypted.metadata_digest(),
+                    encrypted.container_digest(),
+                    encrypted.container_bytes(),
+                    digest,
+                    plaintext_bytes,
+                )
+                .map_err(|_| ())?;
+                root.set_profile_current_pending_sync(&workspace, pending.clone())
+                    .map_err(|_| ())?;
+                Ok((encrypted, pending))
             })();
             let unlock = lock.release().map_err(|_| ());
-            let encrypted = encrypted?;
+            let (encrypted, pending) = encrypted?;
             unlock?;
             if !heartbeat.is_healthy() {
                 return Err(());
@@ -490,7 +578,7 @@ mod windows {
             if !heartbeat.is_healthy() {
                 return Err(());
             }
-            Ok(candidate.clone())
+            Ok((candidate.clone(), pending))
         })();
         drop(heartbeat);
         if outcome.is_ok() {
@@ -498,10 +586,13 @@ mod windows {
         } else {
             let _ = coordinator.close_lease(&lease);
         }
-        let committed = outcome?;
+        let (committed, pending) = outcome?;
+        if &committed != pending.candidate_generation_id() {
+            return Err(());
+        }
 
-        // Apply only the confirmed server revision; if another local browser
-        // already holds the writer, do not touch its bytes or clear dirty.
+        // The exact encrypted descriptor was durably checkpointed before
+        // upload/Commit. Reconcile it without replacing a reopened profile.
         let active = root
             .open_profile_current(&intent.tenant_id, &intent.profile_id)
             .map_err(|_| ())?;
@@ -514,33 +605,20 @@ mod windows {
         let applied = (|| {
             if active.base_generation_id() != Some(&base)
                 || active.profile_version() != intent.expected_version
+                || active.pending_sync() != Some(&pending)
                 || !matches!(browser_writer_locks_absent(&active), Ok(true))
             {
                 return Err(());
             }
-            let unchanged = active.inventory().map_err(|_| ())? == original_inventory;
-            root.update_profile_current_sync_base(
-                &active,
-                &committed,
-                intent.expected_version.checked_add(1).ok_or(())?,
-            )
-            .map_err(|_| ())?;
-            if unchanged {
-                let dirty = active.path().join(".local-unsynced");
-                let metadata = fs::symlink_metadata(&dirty).map_err(|_| ())?;
-                if metadata.file_type().is_symlink()
-                    || !metadata.is_file()
-                    || fs::read(&dirty).map_err(|_| ())? != b"local-unsynced-v2"
-                {
-                    return Err(());
-                }
-                fs::remove_file(&dirty).map_err(|_| ())?;
-            }
-            Ok(())
+            finish_pending_sync_under_writer(root, &active, &pending).map_err(|_| ())
         })();
         let unlocked = guard.release().map_err(|_| ());
-        applied?;
-        unlocked
+        let unchanged = applied?;
+        unlocked?;
+        if !unchanged {
+            return Err(());
+        }
+        Ok(())
     }
 
     /// The SAME post-close handler runs after normal Open and READY restore.
@@ -642,7 +720,8 @@ mod windows {
             if matches!(
                 std::fs::symlink_metadata(&dirty),
                 Err(ref error) if error.kind() == std::io::ErrorKind::NotFound
-            ) {
+            ) && workspace.pending_sync().is_none()
+            {
                 return Ok(());
             }
             // If Camouhost exited before Playwright could deliver its close
@@ -663,13 +742,17 @@ mod windows {
             }
             let outcome =
                 sync_after_native_close(&effective, &binding, &root, &config.control_plane_origin);
-            if outcome.is_ok()
-                && matches!(
+            if outcome.is_ok() {
+                let latest = root
+                    .open_profile_current(&intent.tenant_id, &intent.profile_id)
+                    .map_err(|_| ShippingCompositionError::SyncUnconfirmed)?;
+                if matches!(
                     std::fs::symlink_metadata(&dirty),
                     Err(ref error) if error.kind() == std::io::ErrorKind::NotFound
-                )
-            {
-                return Ok(());
+                ) && latest.pending_sync().is_none()
+                {
+                    return Ok(());
+                }
             }
             if let Some(seconds) = pause {
                 eprintln!("BRIDGE_CLOUD_SYNC_RETRY_PENDING attempt={}", attempt + 1);
@@ -748,6 +831,61 @@ mod windows {
                 Err(ShippingCompositionError::SyncUnconfirmed)
             ));
             assert!(pauses.is_empty());
+        }
+    }
+
+    #[cfg(test)]
+    mod pending_sync_descriptor_tests {
+        use super::pending_descriptor_matches_current;
+        use crate::generation_reopen::GenerationDownloadCapability;
+        use crate::local_profile::PendingSyncDescriptor;
+        use profile_platform_primitives::GenerationId;
+
+        #[test]
+        fn pending_checkpoint_matches_only_the_exact_worker_current_descriptor()
+        -> Result<(), Box<dyn std::error::Error>> {
+            let candidate = GenerationId::parse("generation_pending_descriptor")?;
+            let pending = PendingSyncDescriptor::new(
+                candidate.clone(),
+                [0x11; 32],
+                [0x22; 32],
+                4_096,
+                [0x33; 32],
+                2_048,
+            )?;
+            let exact = GenerationDownloadCapability::new(
+                candidate.clone(),
+                "tenant/profile/generation_pending_descriptor.bpgc".to_owned(),
+                [0x11; 32],
+                [0x22; 32],
+                4_096,
+                "https://example.invalid/signed".to_owned(),
+                60,
+            );
+            assert!(pending_descriptor_matches_current(&pending, &exact));
+
+            let wrong_digest = GenerationDownloadCapability::new(
+                candidate.clone(),
+                "tenant/profile/generation_pending_descriptor.bpgc".to_owned(),
+                [0x12; 32],
+                [0x22; 32],
+                4_096,
+                "https://example.invalid/signed".to_owned(),
+                60,
+            );
+            assert!(!pending_descriptor_matches_current(&pending, &wrong_digest));
+
+            let wrong_size = GenerationDownloadCapability::new(
+                candidate,
+                "tenant/profile/generation_pending_descriptor.bpgc".to_owned(),
+                [0x11; 32],
+                [0x22; 32],
+                4_097,
+                "https://example.invalid/signed".to_owned(),
+                60,
+            );
+            assert!(!pending_descriptor_matches_current(&pending, &wrong_size));
+            Ok(())
         }
     }
 
