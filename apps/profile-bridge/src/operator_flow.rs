@@ -74,7 +74,7 @@ use bridge_domain::{CamouhostPort, ClaimUri, DeviceIdentityPort, DeviceKeyPort};
 #[cfg(any(test, feature = "synthetic-test-bin"))]
 use profile_platform_primitives::TenantScope;
 #[cfg(any(test, feature = "synthetic-test-bin"))]
-use profile_platform_primitives::{ActorContext, DeviceId, LaunchIntentId, ProfileId, UnixMillis};
+use profile_platform_primitives::{DeviceId, ProfileId, UnixMillis};
 use profile_platform_primitives::{GenerationId, SessionId};
 use session_domain::ProfileLease;
 use std::fmt;

@@ -228,7 +228,7 @@ where
             | ShippingControlPlaneError::HttpServerUncertain => {
                 SyncEnrollmentFailureKind::ServiceUncertain
             }
-            _ => EnrollmentFailureKind::Other,
+            _ => SyncEnrollmentFailureKind::Other,
         }
     }
 
