@@ -348,8 +348,12 @@ mod windows {
             return Err(());
         }
         let device = binding.device_id();
-        let lock = BridgeWorkspaceLock::acquire_or_recover_interrupted(&workspace, device, now().map_err(|_| ())?.value())
-            .map_err(|_| ())?;
+        let lock = BridgeWorkspaceLock::acquire_or_recover_interrupted(
+            &workspace,
+            device,
+            now().map_err(|_| ())?.value(),
+        )
+        .map_err(|_| ())?;
         let captured = (|| {
             if !matches!(browser_writer_locks_absent(&workspace), Ok(true)) {
                 return Err(());
@@ -444,9 +448,12 @@ mod windows {
                 .map_err(|_| ())?;
             // Network/key service does not hold the local admission. Only the
             // ORIGINAL closed folder is read for the streaming BPGC seal.
-            let lock =
-                BridgeWorkspaceLock::acquire_or_recover_interrupted(&workspace, device, now().map_err(|_| ())?.value())
-                    .map_err(|_| ())?;
+            let lock = BridgeWorkspaceLock::acquire_or_recover_interrupted(
+                &workspace,
+                device,
+                now().map_err(|_| ())?.value(),
+            )
+            .map_err(|_| ())?;
             let encrypted = (|| {
                 if !matches!(browser_writer_locks_absent(&workspace), Ok(true)) {
                     return Err(());
@@ -498,8 +505,12 @@ mod windows {
         let active = root
             .open_profile_current(&intent.tenant_id, &intent.profile_id)
             .map_err(|_| ())?;
-        let guard = BridgeWorkspaceLock::acquire_or_recover_interrupted(&active, device, now().map_err(|_| ())?.value())
-            .map_err(|_| ())?;
+        let guard = BridgeWorkspaceLock::acquire_or_recover_interrupted(
+            &active,
+            device,
+            now().map_err(|_| ())?.value(),
+        )
+        .map_err(|_| ())?;
         let applied = (|| {
             if active.base_generation_id() != Some(&base)
                 || active.profile_version() != intent.expected_version
