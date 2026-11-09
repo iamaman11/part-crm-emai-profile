@@ -68,8 +68,8 @@ jobs:
             echo "source_sha=$READY_SOURCE_SHA" >> "$GITHUB_OUTPUT"
           elif [ "$GITHUB_EVENT_NAME" = workflow_dispatch ]; then
             # workflow_dispatch is available to users with Write; only the repository owner may authorize staging.
+            # The staging Environment's native deployment-branch policy is the main-branch gate.
             test "$GITHUB_ACTOR" = "$GITHUB_REPOSITORY_OWNER"
-            test "$GITHUB_REF" = refs/heads/main
             test -z "$INTERNAL_OPERATION"
             echo 'mode=promote' >> "$GITHUB_OUTPUT"
             echo "source_sha=$GITHUB_SHA" >> "$GITHUB_OUTPUT"
