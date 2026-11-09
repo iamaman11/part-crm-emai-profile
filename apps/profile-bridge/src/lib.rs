@@ -33,6 +33,7 @@ pub mod shipping_generation_save;
 pub mod shipping_generation_successor_control;
 #[cfg(any(test, feature = "synthetic-test-bin"))]
 pub mod shipping_network;
+#[cfg(any(test, feature = "synthetic-test-bin"))]
 mod shipping_save_attempt;
 pub mod user_diagnostics;
 pub mod windows_delivery;
