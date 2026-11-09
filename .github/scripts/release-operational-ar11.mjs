@@ -285,7 +285,7 @@ function promotionErrors(promotion) {
     "echo 'mode=preflight'",
     "echo 'mode=promote'",
     "echo 'mode=rollback-negative'",
-    'test "$GITHUB_ACTOR" = "$GITHUB_REPOSITORY_OWNER"',
+    "if: github.event_name != 'workflow_dispatch' || github.actor == github.repository_owner",
   ], 'promotion invocation router'));
   errors.push(...forbidMarkers(route, ['secrets.', 'wrangler deploy', 'environment: staging'], 'promotion invocation router'));
 
@@ -668,7 +668,7 @@ function selfTest(files) {
   if (!promotionErrors(ambiguousRunName).some((error) => error.includes('run-name must distinguish'))) {
     throw new Error('ambiguous promotion run-name fixture unexpectedly passed');
   }
-  const missingOwnerGuard = files.promotion.replace('test "$GITHUB_ACTOR" = "$GITHUB_REPOSITORY_OWNER"', 'echo owner-guard-removed');
+  const missingOwnerGuard = files.promotion.replace("if: github.event_name != 'workflow_dispatch' || github.actor == github.repository_owner", "if: always()");
   if (!promotionErrors(missingOwnerGuard).some((error) => error.includes('promotion invocation router'))) throw new Error('missing owner access guard fixture passed');
   const missingStagingEnvironment = files.promotion.replace('    environment: staging\n    permissions:\n      actions: read\n      contents: read\n      issues: read', '    permissions:\n      actions: read\n      contents: read\n      issues: read');
   if (!promotionErrors(missingStagingEnvironment).some((error) => error.includes('dispatch READY binder'))) throw new Error('missing staging resolver Environment guard fixture passed');
