@@ -1661,10 +1661,9 @@ def main() -> int:
         print("user-native runtime requires --local-open", file=sys.stderr)
         return 2
     if mode == ISOLATED_COLD_PROBE_MODE:
-        # The Rust operator redeems a fresh one-time claim, materializes the
-        # historical object into an exclusive disposable C09 slot, and holds
-        # both CURRENT and historical locks. This Playwright context is NOT
-        # the user's native browser. Do not expose arbitrary Python job inbox.
+        # Explicit isolated test/automation mode only. It must use a separate
+        # disposable profile and can never be selected by the product's normal
+        # user-native Open/Sync path. Do not expose an arbitrary Python job inbox.
         if os.environ.get(AGENT_DIRECTORY_ENV):
             print("isolated cold probe rejects executable agent directory", file=sys.stderr)
             return 2
