@@ -177,6 +177,12 @@ def main() -> int:
     assert "pub fn run_claim(" not in composition
     assert "local_browser_open::open" in composition
     assert "start_sync_after_close(intent)" in composition
+    run_initial = composition.split("    pub fn run_initial(", 1)[1].split(
+        "    pub fn run_delivery_command(", 1
+    )[0]
+    assert run_initial.count("start_sync_after_close(intent)") >= 4
+    assert "Every post-restore local failure may leave the" in run_initial
+    assert "The local adapter may fail before or after launch." in run_initial
     app = (SOURCE.parents[2] / "apps/profile-bridge/src/main.rs").read_text(
         encoding="utf-8"
     )
