@@ -169,6 +169,8 @@ def main() -> int:
     composition = (SOURCE.parents[2] /
                    "apps/profile-bridge/src/shipping_composition.rs").read_text(encoding="utf-8")
     assert "pub mod camouhost_process;" not in lib
+    assert "pub mod shipping_preflight;" not in lib
+    assert not (SOURCE.parents[2] / "apps/profile-bridge/src/shipping_preflight.rs").exists()
     assert "ManagedCamouhostProcess" not in composition
     assert "ManagedCamouhostIpc" not in composition
     assert "pub fn run_claim(" not in composition
