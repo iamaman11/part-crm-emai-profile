@@ -9,12 +9,16 @@ use crate::browser_execution::browser_writer_locks_absent;
 use crate::browser_mail_query::BrowserMailExecutionProof;
 #[cfg(any(test, feature = "synthetic-test-bin"))]
 use crate::dirty_close::RetainedDirtyCloseError;
-use crate::dirty_close::{DirtyCloseCompletion, DirtyCloseLocalOutcome, RetainedDirtyClose};
+use crate::dirty_close::DirtyCloseCompletion;
+#[cfg(any(test, feature = "synthetic-test-bin"))]
+use crate::dirty_close::{DirtyCloseLocalOutcome, RetainedDirtyClose};
 #[cfg(any(test, feature = "synthetic-test-bin"))]
 use crate::dirty_generation::PreparedDirtyGeneration;
+#[cfg(any(test, feature = "synthetic-test-bin"))]
 use crate::dirty_generation::{DirtyGenerationError, GenerationSealingMaterialPort};
 #[cfg(any(test, feature = "synthetic-test-bin"))]
 use crate::dirty_generation_finalize::DirtyGenerationCommitClientPort;
+#[cfg(any(test, feature = "synthetic-test-bin"))]
 use crate::generation_reopen::{
     GenerationObjectDownloadError, GenerationObjectDownloadPort, GenerationReopenControlError,
     GenerationReopenControlPort,
@@ -27,38 +31,43 @@ use crate::local_profile::{
 };
 #[cfg(any(test, feature = "synthetic-test-bin"))]
 use crate::local_profile::{GenerationInventory, MaterializationRoot, RecoveryClone};
-use crate::runtime_bundle::RuntimeLaunchError;
+use crate::runtime_bundle::{ApprovedRuntimeBundle, RuntimeLaunchError};
 #[cfg(any(test, feature = "synthetic-test-bin"))]
-use crate::runtime_bundle::{ApprovedRuntimeBundle, RuntimeSessionOrchestrator};
+use crate::runtime_bundle::RuntimeSessionOrchestrator;
+#[cfg(any(test, feature = "synthetic-test-bin"))]
 use crate::shipping_control_plane::{MachineHttpPort, ShippingControlPlaneError};
-#[cfg(any(windows, test))]
+#[cfg(any(test, feature = "synthetic-test-bin"))]
 use crate::shipping_generation_save::SignedGenerationObjectStreamPutPort;
-use crate::shipping_generation_save::{CommittedGenerationSuccessor, ShippingGenerationSaveError};
-#[cfg(any(test, feature = "synthetic-test-bin", debug_assertions))]
+use crate::shipping_generation_save::CommittedGenerationSuccessor;
+#[cfg(any(test, feature = "synthetic-test-bin"))]
+use crate::shipping_generation_save::ShippingGenerationSaveError;
+#[cfg(any(test, feature = "synthetic-test-bin"))]
 use crate::shipping_generation_save::{
     SignedGenerationObjectPutPort, prepare_retained_generation_successor,
     publish_verify_and_commit_successor,
 };
-#[cfg(any(test, feature = "synthetic-test-bin", debug_assertions))]
+#[cfg(any(test, feature = "synthetic-test-bin"))]
 use crate::shipping_generation_successor_control::ControlPlaneGenerationSuccessor;
+#[cfg(any(test, feature = "synthetic-test-bin"))]
 use crate::shipping_generation_successor_control::GenerationSuccessorControlError;
-#[cfg(any(windows, test))]
+#[cfg(any(test, feature = "synthetic-test-bin"))]
 use crate::shipping_generation_successor_control::{
     RestartExactLocalCompletionError, publish_streamed_exact_under_writer,
 };
-#[cfg(any(windows, test))]
+#[cfg(any(test, feature = "synthetic-test-bin"))]
 use crate::shipping_save_attempt::begin_native_rescue_edit;
+#[cfg(any(test, feature = "synthetic-test-bin"))]
 use crate::shipping_save_attempt::{
     SaveAttemptEvidenceError, discover_unresolved_streaming_exact_save_attempt,
     has_unresolved_save_attempt_for_profile, persist_local_unsynced_intent,
 };
-#[cfg(any(windows, test))]
+#[cfg(any(test, feature = "synthetic-test-bin"))]
 use crate::shipping_save_attempt::{
     ScopedPendingSaveEvidence, classify_scoped_pending_save_evidence,
     original_local_unsynced_successor, persist_streaming_exact_save_attempt_from_native,
     retire_fully_saved_streaming_attempt, retire_local_unsynced_after_streamed_checkpoint,
 };
-#[cfg(any(test, feature = "synthetic-test-bin", debug_assertions))]
+#[cfg(any(test, feature = "synthetic-test-bin"))]
 use crate::shipping_save_attempt::{
     inspect_exact_save_attempt, persist_exact_save_attempt, retire_fully_saved_attempt,
     retire_local_unsynced_after_exact_checkpoint,
@@ -73,13 +82,10 @@ use application_ports::{ProfileCoordinatorPort, ProfileCoordinatorRuntimePort};
 use bridge_domain::{CamouhostPort, ClaimUri, DeviceIdentityPort, DeviceKeyPort};
 #[cfg(any(test, feature = "synthetic-test-bin"))]
 use profile_platform_primitives::TenantScope;
-#[cfg(any(test, feature = "synthetic-test-bin"))]
-use profile_platform_primitives::{DeviceId, ProfileId, UnixMillis};
-use profile_platform_primitives::{GenerationId, SessionId};
+use profile_platform_primitives::{DeviceId, GenerationId, ProfileId, SessionId, UnixMillis};
 use session_domain::ProfileLease;
 use std::fmt;
 
-#[cfg(any(test, feature = "synthetic-test-bin"))]
 pub trait DeviceAuthenticationPort {
     type Error;
 
@@ -147,7 +153,6 @@ impl OperationalRejectionReason {
     }
 }
 
-#[cfg(any(test, feature = "synthetic-test-bin"))]
 pub trait BrowserLaunchPreflightPort {
     type Error;
 

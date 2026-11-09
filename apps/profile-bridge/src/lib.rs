@@ -4,7 +4,6 @@ pub mod authoritative_generation;
 pub mod browser_execution;
 pub mod browser_mail_query;
 pub mod browser_mail_runtime;
-#[cfg(any(test, feature = "synthetic-test-bin"))]
 pub mod browser_preflight;
 pub mod device_pairing;
 pub mod dirty_close;
