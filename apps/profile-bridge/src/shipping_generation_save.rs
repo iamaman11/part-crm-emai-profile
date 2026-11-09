@@ -249,6 +249,7 @@ impl<C: std::error::Error, U: std::error::Error> std::error::Error
 {
 }
 
+#[cfg(any(test, feature = "synthetic-test-bin"))]
 #[allow(clippy::too_many_arguments)]
 pub fn prepare_retained_generation_successor<C>(
     base_record: &LocalGenerationRecord,

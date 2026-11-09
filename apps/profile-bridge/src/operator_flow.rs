@@ -1476,7 +1476,7 @@ where
 
     /// The retired operator's Save paths are test-only. Installed production
     /// uses the closed-profile streaming Sync in shipping_composition, not this operator.
-    #[cfg(any(test, feature = "synthetic-test-bin", debug_assertions))]
+    #[cfg(any(test, feature = "synthetic-test-bin"))]
     pub fn save_retained_successor<T, U>(
         &mut self,
         root: &MaterializationRoot,
