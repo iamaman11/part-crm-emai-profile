@@ -1107,7 +1107,7 @@ def self_test() -> None:
 
     pre_effect = dict(resolve_state)
     pre_effect["failed_boundary"] = "CANDIDATE_BINDING"
-    pre_effect["dispatch_authorized"] = False
+    pre_effect["dispatch_authorized"] = True
     not_started = dict(mutation_state)
     not_started["provider_mutation_started"] = False
     not_started["provider_mutation_executed"] = False
@@ -1115,6 +1115,7 @@ def self_test() -> None:
     outcome = manual_case(pre_effect, not_started, post_state, None)
     assert outcome["status"] == "FAILED_NO_EFFECT"
     assert outcome["phase"] == "CANDIDATE_BINDING"
+    assert outcome["authorization_state"] == "GITHUB_WORKFLOW_DISPATCH"
     assert_zero_effect(outcome)
 
     fence_fail = dict(mutation_state)
