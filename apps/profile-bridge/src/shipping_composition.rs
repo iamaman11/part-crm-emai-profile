@@ -165,9 +165,7 @@ mod windows {
     // Exactly one protected staging slot. A crashed/uncertain cold probe
     // leaves this slot occupied rather than silently deleting a potentially
     // still-running Firefox workspace or accumulating unlimited full clones.
-    const CONTROLLED_CLOSE_POLL_MS: u64 = 250;
     const HEARTBEAT_TRANSPORT_RETRY_MS: u64 = 1_000;
-    const SAVE_RECONNECT_PAUSE_MS: u64 = 1_000;
     const SAVE_RECONNECT_AUTHORITY_RESERVE_MS: u64 = 5_000;
     const SAVE_HEARTBEAT_PERIOD_MS: u64 = 5_000;
 
@@ -885,7 +883,7 @@ mod windows {
         Ok(())
     }
 
-    fn recover_delivery_before_claim() -> Result<bool, ShippingCompositionError> {
+    fn recover_delivery_before_open() -> Result<bool, ShippingCompositionError> {
         let (coordinator, current_executable) =
             delivery_process_context().map_err(|_| ShippingCompositionError::DeliveryHandoff)?;
         if !coordinator
@@ -945,6 +943,19 @@ mod windows {
         // The OS releases the exclusive admission handle when this process terminates. Retaining it
         // closes the window between durable handoff evidence and the old process actually exiting.
         std::mem::forget(guard);
+    }
+
+    // Keep the existing coordinator heartbeat alive only while the
+    // same confirmed lease has a safe native-save completion window.
+    fn safe_reconnect_writer_window(
+        idle_expires_at_ms: u64,
+        hard_expires_at_ms: u64,
+        observed_at: UnixMillis,
+    ) -> bool {
+        observed_at
+            .value()
+            .checked_add(SAVE_RECONNECT_AUTHORITY_RESERVE_MS)
+            .is_some_and(|finish_by| finish_by < idle_expires_at_ms.min(hard_expires_at_ms))
     }
 
     fn now() -> Result<UnixMillis, ShippingCompositionError> {
