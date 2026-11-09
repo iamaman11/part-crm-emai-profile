@@ -263,6 +263,7 @@ jobs:
           node .github/scripts/release-operational-ar11.mjs
           node .github/scripts/release-operational-ar11.mjs --self-test
           python scripts/release-compat-evidence-ar11.py --self-test
+          python scripts/download-release-set-ar11.py --self-test
           python scripts/release-core-overlay-ar11.py --self-test
           python scripts/deployment-snapshot-ar11.py --self-test
 
