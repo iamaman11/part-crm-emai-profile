@@ -160,6 +160,22 @@ fn run_python(
             return Err(LocalOpenError::RuntimeUnavailable);
         }
     }
+    run_python_with_executable(
+        &runtime_root.join(PYTHON),
+        runtime_root,
+        folder,
+        action,
+        pending_health,
+    )
+}
+
+fn run_python_with_executable(
+    executable: &Path,
+    runtime_root: &Path,
+    folder: &Path,
+    action: &str,
+    pending_health: Option<PendingWindowsDeliveryHealthConfirmation>,
+) -> Result<bool, LocalOpenError> {
     // Begin the existing activation-health attempt only after all local
     // runtime files have been admitted and immediately before process launch.
     // If spawn or SDK launch fails, no Ready event can confirm this attempt.
@@ -169,10 +185,10 @@ fn run_python(
         .map_err(|_| LocalOpenError::DeliveryHealth)?;
     let health_required = started_health.is_some();
     let (health_result_tx, health_result_rx) = std::sync::mpsc::channel();
-    let mut health_confirmation =
-        started_health.map(|confirmation| move || confirmation.confirm_after_runtime_ready().is_ok());
+    let mut health_confirmation = started_health
+        .map(|confirmation| move || confirmation.confirm_after_runtime_ready().is_ok());
 
-    let mut child = Command::new(runtime_root.join(PYTHON))
+    let mut child = Command::new(executable)
         .arg("-B")
         .arg(runtime_root.join(ENTRYPOINT))
         .arg(action)
@@ -194,9 +210,7 @@ fn run_python(
         for line in BufReader::new(stderr).lines().map_while(Result::ok) {
             // Consume only the exact SDK/Playwright context-ready milestone.
             // Option::take makes confirmation one-shot even if stderr repeats it.
-            if let Some(confirmed) =
-                observe_runtime_ready_line(&line, &mut health_confirmation)
-            {
+            if let Some(confirmed) = observe_runtime_ready_line(&line, &mut health_confirmation) {
                 let _ = health_result_tx.send(confirmed);
             }
             // Runtime stderr can contain upstream/library detail. Forward only
@@ -298,7 +312,12 @@ pub fn open(
     if !config.exists() {
         // No R2 snapshot, cloud claim or generation initialization. Official
         // Camoufox fpgen creates the only local v2 identity once.
-        if !run_python(runtime_root, workspace.path(), "--materialize-identity", None)? {
+        if !run_python(
+            runtime_root,
+            workspace.path(),
+            "--materialize-identity",
+            None,
+        )? {
             return Err(LocalOpenError::IdentityPreparation);
         }
     }
@@ -311,7 +330,12 @@ pub fn open(
         return Err(LocalOpenError::ProfileBusy);
     }
     mark_local_unsynced(workspace.path())?;
-    if !run_python(runtime_root, workspace.path(), "--local-open", pending_health)? {
+    if !run_python(
+        runtime_root,
+        workspace.path(),
+        "--local-open",
+        pending_health,
+    )? {
         // Adapter failure is not proof that the browser released its files.
         // The caller starts the existing Sync recovery; its Rust file gate
         // must still block snapshot while Firefox owns the profile.
@@ -331,9 +355,9 @@ pub fn open(
 #[cfg(test)]
 mod tests {
     use super::{
-        LocalOpenError, local_generation, mark_local_unsynced, observe_runtime_ready_line,
-        open_or_create_workspace, recheck_workspace_after_writer_admission,
-        CAMOUHOST_LAUNCH_READY_EVENT,
+        CAMOUHOST_LAUNCH_READY_EVENT, LocalOpenError, local_generation, mark_local_unsynced,
+        observe_runtime_ready_line, open_or_create_workspace, recheck_workspace_after_writer_admission,
+        run_python_with_executable, ENTRYPOINT, LOCK,
     };
     use crate::generation_initialization::{InitialProfileOpen, InitialProfileStatus};
     use profile_platform_primitives::{ActorId, ProfileId, TenantId};
@@ -391,6 +415,88 @@ mod tests {
             None
         );
         assert_eq!(calls.get(), 1);
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_python_stderr_ready_event_confirms_pending_delivery_health() -> Result<(), Box<dyn std::error::Error>> {
+        use std::fs;
+        use std::path::PathBuf;
+
+        let python = PathBuf::from(
+            std::env::var_os("PROFILE_BRIDGE_TEST_PYTHON")
+                .ok_or("PROFILE_BRIDGE_TEST_PYTHON was not set by the Windows test job")?,
+        );
+        let directory = tempfile::tempdir()?;
+        let runtime_root = directory.path().join("runtime");
+        fs::create_dir_all(runtime_root.join("camouhost"))?;
+        fs::write(
+            runtime_root.join(ENTRYPOINT),
+            format!(
+                "import sys\\nsys.stderr.write({:?} + '\\\\n')\\nsys.stderr.flush()\\n",
+                CAMOUHOST_LAUNCH_READY_EVENT
+            ),
+        )?;
+        fs::write(runtime_root.join(LOCK), b"test-runtime-lock")?;
+        let folder = directory.path().join("profile");
+        fs::create_dir(&folder)?;
+        let state_root = directory.path().join("delivery-state");
+        let pending = crate::windows_delivery_runtime::tests::pending_health_confirmation_for_test(
+            &state_root,
+        )?;
+
+        assert!(run_python_with_executable(
+            &python,
+            &runtime_root,
+            &folder,
+            "--local-open",
+            Some(pending),
+        )?);
+        assert!(crate::windows_delivery_runtime::tests::active_health_confirmed_for_test(
+            &state_root,
+        )?);
+        Ok(())
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_process_without_ready_event_cannot_confirm_delivery_health() -> Result<(), Box<dyn std::error::Error>> {
+        use std::fs;
+        use std::path::PathBuf;
+
+        let python = PathBuf::from(
+            std::env::var_os("PROFILE_BRIDGE_TEST_PYTHON")
+                .ok_or("PROFILE_BRIDGE_TEST_PYTHON was not set by the Windows test job")?,
+        );
+        let directory = tempfile::tempdir()?;
+        let runtime_root = directory.path().join("runtime");
+        fs::create_dir_all(runtime_root.join("camouhost"))?;
+        fs::write(
+            runtime_root.join(ENTRYPOINT),
+            "import sys\\nsys.stderr.write('camouhost_stage phase=launch step=sdk_enter\\\\n')\\nsys.stderr.flush()\\n",
+        )?;
+        fs::write(runtime_root.join(LOCK), b"test-runtime-lock")?;
+        let folder = directory.path().join("profile");
+        fs::create_dir(&folder)?;
+        let state_root = directory.path().join("delivery-state");
+        let pending = crate::windows_delivery_runtime::tests::pending_health_confirmation_for_test(
+            &state_root,
+        )?;
+
+        assert_eq!(
+            run_python_with_executable(
+                &python,
+                &runtime_root,
+                &folder,
+                "--local-open",
+                Some(pending),
+            ),
+            Err(LocalOpenError::DeliveryHealth)
+        );
+        assert!(!crate::windows_delivery_runtime::tests::active_health_confirmed_for_test(
+            &state_root,
+        )?);
+        Ok(())
     }
 
     #[test]

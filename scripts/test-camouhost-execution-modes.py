@@ -95,7 +95,10 @@ def main() -> int:
     local_owner = (SOURCE.parents[2] / "apps/profile-bridge/src/local_browser_open.rs").read_text(
         encoding="utf-8"
     )
-    assert 'run_python(runtime_root, workspace.path(), "--local-open")' in local_owner
+    local_open_after_dirty = local_owner.split("mark_local_unsynced(workspace.path())?;", 1)[1]
+    assert 'run_python(' in local_open_after_dirty
+    assert '"--local-open"' in local_open_after_dirty
+    assert 'pending_health' in local_open_after_dirty
     assert ".local-unsynced" in local_owner
     assert "ControlPlaneEnrollment" not in local_owner
     assert "MachineHttpPort" not in local_owner and "SharedControlPlaneCoordinator" not in local_owner

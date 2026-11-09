@@ -164,9 +164,15 @@ def check_sources(sources: dict[str, str]) -> list[str]:
 
     opened = function_body(local, "pub fn open(")
     marker = opened.find("mark_local_unsynced(workspace.path())?;")
-    launch = opened.find('run_python(runtime_root, workspace.path(), "--local-open")')
-    if marker < 0 or launch < marker:
-        failures.append("durable local dirty evidence must precede native browser launch")
+    launch = opened.find("run_python(", marker)
+    launch_call = opened[launch : launch + 256] if launch >= 0 else ""
+    if (
+        marker < 0
+        or launch < marker
+        or '"--local-open"' not in launch_call
+        or "pending_health" not in launch_call
+    ):
+        failures.append("durable local dirty evidence and health handoff must precede native browser launch")
     if "BridgeWorkspaceLock::acquire_or_recover_interrupted(&workspace" not in opened:
         failures.append("native Open must hold the existing per-profile OS admission through the shared recovery owner")
     lock_admission = function_body(locks, "pub(crate) fn acquire_or_recover_interrupted(")

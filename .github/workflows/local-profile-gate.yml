@@ -106,6 +106,11 @@ jobs:
           EXPECTED_SOURCE_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
         run: python -c "import os, subprocess; actual = subprocess.check_output(['git', 'rev-parse', 'HEAD'], text=True).strip(); expected = os.environ['EXPECTED_SOURCE_SHA']; assert actual == expected, f'expected {expected}, got {actual}'"
 
+      - name: Set up pinned Python for native health-event integration
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
+        with:
+          python-version: '3.12.10'
+
       # Keep OS/toolchain/manifests/flags in the action's hashed key.
       # The independent opsctl Cargo workspace is used by this job as well.
       # Restored artifacts never substitute any check or exact-head test.
@@ -120,6 +125,13 @@ jobs:
 
       - name: Test local profile lifecycle
         run: cargo test --locked -p profile-bridge --features synthetic-test-bin local_profile
+
+      - name: Prove Windows Playwright Ready health confirmation through native process stderr
+        shell: pwsh
+        run: |
+          $env:PROFILE_BRIDGE_TEST_PYTHON = (Get-Command python).Source
+          cargo test --locked -p profile-bridge --features synthetic-test-bin --lib local_browser_open::tests
+          if ($LASTEXITCODE -ne 0) { throw 'native Playwright Ready health-confirmation tests failed' }
 
       - name: Prove K2 256/512 MiB file streaming on Windows with peak RAM and disk limits
         run: python scripts/test-k2-large-native-streaming.py
