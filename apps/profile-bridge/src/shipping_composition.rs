@@ -876,14 +876,14 @@ mod windows {
 
         #[test]
         fn same_sync_waits_for_native_file_release_with_backoff() {
-            let mut probes = [Ok(false), Ok(false), Ok(true)].into_iter();
+            let mut probes = [Ok::<bool, ()>(false), Ok(false), Ok(true)].into_iter();
             let mut pauses = Vec::new();
             wait_for_native_writer_release(
                 || probes.next().expect("three native lock probes"),
                 |delay| pauses.push(delay),
             )
             .expect("released native file lock");
-            assert_eq!(pauses, [Duration::from_secs(1), Duration::from_secs(2)]);
+            assert_eq!(pauses, vec![Duration::from_secs(1), Duration::from_secs(2)]);
         }
 
         #[test]
