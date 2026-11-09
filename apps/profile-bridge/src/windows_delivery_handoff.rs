@@ -1420,11 +1420,9 @@ mod tests {
         assert!(coordinator.restart_recovery_pending()?);
 
         assert_eq!(
-            coordinator.recover_or_resume_started_with(
-                43,
-                &fixture.first_executable,
-                |_| Err(DeliveryHandoffError::HelperLaunchFailed),
-            )?,
+            coordinator.recover_or_resume_started_with(43, &fixture.first_executable, |_| Err(
+                DeliveryHandoffError::HelperLaunchFailed
+            ),)?,
             DeliveryHandoffRestartDisposition::RecoveryRequired
         );
         let failed = DeliveryStateStore::open(&fixture.state_root)?;
@@ -1441,11 +1439,9 @@ mod tests {
             Some(DeliveryFailureKind::InterruptedActivation)
         );
         assert_eq!(
-            coordinator.recover_or_resume_started_with(
-                44,
-                &fixture.first_executable,
-                |_| Err(DeliveryHandoffError::HelperLaunchFailed),
-            )?,
+            coordinator.recover_or_resume_started_with(44, &fixture.first_executable, |_| Err(
+                DeliveryHandoffError::HelperLaunchFailed
+            ),)?,
             DeliveryHandoffRestartDisposition::RecoveryRequired
         );
         Ok(())
