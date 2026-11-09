@@ -1,33 +1,33 @@
 //! Automatic first-open preparation. Reuses the snapshot, cipher, immutable upload and launch owners.
-#[cfg(any(test, feature = "synthetic-test-bin"))]
+#[cfg(test)]
 use crate::browser_execution::{persist_browser_identity, persist_materialization_binding};
-#[cfg(any(test, feature = "synthetic-test-bin"))]
+#[cfg(test)]
 use crate::generation_snapshot::encode_workspace_snapshot;
 use crate::generation_snapshot::{
     digest_closed_workspace_streaming, seal_closed_workspace_streaming,
 };
-#[cfg(any(test, feature = "synthetic-test-bin"))]
+#[cfg(test)]
 use crate::local_profile::GenerationWorkspace;
 use crate::local_profile::{BridgeWorkspaceLock, MaterializationRoot};
-#[cfg(any(test, feature = "synthetic-test-bin"))]
+#[cfg(test)]
 use crate::runtime_bundle::{ApprovedRuntimeBundle, RuntimeBundleSelectionPort};
 use crate::shipping_control_plane::{
     MachineHttpMethod, MachineHttpPort, MachineHttpResponse, sealing_material_from_response,
 };
-#[cfg(any(test, feature = "synthetic-test-bin"))]
+#[cfg(test)]
 use crate::shipping_generation_save::SignedGenerationObjectPutPort;
 use crate::shipping_generation_save::{
     GenerationUploadAuthorization, SignedGenerationObjectStreamPutPort,
 };
 use crate::shipping_generation_successor_control::decode_upload_authorization;
 use bridge_domain::{BridgePortError, ClaimUri};
-#[cfg(any(test, feature = "synthetic-test-bin"))]
+#[cfg(test)]
 use browser_execution_domain::{BrowserIdentityManifest, MaterializationBinding};
 use control_plane_contract::generation_initialization_api::{
     InitialGenerationCommitted, InitialGenerationPrepared, InitialGenerationRequest as Request,
 };
 use control_plane_contract::profile_generation_api::BridgeGenerationUploadCapabilityResponse;
-#[cfg(any(test, feature = "synthetic-test-bin"))]
+#[cfg(test)]
 use encrypted_generation_domain::{
     GenerationIdentity, GenerationMetadata, PlaintextDigest, seal_generation,
 };
@@ -209,7 +209,7 @@ pub fn reauthorize_current_ready_generation<T: MachineHttpPort>(
     }
 }
 
-#[cfg(any(test, feature = "synthetic-test-bin"))]
+#[cfg(test)]
 #[allow(clippy::too_many_arguments)]
 pub fn initialize<
     T: MachineHttpPort,
@@ -529,7 +529,7 @@ pub fn sync_closed_local_draft<T: MachineHttpPort, U: SignedGenerationObjectStre
 /// One existing Initial Generation encryption, signed R2 PUT and verified
 /// Worker Commit owner. Both the legacy initial adapter and the new closed
 /// local DRAFT use it; no second backup format, protocol or cloud writer.
-#[cfg(any(test, feature = "synthetic-test-bin"))]
+#[cfg(test)]
 fn seal_upload_commit_initial<T: MachineHttpPort, U: SignedGenerationObjectPutPort>(
     tenant: &TenantId,
     profile: &ProfileId,
