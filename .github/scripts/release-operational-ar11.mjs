@@ -601,8 +601,8 @@ function camoufoxErrors(workflow, classifier) {
     "if: needs.scope.outputs.heavy == 'true'",
     'Download exact official runtime artifact',
     'Extract and verify exact official runtime',
-    'Run official Camoufox Playwright user Open/Close through production Bridge crates',
-  ], 'Windows user Open/Close context'));
+    'Run official Camoufox Playwright user Open and native file-lock proof through production Bridge crates',
+  ], 'Windows user Open and native file-lock context'));
   errors.push(...requireMarkers(proof, [
     'needs: [scope, runtime-package-windows, shipping-archive-reader-windows, bridge-regression-windows]',
     'if: always()',
@@ -611,7 +611,7 @@ function camoufoxErrors(workflow, classifier) {
   if (!linux.includes("if: needs.scope.outputs.heavy == 'true'")) errors.push('Linux heavy proof is not gated by exact scope output');
   if (!runtimePackage.includes("if: needs.scope.outputs.heavy == 'true'")) errors.push('Windows runtime packaging is not gated by exact scope output');
   if (!archiveReader.includes("if: needs.scope.outputs.heavy == 'true'")) errors.push('Windows archive-reader proof is not gated by exact scope output');
-  if (!windows.includes("if: needs.scope.outputs.heavy == 'true'")) errors.push('Windows user Open/Close proof is not gated by exact scope output');
+  if (!windows.includes("if: needs.scope.outputs.heavy == 'true'")) errors.push('Windows user Open proof is not gated by exact scope output');
   return errors;
 }
 
