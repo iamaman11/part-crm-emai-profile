@@ -25,14 +25,14 @@ use crate::generation_reopen::{
 };
 #[cfg(any(windows, test))]
 use crate::generation_snapshot::{GenerationSnapshotError, WorkspaceSnapshotReader};
+#[cfg(any(test, feature = "synthetic-test-bin"))]
+use crate::local_profile::MaterializationRoot;
 use crate::local_profile::{
     BridgeWorkspaceLock, GenerationWorkspace, LocalGenerationRecord, LocalGenerationState,
     LocalProfileError,
 };
 #[cfg(any(windows, test))]
 use crate::local_profile::{GenerationInventory, RecoveryClone};
-#[cfg(any(test, feature = "synthetic-test-bin"))]
-use crate::local_profile::MaterializationRoot;
 #[cfg(any(test, feature = "synthetic-test-bin"))]
 use crate::runtime_bundle::RuntimeSessionOrchestrator;
 use crate::runtime_bundle::{ApprovedRuntimeBundle, RuntimeLaunchError};
