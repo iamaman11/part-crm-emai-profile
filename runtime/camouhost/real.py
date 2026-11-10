@@ -341,42 +341,6 @@ def load_canonical_json(
     return value, raw
 
 
-def browser_environment() -> dict[str, str]:
-    # Windows expands known-folder registry paths through these OS directory variables.
-    # Missing SYSTEMDRIVE can create a literal %SystemDrive% tree in the working directory.
-    # Windows os.environ iteration uses uppercase keys; credentials remain excluded.
-    allowed = {
-        "ALLUSERSPROFILE",
-        "APPDATA",
-        "DBUS_SESSION_BUS_ADDRESS",
-        "DISPLAY",
-        "GDK_BACKEND",
-        "HOME",
-        "LANG",
-        "LC_ALL",
-        "LOCALAPPDATA",
-        "LOGNAME",
-        "PATH",
-        "PROGRAMDATA",
-        "SHELL",
-        "SYSTEMDRIVE",
-        "SYSTEMROOT",
-        "TEMP",
-        "TMP",
-        "TMPDIR",
-        "USER",
-        "USERPROFILE",
-        "WAYLAND_DISPLAY",
-        "WINDIR",
-        "WSL_DISTRO_NAME",
-        "WSL_INTEROP",
-        "XDG_CACHE_HOME",
-        "XDG_CONFIG_HOME",
-        "XDG_RUNTIME_DIR",
-    }
-    return {key: value for key, value in os.environ.items() if key in allowed}
-
-
 def runtime_lock_path() -> Path:
     configured = os.environ.get(RUNTIME_LOCK_ENV)
     path = Path(configured) if configured else Path(__file__).with_name(RUNTIME_LOCK_NAME)
@@ -816,19 +780,15 @@ def camoufox_launch_options(
     isolated: bool = False,
     first_run: bool = False,
 ) -> dict[str, Any]:
-    """Build one pinned option set through the official Camoufox SDK.
+    """Let the official Camoufox SDK apply the saved identity once.
 
-    Normal user Open uses upstream default extensions and the persistent
-    profile, without bootstrap tabs, offline toggles or page inspection.
-    The isolated C09 probe alone opts into its pre-admission offline boundary.
+    ProfileBridge stores the SDK-generated config and admits the local folder.
+    The SDK itself owns fingerprint injection, default extensions and Firefox
+    launch options. Do not reconstruct or overwrite CAMOU_CONFIG_* after it.
     """
-    from camoufox.utils import get_env_vars, launch_options
+    from camoufox.utils import launch_options
 
-    # Rust owns the directory and has already admitted its native file state.
-    # The SDK receives the path and owns browser files inside it.
     user_data_dir = root / USER_DATA_NAME
-    browser_selector = camoufox_browser_selector(lock)
-    browser_path = browser_selector.get("executable_path")
     firefox_prefs: dict[str, Any] = {
         "browser.startup.page": 3,
         "privacy.baselineFingerprintingProtection": False,
@@ -838,10 +798,9 @@ def camoufox_launch_options(
         firefox_prefs["network.disable-localhost-when-offline"] = True
     try:
         options = launch_options(
-            **browser_selector,
+            **camoufox_browser_selector(lock),
             config=copy.deepcopy(config),
             enable_cache=True,
-            env=browser_environment(),
             ff_version=locked_firefox_major(lock),
             firefox_user_prefs=firefox_prefs,
             headless=resolve_headless_mode(),
@@ -857,45 +816,9 @@ def camoufox_launch_options(
         options["offline"] = True
         options["args"] = ["-new-tab", MANAGED_BOOTSTRAP_TAB_URL]
     elif first_run:
-        # Rust determines virgin-profile state while holding the workspace lock.
-        # Firefox itself creates its one native first-run tab.
+        # Only a new empty Firefox profile needs the startup tab argument.
         options["args"] = ["-new-tab", "about:blank"]
-
-    official_env = options.get("env")
-    if not isinstance(official_env, dict) or not any(
-        isinstance(key, str) and key.startswith("CAMOU_CONFIG_") for key in official_env
-    ):
-        raise RuntimeContractError("official Camoufox fingerprint environment missing")
-    if any(not isinstance(key, str) for key in official_env):
-        raise RuntimeContractError("official Camoufox environment invalid")
-
-    # Preserve the generation's exact sealed identity while retaining the
-    # official SDK's generated default-addon list and all its other options.
-    generated = extract_camoufox_config(options)
-    pinned = copy.deepcopy(config)
-    addons = generated.get("addons")
-    if addons is not None:
-        if not isinstance(addons, list) or any(not isinstance(value, str) for value in addons):
-            raise RuntimeContractError("official Camoufox addon list invalid")
-        if "addons" in pinned and pinned["addons"] != addons:
-            raise RuntimeContractError("persisted addon identity conflicts with upstream")
-        pinned["addons"] = addons
-    try:
-        pinned_env = get_env_vars(pinned, "win", path=browser_path)
-    except (OSError, TypeError, ValueError) as error:
-        raise RuntimeContractError("pinned Camoufox fingerprint unavailable") from error
-    if not isinstance(pinned_env, dict) or not any(
-        isinstance(key, str) and key.startswith("CAMOU_CONFIG_") for key in pinned_env
-    ):
-        raise RuntimeContractError("pinned Camoufox fingerprint serialization missing")
-    merged_env = {
-        key: str(value) for key, value in official_env.items()
-        if not key.startswith("CAMOU_CONFIG_")
-    }
-    merged_env.update({key: str(value) for key, value in pinned_env.items()})
-    options["env"] = merged_env
     return options
-
 
 
 
@@ -984,17 +907,15 @@ def materialize_candidate_identity(root: Path) -> dict[str, Any]:
     # owns every write to the local profile folder.
     user_data_dir = root / USER_DATA_NAME
     browser_selector = camoufox_browser_selector(lock)
-    browser_env = browser_environment()
     headless_mode = resolve_headless_mode()
     fingerprint = generate_fingerprint(
-        screen=get_screen_cons(headless_mode or "DISPLAY" in browser_env),
+        screen=get_screen_cons(headless_mode or "DISPLAY" in os.environ),
         os="windows",
     )
     with contextlib.redirect_stdout(sys.stderr):
         options = launch_options(
             **browser_selector,
             enable_cache=True,
-            env=browser_env,
             ff_version=locked_firefox_major(lock),
             fingerprint=fingerprint,
             headless=headless_mode,

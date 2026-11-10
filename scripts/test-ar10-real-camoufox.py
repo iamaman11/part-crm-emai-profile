@@ -248,24 +248,6 @@ def complete_pre_navigation_protocol(
     admit_navigation(process, url)
 
 
-def prove_managed_environment_projection(runtime: ModuleType) -> None:
-    expected = {
-        "SYSTEMDRIVE": "C:",
-        "SYSTEMROOT": r"C:\Windows",
-        "WINDIR": r"C:\Windows",
-        "PROGRAMDATA": r"C:\ProgramData",
-        "ALLUSERSPROFILE": r"C:\ProgramData",
-        "APPDATA": r"C:\Users\Test\AppData\Roaming",
-        "LOCALAPPDATA": r"C:\Users\Test\AppData\Local",
-    }
-    injected = {
-        "CLOUDFLARE_API_TOKEN": "must-not-cross",
-        "HTTP_PROXY": "must-not-cross",
-        "CAMOU_CONFIG_1": "must-not-cross",
-    }
-    with patch.dict(os.environ, expected | injected, clear=True):
-        assert runtime.browser_environment() == expected
-
 
 def run_cold_launch(
     root: Path, report: dict[str, str], url: str, on_ready: Callable[[], None] | None = None
