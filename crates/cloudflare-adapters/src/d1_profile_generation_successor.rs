@@ -426,6 +426,24 @@ INSERT INTO profile_generation_successor_commands (
 RETURNING generation_id
 "#;
 
+// One D1 reservation per profile fences every external signed immutable PUT.
+// It is committed before the URL is returned. Freeze/DELETE cannot race with
+// an unrecorded authorization or trust a stale worker-local profile read.
+const RESERVE_GENERATION_UPLOAD_CAPABILITY: &str = r#"
+INSERT INTO profile_generation_upload_reservations (
+    tenant_id, profile_id, source_mode, source_generation_id,
+    expected_profile_version, issued_at_ms, expires_at_ms
+) VALUES (?, ?, ?, ?, ?, ?, ?)
+ON CONFLICT(tenant_id, profile_id) DO UPDATE SET
+    source_mode = excluded.source_mode,
+    source_generation_id = excluded.source_generation_id,
+    expected_profile_version = excluded.expected_profile_version,
+    issued_at_ms = excluded.issued_at_ms,
+    expires_at_ms = excluded.expires_at_ms
+WHERE excluded.issued_at_ms >= profile_generation_upload_reservations.issued_at_ms
+RETURNING profile_id
+"#;
+
 pub struct D1ProfileGenerationSuccessorCommitJournal {
     database: D1Database,
 }
@@ -434,6 +452,48 @@ impl D1ProfileGenerationSuccessorCommitJournal {
     #[must_use]
     pub const fn new(database: D1Database) -> Self {
         Self { database }
+    }
+
+    /// Register an R2 signed-PUT expiry with the D1 profile owner before
+    /// returning its URL. One atomic UPSERT checks the CURRENT/DRAFT CAS and
+    /// fails when deletion has frozen the profile. The signing timestamp was
+    /// obtained before this reservation, so even a slow Worker response does
+    /// not extend the recorded expiry.
+    pub async fn reserve_generation_upload_capability(
+        &self,
+        actor: &ActorContext,
+        profile_id: &ProfileId,
+        source_generation: Option<&GenerationId>,
+        expected_profile_version: u64,
+        signed_at: profile_platform_primitives::UnixMillis,
+    ) -> Result<(), GenerationPortError> {
+        let version = i64::try_from(expected_profile_version)
+            .map_err(|_| historical_integrity_failure())?;
+        let issued = i64::try_from(signed_at.value())
+            .map_err(|_| historical_integrity_failure())?;
+        let expires = issued.checked_add(360_000)
+            .ok_or_else(historical_integrity_failure)?;
+        let source_mode = if source_generation.is_some() { "READY" } else { "DRAFT" };
+        let original = source_generation.map(GenerationId::as_str);
+        let reserved = query!(
+            &self.database,
+            RESERVE_GENERATION_UPLOAD_CAPABILITY,
+            actor.tenant_scope().tenant_id().as_str(),
+            profile_id.as_str(),
+            source_mode,
+            original,
+            version,
+            issued,
+            expires,
+        )
+        .map_err(|_| historical_dependency_failure())?
+        .first::<String>(Some("profile_id"))
+        .await
+        .map_err(|_| historical_dependency_failure())?;
+        match reserved {
+            Some(value) if value == profile_id.as_str() => Ok(()),
+            _ => Err(historical_integrity_failure()),
+        }
     }
 
     /// The Worker has already proved a live DO lease/fence, exact R2 HEAD,
