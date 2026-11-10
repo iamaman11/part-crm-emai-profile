@@ -258,6 +258,13 @@ pub async fn control_plane_schedule(_event: ScheduledEvent, env: Env, _context: 
     {
         worker::console_error!("mailbox scheduled operation failed");
     }
+    // BrowserProfiles is an existing activation unit. Scheduled replay only
+    // continues D1-frozen, owner-authorized deletes after signed PUT expiry.
+    if capability_context.unit_enabled(ActivationUnit::BrowserProfiles)
+        && profiles::resume_due_profile_deletes(&env).await.is_err()
+    {
+        worker::console_error!("profile delete scheduled replay failed");
+    }
 }
 
 const fn queue_surface(message: &ControlPlaneQueueMessage) -> RuntimeSurface {
