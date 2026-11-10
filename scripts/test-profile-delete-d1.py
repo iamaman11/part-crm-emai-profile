@@ -131,6 +131,27 @@ def test_ready_profile_requires_all_exact_object_receipts() -> None:
         )
         expect_denied(lambda: begin(connection, profile, 1, 60))
         begin(connection, profile, 2, 60)
+        # The frozen R2 inventory must remain stable even if a stale/offline
+        # writer tries to register another generation or move CURRENT.
+        expect_denied(lambda: connection.execute(
+            "UPDATE browser_profiles SET active_generation_id=NULL "
+            "WHERE tenant_id=? AND profile_id=?",
+            (tenant, profile),
+        ))
+        expect_denied(lambda: connection.execute(
+            "INSERT INTO profile_generation_register_commands "
+            "(tenant_id,command_id,command_actor_id,profile_id,generation_id,"
+            "object_key,metadata_digest,container_digest,executed_at_ms) "
+            "VALUES (?,?,?,?,?,?,?,?,65)",
+            (tenant, "command_register_after_delete_01", owner, profile,
+             "generation_after_delete_01",
+             "profiles/v1/generation_after_delete_01.enc",
+             metadata_digest, container_digest),
+        ))
+        assert connection.execute(
+            "SELECT COUNT(*) FROM profile_generations WHERE tenant_id=? AND profile_id=?",
+            (tenant, profile),
+        ).fetchone()[0] == 1
         row = connection.execute(
             "SELECT object_key,metadata_digest,container_digest "
             "FROM profile_delete_objects WHERE tenant_id=? AND profile_id=?",
