@@ -2,12 +2,11 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { TenantProvider } from '../../app/TenantContext';
-import { changeGenerationActivation, dispatchBrowserProfileOpen, getCoordinator, getGeneration, getProfile, launchProfile } from './api';
+import { changeGenerationActivation, dispatchBrowserProfileOpen, getCoordinator, getGeneration, getProfile } from './api';
 import { ProfilesWorkspace } from './ProfilesWorkspace';
 
 vi.mock('./api', () => ({
   dispatchBrowserProfileOpen: vi.fn(),
-  launchProfile: vi.fn(),
   changeGenerationActivation: vi.fn(),
   commandCoordinator: vi.fn(),
   createProfile: vi.fn(),
@@ -24,20 +23,14 @@ const profileLookup = vi.mocked(getProfile);
 const generationLookup = vi.mocked(getGeneration);
 const coordinatorLookup = vi.mocked(getCoordinator);
 const activation = vi.mocked(changeGenerationActivation);
-const launchIntent = vi.mocked(launchProfile);
 const localOpen = vi.mocked(dispatchBrowserProfileOpen);
 
 describe('ProfilesWorkspace generation refresh (#802 F06)', () => {
-  it('prefetches the authorized launch intent before click and dispatches locally without a click-time API call', async () => {
+  it('opens with the authenticated tenant and selected local profile without a Worker launch request', async () => {
     profileLookup.mockResolvedValue({
       profileId: 'profile_test', status: 'READY', version: 7, linkedClientId: null,
       activeGenerationId: 'generation_current',
     } as Awaited<ReturnType<typeof getProfile>>);
-    const uri = 'profilebridge://open/v2/tenant_test/actor_test/profile_test/7/READY';
-    launchIntent.mockResolvedValue({
-      schemaVersion: 2,
-      launchUri: uri,
-    } as Awaited<ReturnType<typeof launchProfile>>);
     const cache = new QueryClient({ defaultOptions: { queries: { retry: false } } });
     render(
       <QueryClientProvider client={cache}>
@@ -50,21 +43,18 @@ describe('ProfilesWorkspace generation refresh (#802 F06)', () => {
     );
 
     const open = await screen.findByRole('button', { name: 'Open browser' }) as HTMLButtonElement;
-    await waitFor(() => expect(launchIntent).toHaveBeenCalledTimes(1));
     await waitFor(() => expect(open.disabled).toBe(false));
     expect(localOpen).not.toHaveBeenCalled();
 
     fireEvent.click(open);
-    await waitFor(() => expect(localOpen).toHaveBeenCalledWith(uri));
-    expect(launchIntent).toHaveBeenCalledTimes(1);
+    await waitFor(() => expect(localOpen).toHaveBeenCalledWith(
+      'tenant_test', 'actor_test', 'profile_test', 7, 'READY',
+    ));
+    expect(profileLookup).toHaveBeenCalledTimes(1);
   });
 
   beforeEach(() => {
     vi.clearAllMocks();
-    launchIntent.mockResolvedValue({
-      schemaVersion: 2,
-      launchUri: 'profilebridge://open/v2/tenant_test/actor_test/profile_test/1/DRAFT',
-    } as Awaited<ReturnType<typeof launchProfile>>);
     window.history.replaceState(null, '', '/profiles');
   });
 
@@ -207,8 +197,8 @@ describe('ProfilesWorkspace generation refresh (#802 F06)', () => {
     });
     expect(screen.queryByText('profile_old')).toBeNull();
     expect(screen.getByText('profile_new')).toBeTruthy();
-    // Profile projection and prefetched Worker launch authorization are distinct
-    // asynchronous reads. A correct Open stays disabled until both have arrived.
+    // The already loaded, scoped profile projection is enough for local Open.
+    // There is no second launch-intent network dependency.
     await waitFor(() => expect((screen.getByRole('button', { name: 'Open browser' }) as HTMLButtonElement).disabled).toBe(false));
   });
 
