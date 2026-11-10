@@ -82,6 +82,15 @@ BEGIN
     );
 END;
 
+-- Signed URLs are irrevocable until expiry. Their exact-key ledger
+-- must therefore never be shortened by removing rows.
+CREATE TRIGGER profile_generation_upload_reservation_append_only_delete
+BEFORE DELETE ON profile_generation_upload_reservations
+FOR EACH ROW
+BEGIN
+    SELECT RAISE(ABORT, 'upload_reservation_append_only');
+END;
+
 CREATE TABLE profile_delete_commands (
     tenant_id TEXT NOT NULL,
     profile_id TEXT NOT NULL,
