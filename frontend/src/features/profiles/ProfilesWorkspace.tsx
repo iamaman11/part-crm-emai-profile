@@ -1,6 +1,6 @@
-import { dispatchBrowserProfileOpen, launchProfile } from './api';
+import { dispatchBrowserProfileOpen } from './api';
 import { newIdempotencyKey } from '../../shared/api/idempotency';
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { useEffect, useRef, useState, type FormEvent } from 'react';
 import { useTenant } from '../../app/TenantContext';
 import {
@@ -51,7 +51,8 @@ export function ProfilesWorkspace({
   const cache = useQueryClient();
   const [profileId, setProfileId] = useState(selectedProfileId ?? '');
   const [profile, setProfile] = useState<ProfileProjection | null>(null);
-  const owner = contexts.some((context) => context.tenantId === tenantId && context.role === 'TENANT_OWNER');
+  const activeTenant = contexts.find((context) => context.tenantId === tenantId);
+  const owner = activeTenant?.role === 'TENANT_OWNER';
   const [generationId, setGenerationId] = useState('');
   const [generation, setGeneration] = useState<GenerationProjection | null>(null);
   const [coordinator, setCoordinator] = useState<CoordinatorResponse | null>(null);
@@ -59,20 +60,18 @@ export function ProfilesWorkspace({
   const selected = useRef({ tenantId, profileId, generationId });
   selected.current = { tenantId, profileId, generationId };
 
-  const launchIntent = useQuery({
-    queryKey: ['operator-query', tenantId, 'profile-launch', profileId, profile?.version],
-    queryFn: () => launchProfile(tenantId, profileId, newIdempotencyKey()),
-    enabled: tenantId.length > 0 && profile !== null && profile.profileId === profileId
-      && ['DRAFT', 'READY'].includes(profile.status) && !generationRefreshUnconfirmed,
-    staleTime: 60_000,
-    retry: false,
-    refetchOnWindowFocus: false,
-    refetchOnReconnect: false,
-  });
   const launch = useMutation({
     mutationFn: async () => {
-      if (!launchIntent.data) throw new Error('The local browser open intent is not ready.');
-      dispatchBrowserProfileOpen(launchIntent.data.launchUri);
+      // The profile was already selected through the authorized tenant API.
+      // Repeated local Open performs no extra Worker request.
+      if (!activeTenant || !profile || profile.profileId !== profileId
+        || (profile.status !== 'DRAFT' && profile.status !== 'READY')
+        || generationRefreshUnconfirmed) {
+        throw new Error('The selected local profile is not ready to open.');
+      }
+      dispatchBrowserProfileOpen(
+        tenantId, activeTenant.actorId, profile.profileId, profile.version, profile.status,
+      );
     },
   });
   const lookup = useMutation({
@@ -253,7 +252,7 @@ export function ProfilesWorkspace({
         )}
         {profile && <>
           <div className="action-row">
-            <button type="button" disabled={launch.isPending || launchIntent.isPending || !launchIntent.data || generationAction.isPending || generationRefreshUnconfirmed || !['DRAFT', 'READY'].includes(profile.status)} onClick={() => launch.mutate()}>{launch.isPending ? 'Opening…' : 'Open browser'}</button>
+            <button type="button" disabled={launch.isPending || !activeTenant || profile.profileId !== profileId || generationAction.isPending || generationRefreshUnconfirmed || !['DRAFT', 'READY'].includes(profile.status)} onClick={() => launch.mutate()}>{launch.isPending ? 'Opening…' : 'Open browser'}</button>
             <button type="button" disabled={lookup.isPending} onClick={() => {
               void cache.invalidateQueries({ queryKey: ['operator-query', tenantId, 'profiles'] });
               lookup.mutate({ tenantId, profileId });
@@ -273,7 +272,7 @@ export function ProfilesWorkspace({
               />
             )}
           </div>
-          <StatusMessage state={launch.error ?? launchIntent.error ?? (launch.isPending ? 'Opening your profile…' : launchIntent.isPending ? 'Preparing local browser access…' : null)} />
+          <StatusMessage state={launch.error ?? (launch.isPending ? 'Opening your local profile…' : null)} />
           <StatusMessage state={deleteAction.error ?? (deleteAction.data
             ? deleteAction.data.status === 'DELETED'
               ? 'Profile and all cloud objects deleted.'
