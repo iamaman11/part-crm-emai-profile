@@ -8,6 +8,7 @@ issuing a matching immutable D1 receipt.
 from __future__ import annotations
 
 import runpy
+import re
 import sqlite3
 from pathlib import Path
 
@@ -145,6 +146,21 @@ def test_ready_profile_requires_all_exact_object_receipts() -> None:
         )
         expect_denied(lambda: begin(connection, profile, 1, 60))
         begin(connection, profile, 2, 60)
+        # Prove the production scheduled D1 query selects only expired,
+        # already-frozen commands, not new Delete authorizations.
+        d1_source = (
+            ROOT / "crates/cloudflare-adapters/src/d1_profile_deletion.rs"
+        ).read_text(encoding="utf-8")
+        due_match = re.search(
+            r'const DUE_FROZEN_DELETES: &str = r#"(.*?)"#;',
+            d1_source, re.DOTALL,
+        )
+        assert due_match is not None
+        due_sql = due_match.group(1)
+        assert connection.execute(due_sql, (360059,)).fetchall() == []
+        due = connection.execute(due_sql, (360060,)).fetchall()
+        assert len(due) == 1
+        assert tuple(due[0]) == (tenant, profile, owner, 2)
         expect_denied(lambda: connection.execute(
             "UPDATE profile_generation_upload_reservations "
             "SET issued_at_ms=70,expires_at_ms=360070 "
