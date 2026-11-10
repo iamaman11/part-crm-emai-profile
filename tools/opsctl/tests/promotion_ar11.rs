@@ -735,28 +735,35 @@ print(json.dumps({'evidence': adapter['build'](release_id, native, None, None), 
                         "0037_generation_streaming_container_limit.sql",
                         "0038_profile_generation_working_proof.sql",
                         "0039_profile_generation_retirement_guard.sql",
-                        "0040_native_browser_recovery_proof.sql"
+                        "0040_native_browser_recovery_proof.sql",
+                        "0041_profile_delete_exact_r2_receipts.sql"
                     ])
                 } else if revision == "0036_profile_generation_initialization.sql" {
                     json!([
                         "0037_generation_streaming_container_limit.sql",
                         "0038_profile_generation_working_proof.sql",
                         "0039_profile_generation_retirement_guard.sql",
-                        "0040_native_browser_recovery_proof.sql"
+                        "0040_native_browser_recovery_proof.sql",
+                        "0041_profile_delete_exact_r2_receipts.sql"
                     ])
                 } else if revision == "0037_generation_streaming_container_limit.sql" {
                     json!([
                         "0038_profile_generation_working_proof.sql",
                         "0039_profile_generation_retirement_guard.sql",
-                        "0040_native_browser_recovery_proof.sql"
+                        "0040_native_browser_recovery_proof.sql",
+                        "0041_profile_delete_exact_r2_receipts.sql"
                     ])
                 } else if revision == "0038_profile_generation_working_proof.sql" {
                     json!([
                         "0039_profile_generation_retirement_guard.sql",
-                        "0040_native_browser_recovery_proof.sql"
+                        "0040_native_browser_recovery_proof.sql",
+                        "0041_profile_delete_exact_r2_receipts.sql"
                     ])
                 } else {
-                    json!(["0040_native_browser_recovery_proof.sql"])
+                    json!([
+                        "0040_native_browser_recovery_proof.sql",
+                        "0041_profile_delete_exact_r2_receipts.sql"
+                    ])
                 };
                 assert_eq!(native["planned_migrations"], missing);
                 let behind_contract = revision == "0034_device_application_authority.sql";
