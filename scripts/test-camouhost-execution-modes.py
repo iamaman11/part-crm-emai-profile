@@ -54,7 +54,6 @@ def verify_upstream_camoufox_config_is_final(runtime) -> None:
         patch.dict(sys.modules, {"camoufox": fake_package, "camoufox.utils": fake_utils}),
         patch.object(runtime, "camoufox_browser_selector", return_value={"executable_path": "/camoufox.exe"}),
         patch.object(runtime, "locked_firefox_major", return_value=158),
-        patch.object(runtime, "browser_environment", return_value={"SYSTEMROOT": r"C:\\Windows"}),
         patch.object(runtime, "accessibility_preferences", return_value={}),
         patch.object(runtime, "resolve_headless_mode", return_value=False),
         patch.object(runtime, "resolve_proxy", return_value=None),
@@ -69,6 +68,9 @@ def verify_upstream_camoufox_config_is_final(runtime) -> None:
         assert sdk_calls[0]["config"] == identity
         assert sdk_calls[0]["config"] is not identity
         assert sdk_calls[0]["user_data_dir"] == str(Path("/disposable/user_data"))
+        # Do not pass an environment at all: the upstream SDK/native process
+        # inherits the OS environment and owns CAMOU_CONFIG_* construction.
+        assert "env" not in sdk_calls[0]
         assert identity == {"canvas:seed": 12345, "webGl:vendor": "test-gpu"}
 
         new = runtime.camoufox_launch_options({}, Path("/disposable"), identity, first_run=True)

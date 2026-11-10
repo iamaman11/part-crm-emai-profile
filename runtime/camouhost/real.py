@@ -341,42 +341,6 @@ def load_canonical_json(
     return value, raw
 
 
-def browser_environment() -> dict[str, str]:
-    # Windows expands known-folder registry paths through these OS directory variables.
-    # Missing SYSTEMDRIVE can create a literal %SystemDrive% tree in the working directory.
-    # Windows os.environ iteration uses uppercase keys; credentials remain excluded.
-    allowed = {
-        "ALLUSERSPROFILE",
-        "APPDATA",
-        "DBUS_SESSION_BUS_ADDRESS",
-        "DISPLAY",
-        "GDK_BACKEND",
-        "HOME",
-        "LANG",
-        "LC_ALL",
-        "LOCALAPPDATA",
-        "LOGNAME",
-        "PATH",
-        "PROGRAMDATA",
-        "SHELL",
-        "SYSTEMDRIVE",
-        "SYSTEMROOT",
-        "TEMP",
-        "TMP",
-        "TMPDIR",
-        "USER",
-        "USERPROFILE",
-        "WAYLAND_DISPLAY",
-        "WINDIR",
-        "WSL_DISTRO_NAME",
-        "WSL_INTEROP",
-        "XDG_CACHE_HOME",
-        "XDG_CONFIG_HOME",
-        "XDG_RUNTIME_DIR",
-    }
-    return {key: value for key, value in os.environ.items() if key in allowed}
-
-
 def runtime_lock_path() -> Path:
     configured = os.environ.get(RUNTIME_LOCK_ENV)
     path = Path(configured) if configured else Path(__file__).with_name(RUNTIME_LOCK_NAME)
@@ -837,7 +801,6 @@ def camoufox_launch_options(
             **camoufox_browser_selector(lock),
             config=copy.deepcopy(config),
             enable_cache=True,
-            env=browser_environment(),
             ff_version=locked_firefox_major(lock),
             firefox_user_prefs=firefox_prefs,
             headless=resolve_headless_mode(),
@@ -944,17 +907,15 @@ def materialize_candidate_identity(root: Path) -> dict[str, Any]:
     # owns every write to the local profile folder.
     user_data_dir = root / USER_DATA_NAME
     browser_selector = camoufox_browser_selector(lock)
-    browser_env = browser_environment()
     headless_mode = resolve_headless_mode()
     fingerprint = generate_fingerprint(
-        screen=get_screen_cons(headless_mode or "DISPLAY" in browser_env),
+        screen=get_screen_cons(headless_mode or "DISPLAY" in os.environ),
         os="windows",
     )
     with contextlib.redirect_stdout(sys.stderr):
         options = launch_options(
             **browser_selector,
             enable_cache=True,
-            env=browser_env,
             ff_version=locked_firefox_major(lock),
             fingerprint=fingerprint,
             headless=headless_mode,
