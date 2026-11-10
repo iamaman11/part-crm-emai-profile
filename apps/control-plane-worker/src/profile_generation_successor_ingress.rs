@@ -477,7 +477,7 @@ pub(crate) async fn dispatch_authorized(
                     actor,
                     profile_id,
                     Some(&base_generation_id),
-                    expected_profile_version,
+                    expected_profile_version.value(),
                     server_now(),
                 )
                 .await
