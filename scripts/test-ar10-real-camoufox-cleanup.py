@@ -861,7 +861,9 @@ def prove_failure_observation_contract() -> None:
     ):
         stdout = io.StringIO()
         stderr = io.StringIO()
-        with patch.object(runtime, "materialize_candidate_identity", side_effect=error), \
+        with patch.dict(sys.modules, {
+                "native_process": SimpleNamespace(launch_native_camoufox=Mock())
+        }), patch.object(runtime, "materialize_candidate_identity", side_effect=error), \
                 contextlib.redirect_stdout(stdout), contextlib.redirect_stderr(stderr):
             result = asyncio.run(runtime.run_local_profile(Path("unused"), None, True))
         assert result == 5
