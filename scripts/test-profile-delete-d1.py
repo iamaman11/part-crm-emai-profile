@@ -83,6 +83,11 @@ def test_draft_direct_exact_deletion() -> None:
             "VALUES (?,?,?,?,?,?,'DRAFT',NULL,1,35,360035)",
             (BASE["TENANT_A"],profile,generation,key,metadata_digest,container_digest),
         )
+        expect_denied(lambda: connection.execute(
+            "DELETE FROM profile_generation_upload_reservations "
+            "WHERE tenant_id=? AND profile_id=?",
+            (BASE["TENANT_A"], profile),
+        ))
         begin(connection, profile, 1, 40)
         expect_denied(lambda: connection.execute(
             "INSERT INTO profile_generation_upload_reservations "
