@@ -220,7 +220,7 @@ pub(super) async fn dispatch(
             if profile_generation_successor_observer(env)?
                 .reserve_generation_upload_capability(
                     actor,
-                    profile_id,
+                    &descriptor,
                     None,
                     expected.value(),
                     server_now(),
