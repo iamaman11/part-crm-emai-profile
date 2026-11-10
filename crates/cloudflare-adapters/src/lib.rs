@@ -51,6 +51,7 @@ pub mod d1_notification_operations;
 pub mod d1_notifications;
 pub mod d1_outbound_mail_intents;
 pub mod d1_profile_application;
+pub mod d1_profile_deletion;
 pub mod d1_profile_coordinator;
 pub mod d1_profile_generation_application;
 pub mod d1_profile_generation_successor;
