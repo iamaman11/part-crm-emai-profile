@@ -47,9 +47,11 @@ describe('ProfilesWorkspace generation refresh (#802 F06)', () => {
     expect(localOpen).not.toHaveBeenCalled();
 
     fireEvent.click(open);
-    await waitFor(() => expect(localOpen).toHaveBeenCalledWith(
+    // Must run during the direct trusted click, not from a delayed async
+    // mutation or Worker prefetch completion.
+    expect(localOpen).toHaveBeenCalledWith(
       'tenant_test', 'actor_test', 'profile_test', 7, 'READY',
-    ));
+    );
     expect(profileLookup).toHaveBeenCalledTimes(1);
   });
 
