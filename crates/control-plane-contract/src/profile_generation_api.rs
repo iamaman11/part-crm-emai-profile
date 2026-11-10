@@ -119,6 +119,22 @@ pub struct ProfileCreateRequest {
     pub profile_id: String,
 }
 
+/// Strict, versioned user action; the D1 command is replay-safe for this exact
+/// tenant/profile/version, and each R2 effect is limited to frozen keys.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ProfileDeleteRequest {
+    pub expected_profile_version: u64,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ProfileDeleteResponse {
+    pub profile_id: String,
+    pub status: ProfileStatusDto,
+    pub pending_objects: u64,
+}
+
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ProfileGrantRequest {
