@@ -50,6 +50,17 @@ INSERT INTO profile_delete_completion_commands (
 ) VALUES (?,?,?,?,?)
 ON CONFLICT(tenant_id,profile_id) DO NOTHING
 "#;
+// Every old signed PUT is accounted for before deleting a frozen key.
+// At least 360s from freeze also drains URLs issued before migration 0041.
+const SAFE_EXACT_R2_DELETE_AT: &str = r#"
+SELECT MAX(command.requested_at_ms + 360000,
+           COALESCE(reservation.expires_at_ms, 0)) AS safe_at_ms
+FROM profile_delete_commands AS command
+LEFT JOIN profile_generation_upload_reservations AS reservation
+  ON reservation.tenant_id = command.tenant_id
+ AND reservation.profile_id = command.profile_id
+WHERE command.tenant_id = ? AND command.profile_id = ?
+"#;
 const PROFILE_DELETE_STATUS: &str = r#"
 SELECT status FROM browser_profiles WHERE tenant_id=? AND profile_id=?
 "#;
@@ -69,6 +80,10 @@ struct StoredObject {
 #[derive(Deserialize)]
 struct Pending {
     pending: i64,
+}
+#[derive(Deserialize)]
+struct SafeAt {
+    safe_at_ms: i64,
 }
 #[derive(Deserialize)]
 struct StoredStatus {
@@ -134,6 +149,26 @@ impl D1ProfileDeletion {
         )?
         .first::<StoredCommand>(None)
         .await
+    }
+
+    /// A frozen inventory is not R2-delete eligible while an old signed PUT
+    /// may recreate the exact immutable object after HEAD -> DELETE -> HEAD.
+    pub async fn safe_exact_r2_delete_at(
+        &self,
+        scope: &TenantScope,
+        profile_id: &ProfileId,
+    ) -> Result<u64> {
+        let row = query!(
+            &self.database,
+            SAFE_EXACT_R2_DELETE_AT,
+            scope.tenant_id().as_str(),
+            profile_id.as_str()
+        )?
+        .first::<SafeAt>(None)
+        .await?
+        .ok_or_else(|| Error::RustError("profile delete has no frozen command".to_owned()))?;
+        u64::try_from(row.safe_at_ms)
+            .map_err(|_| Error::RustError("invalid signed PUT expiry".to_owned()))
     }
 
     pub async fn next_pending(
