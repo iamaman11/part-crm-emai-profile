@@ -9,14 +9,22 @@
 CREATE TABLE profile_generation_upload_reservations (
     tenant_id TEXT NOT NULL,
     profile_id TEXT NOT NULL,
+    generation_id TEXT NOT NULL,
+    object_key TEXT NOT NULL,
+    metadata_digest TEXT NOT NULL CHECK(length(metadata_digest)=64
+      AND metadata_digest NOT GLOB '*[^0-9a-f]*'),
+    container_digest TEXT NOT NULL CHECK(length(container_digest)=64
+      AND container_digest NOT GLOB '*[^0-9a-f]*'),
     source_mode TEXT NOT NULL CHECK(source_mode IN ('DRAFT','READY')),
     source_generation_id TEXT,
     expected_profile_version INTEGER NOT NULL CHECK(expected_profile_version > 0),
     issued_at_ms INTEGER NOT NULL CHECK(issued_at_ms >= 0),
     expires_at_ms INTEGER NOT NULL CHECK(expires_at_ms = issued_at_ms + 360000),
-    PRIMARY KEY(tenant_id, profile_id),
+    PRIMARY KEY(tenant_id, profile_id, generation_id),
+    UNIQUE(tenant_id, object_key),
     FOREIGN KEY(tenant_id, profile_id)
         REFERENCES browser_profiles(tenant_id, profile_id) ON DELETE RESTRICT,
+    CHECK(length(object_key) > 0 AND instr(object_key, char(92)) = 0),
     CHECK (
         (source_mode = 'DRAFT' AND source_generation_id IS NULL)
         OR
@@ -51,6 +59,13 @@ BEGIN
     SELECT RAISE(ABORT, 'upload_reservation_profile_not_writable')
     WHERE NEW.tenant_id <> OLD.tenant_id
        OR NEW.profile_id <> OLD.profile_id
+       OR NEW.generation_id <> OLD.generation_id
+       OR NEW.object_key <> OLD.object_key
+       OR NEW.metadata_digest <> OLD.metadata_digest
+       OR NEW.container_digest <> OLD.container_digest
+       OR NEW.source_mode <> OLD.source_mode
+       OR NEW.source_generation_id IS NOT OLD.source_generation_id
+       OR NEW.expected_profile_version <> OLD.expected_profile_version
        OR NEW.issued_at_ms < OLD.issued_at_ms
        OR NOT EXISTS (
         SELECT 1 FROM browser_profiles AS profile
@@ -93,8 +108,6 @@ CREATE TABLE profile_delete_objects (
     UNIQUE(tenant_id, object_key),
     FOREIGN KEY(tenant_id, profile_id)
         REFERENCES profile_delete_commands(tenant_id, profile_id) ON DELETE RESTRICT,
-    FOREIGN KEY(tenant_id, profile_id, generation_id)
-        REFERENCES profile_generations(tenant_id, profile_id, generation_id) ON DELETE RESTRICT,
     CHECK(length(object_key) > 0 AND instr(object_key, char(92)) = 0),
     CHECK(length(metadata_digest) = 64
       AND metadata_digest NOT GLOB '*[^0-9a-f]*'),
@@ -150,6 +163,22 @@ BEGIN
           AND profile.status IN ('DRAFT','READY','SUSPENDED','QUARANTINED')
           AND profile.updated_at_ms <= NEW.requested_at_ms
     );
+    -- A signed candidate is immutable even before it is committed into
+    -- profile_generations. A mismatched descriptor may not be hidden by
+    -- INSERT OR IGNORE when the frozen inventory is assembled.
+    SELECT RAISE(ABORT, 'profile_delete_upload_registry_conflict')
+    WHERE EXISTS (
+        SELECT 1 FROM profile_generation_upload_reservations AS issued
+        JOIN profile_generations AS registered
+          ON registered.tenant_id = issued.tenant_id
+         AND registered.profile_id = issued.profile_id
+         AND registered.generation_id = issued.generation_id
+        WHERE issued.tenant_id = NEW.tenant_id
+          AND issued.profile_id = NEW.profile_id
+          AND (issued.object_key <> registered.object_key
+            OR issued.metadata_digest <> registered.metadata_digest
+            OR issued.container_digest <> registered.container_digest)
+    );
     SELECT RAISE(ABORT, 'profile_delete_coordinator_busy')
     WHERE EXISTS (
         SELECT 1 FROM profile_coordinator_projections AS coordinator
@@ -190,6 +219,19 @@ BEGIN
     FROM profile_generations
     WHERE tenant_id = NEW.tenant_id AND profile_id = NEW.profile_id;
 
+    -- Include every permitted R2 key, even when the immutable upload
+    -- completed but the D1 generation commit was interrupted. A signed URL
+    -- can otherwise leave an unreachable/orphan object after whole-profile
+    -- Delete, especially for a new DRAFT with zero registered generations.
+    INSERT OR IGNORE INTO profile_delete_objects (
+        tenant_id, profile_id, generation_id, object_key,
+        metadata_digest, container_digest
+    )
+    SELECT tenant_id, profile_id, generation_id, object_key,
+           metadata_digest, container_digest
+    FROM profile_generation_upload_reservations
+    WHERE tenant_id = NEW.tenant_id AND profile_id = NEW.profile_id;
+
     UPDATE browser_profiles
     SET status = 'DELETING',
         version = version + 1,
@@ -205,14 +247,16 @@ BEGIN
     SELECT RAISE(ABORT, 'profile_delete_presigned_put_not_expired')
     WHERE EXISTS (
         SELECT 1 FROM profile_delete_commands AS command
-        LEFT JOIN profile_generation_upload_reservations AS reservation
-          ON reservation.tenant_id = command.tenant_id
-         AND reservation.profile_id = command.profile_id
         WHERE command.tenant_id = NEW.tenant_id
           AND command.profile_id = NEW.profile_id
           AND NEW.deleted_at_ms < MAX(
               command.requested_at_ms + 360000,
-              COALESCE(reservation.expires_at_ms, 0)
+              COALESCE((
+                  SELECT MAX(reservation.expires_at_ms)
+                  FROM profile_generation_upload_reservations AS reservation
+                  WHERE reservation.tenant_id = command.tenant_id
+                    AND reservation.profile_id = command.profile_id
+              ), 0)
           )
     );
     SELECT RAISE(ABORT, 'profile_delete_exact_object_not_frozen')
@@ -255,6 +299,21 @@ BEGIN
           AND profile.status = 'DELETING'
           AND profile.version = NEW.expected_profile_version
           AND NEW.completed_at_ms >= profile.updated_at_ms
+    );
+    SELECT RAISE(ABORT, 'profile_delete_presigned_put_not_expired')
+    WHERE EXISTS (
+        SELECT 1 FROM profile_delete_commands AS command
+        WHERE command.tenant_id = NEW.tenant_id
+          AND command.profile_id = NEW.profile_id
+          AND NEW.completed_at_ms < MAX(
+              command.requested_at_ms + 360000,
+              COALESCE((
+                  SELECT MAX(reservation.expires_at_ms)
+                  FROM profile_generation_upload_reservations AS reservation
+                  WHERE reservation.tenant_id = command.tenant_id
+                    AND reservation.profile_id = command.profile_id
+              ), 0)
+          )
     );
     SELECT RAISE(ABORT, 'profile_delete_objects_remain')
     WHERE EXISTS (
