@@ -1547,8 +1547,11 @@ async def run_local_profile(root: Path, config: dict[str, Any] | None, first_run
             config = json.loads(generated["camoufox_config_json"])
             if not isinstance(config, dict):
                 raise RuntimeContractError("official fingerprint config invalid")
+        # Installer/runtime gate verified the bundled SDK and fpgen model.
+        # Warm local Open must not re-import and rehash the pinned model.
+        # Only the first empty DRAFT calls materialize_candidate_identity(),
+        # which performs the official model verification before fpgen.
         lock, _ = load_runtime_lock()
-        verify_python_components(lock)
         # Rust owns and holds exclusive local workspace admission. The
         # canonical configuration and first-run decision arrive in memory.
         options = camoufox_launch_options(lock, root, config, first_run=first_run)
