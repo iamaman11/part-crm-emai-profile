@@ -7,6 +7,7 @@ import {
   changeGenerationActivation,
   commandCoordinator,
   createProfile,
+  deleteProfile,
   getCoordinator,
   getGeneration,
   getProfile,
@@ -46,10 +47,11 @@ export function ProfilesWorkspace({
   selectedProfileId?: string | null;
   onProfileSelected: (profileId: string) => void;
 }) {
-  const { tenantId } = useTenant();
+  const { tenantId, contexts } = useTenant();
   const cache = useQueryClient();
   const [profileId, setProfileId] = useState(selectedProfileId ?? '');
   const [profile, setProfile] = useState<ProfileProjection | null>(null);
+  const owner = contexts.some((context) => context.tenantId === tenantId && context.role === 'TENANT_OWNER');
   const [generationId, setGenerationId] = useState('');
   const [generation, setGeneration] = useState<GenerationProjection | null>(null);
   const [coordinator, setCoordinator] = useState<CoordinatorResponse | null>(null);
@@ -86,6 +88,26 @@ export function ProfilesWorkspace({
     onSuccess: (receipt) => {
       void cache.invalidateQueries({ queryKey: ['operator-query', tenantId, 'profiles'] });
       if (receipt?.resourceId) onProfileSelected(receipt.resourceId);
+    },
+  });
+  const deleteAction = useMutation({
+    mutationFn: async ({ targetTenant, targetProfile, expectedVersion }: {
+      targetTenant: string;
+      targetProfile: string;
+      expectedVersion: number;
+    }) => deleteProfile(targetTenant, targetProfile, expectedVersion),
+    onSuccess: async (receipt, variables) => {
+      await cache.invalidateQueries({ queryKey: ['operator-query', variables.targetTenant, 'profiles'] });
+      if (selected.current.tenantId !== variables.targetTenant
+        || selected.current.profileId !== variables.targetProfile) return;
+      try {
+        const refreshed = await getProfile(variables.targetTenant, variables.targetProfile);
+        setProfile(refreshed ?? null);
+      } catch {
+        // A stale local projection cannot be used as proof of deletion.
+        setProfile(null);
+      }
+      if (receipt.status === 'DELETED') setGeneration(null);
     },
   });
   const grant = useLogicalCommandMutation((input: GrantDraft & { revoke: boolean }, idempotencyKey) => setProfileGrant(
@@ -236,8 +258,27 @@ export function ProfilesWorkspace({
               void cache.invalidateQueries({ queryKey: ['operator-query', tenantId, 'profiles'] });
               lookup.mutate({ tenantId, profileId });
             }}>Refresh status</button>
+            {owner && ['DRAFT', 'READY', 'SUSPENDED', 'QUARANTINED', 'DELETING'].includes(profile.status) && (
+              <ConfirmAction
+                label={profile.status === 'DELETING' ? 'Resume profile deletion' : 'Delete profile'}
+                consequence={<>Delete this profile and its encrypted cloud snapshots. This cannot be undone. The browser must be closed.</>}
+                disabled={deleteAction.isPending || launch.isPending}
+                onConfirm={async () => {
+                  await deleteAction.mutateAsync({
+                    targetTenant: tenantId,
+                    targetProfile: profile.profileId,
+                    expectedVersion: profile.status === 'DELETING' ? profile.version - 1 : profile.version,
+                  });
+                }}
+              />
+            )}
           </div>
           <StatusMessage state={launch.error ?? launchIntent.error ?? (launch.isPending ? 'Opening your profile…' : launchIntent.isPending ? 'Preparing local browser access…' : null)} />
+          <StatusMessage state={deleteAction.error ?? (deleteAction.data
+            ? deleteAction.data.status === 'DELETED'
+              ? 'Profile and all cloud objects deleted.'
+              : 'Deletion is incomplete; use Resume profile deletion after refreshing.'
+            : null)} />
         </>}
         {profile && (
           <dl className="projection">
