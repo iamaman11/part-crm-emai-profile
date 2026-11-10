@@ -469,6 +469,22 @@ pub(crate) async fn dispatch_authorized(
                 Ok(value) => value,
                 Err(error) => return signing_failure(actor.correlation_id().as_str(), error),
             };
+            // The D1 reservation and DELETE freeze are serialized together.
+            // Never disclose an otherwise valid pre-signed R2 PUT before D1
+            // records its expiry for replay-safe exact-key retirement.
+            if profile_generation_successor_observer(env)?
+                .reserve_generation_upload_capability(
+                    actor,
+                    profile_id,
+                    Some(&base_generation_id),
+                    expected_profile_version,
+                    server_now(),
+                )
+                .await
+                .is_err()
+            {
+                return dependency(actor.correlation_id().as_str());
+            }
             machine_json(&BridgeGenerationUploadCapabilityResponse::upload_required(
                 capability.url(),
                 capability.headers(),
