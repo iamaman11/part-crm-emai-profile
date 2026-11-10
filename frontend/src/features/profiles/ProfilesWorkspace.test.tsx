@@ -28,7 +28,7 @@ const localOpen = vi.mocked(dispatchBrowserProfileOpen);
 describe('ProfilesWorkspace generation refresh (#802 F06)', () => {
   it('opens with the authenticated tenant and selected local profile without a Worker launch request', async () => {
     profileLookup.mockResolvedValue({
-      profileId: 'profile_test', status: 'READY', version: 7, linkedClientId: null,
+      profileId: 'profile_test', status: 'READY', version: 7, linkedClientId: null, canOperate: true,
       activeGenerationId: 'generation_current',
     } as Awaited<ReturnType<typeof getProfile>>);
     const cache = new QueryClient({ defaultOptions: { queries: { retry: false } } });
@@ -61,7 +61,7 @@ describe('ProfilesWorkspace generation refresh (#802 F06)', () => {
   });
 
   it('refreshes authoritative profile and generation after deactivate/reactivate without reload', async () => {
-    const profile = { profileId: 'profile_test', status: 'READY', version: 11, linkedClientId: null, activeGenerationId: 'generation_test' as string | null };
+    const profile = { profileId: 'profile_test', status: 'READY', version: 11, linkedClientId: null, canOperate: true, activeGenerationId: 'generation_test' as string | null };
     const generation = { generationId: 'generation_test', status: 'VERIFIED', version: 3, verificationReference: null };
     profileLookup.mockImplementation(async () => ({ ...profile }) as Awaited<ReturnType<typeof getProfile>>);
     generationLookup.mockImplementation(async () => ({ ...generation }) as Awaited<ReturnType<typeof getGeneration>>);
@@ -128,7 +128,7 @@ describe('ProfilesWorkspace generation refresh (#802 F06)', () => {
       finishOld = resolve;
     });
     profileLookup.mockImplementation(async (_tenant, id) => ({
-      profileId: id, status: 'READY', version: 11, linkedClientId: null,
+      profileId: id, status: 'READY', version: 11, linkedClientId: null, canOperate: true,
       activeGenerationId: id === 'profile_old' ? 'generation_old' : null,
     }) as Awaited<ReturnType<typeof getProfile>>);
     generationLookup.mockResolvedValue({
@@ -166,6 +166,29 @@ describe('ProfilesWorkspace generation refresh (#802 F06)', () => {
     expect(generationLookup).toHaveBeenCalledTimes(2); // Initial lookup + original readback, never new generation.
   });
 
+  it('never exposes native Open to an independently visible viewer-only profile', async () => {
+    profileLookup.mockResolvedValue({
+      profileId: 'profile_viewer', status: 'READY', version: 7,
+      activeGenerationId: 'generation_current', linkedClientId: null,
+      canOperate: false,
+    } as Awaited<ReturnType<typeof getProfile>>);
+    const cache = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    render(
+      <QueryClientProvider client={cache}>
+        <TenantProvider loadTenantContexts={async () => ({
+          tenants: [{ tenantId: 'tenant_test', displayName: 'Test tenant', actorId: 'actor_viewer', role: 'MEMBER' }],
+        })}>
+          <ProfilesWorkspace selectedProfileId="profile_viewer" onProfileSelected={() => undefined} />
+        </TenantProvider>
+      </QueryClientProvider>,
+    );
+    await screen.findByText('profile_viewer');
+    const open = screen.getByRole('button', { name: 'Open browser' }) as HTMLButtonElement;
+    expect(open.disabled).toBe(true);
+    fireEvent.click(open);
+    expect(localOpen).not.toHaveBeenCalled();
+  });
+
   it('does not show a delayed profile lookup from a previous selection', async () => {
     let resolveOld: (value: Awaited<ReturnType<typeof getProfile>>) => void = () => undefined;
     const oldRead = new Promise<Awaited<ReturnType<typeof getProfile>>>((resolve) => {
@@ -174,7 +197,7 @@ describe('ProfilesWorkspace generation refresh (#802 F06)', () => {
     profileLookup.mockImplementation(async (_tenant, id) => {
       if (id === 'profile_old') return oldRead;
       return {
-        profileId: id, status: 'READY', version: 8, linkedClientId: null,
+        profileId: id, status: 'READY', version: 8, linkedClientId: null, canOperate: true,
       } as Awaited<ReturnType<typeof getProfile>>;
     });
     const cache = new QueryClient({ defaultOptions: { queries: { retry: false } } });
@@ -193,7 +216,7 @@ describe('ProfilesWorkspace generation refresh (#802 F06)', () => {
     await screen.findByText('profile_new');
     await act(async () => {
       resolveOld({
-        profileId: 'profile_old', status: 'SUSPENDED', version: 18, linkedClientId: null,
+        profileId: 'profile_old', status: 'SUSPENDED', version: 18, linkedClientId: null, canOperate: true,
       } as Awaited<ReturnType<typeof getProfile>>);
       await oldRead;
     });
@@ -214,7 +237,7 @@ describe('ProfilesWorkspace generation refresh (#802 F06)', () => {
       resolveCoordinator = resolve;
     });
     profileLookup.mockImplementation(async (_tenant, id) => ({
-      profileId: id, status: 'READY', version: 9, linkedClientId: null,
+      profileId: id, status: 'READY', version: 9, linkedClientId: null, canOperate: true,
     }) as Awaited<ReturnType<typeof getProfile>>);
     generationLookup.mockReturnValue(oldGeneration);
     coordinatorLookup.mockReturnValue(oldCoordinator);
@@ -258,7 +281,7 @@ describe('ProfilesWorkspace generation refresh (#802 F06)', () => {
     let version = 7;
     profileLookup.mockImplementation(async () => ({
       profileId: 'profile_external_save', status: 'READY', version,
-      activeGenerationId: 'generation_current', linkedClientId: null,
+      activeGenerationId: 'generation_current', linkedClientId: null, canOperate: true,
     }) as Awaited<ReturnType<typeof getProfile>>);
     const cache = new QueryClient({ defaultOptions: { queries: { retry: false } } });
     const directoryKey = ['operator-query', 'tenant_test', 'profiles'];
@@ -284,7 +307,7 @@ describe('ProfilesWorkspace generation refresh (#802 F06)', () => {
   it('explains a quarantined generation and never submits its invalid activation', async () => {
     profileLookup.mockResolvedValue({
       profileId: 'profile_test', status: 'READY', version: 7, activeGenerationId: 'generation_current',
-      linkedClientId: null,
+      linkedClientId: null, canOperate: true,
     } as Awaited<ReturnType<typeof getProfile>>);
     generationLookup.mockResolvedValue({
       generationId: 'generation_old', status: 'QUARANTINED', version: 3,
