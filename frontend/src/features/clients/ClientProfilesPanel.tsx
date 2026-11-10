@@ -1,14 +1,10 @@
-import { ApiProblem } from '../../shared/api/openapi-runtime';
-import { useInfiniteQuery, useQueries, useQueryClient } from '@tanstack/react-query';
-import { useEffect, useState, type FormEvent } from 'react';
+import { useInfiniteQuery, useQueryClient } from '@tanstack/react-query';
+import { useState, type FormEvent } from 'react';
 import {
   assignProfile,
   detachProfile,
-  dispatchBrowserProfileOpen,
   getProfile,
-  launchProfile,
 } from '../profiles';
-import { newIdempotencyKey } from '../../shared/api/idempotency';
 import { ConfirmAction } from '../../shared/ui/ConfirmAction';
 import { StatusMessage } from '../../shared/ui/StatusMessage';
 import { useLogicalCommandMutation } from '../../shared/ui/useLogicalCommandMutation';
@@ -29,8 +25,6 @@ export function ClientProfilesPanel({
 }) {
   const queryClient = useQueryClient();
   const [detachReason, setDetachReason] = useState('');
-  const [launchError, setLaunchError] = useState<Error | null>(null);
-  const [launchingProfileId, setLaunchingProfileId] = useState<string | null>(null);
   const queryKey = ['client-registry', tenantId, clientId, 'profiles'] as const;
 
   const profiles = useInfiniteQuery({
@@ -38,16 +32,6 @@ export function ClientProfilesPanel({
     initialPageParam: null as string | null,
     queryFn: ({ pageParam, signal }) => listClientProfiles(tenantId, clientId, signal, pageParam),
     getNextPageParam: (lastPage) => lastPage.nextCursor ?? undefined,
-  });
-
-  // The existing Worker ACL prepares these authorized v2 intents when the
-  // already-visible client profile list loads, never on browser Open click.
-  // No URI is synthesized from a profile ID or client relationship.
-  const launchQuery = (profile: { profileId: string; version: number }) => ({
-    queryKey: ['operator-query', tenantId, 'profile-launch', profile.profileId, profile.version] as const,
-    queryFn: () => launchProfile(tenantId, profile.profileId, newIdempotencyKey()),
-    staleTime: 60_000,
-    retry: false,
   });
 
   const refreshRelationship = async () => {
@@ -95,48 +79,6 @@ export function ClientProfilesPanel({
   );
 
   const visibleProfiles = profiles.data?.pages.flatMap((page) => page.profiles) ?? [];
-  const launchable = visibleProfiles.filter((profile) => ['DRAFT', 'READY'].includes(profile.status));
-  const preparedLaunches = useQueries({
-    queries: launchable.map((profile) => ({
-      ...launchQuery(profile),
-      enabled: tenantId.length > 0,
-      refetchOnWindowFocus: false,
-      refetchOnReconnect: false,
-    })),
-  });
-  // First click never starts a Worker request: any permission check is
-  // already in progress from the separately authorized profile list.
-  // A pending click dispatches automatically once that one request completes.
-  useEffect(() => {
-    if (launchingProfileId === null) return;
-    const index = launchable.findIndex((profile) => profile.profileId === launchingProfileId);
-    if (index < 0) {
-      setLaunchingProfileId(null);
-      return;
-    }
-    const proof = preparedLaunches[index];
-    if (proof?.data) {
-      try {
-        dispatchBrowserProfileOpen(proof.data.launchUri);
-      } catch {
-        setLaunchError(new Error('Profile Bridge open was refused. Retry from this profile.'));
-      } finally {
-        setLaunchingProfileId(null);
-      }
-    } else if (proof?.isError) {
-      setLaunchError(proof.error instanceof ApiProblem
-        ? proof.error
-        : new Error('Profile launch failed. Retry from this profile.'));
-      setLaunchingProfileId(null);
-    }
-  }, [launchingProfileId, tenantId, clientId, profiles.data, preparedLaunches]);
-
-  const requestLaunch = (profile: { profileId: string; status: string }) => {
-    if (!['DRAFT', 'READY'].includes(profile.status) || launchingProfileId !== null) return;
-    setLaunchError(null);
-    setLaunchingProfileId(profile.profileId);
-  };
-
   return (
     <section className="panel full-span">
       <span className="eyebrow">Business relationship · independent profile ACL</span>
@@ -144,13 +86,12 @@ export function ClientProfilesPanel({
       <p>
         This list contains only profiles independently visible to the active actor. Client visibility
         and assignment never grant profile access. Launch authorization, device selection and generation
-        selection remain server-owned.
+        selection remain local ProfileBridge-owned once independently authorized.
       </p>
       <p>First time on this Windows computer? <a href={`/devices?tenant=${encodeURIComponent(tenantId)}`}>Install and connect Profile Bridge</a> once, then launch any profile you can operate.</p>
       <StatusMessage
         state={
           profiles.error
-          ?? launchError
           ?? assign.error
           ?? detach.error
           ?? (profiles.isPending ? 'Loading attached profiles…' : null)
@@ -183,15 +124,12 @@ export function ClientProfilesPanel({
                   </div>
                 </div>
                 <div className="row-actions">
-                  <button
-                    type="button"
-                    disabled={!['DRAFT', 'READY'].includes(profile.status) || launchingProfileId !== null}
-                    aria-label={`Launch profile ${profile.profileId}`}
-                    aria-busy={launchingProfileId === profile.profileId}
-                    onClick={() => requestLaunch(profile)}
+                  <a
+                    href={`/profiles/${encodeURIComponent(profile.profileId)}?tenant=${encodeURIComponent(tenantId)}`}
+                    aria-label={`View profile ${profile.profileId}`}
                   >
-                    {launchingProfileId === profile.profileId ? 'Opening…' : 'Launch'}
-                  </button>
+                    View profile
+                  </a>
                   <ConfirmAction
                     label="detach profile"
                     consequence="This closes only the active Client/Profile relationship. The Client, Profile and explicit ACL grants remain intact."
