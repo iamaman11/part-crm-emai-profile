@@ -188,6 +188,21 @@ def main() -> int:
     request = json.dumps({"config_json": config_json, "first_run": True})
     with patch.object(sys, "stdin", io.StringIO(request)):
         assert runtime.read_local_open_request() == (config, True)
+    # A blank DRAFT alone may ask the official SDK for a new identity;
+    # existing profiles must provide their persisted config.
+    with patch.object(sys, "stdin", io.StringIO(
+        json.dumps({"config_json": None, "first_run": True}) + "\n"
+    )):
+        assert runtime.read_local_open_request() == (None, True)
+    with patch.object(sys, "stdin", io.StringIO(
+        json.dumps({"config_json": None, "first_run": False}) + "\n"
+    )):
+        try:
+            runtime.read_local_open_request()
+        except runtime.RuntimeContractError:
+            pass
+        else:
+            raise AssertionError("READY profile without saved identity was accepted")
 
     with tempfile.TemporaryDirectory() as folder:
         for environment, outcome in (
@@ -210,10 +225,15 @@ def main() -> int:
         encoding="utf-8"
     )
     local_owner = local_source.split("pub(crate) fn open_with_before_launch(", 1)[1].split("\n}\n", 1)[0]
-    materialize_branch = local_source.split(
-        'if action == "--materialize-identity"', 1
-    )[1].split('if action == "--local-open"', 1)[0]
-    assert "require_empty_user_data(folder)?" in materialize_branch
+    cold_branch = local_source.split(
+        "let config = if folder.join(CONFIG).exists()", 1
+    )[1].split("let first_identity = config.is_none()", 1)[0]
+    assert "require_empty_user_data(folder)?" in cold_branch
+    assert "Some(read_profile_config(folder)?)" in cold_branch
+    assert '"--materialize-identity"' not in local_source
+    assert "persist_sdk_identity(folder, &line)?" in local_source
+    assert "write_all(IDENTITY_ACK)" in local_source
+    assert "camouhost-identity-persisted" in SOURCE.read_text(encoding="utf-8")
     local_open_after_dirty = local_owner.split("mark_local_unsynced(workspace.path())?;", 1)[1]
     assert 'run_python(' in local_open_after_dirty
     assert '"--local-open"' in local_open_after_dirty
