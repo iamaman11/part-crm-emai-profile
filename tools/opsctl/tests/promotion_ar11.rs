@@ -626,7 +626,8 @@ fn real_d1_verdict_survives_release_projection_and_terminal_promotion()
             ("0037_generation_streaming_container_limit.sql", false),
             ("0038_profile_generation_working_proof.sql", false),
             ("0039_profile_generation_retirement_guard.sql", false),
-            ("0040_native_browser_recovery_proof.sql", true),
+            ("0040_native_browser_recovery_proof.sql", false),
+            ("0041_profile_delete_exact_r2_receipts.sql", true),
         ] {
             let count = sources
                 .iter()
@@ -759,11 +760,13 @@ print(json.dumps({'evidence': adapter['build'](release_id, native, None, None), 
                         "0040_native_browser_recovery_proof.sql",
                         "0041_profile_delete_exact_r2_receipts.sql"
                     ])
-                } else {
+                } else if revision == "0039_profile_generation_retirement_guard.sql" {
                     json!([
                         "0040_native_browser_recovery_proof.sql",
                         "0041_profile_delete_exact_r2_receipts.sql"
                     ])
+                } else {
+                    json!(["0041_profile_delete_exact_r2_receipts.sql"])
                 };
                 assert_eq!(native["planned_migrations"], missing);
                 let behind_contract = revision == "0034_device_application_authority.sql";
