@@ -39,22 +39,32 @@ pub async fn delete_profile(
     };
     let now_ms = || Date::now().as_millis();
     let journal = profile_deletion(env)?;
-    if journal.status(actor.tenant_scope(), &profile_id).await?.is_none() {
+    if journal
+        .status(actor.tenant_scope(), &profile_id)
+        .await?
+        .is_none()
+    {
         return neutral_not_found(correlation);
     }
     if journal
-        .begin_or_replay(
-            actor, &profile_id, body.expected_profile_version, now_ms(),
-        )
+        .begin_or_replay(actor, &profile_id, body.expected_profile_version, now_ms())
         .await
         .is_err()
     {
-        return problem(correlation, 409, "profile_delete_conflict", "Profile Delete Conflict");
+        return problem(
+            correlation,
+            409,
+            "profile_delete_conflict",
+            "Profile Delete Conflict",
+        );
     }
     let r2 = generation_object_retention(env)?;
     let mut processed = 0;
     while processed < MAX_EXACT_R2_DELETES_PER_REQUEST {
-        let Some(object) = journal.next_pending(actor.tenant_scope(), &profile_id).await? else {
+        let Some(object) = journal
+            .next_pending(actor.tenant_scope(), &profile_id)
+            .await?
+        else {
             break;
         };
         if r2
@@ -65,7 +75,10 @@ pub async fn delete_profile(
             // D1 remains DELETING with a frozen inventory. A later exact
             // request can re-HEAD absent after a lost successful DELETE reply.
             return problem(
-                correlation, 503, "profile_delete_r2_unavailable", "Profile Delete Unavailable"
+                correlation,
+                503,
+                "profile_delete_r2_unavailable",
+                "Profile Delete Unavailable",
             );
         }
         if journal
@@ -74,13 +87,17 @@ pub async fn delete_profile(
             .is_err()
         {
             return problem(
-                correlation, 503, "profile_delete_receipt_unavailable",
-                "Profile Delete Unavailable"
+                correlation,
+                503,
+                "profile_delete_receipt_unavailable",
+                "Profile Delete Unavailable",
             );
         }
         processed += 1;
     }
-    let remaining = journal.pending_count(actor.tenant_scope(), &profile_id).await?;
+    let remaining = journal
+        .pending_count(actor.tenant_scope(), &profile_id)
+        .await?;
     let complete = if remaining == 0 {
         journal
             .complete(actor, &profile_id, body.expected_profile_version, now_ms())
@@ -98,5 +115,6 @@ pub async fn delete_profile(
         },
         pending_objects: remaining,
     };
-    Response::from_json(&receipt).map(|response| response.with_status(if complete { 200 } else { 202 }))
+    Response::from_json(&receipt)
+        .map(|response| response.with_status(if complete { 200 } else { 202 }))
 }
