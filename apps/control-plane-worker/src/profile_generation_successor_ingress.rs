@@ -1119,6 +1119,38 @@ async fn authorize_local_current_restore(
     ))
 }
 
+/// The signed, currently bound device may explicitly request RESTORE of
+/// the authoritative CURRENT. Reuse the same D1 admission owner as a normal
+/// user launch; never import a grant from an older generation or skip the
+/// exact CURRENT authorization/readback that follows.
+async fn admit_explicit_local_current_restore(
+    env: &Env,
+    actor: &ActorContext,
+    role: identity_access_domain::MembershipRole,
+    profile_id: &ProfileId,
+    device_id: &DeviceId,
+) -> Result<Option<Response>> {
+    if !authorize_local_current_restore(env, actor, role, profile_id).await? {
+        return Ok(Some(forbidden(actor.correlation_id().as_str())?));
+    }
+    if device_job_authorization(env)?
+        .admit_profile_device(
+            actor,
+            profile_id,
+            device_id,
+            UnixMillis::new(Date::now().as_millis()),
+        )
+        .await
+        .is_err()
+    {
+        return Ok(Some(dependency(actor.correlation_id().as_str())?));
+    }
+    // A revoked device binding or profile grant cannot be resurrected by
+    // ADMIT_PROFILE_DEVICE's guarded INSERT. The subsequent descriptor
+    // selection still checks evaluate_device_execution for CURRENT.
+    Ok(None)
+}
+
 async fn dispatch_download_capability(
     request: &mut Request,
     env: &Env,
@@ -1145,8 +1177,12 @@ async fn dispatch_download_capability(
         Some(value) => value,
         None => return invalid_request(actor.correlation_id().as_str()),
     };
-    if witness.is_none() && !authorize_local_current_restore(env, actor, role, profile_id).await? {
-        return forbidden(actor.correlation_id().as_str());
+    if witness.is_none() {
+        if let Some(denied) =
+            admit_explicit_local_current_restore(env, actor, role, profile_id, device_id).await?
+        {
+            return Ok(denied);
+        }
     }
 
     let selected = if historical {
@@ -1234,8 +1270,12 @@ async fn dispatch_opening_material(
         Some(value) => value,
         None => return invalid_request(actor.correlation_id().as_str()),
     };
-    if witness.is_none() && !authorize_local_current_restore(env, actor, role, profile_id).await? {
-        return forbidden(actor.correlation_id().as_str());
+    if witness.is_none() {
+        if let Some(denied) =
+            admit_explicit_local_current_restore(env, actor, role, profile_id, device_id).await?
+        {
+            return Ok(denied);
+        }
     }
     let prelude = match decode_bounded_lower_hex(
         body.metadata_prelude_hex(),
