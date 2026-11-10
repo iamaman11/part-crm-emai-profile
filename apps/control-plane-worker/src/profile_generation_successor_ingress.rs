@@ -545,6 +545,30 @@ pub(crate) async fn dispatch_authorized(
                     return successor_failure(actor.correlation_id().as_str(), error.class());
                 }
             };
+            // The exact writer whose signed old-generation grant authorized
+            // this successful CAS may need a new CURRENT-generation grant for
+            // an eventual clean-machine Restore. Reuse the existing guarded
+            // D1 owner, never transfer another device's or revoked grant.
+            //
+            // Commit already happened: a transient grant write failure must
+            // not turn an irreversible accepted CAS into a false failed Save.
+            // The explicit Restore path can safely retry the same admission.
+            if let Ok(admission) = device_job_authorization(env) {
+                if admission
+                    .admit_profile_device(
+                        actor,
+                        profile_id,
+                        device_id,
+                        UnixMillis::new(Date::now().as_millis()),
+                    )
+                    .await
+                    .is_err()
+                {
+                    worker::console_warn!("CURRENT_DEVICE_ADMISSION_PENDING");
+                }
+            } else {
+                worker::console_warn!("CURRENT_DEVICE_ADMISSION_PENDING");
+            }
             machine_json(&BridgeGenerationSuccessorCommitResponse {
                 outcome: match outcome {
                     ProfileGenerationSuccessorCommitOutcome::Activated => {
