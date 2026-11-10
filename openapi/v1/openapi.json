@@ -1361,6 +1361,9 @@
                 "type": "null"
               }
             ]
+          },
+          "canOperate": {
+            "type": "boolean"
           }
         }
       },
