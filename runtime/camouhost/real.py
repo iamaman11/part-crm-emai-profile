@@ -734,25 +734,25 @@ def packaged_windows_browser(lock: dict[str, Any]) -> Path:
         raise RuntimeContractError("Windows browser executable identity is unsupported")
 
     runtime_entrypoint = Path(__file__)
-    if runtime_entrypoint.is_symlink() or not runtime_entrypoint.is_file():
-        raise RuntimeContractError("Camouhost runtime entrypoint is not a regular file")
-    runtime_root = runtime_entrypoint.resolve(strict=True).parent.parent
+    if (
+        not runtime_entrypoint.is_absolute()
+        or runtime_entrypoint.is_symlink()
+        or not runtime_entrypoint.is_file()
+    ):
+        raise RuntimeContractError("Camouhost runtime entrypoint is not an absolute regular file")
+    if os.name == "nt" and re.match(r"^[A-Za-z]:\\", str(runtime_entrypoint)) is None:
+        raise RuntimeContractError(
+            "Windows Camouhost runtime entrypoint must use a conventional local drive path"
+        )
+
+    # Rust passes the original process path. Do not resolve/canonicalize it:
+    # Windows adds the extended \\?\ prefix, which breaks the packaged Gecko
+    # executable's native ffvpx loading path.
+    runtime_root = runtime_entrypoint.parent.parent
     executable = runtime_root.joinpath(*executable_path.split("/"))
     if executable.is_symlink() or not executable.is_file():
         raise RuntimeContractError("packaged Windows browser executable is unavailable")
-    resolved = executable.resolve(strict=True)
-    if os.name != "nt":
-        return resolved
-
-    # Keep canonical/extended paths for filesystem validation, but pass the
-    # official SDK a conventional local Win32 executable path. Gecko's ffvpx
-    # loader can crash content processes when launched via \\?\C:\...
-    sdk_path = str(resolved)
-    if sdk_path.startswith("\\\\?\\"):
-        sdk_path = sdk_path[4:]
-    if re.match(r"^[A-Za-z]:\\", sdk_path) is None or len(sdk_path) >= 260:
-        raise RuntimeContractError("packaged Windows browser requires a short local drive path")
-    return Path(sdk_path)
+    return executable
 
 
 def camoufox_browser_selector(lock: dict[str, Any]) -> dict[str, str | Path]:

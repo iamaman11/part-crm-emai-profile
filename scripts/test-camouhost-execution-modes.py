@@ -85,7 +85,7 @@ def verify_upstream_camoufox_config_is_final(runtime) -> None:
 
 
 def verify_windows_browser_sdk_executable_path(runtime) -> None:
-    """The SDK must receive a plain drive path for either Windows input form."""
+    """The SDK receives the original Win32 path; extended paths fail closed."""
     if os.name != "nt":
         return
 
@@ -105,17 +105,20 @@ def verify_windows_browser_sdk_executable_path(runtime) -> None:
         }
 
         with patch.object(runtime, "__file__", str(entrypoint)):
-            normal = runtime.packaged_windows_browser(lock)
-        with patch.object(runtime, "__file__", "\\\\?\\" + str(entrypoint)):
-            extended = runtime.packaged_windows_browser(lock)
+            selected = runtime.packaged_windows_browser(lock)
             selector = runtime.camoufox_browser_selector(lock)
-        # Windows canonicalization can change spelling/case of a path,
-        # so verify native file identity instead of textual equality.
-        assert os.path.samefile(normal, browser), (normal, browser)
-        assert os.path.samefile(extended, browser), (extended, browser)
-        assert os.path.samefile(selector["executable_path"], browser)
-        assert not str(normal).startswith("\\\\?\\")
-        assert not str(extended).startswith("\\\\?\\")
+        assert selected == browser
+        assert os.path.samefile(selected, browser)
+        assert selector == {"executable_path": browser}
+        assert not str(selected).startswith("\\\\?\\")
+
+        with patch.object(runtime, "__file__", "\\\\?\\" + str(entrypoint)):
+            try:
+                runtime.packaged_windows_browser(lock)
+            except runtime.RuntimeContractError as error:
+                assert "conventional local drive path" in str(error)
+            else:
+                raise AssertionError("extended Win32 entrypoint path must fail closed")
 
 
 def verify_embedded_python_path_configuration():
@@ -139,6 +142,17 @@ def main() -> int:
     verify_embedded_python_path_configuration()
     verify_upstream_camoufox_config_is_final(runtime)
     verify_windows_browser_sdk_executable_path(runtime)
+
+    # The Rust delivery owner must preserve the OS process path for the
+    # Python child while retaining canonicalize() only for identity checks.
+    delivery_runtime = (
+        SOURCE.parents[2] / "apps/profile-bridge/src/windows_delivery_runtime.rs"
+    ).read_text(encoding="utf-8")
+    assert "let process_executable = std::env::current_exe()" in delivery_runtime
+    assert "fs::canonicalize(&process_executable)" in delivery_runtime
+    assert "InstalledDeliveryLayout::from_executable(&process_executable)" in delivery_runtime
+    assert "InstalledDeliveryLayout::from_executable(&canonical_executable)" not in delivery_runtime
+
     invoked = []
 
     def native():
