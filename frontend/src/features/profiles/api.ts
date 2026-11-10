@@ -11,7 +11,6 @@ import {
   getProfileMetadata as getProfileMetadataOperation,
   grantProfileAccess as grantProfileAccessOperation,
   issueProfileCoordinatorCommand as issueProfileCoordinatorCommandOperation,
-  launchProfile as launchProfileOperation,
   listProfiles as listProfilesOperation,
   quarantineProfileGeneration as quarantineProfileGenerationOperation,
   registerProfileGeneration as registerProfileGenerationOperation,
@@ -30,7 +29,6 @@ import type {
   ProfileDetachmentRequest,
   ProfileGenerationResponse,
   ProfileGrantRequest,
-  ProfileLaunchIntentProjectionV2,
   ProfileListPageDto,
   ProfileView,
   RegisterProfileGenerationRequest,
@@ -47,7 +45,6 @@ export type ChangeGenerationActivationInput = { readonly expectedProfileVersion:
 export type QuarantineGenerationInput = { readonly expectedGenerationVersion: number };
 export type ProfileProjection = ProfileView;
 export type GenerationProjection = ProfileGenerationResponse;
-export type ProfileLaunch = ProfileLaunchIntentProjectionV2;
 export type CoordinatorResponse = CoordinatorResponseDto;
 export type CoordinatorCommandDto = GeneratedCoordinatorCommandDto;
 export type { CoordinatorCommandRequestDto, ProfileListPageDto };
@@ -68,14 +65,6 @@ export function listProfiles(
 
 export function getProfile(tenantId: string, profileId: string): Promise<ProfileProjection> {
   return getProfileMetadataOperation({ tenantId, profileId });
-}
-
-export function launchProfile(
-  tenantId: string,
-  profileId: string,
-  idempotencyKey: string,
-): Promise<ProfileLaunch> {
-  return launchProfileOperation({ tenantId, profileId, idempotencyKey });
 }
 
 export function createProfile(tenantId: string, profileId: string, idempotencyKey: string): Promise<MutationReceipt> {
@@ -231,12 +220,22 @@ export function commandCoordinator(
   return issueProfileCoordinatorCommandOperation({ tenantId, profileId, body: input });
 }
 
-export async function openBrowserProfile(tenantId: string, profileId: string, idempotencyKey: string): Promise<void> {
-  const launch = await launchProfile(tenantId, profileId, idempotencyKey);
-  invokeProfileBridgeLaunch(launch.launchUri);
-}
-
-export function dispatchBrowserProfileOpen(launchUri: string): void {
-  // A user click only dispatches the already authorized, prefetched local Bridge URI.
-  invokeProfileBridgeLaunch(launchUri);
+export function dispatchBrowserProfileOpen(
+  tenantId: string,
+  actorId: string,
+  profileId: string,
+  expectedVersion: number,
+  status: 'DRAFT' | 'READY',
+): void {
+  // The selected profile projection and authenticated tenant context were
+  // already loaded. Do not ask the Worker to re-serialize this predictable
+  // native URI or delay the local Open on an additional network request.
+  // Installed Bridge independently checks tenant/actor device binding, local
+  // profile version and native OS writer ownership.
+  if (!Number.isSafeInteger(expectedVersion) || expectedVersion <= 0) {
+    throw new Error('Invalid local profile version');
+  }
+  invokeProfileBridgeLaunch(
+    `profilebridge://open/v2/${tenantId}/${actorId}/${profileId}/${expectedVersion}/${status}`,
+  );
 }
