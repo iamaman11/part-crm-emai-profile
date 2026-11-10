@@ -475,7 +475,7 @@ pub(crate) async fn dispatch_authorized(
             if profile_generation_successor_observer(env)?
                 .reserve_generation_upload_capability(
                     actor,
-                    profile_id,
+                    &descriptor,
                     Some(&base_generation_id),
                     expected_profile_version.value(),
                     server_now(),
