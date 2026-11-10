@@ -61,6 +61,23 @@ LEFT JOIN profile_generation_upload_reservations AS reservation
  AND reservation.profile_id = command.profile_id
 WHERE command.tenant_id = ? AND command.profile_id = ?
 "#;
+// The existing Worker cron can resume the same frozen Delete command; no
+// second deletion owner or Cloudflare service is required.
+const DUE_FROZEN_DELETES: &str = r#"
+SELECT command.tenant_id, command.profile_id, command.command_actor_id,
+       command.expected_profile_version
+FROM profile_delete_commands AS command
+JOIN browser_profiles AS profile
+  ON profile.tenant_id=command.tenant_id AND profile.profile_id=command.profile_id
+LEFT JOIN profile_generation_upload_reservations AS reservation
+  ON reservation.tenant_id=command.tenant_id
+ AND reservation.profile_id=command.profile_id
+WHERE profile.status='DELETING'
+  AND MAX(command.requested_at_ms + 360000,
+          COALESCE(reservation.expires_at_ms,0)) <= ?
+ORDER BY command.requested_at_ms, command.tenant_id, command.profile_id
+LIMIT 8
+"#;
 const PROFILE_DELETE_STATUS: &str = r#"
 SELECT status FROM browser_profiles WHERE tenant_id=? AND profile_id=?
 "#;
@@ -84,6 +101,13 @@ struct Pending {
 #[derive(Deserialize)]
 struct SafeAt {
     safe_at_ms: i64,
+}
+#[derive(Clone, Debug, Deserialize)]
+pub struct DueProfileDelete {
+    pub tenant_id: String,
+    pub profile_id: String,
+    pub command_actor_id: String,
+    pub expected_profile_version: i64,
 }
 #[derive(Deserialize)]
 struct StoredStatus {
@@ -233,6 +257,15 @@ impl D1ProfileDeletion {
             .map_err(|_| Error::RustError("invalid pending delete count".to_owned()))
     }
 
+    /// Return only expired, already-admitted DELETE commands. No new
+    /// authorization or D1 destructive command is created by the scheduler.
+    pub async fn due_frozen_deletes(&self, now_ms: u64) -> Result<Vec<DueProfileDelete>> {
+        query!(&self.database, DUE_FROZEN_DELETES, signed(now_ms)?)?
+            .all()
+            .await?
+            .results::<DueProfileDelete>()
+    }
+
     pub async fn complete(
         &self,
         actor: &ActorContext,
@@ -240,7 +273,27 @@ impl D1ProfileDeletion {
         expected_version: u64,
         now_ms: u64,
     ) -> Result<bool> {
-        let scope = actor.tenant_scope();
+        self.complete_frozen(
+            actor.tenant_scope(),
+            profile_id,
+            actor.actor_id().as_str(),
+            expected_version,
+            now_ms,
+        )
+        .await
+    }
+
+    /// The signed owner was frozen by D1 in the original Delete command.
+    /// Scheduled replay is not a new user authorization; the D1 completion
+    /// trigger still verifies that this exact owner is active.
+    pub async fn complete_frozen(
+        &self,
+        scope: &TenantScope,
+        profile_id: &ProfileId,
+        command_actor_id: &str,
+        expected_version: u64,
+        now_ms: u64,
+    ) -> Result<bool> {
         if self.pending_count(scope, profile_id).await? != 0 {
             return Ok(false);
         }
@@ -252,7 +305,7 @@ impl D1ProfileDeletion {
             COMPLETE_DELETE,
             scope.tenant_id().as_str(),
             profile_id.as_str(),
-            actor.actor_id().as_str(),
+            command_actor_id,
             signed(expected_version.checked_add(1).ok_or_else(|| {
                 Error::RustError("profile delete version overflow".to_owned())
             })?)?,
