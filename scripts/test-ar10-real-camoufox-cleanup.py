@@ -11,6 +11,7 @@ independent observation-surface failure.
 from __future__ import annotations
 
 import argparse
+import asyncio
 import contextlib
 import ctypes
 import importlib.util
@@ -851,6 +852,8 @@ def prove_failure_observation_contract() -> None:
     proof = load_runtime(source_root / "scripts/test-ar10-real-camoufox.py")
     # Camoufox inherits the native environment: do not resurrect a filter.
     assert not hasattr(runtime, "browser_environment")
+    # Cold identity failures now happen inside the single user-native Open
+    # process, not in a separate CLI. Observe only the redacted fixed error.
     for error, category in (
         (runtime.RuntimeContractError("secret-config-path"), "contract"),
         (OSError("secret-config-path"), "io"),
@@ -858,14 +861,14 @@ def prove_failure_observation_contract() -> None:
     ):
         stdout = io.StringIO()
         stderr = io.StringIO()
-        with patch.object(sys, "argv", ["real.py", "--materialize-identity", "unused"]), \
-                patch.object(runtime, "materialize_candidate_identity", side_effect=error), \
+        with patch.object(runtime, "materialize_candidate_identity", side_effect=error), \
                 contextlib.redirect_stdout(stdout), contextlib.redirect_stderr(stderr):
-            result = runtime.main()
-        report = json.loads(stdout.getvalue())
-        assert result == 7 and report["failure"]["category"] == category
-        assert isinstance(report["failure"]["line"], int)
-        assert len(stdout.getvalue().splitlines()) == 1
+            result = asyncio.run(runtime.run_local_profile(Path("unused"), None, True))
+        assert result == 5
+        assert stdout.getvalue() == ""
+        assert stderr.getvalue().strip() == (
+            f"camouhost_failure phase=launch category={category}"
+        )
         assert "secret" not in stdout.getvalue() + stderr.getvalue()
     timeout = type("TimeoutError", (Exception,), {})("secret-url-key-profile-content")
     frames = [f"hello|{IPC_VERSION}", f"launch|{SESSION}", f"observe_browser_visible|{SESSION}",
