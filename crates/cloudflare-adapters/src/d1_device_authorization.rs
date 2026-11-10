@@ -255,6 +255,31 @@ mod tests {
     use super::LOAD_AUTHORIZATION;
 
     #[test]
+    fn exact_current_restore_admission_does_not_copy_or_resurrect_old_grants() {
+        for required in [
+            "generation.generation_id = profile.active_generation_id",
+            "generation.status = 'VERIFIED'",
+            "generation.verification_reference IS NOT NULL",
+            "binding.device_id = ?5",
+            "binding.status = 'ACTIVE'",
+            "binding.evidence_reference LIKE 'p256_spki_der:%'",
+            "member.status = 'ACTIVE'",
+            "grant.role = 'PROFILE_OPERATOR'",
+            "ON CONFLICT(tenant_id, device_id, profile_id, generation_id) DO NOTHING",
+        ] {
+            assert!(
+                super::ADMIT_PROFILE_DEVICE.contains(required),
+                "missing signed CURRENT admission fence: {required}"
+            );
+        }
+        // In particular, an earlier-generation authorization cannot become a
+        // grant for the new CURRENT without the real membership/device proof.
+        assert!(!super::ADMIT_PROFILE_DEVICE.contains(
+            "SELECT generation_id FROM device_authorizations"
+        ));
+    }
+
+    #[test]
     fn authorization_query_is_tenant_profile_grant_and_device_scoped() {
         for required in [
             "authorization.tenant_id = ?",
