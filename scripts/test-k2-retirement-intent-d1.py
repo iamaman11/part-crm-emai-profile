@@ -505,3 +505,6 @@ def main() -> None:
 if __name__ == "__main__":
     main()
     previous_browser_proven_lkg_can_be_retired()
+    # The new #849 lifecycle reuses D1-owned exact-object admission;
+    # test it alongside the existing K2 R2 retention guards.
+    runpy.run_path(str(ROOT / "scripts/test-profile-delete-d1.py"))["main"]()
