@@ -467,13 +467,18 @@ impl D1ProfileGenerationSuccessorCommitJournal {
         expected_profile_version: u64,
         signed_at: profile_platform_primitives::UnixMillis,
     ) -> Result<(), GenerationPortError> {
-        let version = i64::try_from(expected_profile_version)
-            .map_err(|_| historical_integrity_failure())?;
-        let issued = i64::try_from(signed_at.value())
-            .map_err(|_| historical_integrity_failure())?;
-        let expires = issued.checked_add(360_000)
+        let version =
+            i64::try_from(expected_profile_version).map_err(|_| historical_integrity_failure())?;
+        let issued =
+            i64::try_from(signed_at.value()).map_err(|_| historical_integrity_failure())?;
+        let expires = issued
+            .checked_add(360_000)
             .ok_or_else(historical_integrity_failure)?;
-        let source_mode = if source_generation.is_some() { "READY" } else { "DRAFT" };
+        let source_mode = if source_generation.is_some() {
+            "READY"
+        } else {
+            "DRAFT"
+        };
         let original = source_generation.map(GenerationId::as_str);
         let reserved = query!(
             &self.database,
