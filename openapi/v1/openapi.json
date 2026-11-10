@@ -591,6 +591,93 @@
             "$ref": "#/components/responses/NeutralNotFound"
           }
         }
+      },
+      "delete": {
+        "operationId": "deleteProfileMetadata",
+        "security": [
+          {
+            "cloudflareAccessJwt": []
+          }
+        ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/TenantPath"
+          },
+          {
+            "$ref": "#/components/parameters/ProfilePath"
+          },
+          {
+            "$ref": "#/components/parameters/CorrelationHeader"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ProfileDeleteRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Profile deleted after verified exact R2 absence",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProfileDeleteResponse"
+                }
+              }
+            }
+          },
+          "202": {
+            "description": "Deletion pending; retry exact same versioned request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProfileDeleteResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Profile deletion rejected or unavailable",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Profile deletion rejected or unavailable",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "404": {
+            "$ref": "#/components/responses/NeutralNotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          },
+          "503": {
+            "description": "Profile deletion rejected or unavailable",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
       }
     },
     "/api/v1/tenants/{tenantId}/profiles/{profileId}/grants/{actorId}": {
@@ -741,9 +828,6 @@
               }
             }
           },
-          "409": {
-            "$ref": "#/components/responses/Conflict"
-          },
           "400": {
             "description": "Invalid organization setup request",
             "content": {
@@ -756,6 +840,9 @@
           },
           "404": {
             "$ref": "#/components/responses/NeutralNotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
           },
           "500": {
             "$ref": "#/components/responses/InternalFailure"
@@ -1341,6 +1428,43 @@
           "correlation_id": {
             "type": "string",
             "minLength": 1
+          }
+        }
+      },
+      "ProfileDeleteRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "expectedProfileVersion"
+        ],
+        "properties": {
+          "expectedProfileVersion": {
+            "$ref": "#/components/schemas/AggregateVersion"
+          }
+        }
+      },
+      "ProfileDeleteResponse": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "profileId",
+          "status",
+          "pendingObjects"
+        ],
+        "properties": {
+          "profileId": {
+            "$ref": "#/components/schemas/OpaqueId"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "DELETING",
+              "DELETED"
+            ]
+          },
+          "pendingObjects": {
+            "type": "integer",
+            "minimum": 0
           }
         }
       }
