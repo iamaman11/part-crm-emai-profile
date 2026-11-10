@@ -223,14 +223,15 @@ BEGIN
     -- completed but the D1 generation commit was interrupted. A signed URL
     -- can otherwise leave an unreachable/orphan object after whole-profile
     -- Delete, especially for a new DRAFT with zero registered generations.
-    INSERT OR IGNORE INTO profile_delete_objects (
+    INSERT INTO profile_delete_objects (
         tenant_id, profile_id, generation_id, object_key,
         metadata_digest, container_digest
     )
     SELECT tenant_id, profile_id, generation_id, object_key,
            metadata_digest, container_digest
     FROM profile_generation_upload_reservations
-    WHERE tenant_id = NEW.tenant_id AND profile_id = NEW.profile_id;
+    WHERE tenant_id = NEW.tenant_id AND profile_id = NEW.profile_id
+    ON CONFLICT(tenant_id, profile_id, generation_id) DO NOTHING;
 
     UPDATE browser_profiles
     SET status = 'DELETING',
