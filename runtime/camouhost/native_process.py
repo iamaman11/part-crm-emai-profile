@@ -35,11 +35,28 @@ class NativeProfileSession:
             raise NativeLaunchError("official Playwright context unavailable")
         # Passive public SDK events only: no page, window, process or Firefox internals.
         self.context.on("close", self._on_context_close)
+        # Official Playwright observation only: a content-tab crash is not a
+        # browser Close and must never trigger ProfileBridge Sync or a page action.
+        self.context.on("page", self._observe_page_crash)
+        for page in self.context.pages:
+            self._observe_page_crash(page)
         self._browser = getattr(self.context, "browser", None)
         if self._browser is not None:
             self._browser.on("disconnected", self._on_browser_disconnected)
         if self.context.is_closed():
             self._closed.set()
+
+    def _observe_page_crash(self, page: Any) -> None:
+        # Do not inspect a page, its URL, identity, content or cookies.
+        page.on("crash", self._on_page_crash)
+
+    def _on_page_crash(self, *_args: Any) -> None:
+        # The only data crossing Python -> Rust is this exact constant.
+        # A best-effort diagnostic cannot disrupt the user browser.
+        try:
+            print("camouhost_page_event kind=crash", file=sys.stderr, flush=True)
+        except OSError:
+            pass
 
     def _on_context_close(self, *_args: Any) -> None:
         self._closed.set()

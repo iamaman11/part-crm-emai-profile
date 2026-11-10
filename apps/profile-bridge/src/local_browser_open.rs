@@ -4,6 +4,7 @@
 
 use crate::generation_initialization::{InitialProfileOpen, InitialProfileStatus};
 use crate::local_profile::{BridgeWorkspaceLock, LocalProfileError, MaterializationRoot};
+use crate::user_diagnostics::report::{self, Cause, Cloud, Outcome, Stage};
 use profile_platform_primitives::{DeviceId, GenerationId};
 use sha2::{Digest, Sha256};
 use std::fmt;
@@ -22,6 +23,7 @@ const MAX_CONFIG_BYTES: u64 = 1024 * 1024;
 const LOCAL_UNSYNCED: &str = ".local-unsynced";
 const LOCAL_UNSYNCED_CONTENT: &[u8] = b"local-unsynced-v2";
 const CAMOUHOST_LAUNCH_READY_EVENT: &str = "camouhost_stage phase=launch step=ready";
+const CAMOUHOST_PAGE_CRASH_EVENT: &str = "camouhost_page_event kind=crash";
 
 pub(crate) type ReadyConfirmation = Box<dyn FnOnce() -> bool + Send + 'static>;
 pub(crate) type BeforeLaunch =
@@ -149,6 +151,10 @@ where
         return None;
     }
     confirmation.take().map(|confirm| confirm())
+}
+
+fn is_official_page_crash_event(line: &str) -> bool {
+    line == CAMOUHOST_PAGE_CRASH_EVENT
 }
 
 fn run_python(
@@ -395,6 +401,17 @@ fn run_python_with_input(
             if let Some(confirmed) = observe_runtime_ready_line(&line, &mut health_confirmation) {
                 let _ = health_result_tx.send(confirmed);
             }
+            if is_official_page_crash_event(&line) {
+                // Existing bounded observation store; not a browser-close signal.
+                // No page URL, account, profile path, or exception text is stored.
+                report::record_current(
+                    Stage::BrowserPageCrash,
+                    Outcome::Observed,
+                    Cloud::Unknown,
+                    Cause::BrowserPageCrashed,
+                    0,
+                );
+            }
             // Runtime stderr can contain upstream/library detail. Forward only
             // the fixed, redacted milestones and typed failure categories.
             if cfg!(debug_assertions)
@@ -634,6 +651,14 @@ mod tests {
             None
         );
         assert_eq!(calls.get(), 1);
+    }
+
+    #[test]
+    fn only_exact_playwright_page_crash_is_a_diagnostic_event() {
+        assert!(super::is_official_page_crash_event(super::CAMOUHOST_PAGE_CRASH_EVENT));
+        assert!(!super::is_official_page_crash_event("camouhost_page_event kind=crash url=https://id.vk.ru"));
+        assert!(!super::is_official_page_crash_event("camouhost_page_event kind=close"));
+        assert!(!super::is_official_page_crash_event(super::CAMOUHOST_LAUNCH_READY_EVENT));
     }
 
     #[test]
