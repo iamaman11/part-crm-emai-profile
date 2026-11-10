@@ -345,7 +345,7 @@ pub fn openapi_fragment() -> Value {
                 "ProfileProjectionDto": {
                     "type": "object",
                     "additionalProperties": false,
-                    "required": ["profileId", "status", "version", "linkedClientId", "canOperate"],
+                    "required": ["profileId", "status", "version", "linkedClientId"],
                     "properties": {
                         "profileId": opaque_id_schema(),
                         "status": schema_ref("ProfileStatusDto"),
