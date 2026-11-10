@@ -851,6 +851,41 @@ sys.stderr.flush()
     }
 
     #[test]
+    fn locally_committed_current_reopens_with_stale_crm_projection_without_cloud() {
+        let directory = tempfile::tempdir().unwrap();
+        let root =
+            crate::local_profile::MaterializationRoot::open_or_create(directory.path()).unwrap();
+        let draft = intent();
+        let generation = local_generation(&draft).unwrap();
+        let first = open_or_create_workspace(&root, &draft, &generation).unwrap();
+        root.update_profile_current_sync_base(&first, &generation, 2)
+            .unwrap();
+        // The browser was closed and Sync finished, but the web tab still
+        // displays DRAFT v1. Do not require an extra cloud launch query.
+        let advanced = open_or_create_workspace(&root, &draft, &generation).unwrap();
+        assert_eq!(advanced.profile_version(), 2);
+        assert_eq!(advanced.base_generation_id(), Some(&generation));
+        assert_eq!(advanced.path(), first.path());
+
+        let mut cached_ready = draft.clone();
+        cached_ready.status = InitialProfileStatus::Ready;
+        cached_ready.expected_version = 1;
+        assert_eq!(
+            recheck_workspace_after_writer_admission(&root, &advanced, &cached_ready)
+                .unwrap()
+                .path(),
+            first.path()
+        );
+        // If the CRM projection is *newer* than local CURRENT, opening
+        // cannot silently select old bytes instead of requiring Restore.
+        cached_ready.expected_version = 3;
+        assert!(matches!(
+            open_or_create_workspace(&root, &cached_ready, &generation),
+            Err(LocalOpenError::StaleLocalWorkspace)
+        ));
+    }
+
+    #[test]
     fn readback_under_writer_lock_rejects_cloud_base_advanced_after_first_lookup() {
         let directory = tempfile::tempdir().unwrap();
         let root =
