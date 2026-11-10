@@ -191,8 +191,26 @@ def materialize(
     (root / ".profile-platform.lock").write_text(
         BRIDGE_LOCK, encoding="utf-8", newline="\n"
     )
+    # The retired CLI was only a redundant production Python process.
+    # This isolated test directly calls the same official fpgen function in
+    # the packaged runtime; only Rust/ProfileBridge persists its result in
+    # production, while this disposable fixture mirrors that exact write.
+    fixture = """
+import contextlib
+import importlib.util
+import json
+import sys
+from pathlib import Path
+camouhost, root = map(Path, sys.argv[1:])
+spec = importlib.util.spec_from_file_location("camouhost_fixture", camouhost)
+module = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(module)
+with contextlib.redirect_stdout(sys.stderr):
+    report = module.materialize_candidate_identity(root)
+print(json.dumps(report, separators=(",", ":"), sort_keys=True), flush=True)
+"""
     completed = subprocess.run(
-        [str(python), str(camouhost), "--materialize-identity", str(root)],
+        [str(python), "-c", fixture, str(camouhost), str(root)],
         env=runtime_env(runtime_lock, headless),
         text=True,
         capture_output=True,
