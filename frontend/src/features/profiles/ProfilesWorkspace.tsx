@@ -65,6 +65,7 @@ export function ProfilesWorkspace({
     // Native protocol dispatch must stay synchronous in the actual user
     // click. No ReactQuery mutation, background prefetch or Worker launch.
     if (!activeTenant || !profile || profile.profileId !== profileId
+      || profile.canOperate !== true
       || (profile.status !== 'DRAFT' && profile.status !== 'READY')
       || generationRefreshUnconfirmed) {
       setOpenError(new Error('The selected local profile is not ready to open.'));
@@ -257,7 +258,7 @@ export function ProfilesWorkspace({
         )}
         {profile && <>
           <div className="action-row">
-            <button type="button" disabled={!activeTenant || profile.profileId !== profileId || generationAction.isPending || generationRefreshUnconfirmed || !['DRAFT', 'READY'].includes(profile.status)} onClick={openSelectedProfile}>Open browser</button>
+            <button type="button" disabled={!activeTenant || profile.profileId !== profileId || profile.canOperate !== true || generationAction.isPending || generationRefreshUnconfirmed || !['DRAFT', 'READY'].includes(profile.status)} onClick={openSelectedProfile}>Open browser</button>
             <button type="button" disabled={lookup.isPending} onClick={() => {
               void cache.invalidateQueries({ queryKey: ['operator-query', tenantId, 'profiles'] });
               lookup.mutate({ tenantId, profileId });
