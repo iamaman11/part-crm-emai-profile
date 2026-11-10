@@ -274,9 +274,10 @@ mod tests {
         }
         // In particular, an earlier-generation authorization cannot become a
         // grant for the new CURRENT without the real membership/device proof.
-        assert!(!super::ADMIT_PROFILE_DEVICE.contains(
-            "SELECT generation_id FROM device_authorizations"
-        ));
+        assert!(
+            !super::ADMIT_PROFILE_DEVICE
+                .contains("SELECT generation_id FROM device_authorizations")
+        );
     }
 
     #[test]
