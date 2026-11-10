@@ -108,7 +108,9 @@ impl D1ProfileDeletion {
             actor.actor_id().as_str(),
             version,
             signed(now_ms)?
-        )?.run().await;
+        )?
+        .run()
+        .await;
         if let Err(original) = result {
             // Concurrent exact same DELETE is an idempotent continuation.
             if let Some(row) = self.load_command(actor.tenant_scope(), profile_id).await? {
@@ -129,7 +131,9 @@ impl D1ProfileDeletion {
             LOAD_DELETE_COMMAND,
             scope.tenant_id().as_str(),
             profile_id.as_str()
-        )?.first::<StoredCommand>(None).await
+        )?
+        .first::<StoredCommand>(None)
+        .await
     }
 
     pub async fn next_pending(
@@ -142,7 +146,9 @@ impl D1ProfileDeletion {
             NEXT_PENDING,
             scope.tenant_id().as_str(),
             profile_id.as_str()
-        )?.first::<StoredObject>(None).await?;
+        )?
+        .first::<StoredObject>(None)
+        .await?;
         row.map(|object| {
             Ok(GenerationObjectCatalogReference::new(
                 profile_id.clone(),
@@ -152,7 +158,8 @@ impl D1ProfileDeletion {
                 object.metadata_digest,
                 object.container_digest,
             ))
-        }).transpose()
+        })
+        .transpose()
     }
 
     pub async fn record_absent_exact(
@@ -171,22 +178,22 @@ impl D1ProfileDeletion {
             object.metadata_digest(),
             object.container_digest(),
             signed(now_ms)?
-        )?.run().await?;
+        )?
+        .run()
+        .await?;
         Ok(())
     }
 
-    pub async fn pending_count(
-        &self,
-        scope: &TenantScope,
-        profile_id: &ProfileId,
-    ) -> Result<u64> {
+    pub async fn pending_count(&self, scope: &TenantScope, profile_id: &ProfileId) -> Result<u64> {
         let count = query!(
             &self.database,
             PENDING_COUNT,
             scope.tenant_id().as_str(),
             profile_id.as_str()
-        )?.first::<Pending>(None).await?
-            .ok_or_else(|| Error::RustError("profile delete inventory unreadable".to_owned()))?;
+        )?
+        .first::<Pending>(None)
+        .await?
+        .ok_or_else(|| Error::RustError("profile delete inventory unreadable".to_owned()))?;
         u64::try_from(count.pending)
             .map_err(|_| Error::RustError("invalid pending delete count".to_owned()))
     }
@@ -215,7 +222,9 @@ impl D1ProfileDeletion {
                 Error::RustError("profile delete version overflow".to_owned())
             })?)?,
             signed(now_ms)?
-        )?.run().await?;
+        )?
+        .run()
+        .await?;
         Ok(self.status(scope, profile_id).await?.as_deref() == Some("DELETED"))
     }
 
@@ -229,7 +238,10 @@ impl D1ProfileDeletion {
             PROFILE_DELETE_STATUS,
             scope.tenant_id().as_str(),
             profile_id.as_str()
-        )?.first::<StoredStatus>(None).await?.map(|v| v.status))
+        )?
+        .first::<StoredStatus>(None)
+        .await?
+        .map(|v| v.status))
     }
 }
 
@@ -238,8 +250,7 @@ fn signed(value: u64) -> Result<i64> {
         .map_err(|_| Error::RustError("invalid profile deletion integer".to_owned()))
 }
 fn exact_existing(row: &StoredCommand, actor: &ActorContext, expected: i64) -> Result<()> {
-    if row.command_actor_id == actor.actor_id().as_str()
-        && row.expected_profile_version == expected
+    if row.command_actor_id == actor.actor_id().as_str() && row.expected_profile_version == expected
     {
         Ok(())
     } else {
