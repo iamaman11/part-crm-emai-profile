@@ -366,7 +366,9 @@ fn run_python_with_input(
         .map_err(|_| LocalOpenError::RuntimeUnavailable)?;
     let mut stdin = child.stdin.take();
     if let Some(payload) = stdin_payload {
-        let written = stdin.as_mut().is_some_and(|stream| stream.write_all(payload).is_ok());
+        let written = stdin
+            .as_mut()
+            .is_some_and(|stream| stream.write_all(payload).is_ok());
         if !written {
             let _ = child.kill();
             let _ = child.wait();
@@ -397,7 +399,10 @@ fn run_python_with_input(
         // One bounded SDK result, persisted by the Rust file owner before
         // Camoufox begins launching. Fail closed on a partial IPC exchange.
         let persisted = (|| -> Result<(), LocalOpenError> {
-            let output = child.stdout.take().ok_or(LocalOpenError::IdentityPreparation)?;
+            let output = child
+                .stdout
+                .take()
+                .ok_or(LocalOpenError::IdentityPreparation)?;
             let mut stream = BufReader::new(output).take(MAX_CONFIG_BYTES * 8);
             let mut line = Vec::new();
             stream
