@@ -54,11 +54,13 @@ ON CONFLICT(tenant_id,profile_id) DO NOTHING
 // At least 360s from freeze also drains URLs issued before migration 0041.
 const SAFE_EXACT_R2_DELETE_AT: &str = r#"
 SELECT MAX(command.requested_at_ms + 360000,
-           COALESCE(reservation.expires_at_ms, 0)) AS safe_at_ms
+           COALESCE((
+               SELECT MAX(reservation.expires_at_ms)
+               FROM profile_generation_upload_reservations AS reservation
+               WHERE reservation.tenant_id = command.tenant_id
+                 AND reservation.profile_id = command.profile_id
+           ), 0)) AS safe_at_ms
 FROM profile_delete_commands AS command
-LEFT JOIN profile_generation_upload_reservations AS reservation
-  ON reservation.tenant_id = command.tenant_id
- AND reservation.profile_id = command.profile_id
 WHERE command.tenant_id = ? AND command.profile_id = ?
 "#;
 // The existing Worker cron can resume the same frozen Delete command; no
@@ -74,12 +76,14 @@ JOIN memberships AS original_owner
  AND original_owner.actor_id=command.command_actor_id
  AND original_owner.status='ACTIVE'
  AND original_owner.role='TENANT_OWNER'
-LEFT JOIN profile_generation_upload_reservations AS reservation
-  ON reservation.tenant_id=command.tenant_id
- AND reservation.profile_id=command.profile_id
 WHERE profile.status='DELETING'
   AND MAX(command.requested_at_ms + 360000,
-          COALESCE(reservation.expires_at_ms,0)) <= ?
+          COALESCE((
+              SELECT MAX(reservation.expires_at_ms)
+              FROM profile_generation_upload_reservations AS reservation
+              WHERE reservation.tenant_id = command.tenant_id
+                AND reservation.profile_id = command.profile_id
+          ),0)) <= ?
 ORDER BY command.requested_at_ms, command.tenant_id, command.profile_id
 LIMIT 8
 "#;
