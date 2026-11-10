@@ -58,6 +58,25 @@ pub async fn delete_profile(
             "Profile Delete Conflict",
         );
     }
+    let pending_before_delete = journal
+        .pending_count(actor.tenant_scope(), &profile_id)
+        .await?;
+    if pending_before_delete > 0
+        && now_ms()
+            < journal
+                .safe_exact_r2_delete_at(actor.tenant_scope(), &profile_id)
+                .await?
+    {
+        // Signed PUTs issued before the D1 freeze may still be valid. Never
+        // delete an exact object that an old writer can recreate. The durable
+        // DELETING command is replayable after the expiry boundary.
+        return Response::from_json(&ProfileDeleteResponse {
+            profile_id: profile_id.as_str().to_owned(),
+            status: ProfileStatusDto::Deleting,
+            pending_objects: pending_before_delete,
+        })
+        .map(|response| response.with_status(202));
+    }
     let r2 = generation_object_retention(env)?;
     let mut processed = 0;
     while processed < MAX_EXACT_R2_DELETES_PER_REQUEST {
