@@ -236,6 +236,41 @@ BEGIN
         ));
 END;
 
+-- A late offline Save must not change the frozen CURRENT pointer or
+-- append new generation metadata while exact-key deletion is in flight.
+-- The same terminal D1 owner protects both states, including replay.
+CREATE TRIGGER profile_delete_current_pointer_immutable
+BEFORE UPDATE OF active_generation_id ON browser_profiles
+FOR EACH ROW WHEN OLD.status IN ('DELETING','DELETED')
+  AND NEW.active_generation_id IS NOT OLD.active_generation_id
+BEGIN
+    SELECT RAISE(ABORT, 'profile_delete_current_pointer_frozen');
+END;
+
+CREATE TRIGGER profile_delete_new_generation_forbidden
+BEFORE INSERT ON profile_generation_register_commands
+FOR EACH ROW WHEN EXISTS (
+    SELECT 1 FROM browser_profiles
+    WHERE tenant_id = NEW.tenant_id
+      AND profile_id = NEW.profile_id
+      AND status IN ('DELETING','DELETED')
+)
+BEGIN
+    SELECT RAISE(ABORT, 'profile_delete_new_generation_forbidden');
+END;
+
+CREATE TRIGGER profile_delete_successor_forbidden
+BEFORE INSERT ON profile_generation_successor_commands
+FOR EACH ROW WHEN EXISTS (
+    SELECT 1 FROM browser_profiles
+    WHERE tenant_id = NEW.tenant_id
+      AND profile_id = NEW.profile_id
+      AND status IN ('DELETING','DELETED')
+)
+BEGIN
+    SELECT RAISE(ABORT, 'profile_delete_successor_forbidden');
+END;
+
 CREATE TRIGGER profile_delete_objects_immutable_update
 BEFORE UPDATE ON profile_delete_objects
 BEGIN
