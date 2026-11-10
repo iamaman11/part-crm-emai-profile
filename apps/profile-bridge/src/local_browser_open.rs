@@ -904,8 +904,14 @@ sys.stderr.flush()
         let mut ready = draft.clone();
         ready.status = InitialProfileStatus::Ready;
         ready.expected_version = 2;
+        // After a concurrent Sync, a new Open must begin with a new exact
+        // local-marker observation. Reusing the pre-Sync marker is not valid
+        // even when the caller refreshed the cloud version separately.
+        let refreshed = root
+            .open_profile_current(&draft.tenant_id, &draft.profile_id)
+            .unwrap();
         assert_eq!(
-            recheck_workspace_after_writer_admission(&root, &observed, &ready)
+            recheck_workspace_after_writer_admission(&root, &refreshed, &ready)
                 .unwrap()
                 .profile_version(),
             2
