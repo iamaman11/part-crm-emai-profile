@@ -27,9 +27,15 @@ def expect_denied(op) -> None:
 def make_database() -> sqlite3.Connection:
     connection = BASE["open_database"]()
     BASE["apply_migrations"](connection)
-    migrations = sorted(SUCCESSOR.glob("[0-9][0-9][0-9][0-9]_*.sql"))
+    # The accepted Catalog 0001-0031 base precedes the v2 lineage.
+    # D1 0035 is a contract migration and must not be executed directly
+    # against 0031. K2 uses the same physical 0037..0040 test schema.
+    migrations = [
+        path for path in sorted(SUCCESSOR.glob("[0-9][0-9][0-9][0-9]_*.sql"))
+        if 37 <= int(path.name[:4]) <= 41
+    ]
     versions = [int(path.name[:4]) for path in migrations]
-    assert versions == list(range(32, 42)), versions
+    assert versions == list(range(37, 42)), versions
     for migration in migrations:
         connection.executescript(migration.read_text(encoding="utf-8"))
     BASE["seed_catalog"](connection)
