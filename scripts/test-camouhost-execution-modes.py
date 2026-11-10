@@ -85,7 +85,7 @@ def verify_upstream_camoufox_config_is_final(runtime) -> None:
 
 
 def verify_windows_browser_sdk_executable_path(runtime) -> None:
-    """The SDK must receive the same plain drive path from Win32 or \\?\ input."""
+    """The SDK must receive a plain drive path for either Windows input form."""
     if os.name != "nt":
         return
 
@@ -109,8 +109,12 @@ def verify_windows_browser_sdk_executable_path(runtime) -> None:
         with patch.object(runtime, "__file__", "\\\\?\\" + str(entrypoint)):
             extended = runtime.packaged_windows_browser(lock)
             selector = runtime.camoufox_browser_selector(lock)
-        assert normal == extended == browser
-        assert selector == {"executable_path": browser}
+        # Windows canonicalization can change spelling/case of a path,
+        # so verify native file identity instead of textual equality.
+        assert os.path.samefile(normal, browser), (normal, browser)
+        assert os.path.samefile(extended, browser), (extended, browser)
+        assert os.path.samefile(selector["executable_path"], browser)
+        assert not str(normal).startswith("\\\\?\\")
         assert not str(extended).startswith("\\\\?\\")
 
 
