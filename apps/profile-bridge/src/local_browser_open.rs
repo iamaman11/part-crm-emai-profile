@@ -655,10 +655,18 @@ mod tests {
 
     #[test]
     fn only_exact_playwright_page_crash_is_a_diagnostic_event() {
-        assert!(super::is_official_page_crash_event(super::CAMOUHOST_PAGE_CRASH_EVENT));
-        assert!(!super::is_official_page_crash_event("camouhost_page_event kind=crash url=https://id.vk.ru"));
-        assert!(!super::is_official_page_crash_event("camouhost_page_event kind=close"));
-        assert!(!super::is_official_page_crash_event(super::CAMOUHOST_LAUNCH_READY_EVENT));
+        assert!(super::is_official_page_crash_event(
+            super::CAMOUHOST_PAGE_CRASH_EVENT
+        ));
+        assert!(!super::is_official_page_crash_event(
+            "camouhost_page_event kind=crash url=https://id.vk.ru"
+        ));
+        assert!(!super::is_official_page_crash_event(
+            "camouhost_page_event kind=close"
+        ));
+        assert!(!super::is_official_page_crash_event(
+            super::CAMOUHOST_LAUNCH_READY_EVENT
+        ));
     }
 
     #[test]

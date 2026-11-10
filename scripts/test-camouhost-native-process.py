@@ -39,17 +39,23 @@ class FakeBrowser:
 
 
 class FakeContext:
-    """No page/window/process API: only public Playwright lifecycle events."""
+    """Only documented Playwright close, new-page and tab-crash observation."""
 
     def __init__(self, closed=False):
         self.closed = closed
         self.handlers = []
+        self.page_handlers = []
+        self.pages = []
         self.close_calls = 0
         self.browser = FakeBrowser()
 
     def on(self, event, handler):
-        assert event == "close"
-        self.handlers.append(handler)
+        if event == "close":
+            self.handlers.append(handler)
+        elif event == "page":
+            self.page_handlers.append(handler)
+        else:
+            raise AssertionError("unsupported public Playwright event")
 
     def is_closed(self):
         return self.closed
@@ -145,6 +151,7 @@ async def verify() -> int:
             }
             assert session.context is contexts[-1]
             assert len(contexts[-1].handlers) == 1
+            assert len(contexts[-1].page_handlers) == 1
             assert len(contexts[-1].browser.handlers) == 1
 
             waiting = asyncio.create_task(session.wait_for_browser_close())
