@@ -33,6 +33,11 @@ use use_cases::profiles::{
 };
 use worker::{Env, Request, Response, Result};
 
+/// Reuse the already deployed scheduled Worker, not a parallel GC service.
+pub(crate) async fn resume_due_profile_deletes(env: &Env) -> Result<()> {
+    profile_deletion::resume_due_frozen_deletes(env).await
+}
+
 pub async fn dispatch(route: RouteClass, request: &mut Request, env: &Env) -> Result<Response> {
     let path = request.path();
     let segments: Vec<&str> = path
