@@ -69,6 +69,11 @@ SELECT command.tenant_id, command.profile_id, command.command_actor_id,
 FROM profile_delete_commands AS command
 JOIN browser_profiles AS profile
   ON profile.tenant_id=command.tenant_id AND profile.profile_id=command.profile_id
+JOIN memberships AS original_owner
+  ON original_owner.tenant_id=command.tenant_id
+ AND original_owner.actor_id=command.command_actor_id
+ AND original_owner.status='ACTIVE'
+ AND original_owner.role='TENANT_OWNER'
 LEFT JOIN profile_generation_upload_reservations AS reservation
   ON reservation.tenant_id=command.tenant_id
  AND reservation.profile_id=command.profile_id
