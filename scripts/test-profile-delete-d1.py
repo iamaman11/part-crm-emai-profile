@@ -70,13 +70,29 @@ def test_draft_direct_exact_deletion() -> None:
         profile = BASE["PROFILE_A"]
         expect_denied(lambda: begin(connection, profile, 1, 40, BASE["MEMBER_A"]))
         expect_denied(lambda: begin(connection, profile, 3, 40))
+        # A signed upload may exist in R2 before its D1 generation commit.
+        # Freeze that exact key even though profile_generations is empty.
+        generation = "generation_unsigned_draft_01"
+        key = f"profiles/v1/{generation}.enc"
+        metadata_digest, container_digest = "a" * 64, "b" * 64
+        connection.execute(
+            "INSERT INTO profile_generation_upload_reservations "
+            "(tenant_id,profile_id,generation_id,object_key,metadata_digest,"
+            "container_digest,source_mode,source_generation_id,"
+            "expected_profile_version,issued_at_ms,expires_at_ms) "
+            "VALUES (?,?,?,?,?,?,'DRAFT',NULL,1,35,360035)",
+            (BASE["TENANT_A"],profile,generation,key,metadata_digest,container_digest),
+        )
         begin(connection, profile, 1, 40)
         expect_denied(lambda: connection.execute(
             "INSERT INTO profile_generation_upload_reservations "
-            "(tenant_id,profile_id,source_mode,source_generation_id,"
+            "(tenant_id,profile_id,generation_id,object_key,metadata_digest,"
+            "container_digest,source_mode,source_generation_id,"
             "expected_profile_version,issued_at_ms,expires_at_ms) "
-            "VALUES (?,?,'DRAFT',NULL,1,41,360041)",
-            (BASE["TENANT_A"], profile),
+            "VALUES (?,?,?,?,?,?,'DRAFT',NULL,1,41,360041)",
+            (BASE["TENANT_A"],profile,"generation_late_draft_01",
+             "profiles/v1/generation_late_draft_01.enc",
+             metadata_digest,container_digest),
         ))
         assert tuple(connection.execute(
             "SELECT status,version FROM browser_profiles WHERE tenant_id=? AND profile_id=?",
@@ -85,8 +101,20 @@ def test_draft_direct_exact_deletion() -> None:
         assert connection.execute(
             "SELECT COUNT(*) FROM profile_delete_objects WHERE tenant_id=? AND profile_id=?",
             (BASE["TENANT_A"], profile),
-        ).fetchone()[0] == 0
-        finish(connection, profile, 2, 50)
+        ).fetchone()[0] == 1
+        assert connection.execute(
+            "SELECT object_key FROM profile_delete_objects WHERE tenant_id=? AND profile_id=?",
+            (BASE["TENANT_A"], profile),
+        ).fetchone()[0] == key
+        expect_denied(lambda: finish(connection, profile, 2, 50))
+        connection.execute(
+            "INSERT INTO profile_delete_object_receipts "
+            "(tenant_id,profile_id,generation_id,object_key,"
+            "metadata_digest,container_digest,deleted_at_ms) "
+            "VALUES (?,?,?,?,?,?,360050)",
+            (BASE["TENANT_A"],profile,generation,key,metadata_digest,container_digest),
+        )
+        finish(connection, profile, 2, 360060)
         assert connection.execute(
             "SELECT status FROM browser_profiles WHERE tenant_id=? AND profile_id=?",
             (BASE["TENANT_A"], profile),
@@ -137,12 +165,23 @@ def test_ready_profile_requires_all_exact_object_receipts() -> None:
             "expected_profile_version,executed_at_ms) VALUES (?,?,?,?,?,1,50)",
             (tenant,"command_activate_delete_01",owner,profile,generation),
         )
+        unsigned_generation = "generation_ready_uncommitted_01"
+        unsigned_key = f"profiles/v1/{unsigned_generation}.enc"
         connection.execute(
             "INSERT INTO profile_generation_upload_reservations "
-            "(tenant_id,profile_id,source_mode,source_generation_id,"
+            "(tenant_id,profile_id,generation_id,object_key,metadata_digest,"
+            "container_digest,source_mode,source_generation_id,"
             "expected_profile_version,issued_at_ms,expires_at_ms) "
-            "VALUES (?,?,'READY',?,2,55,360055)",
-            (tenant, profile, generation),
+            "VALUES (?,?,?,?,?,?,'READY',?,2,55,360055)",
+            (tenant, profile, generation, key, metadata_digest, container_digest, generation),
+        )
+        connection.execute(
+            "INSERT INTO profile_generation_upload_reservations "
+            "(tenant_id,profile_id,generation_id,object_key,metadata_digest,"
+            "container_digest,source_mode,source_generation_id,"
+            "expected_profile_version,issued_at_ms,expires_at_ms) "
+            "VALUES (?,?,?,?,?,?,'READY',?,2,58,360058)",
+            (tenant,profile,unsigned_generation,unsigned_key,"c"*64,"d"*64,generation),
         )
         expect_denied(lambda: begin(connection, profile, 1, 60))
         begin(connection, profile, 2, 60)
@@ -169,12 +208,13 @@ def test_ready_profile_requires_all_exact_object_receipts() -> None:
         ))
         expect_denied(lambda: connection.execute(
             "INSERT INTO profile_generation_upload_reservations "
-            "(tenant_id,profile_id,source_mode,source_generation_id,"
+            "(tenant_id,profile_id,generation_id,object_key,metadata_digest,"
+            "container_digest,source_mode,source_generation_id,"
             "expected_profile_version,issued_at_ms,expires_at_ms) "
-            "VALUES (?,?,'READY',?,2,70,360070) "
-            "ON CONFLICT(tenant_id,profile_id) DO UPDATE SET "
+            "VALUES (?,?,?,?,?,?,'READY',?,2,70,360070) "
+            "ON CONFLICT(tenant_id,profile_id,generation_id) DO UPDATE SET "
             "issued_at_ms=excluded.issued_at_ms,expires_at_ms=excluded.expires_at_ms",
-            (tenant, profile, generation),
+            (tenant,profile,unsigned_generation,unsigned_key,"c"*64,"d"*64,generation),
         ))
         # The frozen R2 inventory must remain stable even if a stale/offline
         # writer tries to register another generation or move CURRENT.
@@ -199,10 +239,15 @@ def test_ready_profile_requires_all_exact_object_receipts() -> None:
         ).fetchone()[0] == 1
         row = connection.execute(
             "SELECT object_key,metadata_digest,container_digest "
-            "FROM profile_delete_objects WHERE tenant_id=? AND profile_id=?",
-            (tenant,profile),
+            "FROM profile_delete_objects WHERE tenant_id=? AND profile_id=? AND generation_id=?",
+            (tenant,profile,generation),
         ).fetchone()
         assert tuple(row) == (key,metadata_digest,container_digest)
+        assert connection.execute(
+            "SELECT object_key FROM profile_delete_objects "
+            "WHERE tenant_id=? AND profile_id=? AND generation_id=?",
+            (tenant,profile,unsigned_generation),
+        ).fetchone()[0] == unsigned_key
         expect_denied(lambda: finish(connection, profile, 3, 65))
         # DELETE must not receipt a key while an old signed PUT can recreate it.
         expect_denied(lambda: connection.execute(
@@ -231,7 +276,15 @@ def test_ready_profile_requires_all_exact_object_receipts() -> None:
             "WHERE tenant_id=? AND profile_id=?",
             (tenant,profile),
         ))
-        finish(connection,profile,3,360080)
+        expect_denied(lambda: finish(connection,profile,3,360080))
+        connection.execute(
+            "INSERT INTO profile_delete_object_receipts "
+            "(tenant_id,profile_id,generation_id,object_key,"
+            "metadata_digest,container_digest,deleted_at_ms) "
+            "VALUES (?,?,?,?,?,?,360080)",
+            (tenant,profile,unsigned_generation,unsigned_key,"c"*64,"d"*64),
+        )
+        finish(connection,profile,3,360090)
         assert connection.execute(
             "SELECT status FROM browser_profiles WHERE tenant_id=? AND profile_id=?",
             (tenant,profile),
