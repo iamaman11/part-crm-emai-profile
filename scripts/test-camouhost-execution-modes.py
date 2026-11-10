@@ -84,6 +84,36 @@ def verify_upstream_camoufox_config_is_final(runtime) -> None:
         assert isolated["env"]["CAMOU_CONFIG_1"] == "sdk-composed-identity"
 
 
+def verify_windows_browser_sdk_executable_path(runtime) -> None:
+    """The SDK must receive the same plain drive path from Win32 or \\?\ input."""
+    if os.name != "nt":
+        return
+
+    with tempfile.TemporaryDirectory() as directory:
+        root = Path(directory) / "runtime"
+        entrypoint = root / "camouhost" / "real.py"
+        browser = root / "browser" / "camoufox.exe"
+        entrypoint.parent.mkdir(parents=True)
+        browser.parent.mkdir(parents=True)
+        entrypoint.write_text("# fixture\n", encoding="utf-8")
+        browser.write_bytes(b"disposable Windows executable fixture")
+        lock = {
+            "windows_distribution": {
+                "browser": {"executable_path": "browser/camoufox.exe"}
+            },
+            "browser": {"version": "158.0.0-beta.1"},
+        }
+
+        with patch.object(runtime, "__file__", str(entrypoint)):
+            normal = runtime.packaged_windows_browser(lock)
+        with patch.object(runtime, "__file__", "\\\\?\\" + str(entrypoint)):
+            extended = runtime.packaged_windows_browser(lock)
+            selector = runtime.camoufox_browser_selector(lock)
+        assert normal == extended == browser
+        assert selector == {"executable_path": browser}
+        assert not str(extended).startswith("\\\\?\\")
+
+
 def verify_embedded_python_path_configuration():
     builder_path = SOURCE.parents[2] / "scripts" / "camouhost-runtime-build-windows.py"
     spec = importlib.util.spec_from_file_location("camouhost_runtime_builder_test", builder_path)
@@ -104,6 +134,7 @@ def main() -> int:
     runtime = load_runtime()
     verify_embedded_python_path_configuration()
     verify_upstream_camoufox_config_is_final(runtime)
+    verify_windows_browser_sdk_executable_path(runtime)
     invoked = []
 
     def native():
