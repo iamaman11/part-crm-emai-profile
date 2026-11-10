@@ -830,7 +830,8 @@ def prove_failure_observation_contract() -> None:
     prove_official_context_close_event_contract(runtime)
     prove_managed_bootstrap_tab_contract(runtime)
     proof = load_runtime(source_root / "scripts/test-ar10-real-camoufox.py")
-    proof.prove_managed_environment_projection(runtime)
+    # Camoufox inherits the native environment: do not resurrect a filter.
+    assert not hasattr(runtime, "browser_environment")
     for error, category in (
         (runtime.RuntimeContractError("secret-config-path"), "contract"),
         (OSError("secret-config-path"), "io"),
