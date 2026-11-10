@@ -20,4 +20,4 @@ User closes the Camoufox window. Playwright reports a supported close event; Rus
 
 ## Physical correctness
 
-Open on installed Windows 559 logged `BROWSER_UNAVAILABLE` after **733339 ms**, while the user reports VK ID login-click tab crashes across profiles. No amount of green CI changes this NO-GO. Source changes need exact official-SDK parity tests and fresh installed-Windows results in #849.
+One installed Windows 559 `OPEN_REQUESTED` command ended after **733339 ms** with generic diagnostic cause `BROWSER_UNAVAILABLE`. In `main.rs` this label represents **any LaunchFailed** (including Restore) and the measured duration is the complete command lifetime, **not the time to first browser window**. The user separately reports `BRIDGE_LOCAL_CURRENT_RESTORE_FAILED` after authorized Open and VK ID login-click tab crashes across profiles. Exact typed error-per-attempt and true first-window timing remain unmeasured. CI cannot close these P0 defects. See #849.
