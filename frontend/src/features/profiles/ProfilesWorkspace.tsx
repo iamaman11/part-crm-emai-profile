@@ -258,16 +258,16 @@ export function ProfilesWorkspace({
               void cache.invalidateQueries({ queryKey: ['operator-query', tenantId, 'profiles'] });
               lookup.mutate({ tenantId, profileId });
             }}>Refresh status</button>
-            {owner && ['DRAFT', 'READY', 'SUSPENDED', 'QUARANTINED', 'DELETING'].includes(profile.status) && (
+            {owner && ['DRAFT', 'READY', 'SUSPENDED', 'QUARANTINED'].includes(profile.status) && (
               <ConfirmAction
-                label={profile.status === 'DELETING' ? 'Resume profile deletion' : 'Delete profile'}
+                label="Delete profile"
                 consequence={<>Delete this profile and its encrypted cloud snapshots. This cannot be undone. The browser must be closed.</>}
                 disabled={deleteAction.isPending || launch.isPending}
                 onConfirm={async () => {
                   await deleteAction.mutateAsync({
                     targetTenant: tenantId,
                     targetProfile: profile.profileId,
-                    expectedVersion: profile.status === 'DELETING' ? profile.version - 1 : profile.version,
+                    expectedVersion: profile.version,
                   });
                 }}
               />
@@ -279,6 +279,9 @@ export function ProfilesWorkspace({
               ? 'Profile and all cloud objects deleted.'
               : 'Deletion is pending; the server resumes automatically after signed upload permissions expire. Refresh for status.'
             : null)} />
+          {profile.status === 'DELETING' && (
+            <p>Deletion is in progress. The server continues automatically; use Refresh status to check the result.</p>
+          )}
         </>}
         {profile && (
           <dl className="projection">
