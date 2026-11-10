@@ -28,6 +28,60 @@ def load_runtime():
     return module
 
 
+
+def verify_upstream_camoufox_config_is_final(runtime) -> None:
+    """The official SDK result is authoritative: no second fingerprint serializer."""
+    from types import ModuleType
+
+    fake_package = ModuleType("camoufox")
+    fake_utils = ModuleType("camoufox.utils")
+    sdk_calls = []
+
+    def official_launch_options(**kwargs):
+        sdk_calls.append(kwargs)
+        return {
+            "env": {"CAMOU_CONFIG_1": "sdk-composed-identity", "SAFE": "untouched"},
+            "headless": False,
+            "user_data_dir": kwargs["user_data_dir"],
+            "firefox_user_prefs": {"official-webgl-setting": True},
+        }
+
+    fake_utils.launch_options = official_launch_options
+    fake_package.utils = fake_utils
+    identity = {"canvas:seed": 12345, "webGl:vendor": "test-gpu"}
+
+    with (
+        patch.dict(sys.modules, {"camoufox": fake_package, "camoufox.utils": fake_utils}),
+        patch.object(runtime, "camoufox_browser_selector", return_value={"executable_path": "/camoufox.exe"}),
+        patch.object(runtime, "locked_firefox_major", return_value=158),
+        patch.object(runtime, "browser_environment", return_value={"SYSTEMROOT": r"C:\\Windows"}),
+        patch.object(runtime, "accessibility_preferences", return_value={}),
+        patch.object(runtime, "resolve_headless_mode", return_value=False),
+        patch.object(runtime, "resolve_proxy", return_value=None),
+    ):
+        base = runtime.camoufox_launch_options({}, Path("/disposable"), identity)
+        assert base["env"] == {
+            "CAMOU_CONFIG_1": "sdk-composed-identity",
+            "SAFE": "untouched",
+        }
+        assert base["firefox_user_prefs"] == {"official-webgl-setting": True}
+        assert "args" not in base
+        assert sdk_calls[0]["config"] == identity
+        assert sdk_calls[0]["config"] is not identity
+        assert sdk_calls[0]["user_data_dir"] == str(Path("/disposable/user_data"))
+        assert identity == {"canvas:seed": 12345, "webGl:vendor": "test-gpu"}
+
+        new = runtime.camoufox_launch_options({}, Path("/disposable"), identity, first_run=True)
+        assert new["args"] == ["-new-tab", "about:blank"]
+        assert new["env"]["CAMOU_CONFIG_1"] == "sdk-composed-identity"
+        assert "get_env_vars" not in vars(fake_utils)
+
+        isolated = runtime.camoufox_launch_options({}, Path("/disposable"), identity, isolated=True)
+        assert isolated["offline"] is True
+        assert isolated["args"] == ["-new-tab", runtime.MANAGED_BOOTSTRAP_TAB_URL]
+        assert isolated["env"]["CAMOU_CONFIG_1"] == "sdk-composed-identity"
+
+
 def verify_embedded_python_path_configuration():
     builder_path = SOURCE.parents[2] / "scripts" / "camouhost-runtime-build-windows.py"
     spec = importlib.util.spec_from_file_location("camouhost_runtime_builder_test", builder_path)
@@ -47,6 +101,7 @@ def verify_embedded_python_path_configuration():
 def main() -> int:
     runtime = load_runtime()
     verify_embedded_python_path_configuration()
+    verify_upstream_camoufox_config_is_final(runtime)
     invoked = []
 
     def native():
