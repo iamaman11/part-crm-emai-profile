@@ -60,20 +60,25 @@ export function ProfilesWorkspace({
   const selected = useRef({ tenantId, profileId, generationId });
   selected.current = { tenantId, profileId, generationId };
 
-  const launch = useMutation({
-    mutationFn: async () => {
-      // The profile was already selected through the authorized tenant API.
-      // Repeated local Open performs no extra Worker request.
-      if (!activeTenant || !profile || profile.profileId !== profileId
-        || (profile.status !== 'DRAFT' && profile.status !== 'READY')
-        || generationRefreshUnconfirmed) {
-        throw new Error('The selected local profile is not ready to open.');
-      }
+  const [openError, setOpenError] = useState<Error | null>(null);
+  const openSelectedProfile = () => {
+    // Native protocol dispatch must stay synchronous in the actual user
+    // click. No ReactQuery mutation, background prefetch or Worker launch.
+    if (!activeTenant || !profile || profile.profileId !== profileId
+      || (profile.status !== 'DRAFT' && profile.status !== 'READY')
+      || generationRefreshUnconfirmed) {
+      setOpenError(new Error('The selected local profile is not ready to open.'));
+      return;
+    }
+    try {
+      setOpenError(null);
       dispatchBrowserProfileOpen(
         tenantId, activeTenant.actorId, profile.profileId, profile.version, profile.status,
       );
-    },
-  });
+    } catch {
+      setOpenError(new Error('Native Profile Bridge did not accept this profile Open.'));
+    }
+  };
   const lookup = useMutation({
     mutationFn: (target: ProfileSelection) => getProfile(target.tenantId, target.profileId),
     onSuccess: (data, target) => {
@@ -252,7 +257,7 @@ export function ProfilesWorkspace({
         )}
         {profile && <>
           <div className="action-row">
-            <button type="button" disabled={launch.isPending || !activeTenant || profile.profileId !== profileId || generationAction.isPending || generationRefreshUnconfirmed || !['DRAFT', 'READY'].includes(profile.status)} onClick={() => launch.mutate()}>{launch.isPending ? 'Opening…' : 'Open browser'}</button>
+            <button type="button" disabled={!activeTenant || profile.profileId !== profileId || generationAction.isPending || generationRefreshUnconfirmed || !['DRAFT', 'READY'].includes(profile.status)} onClick={openSelectedProfile}>Open browser</button>
             <button type="button" disabled={lookup.isPending} onClick={() => {
               void cache.invalidateQueries({ queryKey: ['operator-query', tenantId, 'profiles'] });
               lookup.mutate({ tenantId, profileId });
@@ -261,7 +266,7 @@ export function ProfilesWorkspace({
               <ConfirmAction
                 label="Delete profile"
                 consequence={<>Delete this profile and its encrypted cloud snapshots. This cannot be undone. The browser must be closed.</>}
-                disabled={deleteAction.isPending || launch.isPending}
+                disabled={deleteAction.isPending}
                 onConfirm={async () => {
                   await deleteAction.mutateAsync({
                     targetTenant: tenantId,
@@ -272,7 +277,7 @@ export function ProfilesWorkspace({
               />
             )}
           </div>
-          <StatusMessage state={launch.error ?? (launch.isPending ? 'Opening your local profile…' : null)} />
+          <StatusMessage state={openError} />
           <StatusMessage state={deleteAction.error ?? (deleteAction.data
             ? deleteAction.data.status === 'DELETED'
               ? 'Profile and all cloud objects deleted.'
