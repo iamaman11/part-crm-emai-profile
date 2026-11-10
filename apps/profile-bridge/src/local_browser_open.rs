@@ -75,14 +75,24 @@ fn admit_existing_workspace(
     current: crate::local_profile::GenerationWorkspace,
     intent: &InitialProfileOpen,
 ) -> Result<crate::local_profile::GenerationWorkspace, LocalOpenError> {
-    // A valid local folder is not automatically the Worker-selected CURRENT.
-    // Use the already-authorized launch version; never silently open an older
-    // generation or claim that pending local bytes can be overwritten.
-    let matches_status = match intent.status {
-        InitialProfileStatus::Draft => current.base_generation_id().is_none(),
-        InitialProfileStatus::Ready => current.base_generation_id().is_some(),
+    // The installed local marker is the sole Open state owner. A successful
+    // post-close Sync may already have advanced D1 CURRENT and this marker
+    // while the CRM tab still displays the old version. Such a previously
+    // admitted local copy must remain reopenable without another Worker call.
+    //
+    // Never open a local folder *behind* the known server projection, and
+    // never reinterpret an uncommitted DRAFT as a READY profile.
+    let local_version = current.profile_version();
+    let matches_state = match intent.status {
+        InitialProfileStatus::Draft if current.base_generation_id().is_none() => {
+            local_version == intent.expected_version
+        }
+        InitialProfileStatus::Draft => local_version > intent.expected_version,
+        InitialProfileStatus::Ready => {
+            current.base_generation_id().is_some() && local_version >= intent.expected_version
+        }
     };
-    if current.profile_version() != intent.expected_version || !matches_status {
+    if !matches_state {
         return Err(LocalOpenError::StaleLocalWorkspace);
     }
     Ok(current)
@@ -98,7 +108,13 @@ fn recheck_workspace_after_writer_admission(
     let current = root
         .open_profile_current(&intent.tenant_id, &intent.profile_id)
         .map_err(|_| LocalOpenError::InvalidLocalWorkspace)?;
-    if current.path() != observed.path() {
+    // A Sync may have advanced the marker after our preliminary read.
+    // Even if the original CRM version is old, never accept a *race* during
+    // writer admission: Open must retry against one stable local snapshot.
+    if current.path() != observed.path()
+        || current.profile_version() != observed.profile_version()
+        || current.base_generation_id() != observed.base_generation_id()
+    {
         return Err(LocalOpenError::StaleLocalWorkspace);
     }
     admit_existing_workspace(current, intent)
