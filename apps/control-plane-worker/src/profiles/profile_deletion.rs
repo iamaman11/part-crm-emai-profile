@@ -8,8 +8,8 @@ use control_plane_contract::profile_generation_api::{
     ProfileDeleteRequest, ProfileDeleteResponse, ProfileStatusDto,
 };
 use identity_access_domain::MembershipRole;
-use profile_platform_primitives::ProfileId;
-use worker::{Date, Env, Request, Response, Result};
+use profile_platform_primitives::{ProfileId, TenantId, TenantScope};
+use worker::{Date, Env, Error, Request, Response, Result};
 
 const MAX_EXACT_R2_DELETES_PER_REQUEST: usize = 16;
 
@@ -148,4 +148,57 @@ pub async fn delete_profile(
     };
     Response::from_json(&receipt)
         .map(|response| response.with_status(if complete { 200 } else { 202 }))
+}
+
+
+/// Existing Worker cron resumes only already-authorized, immutable D1 Delete
+/// commands. It creates no fresh profile Delete, browser owner or GC service.
+/// Bound the work per tick; a partial or failed exact R2 effect stays DELETING.
+pub(crate) async fn resume_due_frozen_deletes(env: &Env) -> Result<()> {
+    const MAX_OBJECTS_PER_PROFILE_PER_TICK: usize = 4;
+    let journal = profile_deletion(env)?;
+    let frozen = journal.due_frozen_deletes(Date::now().as_millis()).await?;
+    let r2 = generation_object_retention(env)?;
+    for command in frozen {
+        let scope = TenantScope::new(
+            TenantId::parse(&command.tenant_id)
+                .map_err(|_| Error::RustError("invalid frozen delete tenant".to_owned()))?,
+        );
+        let profile_id = ProfileId::parse(&command.profile_id)
+            .map_err(|_| Error::RustError("invalid frozen delete profile".to_owned()))?;
+        let expected_version = u64::try_from(command.expected_profile_version)
+            .map_err(|_| Error::RustError("invalid frozen delete version".to_owned()))?;
+        for _ in 0..MAX_OBJECTS_PER_PROFILE_PER_TICK {
+            let Some(object) = journal.next_pending(&scope, &profile_id).await? else {
+                break;
+            };
+            if r2.delete_frozen_profile_exact(&scope, &object).await.is_err() {
+                worker::console_warn!("SCHEDULED_DELETE_R2_REPLAY_PENDING");
+                break;
+            }
+            if journal
+                .record_absent_exact(&scope, &object, Date::now().as_millis())
+                .await
+                .is_err()
+            {
+                worker::console_warn!("SCHEDULED_DELETE_D1_RECEIPT_PENDING");
+                break;
+            }
+        }
+        if journal.pending_count(&scope, &profile_id).await? == 0
+            && journal
+                .complete_frozen(
+                    &scope,
+                    &profile_id,
+                    &command.command_actor_id,
+                    expected_version,
+                    Date::now().as_millis(),
+                )
+                .await
+                .is_err()
+        {
+            worker::console_warn!("SCHEDULED_DELETE_D1_COMPLETION_PENDING");
+        }
+    }
+    Ok(())
 }
