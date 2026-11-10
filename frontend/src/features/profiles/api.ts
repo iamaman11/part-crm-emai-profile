@@ -3,6 +3,7 @@ import {
   activateProfileGeneration as activateProfileGenerationOperation,
   assignProfileToClient as assignProfileToClientOperation,
   createProfileMetadata as createProfileMetadataOperation,
+  deleteProfileMetadata as deleteProfileMetadataOperation,
   deactivateProfileGeneration as deactivateProfileGenerationOperation,
   detachProfileFromClient as detachProfileFromClientOperation,
   getProfileCoordinator as getProfileCoordinatorOperation,
@@ -25,6 +26,7 @@ import type {
   CoordinatorResponseDto,
   MutationReceipt,
   ProfileCreateRequest,
+  ProfileDeleteResponse,
   ProfileDetachmentRequest,
   ProfileGenerationResponse,
   ProfileGrantRequest,
@@ -82,6 +84,26 @@ export function createProfile(tenantId: string, profileId: string, idempotencyKe
     body: { profileId },
     idempotencyKey,
   });
+}
+
+export async function deleteProfile(
+  tenantId: string,
+  profileId: string,
+  expectedProfileVersion: number,
+): Promise<ProfileDeleteResponse> {
+  // The server owns the exact frozen R2 inventory. A single user command may
+  // require multiple bounded requests; all carry the same original CAS version.
+  let latest: ProfileDeleteResponse | undefined;
+  for (let attempt = 0; attempt < 32; attempt += 1) {
+    latest = await deleteProfileMetadataOperation({
+      tenantId,
+      profileId,
+      body: { expectedProfileVersion },
+    });
+    if (latest.status === 'DELETED') return latest;
+  }
+  if (latest === undefined) throw new Error('Profile deletion did not begin');
+  return latest; // A later explicit Resume uses the original freeze version.
 }
 
 export function assignProfile(
