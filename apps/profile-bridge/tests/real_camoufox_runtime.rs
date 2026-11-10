@@ -307,7 +307,11 @@ fn run_native_open_proof() -> Result<ApprovedRuntimeBundle, Box<dyn std::error::
     // Canonical spelling is used only to compare the Python executable's
     // physical identity with the executable inside this verified runtime.
     let canonical_runtime_root = runtime_root.canonicalize()?;
-    if python != canonical_runtime_root.join("python/python.exe").canonicalize()? {
+    if python
+        != canonical_runtime_root
+            .join("python/python.exe")
+            .canonicalize()?
+    {
         return Err("CI selected a different Python from the verified shipping runtime".into());
     }
     if env::var(HEADLESS_ENV).as_deref() != Ok("false") {
