@@ -221,6 +221,18 @@ def main() -> int:
                 assert runtime.main() == outcome
             assert invoked == (["local"] if outcome == 19 else [])
 
+
+    native_code = SOURCE.read_text(encoding="utf-8")
+    warm_open = native_code.split("async def run_local_profile(", 1)[1].split(
+        "\ndef main() -> int:", 1
+    )[0]
+    assert "verify_python_components(lock)" not in warm_open, (
+        "installed warm Open unnecessarily reverified the packaged fpgen model"
+    )
+    assert "materialize_candidate_identity(root)" in warm_open, (
+        "fresh empty DRAFT lost its one official SDK fingerprint draw"
+    )
+    assert "camouhost-identity-persisted" in warm_open
     local_source = (SOURCE.parents[2] / "apps/profile-bridge/src/local_browser_open.rs").read_text(
         encoding="utf-8"
     )
