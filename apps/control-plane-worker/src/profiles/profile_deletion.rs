@@ -11,8 +11,6 @@ use identity_access_domain::MembershipRole;
 use profile_platform_primitives::{ProfileId, TenantId, TenantScope};
 use worker::{Date, Env, Error, Request, Response, Result};
 
-const MAX_EXACT_R2_DELETES_PER_REQUEST: usize = 16;
-
 pub async fn delete_profile(
     request: &mut Request,
     env: &Env,
@@ -58,96 +56,26 @@ pub async fn delete_profile(
             "Profile Delete Conflict",
         );
     }
-    let pending_before_delete = journal
+    // HTTP only freezes the command and returns its current projection.
+    // The existing minute cron is the sole exact R2 DELETE executor: no
+    // duplicate R2 side-effect loop and no browser/process ownership.
+    let pending = journal
         .pending_count(actor.tenant_scope(), &profile_id)
         .await?;
-    if pending_before_delete > 0
-        && now_ms()
-            < journal
-                .safe_exact_r2_delete_at(actor.tenant_scope(), &profile_id)
-                .await?
-    {
-        // Signed PUTs issued before the D1 freeze may still be valid. Never
-        // delete an exact object that an old writer can recreate. The durable
-        // DELETING command is replayable after the expiry boundary.
-        return Response::from_json(&ProfileDeleteResponse {
-            profile_id: profile_id.as_str().to_owned(),
-            status: ProfileStatusDto::Deleting,
-            pending_objects: pending_before_delete,
-        })
-        .map(|response| response.with_status(202));
-    }
-    let r2 = generation_object_retention(env)?;
-    let mut processed = 0;
-    while processed < MAX_EXACT_R2_DELETES_PER_REQUEST {
-        let Some(object) = journal
-            .next_pending(actor.tenant_scope(), &profile_id)
-            .await?
-        else {
-            break;
-        };
-        if r2
-            .delete_frozen_profile_exact(actor.tenant_scope(), &object)
-            .await
-            .is_err()
-        {
-            // D1 remains DELETING with a frozen inventory. A later exact
-            // request can re-HEAD absent after a lost successful DELETE reply.
-            return problem(
-                correlation,
-                503,
-                "profile_delete_r2_unavailable",
-                "Profile Delete Unavailable",
-            );
-        }
-        if journal
-            .record_absent_exact(actor.tenant_scope(), &object, now_ms())
-            .await
-            .is_err()
-        {
-            return problem(
-                correlation,
-                503,
-                "profile_delete_receipt_unavailable",
-                "Profile Delete Unavailable",
-            );
-        }
-        processed += 1;
-    }
-    let remaining = journal
-        .pending_count(actor.tenant_scope(), &profile_id)
-        .await?;
-    let complete = if remaining == 0 {
-        match journal
-            .complete(actor, &profile_id, body.expected_profile_version, now_ms())
-            .await
-        {
-            Ok(complete) => complete,
-            Err(_) => {
-                // Do not disguise a failed durable D1 completion as a healthy
-                // 202 with zero pending objects. DELETING stays replayable.
-                return problem(
-                    correlation,
-                    503,
-                    "profile_delete_completion_unavailable",
-                    "Profile Delete Unavailable",
-                );
-            }
-        }
-    } else {
-        false
-    };
-    let receipt = ProfileDeleteResponse {
+    let complete = journal
+        .status(actor.tenant_scope(), &profile_id)
+        .await?
+        .as_deref() == Some("DELETED");
+    Response::from_json(&ProfileDeleteResponse {
         profile_id: profile_id.as_str().to_owned(),
         status: if complete {
             ProfileStatusDto::Deleted
         } else {
             ProfileStatusDto::Deleting
         },
-        pending_objects: remaining,
-    };
-    Response::from_json(&receipt)
-        .map(|response| response.with_status(if complete { 200 } else { 202 }))
+        pending_objects: pending,
+    })
+    .map(|response| response.with_status(if complete { 200 } else { 202 }))
 }
 
 /// Existing Worker cron resumes only already-authorized, immutable D1 Delete
