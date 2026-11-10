@@ -150,7 +150,6 @@ pub async fn delete_profile(
         .map(|response| response.with_status(if complete { 200 } else { 202 }))
 }
 
-
 /// Existing Worker cron resumes only already-authorized, immutable D1 Delete
 /// commands. It creates no fresh profile Delete, browser owner or GC service.
 /// Bound the work per tick; a partial or failed exact R2 effect stays DELETING.
@@ -172,7 +171,11 @@ pub(crate) async fn resume_due_frozen_deletes(env: &Env) -> Result<()> {
             let Some(object) = journal.next_pending(&scope, &profile_id).await? else {
                 break;
             };
-            if r2.delete_frozen_profile_exact(&scope, &object).await.is_err() {
+            if r2
+                .delete_frozen_profile_exact(&scope, &object)
+                .await
+                .is_err()
+            {
                 worker::console_warn!("SCHEDULED_DELETE_R2_REPLAY_PENDING");
                 break;
             }
