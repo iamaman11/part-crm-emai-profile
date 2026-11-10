@@ -1,4 +1,4 @@
-import { invokeProfileBridgeLaunch } from './launchBridge';
+import { invokeProfileBridgeLaunch, localProfileOpenUri } from './launchBridge';
 import {
   activateProfileGeneration as activateProfileGenerationOperation,
   assignProfileToClient as assignProfileToClientOperation,
@@ -227,15 +227,9 @@ export function dispatchBrowserProfileOpen(
   expectedVersion: number,
   status: 'DRAFT' | 'READY',
 ): void {
-  // The selected profile projection and authenticated tenant context were
-  // already loaded. Do not ask the Worker to re-serialize this predictable
-  // native URI or delay the local Open on an additional network request.
-  // Installed Bridge independently checks tenant/actor device binding, local
-  // profile version and native OS writer ownership.
-  if (!Number.isSafeInteger(expectedVersion) || expectedVersion <= 0) {
-    throw new Error('Invalid local profile version');
-  }
+  // The profile and authenticated tenant context are already selected.
+  // Installed Bridge still enforces device binding, local version and OS lock.
   invokeProfileBridgeLaunch(
-    `profilebridge://open/v2/${tenantId}/${actorId}/${profileId}/${expectedVersion}/${status}`,
+    localProfileOpenUri(tenantId, actorId, profileId, expectedVersion, status),
   );
 }
