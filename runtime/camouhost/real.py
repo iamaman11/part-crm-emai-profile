@@ -740,7 +740,19 @@ def packaged_windows_browser(lock: dict[str, Any]) -> Path:
     executable = runtime_root.joinpath(*executable_path.split("/"))
     if executable.is_symlink() or not executable.is_file():
         raise RuntimeContractError("packaged Windows browser executable is unavailable")
-    return executable.resolve(strict=True)
+    resolved = executable.resolve(strict=True)
+    if os.name != "nt":
+        return resolved
+
+    # Keep canonical/extended paths for filesystem validation, but pass the
+    # official SDK a conventional local Win32 executable path. Gecko's ffvpx
+    # loader can crash content processes when launched via \\?\C:\...
+    sdk_path = str(resolved)
+    if sdk_path.startswith("\\\\?\\"):
+        sdk_path = sdk_path[4:]
+    if re.match(r"^[A-Za-z]:\\", sdk_path) is None or len(sdk_path) >= 260:
+        raise RuntimeContractError("packaged Windows browser requires a short local drive path")
+    return Path(sdk_path)
 
 
 def camoufox_browser_selector(lock: dict[str, Any]) -> dict[str, str | Path]:
