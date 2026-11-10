@@ -94,6 +94,7 @@ export async function deleteProfile(
   // The server owns the exact frozen R2 inventory. A single user command may
   // require multiple bounded requests; all carry the same original CAS version.
   let latest: ProfileDeleteResponse | undefined;
+  let previousPending: number | undefined;
   for (let attempt = 0; attempt < 32; attempt += 1) {
     latest = await deleteProfileMetadataOperation({
       tenantId,
@@ -101,6 +102,11 @@ export async function deleteProfile(
       body: { expectedProfileVersion },
     });
     if (latest.status === 'DELETED') return latest;
+    // D1 deliberately defers R2 until every previously signed PUT has
+    // expired. Do not hammer the Worker with 32 identical requests while
+    // the frozen inventory is unchanged. Resume uses the original version.
+    if (latest.pendingObjects === previousPending) return latest;
+    previousPending = latest.pendingObjects;
   }
   if (latest === undefined) throw new Error('Profile deletion did not begin');
   return latest; // A later explicit Resume uses the original freeze version.
