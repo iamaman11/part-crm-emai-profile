@@ -3,6 +3,70 @@
 -- has frozen the profile; one object receipt follows an exact-key R2 absence.
 -- This migration does not delete or migrate any existing test profile.
 
+-- One D1 owner also fences pre-signed immutable R2 PUTs against DELETE.
+-- A capability is NOT returned before its bound reservation is committed.
+-- Signatures expire in 300s; 60s conservatively covers in-flight delivery.
+CREATE TABLE profile_generation_upload_reservations (
+    tenant_id TEXT NOT NULL,
+    profile_id TEXT NOT NULL,
+    source_mode TEXT NOT NULL CHECK(source_mode IN ('DRAFT','READY')),
+    source_generation_id TEXT,
+    expected_profile_version INTEGER NOT NULL CHECK(expected_profile_version > 0),
+    issued_at_ms INTEGER NOT NULL CHECK(issued_at_ms >= 0),
+    expires_at_ms INTEGER NOT NULL CHECK(expires_at_ms = issued_at_ms + 360000),
+    PRIMARY KEY(tenant_id, profile_id),
+    FOREIGN KEY(tenant_id, profile_id)
+        REFERENCES browser_profiles(tenant_id, profile_id) ON DELETE RESTRICT,
+    CHECK (
+        (source_mode = 'DRAFT' AND source_generation_id IS NULL)
+        OR
+        (source_mode = 'READY' AND source_generation_id IS NOT NULL)
+    )
+) STRICT;
+
+CREATE TRIGGER profile_generation_upload_reservation_admit
+BEFORE INSERT ON profile_generation_upload_reservations
+FOR EACH ROW
+BEGIN
+    SELECT RAISE(ABORT, 'upload_reservation_profile_not_writable')
+    WHERE NOT EXISTS (
+        SELECT 1 FROM browser_profiles AS profile
+        WHERE profile.tenant_id = NEW.tenant_id
+          AND profile.profile_id = NEW.profile_id
+          AND profile.status = NEW.source_mode
+          AND profile.version = NEW.expected_profile_version
+          AND (
+              (NEW.source_mode = 'DRAFT' AND profile.active_generation_id IS NULL)
+              OR
+              (NEW.source_mode = 'READY'
+                AND profile.active_generation_id = NEW.source_generation_id)
+          )
+    );
+END;
+
+CREATE TRIGGER profile_generation_upload_reservation_update
+BEFORE UPDATE ON profile_generation_upload_reservations
+FOR EACH ROW
+BEGIN
+    SELECT RAISE(ABORT, 'upload_reservation_profile_not_writable')
+    WHERE NEW.tenant_id <> OLD.tenant_id
+       OR NEW.profile_id <> OLD.profile_id
+       OR NEW.issued_at_ms < OLD.issued_at_ms
+       OR NOT EXISTS (
+        SELECT 1 FROM browser_profiles AS profile
+        WHERE profile.tenant_id = NEW.tenant_id
+          AND profile.profile_id = NEW.profile_id
+          AND profile.status = NEW.source_mode
+          AND profile.version = NEW.expected_profile_version
+          AND (
+              (NEW.source_mode = 'DRAFT' AND profile.active_generation_id IS NULL)
+              OR
+              (NEW.source_mode = 'READY'
+                AND profile.active_generation_id = NEW.source_generation_id)
+          )
+    );
+END;
+
 CREATE TABLE profile_delete_commands (
     tenant_id TEXT NOT NULL,
     profile_id TEXT NOT NULL,
@@ -138,6 +202,19 @@ CREATE TRIGGER profile_delete_object_receipt_admit
 BEFORE INSERT ON profile_delete_object_receipts
 FOR EACH ROW
 BEGIN
+    SELECT RAISE(ABORT, 'profile_delete_presigned_put_not_expired')
+    WHERE EXISTS (
+        SELECT 1 FROM profile_delete_commands AS command
+        LEFT JOIN profile_generation_upload_reservations AS reservation
+          ON reservation.tenant_id = command.tenant_id
+         AND reservation.profile_id = command.profile_id
+        WHERE command.tenant_id = NEW.tenant_id
+          AND command.profile_id = NEW.profile_id
+          AND NEW.deleted_at_ms < MAX(
+              command.requested_at_ms + 360000,
+              COALESCE(reservation.expires_at_ms, 0)
+          )
+    );
     SELECT RAISE(ABORT, 'profile_delete_exact_object_not_frozen')
     WHERE NOT EXISTS (
         SELECT 1 FROM profile_delete_objects AS object
