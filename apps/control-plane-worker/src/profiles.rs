@@ -6,7 +6,7 @@ use crate::access_session::{
     correlation_hint, membership_role, neutral_not_found, problem, resolve_active_request_actor,
 };
 use crate::command_evidence;
-use crate::composition::profile_application;
+use crate::composition::{profile_application, profile_generation_application};
 use crate::request_evidence;
 use application_ports::profiles::ProfileStatus;
 use control_plane_contract::RouteClass;
@@ -136,7 +136,22 @@ async fn get_profile(
     )
     .await
     {
-        Ok(profile) => Response::from_json(&profile_projection(&profile)),
+        Ok(profile) => {
+            // The GET projection may be visible to PROFILE_VIEWER, whereas
+            // native Open must retain the original Operate capability gate.
+            // Reuse the existing D1 authorization use case during this
+            // already authenticated read, never on each local Open click.
+            // Dependency uncertainty is fail-closed (can_operate=false).
+            let can_operate = use_cases::generation_initialization::authorize_initial_generation_access(
+                actor.actor(),
+                membership_role(&actor),
+                &profile_id,
+                &profile_generation_application(env)?,
+            )
+            .await
+            .is_ok();
+            Response::from_json(&profile_projection(&profile, can_operate))
+        },
         Err(ProfileOperationError::NotFound) => {
             neutral_not_found(actor.actor().correlation_id().as_str())
         }
@@ -450,7 +465,7 @@ fn profile_grant_receipt(outcome: &ProfileGrantOutcome) -> Result<Response> {
     .map(|response| response.with_status(200))
 }
 
-fn profile_projection(profile: &ProfileDetails) -> ProfileProjectionDto {
+fn profile_projection(profile: &ProfileDetails, can_operate: bool) -> ProfileProjectionDto {
     ProfileProjectionDto {
         profile_id: profile.profile_id().as_str().to_owned(),
         status: profile_status(profile.status()),
@@ -458,6 +473,7 @@ fn profile_projection(profile: &ProfileDetails) -> ProfileProjectionDto {
         linked_client_id: profile
             .linked_client_id()
             .map(|value| value.as_str().to_owned()),
+        can_operate,
     }
 }
 
