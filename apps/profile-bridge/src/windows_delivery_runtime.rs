@@ -49,13 +49,17 @@ impl ActiveWindowsDeliveryRuntime {
     ) -> Result<Self, WindowsDeliveryRuntimeError> {
         #[cfg(windows)]
         let layout_started = std::time::Instant::now();
-        let current_executable = std::env::current_exe()
+        // Keep the process path for child-process arguments. On Windows,
+        // canonicalize() adds the \\?\ extended prefix, which is not accepted
+        // by every native consumer (notably the packaged Gecko executable).
+        let process_executable = std::env::current_exe()
             .map_err(|_| WindowsDeliveryRuntimeError::InvalidInstalledLayout)?;
-        let current_executable = fs::canonicalize(current_executable)
+        // Canonical form is for file identity/security comparisons only.
+        let canonical_executable = fs::canonicalize(&process_executable)
             .map_err(|_| WindowsDeliveryRuntimeError::InvalidInstalledLayout)?;
-        validate_regular_path(&current_executable)
+        validate_regular_path(&canonical_executable)
             .map_err(|_| WindowsDeliveryRuntimeError::InvalidInstalledLayout)?;
-        let layout = InstalledDeliveryLayout::from_executable(&current_executable)?;
+        let layout = InstalledDeliveryLayout::from_executable(&process_executable)?;
 
         validate_existing_directory(&layout.releases_root)
             .map_err(|_| WindowsDeliveryRuntimeError::InvalidInstalledLayout)?;
@@ -101,7 +105,7 @@ impl ActiveWindowsDeliveryRuntime {
         let expected_executable = staged.profile_bridge_root().join(PROFILE_BRIDGE_EXECUTABLE);
         let expected_executable = fs::canonicalize(expected_executable)
             .map_err(|_| WindowsDeliveryRuntimeError::StagedDelivery)?;
-        if expected_executable != current_executable {
+        if expected_executable != canonical_executable {
             return Err(WindowsDeliveryRuntimeError::ActiveExecutableMismatch);
         }
 
@@ -646,6 +650,25 @@ pub(crate) mod tests {
                 r"C:\ProfileBridge\arbitrary\profile-bridge.exe"
             )),
             Err(WindowsDeliveryRuntimeError::InvalidInstalledLayout)
+        );
+        Ok(())
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn current_exe_keeps_the_child_launch_path_separate_from_canonical_identity()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let process_executable = std::env::current_exe()?;
+        let canonical_executable = fs::canonicalize(&process_executable)?;
+
+        assert!(process_executable.is_absolute());
+        assert!(
+            !process_executable.to_string_lossy().starts_with(r"\\?\"),
+            "the installed launcher must retain its ordinary Win32 process path"
+        );
+        assert!(
+            canonical_executable.to_string_lossy().starts_with(r"\\?\"),
+            "canonicalize is retained for identity checks, not child-process paths"
         );
         Ok(())
     }

@@ -297,8 +297,21 @@ fn root_path() -> Result<PathBuf, Box<dyn std::error::Error>> {
 #[cfg(windows)]
 fn run_native_open_proof() -> Result<ApprovedRuntimeBundle, Box<dyn std::error::Error>> {
     let python = PathBuf::from(env::var(PYTHON_ENV)?).canonicalize()?;
-    let runtime_root = PathBuf::from(env::var(RUNTIME_ROOT_ENV)?).canonicalize()?;
-    if python != runtime_root.join("python/python.exe").canonicalize()? {
+    // Keep the ordinary absolute path for production Open. On Windows,
+    // canonicalize() adds the `\\?\` namespace prefix, which is not the
+    // executable-path contract used by the installed application.
+    let runtime_root = PathBuf::from(env::var(RUNTIME_ROOT_ENV)?);
+    if !runtime_root.is_absolute() {
+        return Err("CI shipping runtime root must be an absolute path".into());
+    }
+    // Canonical spelling is used only to compare the Python executable's
+    // physical identity with the executable inside this verified runtime.
+    let canonical_runtime_root = runtime_root.canonicalize()?;
+    if python
+        != canonical_runtime_root
+            .join("python/python.exe")
+            .canonicalize()?
+    {
         return Err("CI selected a different Python from the verified shipping runtime".into());
     }
     if env::var(HEADLESS_ENV).as_deref() != Ok("false") {
