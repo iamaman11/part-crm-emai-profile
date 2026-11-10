@@ -656,8 +656,8 @@ pub(crate) mod tests {
 
     #[cfg(windows)]
     #[test]
-    fn current_exe_keeps_the_child_launch_path_separate_from_canonical_identity(
-    ) -> Result<(), Box<dyn std::error::Error>> {
+    fn current_exe_keeps_the_child_launch_path_separate_from_canonical_identity()
+    -> Result<(), Box<dyn std::error::Error>> {
         let process_executable = std::env::current_exe()?;
         let canonical_executable = fs::canonicalize(&process_executable)?;
 
