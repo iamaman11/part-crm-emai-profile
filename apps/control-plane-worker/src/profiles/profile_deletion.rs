@@ -65,7 +65,8 @@ pub async fn delete_profile(
     let complete = journal
         .status(actor.tenant_scope(), &profile_id)
         .await?
-        .as_deref() == Some("DELETED");
+        .as_deref()
+        == Some("DELETED");
     Response::from_json(&ProfileDeleteResponse {
         profile_id: profile_id.as_str().to_owned(),
         status: if complete {
