@@ -111,6 +111,8 @@ pub struct ProfileProjectionDto {
     pub status: ProfileStatusDto,
     pub version: u64,
     pub linked_client_id: Option<String>,
+    /// Explicit profile Operate permission; View alone never authorizes Open.
+    pub can_operate: bool,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -343,12 +345,13 @@ pub fn openapi_fragment() -> Value {
                 "ProfileProjectionDto": {
                     "type": "object",
                     "additionalProperties": false,
-                    "required": ["profileId", "status", "version", "linkedClientId"],
+                    "required": ["profileId", "status", "version", "linkedClientId", "canOperate"],
                     "properties": {
                         "profileId": opaque_id_schema(),
                         "status": schema_ref("ProfileStatusDto"),
                         "version": positive_version_schema(),
-                        "linkedClientId": nullable_opaque_id_schema()
+                        "linkedClientId": nullable_opaque_id_schema(),
+                        "canOperate": {"type": "boolean"}
                     }
                 },
                 "ProfileCreateRequestDto": {
@@ -699,9 +702,11 @@ mod tests {
             status: ProfileStatusDto::DirtyLocal,
             version: 7,
             linked_client_id: None,
+            can_operate: false,
         })?;
         assert_eq!(profile["status"], "DIRTY_LOCAL");
         assert!(profile.get("linkedClientId").is_some_and(Value::is_null));
+        assert_eq!(profile["canOperate"], false);
         Ok(())
     }
 
