@@ -248,8 +248,19 @@ def check_sources(sources: dict[str, str]) -> list[str]:
     ):
         failures.append("confirmed-current DRAFT/READY reconciliation must use the shared Bridge recovery owner")
 
-    if "current.profile_version() != intent.expected_version" not in local:
-        failures.append("stale local CURRENT must fail closed before browser launch")
+    # Cached CRM version may lag a newly committed local CURRENT, but a
+    # local folder behind the known cloud version must never be launched.
+    # The second marker read under the OS lock must match the first exactly,
+    # so no concurrent Sync transition can be admitted mid-Open.
+    for required in (
+        "local_version == intent.expected_version",
+        "local_version > intent.expected_version",
+        "local_version >= intent.expected_version",
+        "current.profile_version() != observed.profile_version()",
+        "current.base_generation_id() != observed.base_generation_id()",
+    ):
+        if required not in local:
+            failures.append(f"stale local CURRENT must fail closed before browser launch: {required}")
 
     for required in ('from playwright.async_api import async_playwright',
                      'from camoufox.async_api import AsyncNewBrowser',
@@ -293,7 +304,9 @@ def self_test(sources: dict[str, str]) -> list[str]:
          "native Open must hold the existing per-profile OS admission through the shared recovery owner"),
         ("locks", "Self::recover_interrupted_launch(workspace, device_id, epoch)", "Ok(())",
          "native Open must hold the existing per-profile OS admission through the shared recovery owner"),
-        ("local", "current.profile_version() != intent.expected_version", "false",
+        ("local", "local_version >= intent.expected_version", "true",
+         "stale local CURRENT"),
+        ("local", "current.profile_version() != observed.profile_version()", "false",
          "stale local CURRENT"),
         ("shipping", "wait_for_native_writer_release(", "unsafe_file_assumption(",
          "native file-release proof"),
