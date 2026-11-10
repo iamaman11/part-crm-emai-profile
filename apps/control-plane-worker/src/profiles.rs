@@ -1,5 +1,6 @@
 pub(crate) mod profile_launch;
 mod profile_launch_composition;
+mod profile_deletion;
 
 use crate::access_session::{
     correlation_hint, membership_role, neutral_not_found, problem, resolve_active_request_actor,
@@ -45,7 +46,11 @@ pub async fn dispatch(route: RouteClass, request: &mut Request, env: &Env) -> Re
         RouteClass::ProfileCollectionApi => create_profile(request, env, tenant_id).await,
         RouteClass::ProfileResourceApi => {
             let profile_id = segments.get(5).copied().unwrap_or_default();
-            get_profile(request, env, tenant_id, profile_id).await
+            match request.method().as_ref() {
+                "GET" => get_profile(request, env, tenant_id, profile_id).await,
+                "DELETE" => profile_deletion::delete_profile(request, env, tenant_id, profile_id).await,
+                _ => neutral_not_found(&correlation_hint(request)),
+            }
         }
         RouteClass::ProfileLaunchApi => {
             let profile_id = segments.get(5).copied().unwrap_or_default();
