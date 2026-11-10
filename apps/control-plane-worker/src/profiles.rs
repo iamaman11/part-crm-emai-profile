@@ -142,16 +142,17 @@ async fn get_profile(
             // Reuse the existing D1 authorization use case during this
             // already authenticated read, never on each local Open click.
             // Dependency uncertainty is fail-closed (can_operate=false).
-            let can_operate = use_cases::generation_initialization::authorize_initial_generation_access(
-                actor.actor(),
-                membership_role(&actor),
-                &profile_id,
-                &profile_generation_application(env)?,
-            )
-            .await
-            .is_ok();
+            let can_operate =
+                use_cases::generation_initialization::authorize_initial_generation_access(
+                    actor.actor(),
+                    membership_role(&actor),
+                    &profile_id,
+                    &profile_generation_application(env)?,
+                )
+                .await
+                .is_ok();
             Response::from_json(&profile_projection(&profile, can_operate))
-        },
+        }
         Err(ProfileOperationError::NotFound) => {
             neutral_not_found(actor.actor().correlation_id().as_str())
         }
