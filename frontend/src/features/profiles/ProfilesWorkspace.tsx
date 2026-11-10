@@ -277,7 +277,7 @@ export function ProfilesWorkspace({
           <StatusMessage state={deleteAction.error ?? (deleteAction.data
             ? deleteAction.data.status === 'DELETED'
               ? 'Profile and all cloud objects deleted.'
-              : 'Deletion is incomplete; use Resume profile deletion after refreshing.'
+              : 'Deletion is pending; the server resumes automatically after signed upload permissions expire. Refresh for status.'
             : null)} />
         </>}
         {profile && (
