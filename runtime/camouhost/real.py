@@ -1603,22 +1603,6 @@ def main() -> int:
             report_runtime_failure("startup", error)
             return 4
         return asyncio.run(run_local_profile(Path(sys.argv[2]), config, first_run))
-    if len(sys.argv) == 3 and sys.argv[1] == "--materialize-identity":
-        try:
-            with contextlib.redirect_stdout(sys.stderr):
-                report = materialize_candidate_identity(Path(sys.argv[2]))
-        except Exception as error:
-            line = 0
-            traceback = error.__traceback__
-            while traceback is not None:
-                if traceback.tb_frame.f_code.co_filename == __file__:
-                    line = traceback.tb_lineno
-                traceback = traceback.tb_next
-            failure = {"category": runtime_failure_category(error), "line": line}
-            print(json.dumps({"failure": failure}, separators=(",", ":")), flush=True)
-            return 7
-        print(json.dumps(report, ensure_ascii=True, separators=(",", ":"), sort_keys=True))
-        return 0
     if len(sys.argv) != 1:
         print("unsupported Camouhost invocation", file=sys.stderr)
         return 2
