@@ -606,7 +606,26 @@ def enter():
 manager, context = enter()
 try:
     context.set_offline(False)
-    first = context.pages[0] if context.pages else context.new_page()
+    audio_page = context.pages[0] if context.pages else context.new_page()
+    audio_crashes = []
+    audio_page.on("crash", lambda _page: audio_crashes.append(True))
+    audio_state = audio_page.evaluate(
+        "() => new OfflineAudioContext(1, 256, 44100).state"
+    )
+    audio_page.wait_for_timeout(250)
+    assert audio_state == "suspended", (
+        "packaged Camoufox OfflineAudioContext did not initialize: "
+        f"state={audio_state!r}"
+    )
+    assert not audio_crashes and not audio_page.is_closed(), (
+        "packaged Camoufox content page crashed during OfflineAudioContext initialization"
+    )
+    print(
+        "native_restore_proof stage=offline_audio_context "
+        "state=suspended page_crash=0",
+        flush=True,
+    )
+    first = audio_page
     first.goto(urls[0], wait_until="domcontentloaded", timeout=15000)
     first.evaluate("localStorage.setItem('restore-proof', 'retained')")
     second = context.new_page()
