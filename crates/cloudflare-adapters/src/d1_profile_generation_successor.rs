@@ -426,21 +426,26 @@ INSERT INTO profile_generation_successor_commands (
 RETURNING generation_id
 "#;
 
-// One D1 reservation per profile fences every external signed immutable PUT.
-// It is committed before the URL is returned. Freeze/DELETE cannot race with
-// an unrecorded authorization or trust a stale worker-local profile read.
+// The existing D1 lifecycle owns the exact signed object inventory,
+// including interrupted uploads that never reached generation registration.
+// One row per immutable R2 key; renewing the same signature target extends
+// its expiry but cannot switch to a different object or generation.
 const RESERVE_GENERATION_UPLOAD_CAPABILITY: &str = r#"
 INSERT INTO profile_generation_upload_reservations (
-    tenant_id, profile_id, source_mode, source_generation_id,
+    tenant_id, profile_id, generation_id, object_key,
+    metadata_digest, container_digest, source_mode, source_generation_id,
     expected_profile_version, issued_at_ms, expires_at_ms
-) VALUES (?, ?, ?, ?, ?, ?, ?)
-ON CONFLICT(tenant_id, profile_id) DO UPDATE SET
-    source_mode = excluded.source_mode,
-    source_generation_id = excluded.source_generation_id,
-    expected_profile_version = excluded.expected_profile_version,
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+ON CONFLICT(tenant_id, profile_id, generation_id) DO UPDATE SET
     issued_at_ms = excluded.issued_at_ms,
     expires_at_ms = excluded.expires_at_ms
 WHERE excluded.issued_at_ms >= profile_generation_upload_reservations.issued_at_ms
+  AND excluded.object_key = profile_generation_upload_reservations.object_key
+  AND excluded.metadata_digest = profile_generation_upload_reservations.metadata_digest
+  AND excluded.container_digest = profile_generation_upload_reservations.container_digest
+  AND excluded.source_mode = profile_generation_upload_reservations.source_mode
+  AND excluded.source_generation_id IS profile_generation_upload_reservations.source_generation_id
+  AND excluded.expected_profile_version = profile_generation_upload_reservations.expected_profile_version
 RETURNING profile_id
 "#;
 
@@ -462,7 +467,7 @@ impl D1ProfileGenerationSuccessorCommitJournal {
     pub async fn reserve_generation_upload_capability(
         &self,
         actor: &ActorContext,
-        profile_id: &ProfileId,
+        descriptor: &GenerationObjectDescriptor,
         source_generation: Option<&GenerationId>,
         expected_profile_version: u64,
         signed_at: profile_platform_primitives::UnixMillis,
@@ -484,7 +489,11 @@ impl D1ProfileGenerationSuccessorCommitJournal {
             &self.database,
             RESERVE_GENERATION_UPLOAD_CAPABILITY,
             actor.tenant_scope().tenant_id().as_str(),
-            profile_id.as_str(),
+            descriptor.profile_id().as_str(),
+            descriptor.generation_id().as_str(),
+            descriptor.object_key(),
+            descriptor.metadata_digest(),
+            descriptor.container_digest(),
             source_mode,
             original,
             version,
@@ -496,7 +505,7 @@ impl D1ProfileGenerationSuccessorCommitJournal {
         .await
         .map_err(|_| historical_dependency_failure())?;
         match reserved {
-            Some(value) if value == profile_id.as_str() => Ok(()),
+            Some(value) if value == descriptor.profile_id().as_str() => Ok(()),
             _ => Err(historical_integrity_failure()),
         }
     }
