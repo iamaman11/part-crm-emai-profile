@@ -99,10 +99,22 @@ pub async fn delete_profile(
         .pending_count(actor.tenant_scope(), &profile_id)
         .await?;
     let complete = if remaining == 0 {
-        journal
+        match journal
             .complete(actor, &profile_id, body.expected_profile_version, now_ms())
             .await
-            .unwrap_or(false)
+        {
+            Ok(complete) => complete,
+            Err(_) => {
+                // Do not disguise a failed durable D1 completion as a healthy
+                // 202 with zero pending objects. DELETING stays replayable.
+                return problem(
+                    correlation,
+                    503,
+                    "profile_delete_completion_unavailable",
+                    "Profile Delete Unavailable",
+                );
+            }
+        }
     } else {
         false
     };
