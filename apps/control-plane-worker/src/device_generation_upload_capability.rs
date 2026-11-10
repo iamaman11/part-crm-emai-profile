@@ -204,7 +204,7 @@ pub async fn dispatch(request: &mut Request, env: &Env) -> Result<Response> {
     if profile_generation_successor_observer(env)?
         .reserve_generation_upload_capability(
             actor,
-            descriptor.profile_id(),
+            &descriptor,
             Some(&base_generation_id),
             expected_version,
             server_now(),
