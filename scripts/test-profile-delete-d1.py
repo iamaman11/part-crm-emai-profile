@@ -70,6 +70,13 @@ def test_draft_direct_exact_deletion() -> None:
         expect_denied(lambda: begin(connection, profile, 1, 40, BASE["MEMBER_A"]))
         expect_denied(lambda: begin(connection, profile, 3, 40))
         begin(connection, profile, 1, 40)
+        expect_denied(lambda: connection.execute(
+            "INSERT INTO profile_generation_upload_reservations "
+            "(tenant_id,profile_id,source_mode,source_generation_id,"
+            "expected_profile_version,issued_at_ms,expires_at_ms) "
+            "VALUES (?,?,'DRAFT',NULL,1,41,360041)",
+            (BASE["TENANT_A"], profile),
+        ))
         assert tuple(connection.execute(
             "SELECT status,version FROM browser_profiles WHERE tenant_id=? AND profile_id=?",
             (BASE["TENANT_A"], profile),
@@ -129,8 +136,30 @@ def test_ready_profile_requires_all_exact_object_receipts() -> None:
             "expected_profile_version,executed_at_ms) VALUES (?,?,?,?,?,1,50)",
             (tenant,"command_activate_delete_01",owner,profile,generation),
         )
+        connection.execute(
+            "INSERT INTO profile_generation_upload_reservations "
+            "(tenant_id,profile_id,source_mode,source_generation_id,"
+            "expected_profile_version,issued_at_ms,expires_at_ms) "
+            "VALUES (?,?,'READY',?,2,55,360055)",
+            (tenant, profile, generation),
+        )
         expect_denied(lambda: begin(connection, profile, 1, 60))
         begin(connection, profile, 2, 60)
+        expect_denied(lambda: connection.execute(
+            "UPDATE profile_generation_upload_reservations "
+            "SET issued_at_ms=70,expires_at_ms=360070 "
+            "WHERE tenant_id=? AND profile_id=?",
+            (tenant, profile),
+        ))
+        expect_denied(lambda: connection.execute(
+            "INSERT INTO profile_generation_upload_reservations "
+            "(tenant_id,profile_id,source_mode,source_generation_id,"
+            "expected_profile_version,issued_at_ms,expires_at_ms) "
+            "VALUES (?,?,'READY',?,2,70,360070) "
+            "ON CONFLICT(tenant_id,profile_id) DO UPDATE SET "
+            "issued_at_ms=excluded.issued_at_ms,expires_at_ms=excluded.expires_at_ms",
+            (tenant, profile, generation),
+        ))
         # The frozen R2 inventory must remain stable even if a stale/offline
         # writer tries to register another generation or move CURRENT.
         expect_denied(lambda: connection.execute(
@@ -159,18 +188,26 @@ def test_ready_profile_requires_all_exact_object_receipts() -> None:
         ).fetchone()
         assert tuple(row) == (key,metadata_digest,container_digest)
         expect_denied(lambda: finish(connection, profile, 3, 65))
+        # DELETE must not receipt a key while an old signed PUT can recreate it.
         expect_denied(lambda: connection.execute(
             "INSERT INTO profile_delete_object_receipts "
             "(tenant_id,profile_id,generation_id,object_key,"
             "metadata_digest,container_digest,deleted_at_ms) "
-            "VALUES (?,?,?,?,?,?,70)",
+            "VALUES (?,?,?,?,?,?,360059)",
+            (tenant,profile,generation,key,metadata_digest,container_digest),
+        ))
+        expect_denied(lambda: connection.execute(
+            "INSERT INTO profile_delete_object_receipts "
+            "(tenant_id,profile_id,generation_id,object_key,"
+            "metadata_digest,container_digest,deleted_at_ms) "
+            "VALUES (?,?,?,?,?,?,360070)",
             (tenant,profile,generation,key,metadata_digest,"c"*64),
         ))
         connection.execute(
             "INSERT INTO profile_delete_object_receipts "
             "(tenant_id,profile_id,generation_id,object_key,"
             "metadata_digest,container_digest,deleted_at_ms) "
-            "VALUES (?,?,?,?,?,?,70)",
+            "VALUES (?,?,?,?,?,?,360070)",
             (tenant,profile,generation,key,metadata_digest,container_digest),
         )
         expect_denied(lambda: connection.execute(
@@ -178,7 +215,7 @@ def test_ready_profile_requires_all_exact_object_receipts() -> None:
             "WHERE tenant_id=? AND profile_id=?",
             (tenant,profile),
         ))
-        finish(connection,profile,3,80)
+        finish(connection,profile,3,360080)
         assert connection.execute(
             "SELECT status FROM browser_profiles WHERE tenant_id=? AND profile_id=?",
             (tenant,profile),
