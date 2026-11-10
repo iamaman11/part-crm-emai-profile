@@ -375,7 +375,9 @@ def assert_writer_quiescent(_runtime: ModuleType, _root: Path, label: str) -> No
         encoding="utf-8"
     )
     assert "browser_writer_locks_absent_at" in browser_execution
-    assert local_open.count("browser_writer_locks_absent(&workspace)") >= 3
+    # The redundant pre-launch writer check was removed; the Rust owner
+    # still checks native writer quiescence before saving/after closure.
+    assert local_open.count("browser_writer_locks_absent(&workspace)") >= 2
     assert "firefox_writer_active" not in (root / "runtime/camouhost/real.py").read_text(
         encoding="utf-8"
     )
