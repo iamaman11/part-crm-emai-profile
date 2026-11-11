@@ -451,7 +451,10 @@ fn frozen_epoch_and_current_projection_are_derived_from_real_sql_bytes()
     assert_eq!(catalog_current[38]["name"], RETIREMENT_GUARD_REVISION);
     assert_eq!(catalog_current[39]["name"], NATIVE_RECOVERY_REVISION);
     assert_eq!(catalog_current[40]["name"], PROFILE_DELETE_REVISION);
-    assert_eq!(catalog_current[41]["name"], CURRENT_COLD_RETIREMENT_REVISION);
+    assert_eq!(
+        catalog_current[41]["name"],
+        CURRENT_COLD_RETIREMENT_REVISION
+    );
     assert!(
         catalog_current
             .iter()
@@ -628,7 +631,10 @@ fn legacy_and_successor_pas2_revisions_have_distinct_governed_roles() -> Result<
     );
     assert_eq!(current_successor_files[8]["name"], NATIVE_RECOVERY_REVISION);
     assert_eq!(current_successor_files[9]["name"], PROFILE_DELETE_REVISION);
-    assert_eq!(current_successor_files[10]["name"], CURRENT_COLD_RETIREMENT_REVISION);
+    assert_eq!(
+        current_successor_files[10]["name"],
+        CURRENT_COLD_RETIREMENT_REVISION
+    );
     assert_eq!(
         current_successor_files[0]["name"],
         BRIDGE_ENROLLMENT_REVISION
@@ -697,7 +703,10 @@ fn legacy_and_successor_pas2_revisions_have_distinct_governed_roles() -> Result<
     assert_eq!(sources[39]["source_root"], "migrations/d1-successor-v2");
     assert_eq!(sources[40]["migration_file"], PROFILE_DELETE_REVISION);
     assert_eq!(sources[40]["source_root"], "migrations/d1-successor-v2");
-    assert_eq!(sources[41]["migration_file"], CURRENT_COLD_RETIREMENT_REVISION);
+    assert_eq!(
+        sources[41]["migration_file"],
+        CURRENT_COLD_RETIREMENT_REVISION
+    );
     assert_eq!(sources[41]["source_root"], "migrations/d1-successor-v2");
     assert!(
         sources
