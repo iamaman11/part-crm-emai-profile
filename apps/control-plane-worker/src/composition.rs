@@ -40,6 +40,7 @@ use cloudflare_adapters::d1_mailbox_jobs::D1MailboxJobApplicationRepository;
 use cloudflare_adapters::d1_notification_operations::D1NotificationOperationsRepository;
 use cloudflare_adapters::d1_notifications::D1NotificationRepository;
 use cloudflare_adapters::d1_profile_application::D1ProfileApplicationBundle;
+use cloudflare_adapters::d1_profile_deletion::D1ProfileDeletion;
 use cloudflare_adapters::d1_profile_generation_application::D1ProfileGenerationApplicationRepository;
 use cloudflare_adapters::d1_profile_generation_successor::D1ProfileGenerationSuccessorCommitJournal;
 use cloudflare_adapters::d1_query::D1QueryRepository;
@@ -278,6 +279,10 @@ pub fn device_generation_replay_probe(env: &Env) -> Result<D1DeviceGenerationCom
 
 pub fn generation_object_verifier(env: &Env) -> Result<R2GenerationObjects> {
     Ok(R2GenerationObjects::new(env.bucket(R2_PROFILES_BINDING)?))
+}
+
+pub fn profile_deletion(env: &Env) -> Result<D1ProfileDeletion> {
+    Ok(D1ProfileDeletion::new(env.d1(D1_CATALOG_BINDING)?))
 }
 
 pub fn generation_object_retention(env: &Env) -> Result<R2GenerationRetention> {

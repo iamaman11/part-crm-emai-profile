@@ -27,7 +27,6 @@ ACCOUNT_RE = re.compile(r"^[0-9a-f]{32}$")
 D1_RE = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$")
 AUDIENCE_RE = re.compile(r"^[A-Za-z0-9_-]{16,128}$")
 SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
-APPROVED_RUNTIME_INVENTORIES_RE = re.compile(r"^[0-9a-f]{64}(?:,[0-9a-f]{64})?$")
 RELEASE_SET_V3_RE = re.compile(r"^release-set-v3-sha256-[0-9a-f]{64}$")
 TARGET_AUTHORIZATION_VAR = "TARGET_AUTHORIZATION_OBSERVATION"
 TARGET_AUTHORIZATION_SCHEMA = "target-v1"
@@ -168,10 +167,7 @@ def verified_runtime_inventory(
     return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
 
 
-def control_manifest(
-    document: dict[str, Any], environment: str, *,
-    runtime_digest: str | None = None, previous_runtime_digest: str | None = None,
-) -> dict[str, str]:
+def control_manifest(document: dict[str, Any], environment: str) -> dict[str, str]:
     if environment != "staging":
         fail("AR-11 Core overlay adapter is staging-only; production execution is forbidden")
     if "control_plane" in document:
@@ -191,16 +187,6 @@ def control_manifest(
     if not isinstance(owner, str) or len(owner) > 254 or any(ord(ch) < 32 or ord(ch) == 127 for ch in owner):
         fail("control_plane.initial_owner_email must be a bounded single-line string")
     result["initial_owner_email"] = owner
-    # Only the two cryptographically identified Release Set runtime inventories
-    # can be trusted during a staged predecessor -> successor transition.
-    pinned = [runtime_digest] if runtime_digest is not None else []
-    if previous_runtime_digest is not None and previous_runtime_digest != runtime_digest:
-        pinned.append(previous_runtime_digest)
-    expected = ",".join(pinned) if pinned else None
-    allowed = candidate.get("approved_runtime_inventories", expected)
-    if not isinstance(allowed, str):
-        fail("runtime trust requires verified immutable Release Set inventories")
-    result["approved_runtime_inventories"] = bounded(allowed, "control_plane.approved_runtime_inventories")
     for field in (
         "worker_name",
         "d1_database_name",
@@ -215,17 +201,6 @@ def control_manifest(
         fail("control_plane.d1_database_id is not a D1 UUID")
     if AUDIENCE_RE.fullmatch(result["access_audience"]) is None:
         fail("control_plane.access_audience shape is invalid")
-    allowed = result["approved_runtime_inventories"]
-    if APPROVED_RUNTIME_INVENTORIES_RE.fullmatch(allowed) is None:
-        fail("control_plane.approved_runtime_inventories must be one or two exact lowercase SHA-256s")
-    if "," in allowed and allowed.split(",")[0] == allowed.split(",")[1]:
-        fail("control_plane.approved_runtime_inventories must not duplicate a runtime")
-    if previous_runtime_digest is not None:
-        if runtime_digest is None or set(allowed.split(",")) != set(pinned):
-            fail("protected runtime policy differs from the two verified Release Set inventories")
-        result["approved_runtime_inventories"] = expected
-    elif runtime_digest is not None and runtime_digest not in allowed.split(","):
-        fail("protected runtime policy excludes the exact accepted runtime Release Set")
     issuer = urlparse(result["access_issuer"])
     if (
         issuer.scheme != "https"
@@ -302,10 +277,11 @@ def render(
         fail("sealed READY evidence and known-good runtime materialization are mutually exclusive")
     if expected_previous_release_set_id == os.environ.get("RELEASE_SET_ID"):
         fail("known-good runtime must refer to a different immutable Release Set")
-    current_digest = verified_runtime_inventory(runtime_release_set, runtime_archive)
-    previous_digest = None
+    # Keep exact immutable Release Set runtime verification at promotion only.
+    # No WORKING/LKG allowlist is injected into the Cloudflare Worker.
+    verified_runtime_inventory(runtime_release_set, runtime_archive)
     if all(item is not None for item in previous_args):
-        previous_digest = verified_runtime_inventory(
+        verified_runtime_inventory(
             previous_runtime_release_set, previous_runtime_archive, expected_previous_release_set_id,
         )
     if ready_policy_evidence is not None:
@@ -318,25 +294,15 @@ def render(
         if SHA256_RE.fullmatch(sealed_sha) is None or hashlib.sha256(raw).hexdigest() != sealed_sha:
             fail("READY runtime policy evidence is not bound to the one-shot authorization")
         evidence = load(ready_policy_evidence, "sealed READY runtime policy")
-        policy = evidence.get("approved_runtime_inventories")
         if (
             evidence.get("kind") != "AR11_READY_TO_MUTATE"
             or evidence.get("ready") is not True
             or evidence.get("source_sha") != os.environ.get("GITHUB_SHA")
             or evidence.get("release_set_id") != os.environ.get("RELEASE_SET_ID")
             or evidence.get("expected_current_release_set_id") != expected_previous_release_set_id
-            or not isinstance(policy, str)
-            or APPROVED_RUNTIME_INVENTORIES_RE.fullmatch(policy) is None
-            or not policy.startswith(current_digest)
-            or policy.split(",")[0] != current_digest
-            or evidence.get("runtime_policy_sha256") != hashlib.sha256(policy.encode("utf-8")).hexdigest()
         ):
-            fail("sealed READY policy differs from exact approved source or target runtime")
-        previous_digest = policy.split(",")[-1]
-    manifest = control_manifest(
-        load(deploy_manifest, "deploy manifest"), environment,
-        runtime_digest=current_digest, previous_runtime_digest=previous_digest,
-    )
+            fail("sealed READY evidence differs from the accepted source or Release Set")
+    manifest = control_manifest(load(deploy_manifest, "deploy manifest"), environment)
     envs = config.get("env")
     if not isinstance(envs, dict) or set(envs) != {"staging", "production"}:
         fail("immutable Wrangler config must contain exactly staging and production templates")
@@ -360,7 +326,6 @@ def render(
         "${STAGING_CUSTOM_DOMAIN}": manifest["custom_domain"],
         "${STAGING_ACCESS_ISSUER}": manifest["access_issuer"],
         "${STAGING_ACCESS_AUDIENCE}": manifest["access_audience"],
-        "${STAGING_APPROVED_RUNTIME_INVENTORIES}": manifest["approved_runtime_inventories"],
         "${STAGING_INITIAL_OWNER_EMAIL}": manifest["initial_owner_email"],
         "${STAGING_D1_DATABASE_NAME}": manifest["d1_database_name"],
         "${STAGING_D1_DATABASE_ID}": manifest["d1_database_id"],
@@ -463,7 +428,6 @@ def self_test() -> None:
         "worker_name": "profile-staging", "account_id": "c" * 32,
         "custom_domain": "staging.example.invalid",
         "access_issuer": "https://team.cloudflareaccess.com", "access_audience": "d" * 32,
-        "approved_runtime_inventories": "a" * 64,
         "d1_database_name": "catalog-staging", "d1_database_id": "11111111-1111-1111-1111-111111111111",
         "r2_bucket_name": "profiles-staging", "integration_events_queue": "events-staging",
     }
@@ -546,7 +510,6 @@ def self_test() -> None:
                 fail("runtime digest differs from native shipping inventory format")
             for index, contact in enumerate([None, "owner@staging.invalid"]):
                 candidate = dict(manifest)
-                candidate.pop("approved_runtime_inventories", None)
                 if contact is not None:
                     candidate["initial_owner_email"] = contact
                 manifest_path.write_text(json.dumps({"control_plane": candidate}), encoding="utf-8")
@@ -561,39 +524,14 @@ def self_test() -> None:
                 observed = json.loads(output.read_text(encoding="utf-8"))
                 if observed["env"]["staging"]["vars"]["INITIAL_OWNER_EMAIL"] != (contact or ""):
                     fail("initial owner configuration was lost during canonical Core rendering")
-                if observed["env"]["staging"]["vars"]["PROFILE_GENERATION_APPROVED_RUNTIME_INVENTORIES"] != expected_pin + "," + old_pin:
-                    fail("staging WORKING two-release runtime policy was lost during no-rebuild Core rendering")
                 if set(observed["env"]) != {"staging"} or "build" in observed:
                     fail("setup configuration expanded the promotion target/build scope")
-            mismatched = dict(manifest, approved_runtime_inventories=expected_pin)
-            try:
-                control_manifest(
-                    {"control_plane": mismatched}, "staging",
-                    runtime_digest=expected_pin, previous_runtime_digest=old_pin,
-                )
-            except OverlayError:
-                pass
-            else:
-                fail("protected runtime policy excluding the verified previous runtime passed")
-            mismatched["approved_runtime_inventories"] = expected_pin + "," + "b" * 64
-            try:
-                control_manifest(
-                    {"control_plane": mismatched}, "staging",
-                    runtime_digest=expected_pin, previous_runtime_digest=old_pin,
-                )
-            except OverlayError:
-                pass
-            else:
-                fail("unverified third-party runtime pin unexpectedly passed")
             # Exercise the actual manual/post-deploy path with an independently
             # hashed READY proof rather than fetching an older runtime in mutate.
-            verified_policy = expected_pin + "," + old_pin
             ready_value = {
                 "kind": "AR11_READY_TO_MUTATE", "ready": True,
                 "source_sha": "1" * 40, "release_set_id": release_set_id,
                 "expected_current_release_set_id": previous_release_id,
-                "approved_runtime_inventories": verified_policy,
-                "runtime_policy_sha256": hashlib.sha256(verified_policy.encode()).hexdigest(),
             }
             ready_file = root / "ready-to-mutate.json"
             ready_file.write_text(json.dumps(ready_value), encoding="utf-8")
@@ -602,7 +540,7 @@ def self_test() -> None:
             os.environ["READY_EVIDENCE_SHA256"] = hashlib.sha256(ready_file.read_bytes()).hexdigest()
             os.environ["GITHUB_SHA"] = "1" * 40
             try:
-                manifest_path.write_text(json.dumps({"control_plane": dict(manifest, approved_runtime_inventories=verified_policy)}), encoding="utf-8")
+                manifest_path.write_text(json.dumps({"control_plane": manifest}), encoding="utf-8")
                 proof_output = root / "overlay-ready.json"
                 render(source_config=Path(__file__).resolve().parents[1] / "deploy/cloudflare/wrangler.jsonc",
                        release_root=root, deploy_manifest=manifest_path,
@@ -610,8 +548,8 @@ def self_test() -> None:
                        ready_policy_evidence=ready_file, expected_previous_release_set_id=previous_release_id,
                        environment="staging", output=proof_output)
                 rendered = json.loads(proof_output.read_text(encoding="utf-8"))
-                if rendered["env"]["staging"]["vars"]["PROFILE_GENERATION_APPROVED_RUNTIME_INVENTORIES"] != verified_policy:
-                    fail("verified READY runtime policy was not reproduced at mutation boundary")
+                if "PROFILE_GENERATION_APPROVED_RUNTIME_INVENTORIES" in rendered["env"]["staging"]["vars"]:
+                    fail("retired WORKING runtime pin reappeared at mutation boundary")
                 os.environ["READY_EVIDENCE_SHA256"] = "0" * 64
                 try:
                     render(source_config=Path(__file__).resolve().parents[1] / "deploy/cloudflare/wrangler.jsonc",
@@ -632,12 +570,6 @@ def self_test() -> None:
                     os.environ.pop("GITHUB_SHA", None)
                 else:
                     os.environ["GITHUB_SHA"] = old_git_sha
-            permitted = dict(manifest, approved_runtime_inventories=old_pin + "," + expected_pin)
-            if control_manifest(
-                {"control_plane": permitted}, "staging",
-                runtime_digest=expected_pin, previous_runtime_digest=old_pin,
-            )["approved_runtime_inventories"] != expected_pin + "," + old_pin:
-                fail("valid two-release policy is not canonical")
             try:
                 verified_runtime_inventory(previous_release_set, previous_archive, release_set_id)
             except OverlayError:

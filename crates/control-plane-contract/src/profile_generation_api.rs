@@ -23,6 +23,21 @@ pub const BRIDGE_PROFILE_GENERATION_OBSERVE_PATH_TEMPLATE: &str =
 pub const BRIDGE_PROFILE_GENERATION_RETRY_DECISION_PATH_TEMPLATE: &str =
     "/bridge/v1/tenants/{tenantId}/profiles/{profileId}/generation-successor/retry-decision";
 pub const BRIDGE_PROFILE_GENERATION_LOCAL_UNSYNCED_RETRY_DECISION_PATH_TEMPLATE: &str = "/bridge/v1/tenants/{tenantId}/profiles/{profileId}/generation-successor/local-unsynced/retry-decision";
+pub const BRIDGE_PROFILE_CURRENT_COLD_RETIREMENT_PATH_TEMPLATE: &str = "/bridge/v1/tenants/{tenantId}/profiles/{profileId}/generation-successor/cold-current-retirement";
+
+/// The same signed device independently cold-restored the exact current R2
+/// BPGC into a disposable local folder, compared every native Firefox byte
+/// with its clean original under the OS lock, and attests that completed
+/// recovery. The Worker separately re-authenticates the BPGC metadata and
+/// original sealed snapshot digest; a caller-supplied SHA is never authority.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct BridgeCurrentColdRetirementRequest {
+    pub current_generation_id: String,
+    pub expected_profile_version: u64,
+    pub metadata_prelude_hex: String,
+    pub restored_native_sha256: String,
+}
 
 /// Machine-authenticated, read-only exact successor reconciliation. No
 /// credential, lease/fencing token, signed URL or optimistic write version is
@@ -111,12 +126,30 @@ pub struct ProfileProjectionDto {
     pub status: ProfileStatusDto,
     pub version: u64,
     pub linked_client_id: Option<String>,
+    /// Explicit profile Operate permission; View alone never authorizes Open.
+    pub can_operate: bool,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ProfileCreateRequest {
     pub profile_id: String,
+}
+
+/// Strict, versioned user action; the D1 command is replay-safe for this exact
+/// tenant/profile/version, and each R2 effect is limited to frozen keys.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ProfileDeleteRequest {
+    pub expected_profile_version: u64,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ProfileDeleteResponse {
+    pub profile_id: String,
+    pub status: ProfileStatusDto,
+    pub pending_objects: u64,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -332,7 +365,8 @@ pub fn openapi_fragment() -> Value {
                         "profileId": opaque_id_schema(),
                         "status": schema_ref("ProfileStatusDto"),
                         "version": positive_version_schema(),
-                        "linkedClientId": nullable_opaque_id_schema()
+                        "linkedClientId": nullable_opaque_id_schema(),
+                        "canOperate": {"type": "boolean"}
                     }
                 },
                 "ProfileCreateRequestDto": {
@@ -683,9 +717,11 @@ mod tests {
             status: ProfileStatusDto::DirtyLocal,
             version: 7,
             linked_client_id: None,
+            can_operate: false,
         })?;
         assert_eq!(profile["status"], "DIRTY_LOCAL");
         assert!(profile.get("linkedClientId").is_some_and(Value::is_null));
+        assert_eq!(profile["canOperate"], false);
         Ok(())
     }
 

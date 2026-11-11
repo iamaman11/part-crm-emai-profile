@@ -2,12 +2,11 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { TenantProvider } from '../../app/TenantContext';
-import { changeGenerationActivation, dispatchBrowserProfileOpen, getCoordinator, getGeneration, getProfile, launchProfile } from './api';
+import { changeGenerationActivation, dispatchBrowserProfileOpen, getCoordinator, getGeneration, getProfile } from './api';
 import { ProfilesWorkspace } from './ProfilesWorkspace';
 
 vi.mock('./api', () => ({
   dispatchBrowserProfileOpen: vi.fn(),
-  launchProfile: vi.fn(),
   changeGenerationActivation: vi.fn(),
   commandCoordinator: vi.fn(),
   createProfile: vi.fn(),
@@ -24,20 +23,14 @@ const profileLookup = vi.mocked(getProfile);
 const generationLookup = vi.mocked(getGeneration);
 const coordinatorLookup = vi.mocked(getCoordinator);
 const activation = vi.mocked(changeGenerationActivation);
-const launchIntent = vi.mocked(launchProfile);
 const localOpen = vi.mocked(dispatchBrowserProfileOpen);
 
 describe('ProfilesWorkspace generation refresh (#802 F06)', () => {
-  it('prefetches the authorized launch intent before click and dispatches locally without a click-time API call', async () => {
+  it('opens with the authenticated tenant and selected local profile without a Worker launch request', async () => {
     profileLookup.mockResolvedValue({
-      profileId: 'profile_test', status: 'READY', version: 7, linkedClientId: null,
+      profileId: 'profile_test', status: 'READY', version: 7, linkedClientId: null, canOperate: true,
       activeGenerationId: 'generation_current',
     } as Awaited<ReturnType<typeof getProfile>>);
-    const uri = 'profilebridge://open/v2/tenant_test/actor_test/profile_test/7/READY';
-    launchIntent.mockResolvedValue({
-      schemaVersion: 2,
-      launchUri: uri,
-    } as Awaited<ReturnType<typeof launchProfile>>);
     const cache = new QueryClient({ defaultOptions: { queries: { retry: false } } });
     render(
       <QueryClientProvider client={cache}>
@@ -50,26 +43,25 @@ describe('ProfilesWorkspace generation refresh (#802 F06)', () => {
     );
 
     const open = await screen.findByRole('button', { name: 'Open browser' }) as HTMLButtonElement;
-    await waitFor(() => expect(launchIntent).toHaveBeenCalledTimes(1));
     await waitFor(() => expect(open.disabled).toBe(false));
     expect(localOpen).not.toHaveBeenCalled();
 
     fireEvent.click(open);
-    await waitFor(() => expect(localOpen).toHaveBeenCalledWith(uri));
-    expect(launchIntent).toHaveBeenCalledTimes(1);
+    // Must run during the direct trusted click, not from a delayed async
+    // mutation or Worker prefetch completion.
+    expect(localOpen).toHaveBeenCalledWith(
+      'tenant_test', 'actor_test', 'profile_test', 7, 'READY',
+    );
+    expect(profileLookup).toHaveBeenCalledTimes(1);
   });
 
   beforeEach(() => {
     vi.clearAllMocks();
-    launchIntent.mockResolvedValue({
-      schemaVersion: 2,
-      launchUri: 'profilebridge://open/v2/tenant_test/actor_test/profile_test/1/DRAFT',
-    } as Awaited<ReturnType<typeof launchProfile>>);
     window.history.replaceState(null, '', '/profiles');
   });
 
   it('refreshes authoritative profile and generation after deactivate/reactivate without reload', async () => {
-    const profile = { profileId: 'profile_test', status: 'READY', version: 11, linkedClientId: null, activeGenerationId: 'generation_test' as string | null };
+    const profile = { profileId: 'profile_test', status: 'READY', version: 11, linkedClientId: null, canOperate: true, activeGenerationId: 'generation_test' as string | null };
     const generation = { generationId: 'generation_test', status: 'VERIFIED', version: 3, verificationReference: null };
     profileLookup.mockImplementation(async () => ({ ...profile }) as Awaited<ReturnType<typeof getProfile>>);
     generationLookup.mockImplementation(async () => ({ ...generation }) as Awaited<ReturnType<typeof getGeneration>>);
@@ -136,7 +128,7 @@ describe('ProfilesWorkspace generation refresh (#802 F06)', () => {
       finishOld = resolve;
     });
     profileLookup.mockImplementation(async (_tenant, id) => ({
-      profileId: id, status: 'READY', version: 11, linkedClientId: null,
+      profileId: id, status: 'READY', version: 11, linkedClientId: null, canOperate: true,
       activeGenerationId: id === 'profile_old' ? 'generation_old' : null,
     }) as Awaited<ReturnType<typeof getProfile>>);
     generationLookup.mockResolvedValue({
@@ -174,6 +166,29 @@ describe('ProfilesWorkspace generation refresh (#802 F06)', () => {
     expect(generationLookup).toHaveBeenCalledTimes(2); // Initial lookup + original readback, never new generation.
   });
 
+  it('never exposes native Open to an independently visible viewer-only profile', async () => {
+    profileLookup.mockResolvedValue({
+      profileId: 'profile_viewer', status: 'READY', version: 7,
+      activeGenerationId: 'generation_current', linkedClientId: null,
+      canOperate: false,
+    } as Awaited<ReturnType<typeof getProfile>>);
+    const cache = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    render(
+      <QueryClientProvider client={cache}>
+        <TenantProvider loadTenantContexts={async () => ({
+          tenants: [{ tenantId: 'tenant_test', displayName: 'Test tenant', actorId: 'actor_viewer', role: 'MEMBER' }],
+        })}>
+          <ProfilesWorkspace selectedProfileId="profile_viewer" onProfileSelected={() => undefined} />
+        </TenantProvider>
+      </QueryClientProvider>,
+    );
+    await screen.findByText('profile_viewer');
+    const open = screen.getByRole('button', { name: 'Open browser' }) as HTMLButtonElement;
+    expect(open.disabled).toBe(true);
+    fireEvent.click(open);
+    expect(localOpen).not.toHaveBeenCalled();
+  });
+
   it('does not show a delayed profile lookup from a previous selection', async () => {
     let resolveOld: (value: Awaited<ReturnType<typeof getProfile>>) => void = () => undefined;
     const oldRead = new Promise<Awaited<ReturnType<typeof getProfile>>>((resolve) => {
@@ -182,7 +197,7 @@ describe('ProfilesWorkspace generation refresh (#802 F06)', () => {
     profileLookup.mockImplementation(async (_tenant, id) => {
       if (id === 'profile_old') return oldRead;
       return {
-        profileId: id, status: 'READY', version: 8, linkedClientId: null,
+        profileId: id, status: 'READY', version: 8, linkedClientId: null, canOperate: true,
       } as Awaited<ReturnType<typeof getProfile>>;
     });
     const cache = new QueryClient({ defaultOptions: { queries: { retry: false } } });
@@ -201,14 +216,14 @@ describe('ProfilesWorkspace generation refresh (#802 F06)', () => {
     await screen.findByText('profile_new');
     await act(async () => {
       resolveOld({
-        profileId: 'profile_old', status: 'SUSPENDED', version: 18, linkedClientId: null,
+        profileId: 'profile_old', status: 'SUSPENDED', version: 18, linkedClientId: null, canOperate: true,
       } as Awaited<ReturnType<typeof getProfile>>);
       await oldRead;
     });
     expect(screen.queryByText('profile_old')).toBeNull();
     expect(screen.getByText('profile_new')).toBeTruthy();
-    // Profile projection and prefetched Worker launch authorization are distinct
-    // asynchronous reads. A correct Open stays disabled until both have arrived.
+    // The already loaded, scoped profile projection is enough for local Open.
+    // There is no second launch-intent network dependency.
     await waitFor(() => expect((screen.getByRole('button', { name: 'Open browser' }) as HTMLButtonElement).disabled).toBe(false));
   });
 
@@ -222,7 +237,7 @@ describe('ProfilesWorkspace generation refresh (#802 F06)', () => {
       resolveCoordinator = resolve;
     });
     profileLookup.mockImplementation(async (_tenant, id) => ({
-      profileId: id, status: 'READY', version: 9, linkedClientId: null,
+      profileId: id, status: 'READY', version: 9, linkedClientId: null, canOperate: true,
     }) as Awaited<ReturnType<typeof getProfile>>);
     generationLookup.mockReturnValue(oldGeneration);
     coordinatorLookup.mockReturnValue(oldCoordinator);
@@ -266,7 +281,7 @@ describe('ProfilesWorkspace generation refresh (#802 F06)', () => {
     let version = 7;
     profileLookup.mockImplementation(async () => ({
       profileId: 'profile_external_save', status: 'READY', version,
-      activeGenerationId: 'generation_current', linkedClientId: null,
+      activeGenerationId: 'generation_current', linkedClientId: null, canOperate: true,
     }) as Awaited<ReturnType<typeof getProfile>>);
     const cache = new QueryClient({ defaultOptions: { queries: { retry: false } } });
     const directoryKey = ['operator-query', 'tenant_test', 'profiles'];
@@ -292,7 +307,7 @@ describe('ProfilesWorkspace generation refresh (#802 F06)', () => {
   it('explains a quarantined generation and never submits its invalid activation', async () => {
     profileLookup.mockResolvedValue({
       profileId: 'profile_test', status: 'READY', version: 7, activeGenerationId: 'generation_current',
-      linkedClientId: null,
+      linkedClientId: null, canOperate: true,
     } as Awaited<ReturnType<typeof getProfile>>);
     generationLookup.mockResolvedValue({
       generationId: 'generation_old', status: 'QUARANTINED', version: 3,

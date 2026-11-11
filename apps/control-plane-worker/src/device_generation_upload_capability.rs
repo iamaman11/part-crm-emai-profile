@@ -4,7 +4,7 @@ use crate::access_session::{
 use crate::composition::{
     authenticated_device, coordinator_ingress_application, device_execution_preconditions,
     device_job_authorization, device_job_repository, generation_object_verifier,
-    generation_upload_capability_signer,
+    generation_upload_capability_signer, profile_generation_successor_observer,
 };
 use application_ports::coordinator_ingress::{
     CoordinatorIngressApplicationPort, CoordinatorIngressPortErrorClass,
@@ -130,16 +130,16 @@ pub async fn dispatch(request: &mut Request, env: &Env) -> Result<Response> {
     }
 
     let preconditions = device_execution_preconditions(env)?;
-    match preconditions
+    let expected_version = match preconditions
         .load_active_profile_version(actor, &profile_id, &base_generation_id)
         .await
     {
-        Ok(Some(_)) => {}
+        Ok(Some(value)) => value.value(),
         Ok(None) => return version_conflict(actor.correlation_id().as_str()),
         Err(error) => {
             return generation_precondition_failure(actor.correlation_id().as_str(), error.class());
         }
-    }
+    };
 
     let coordinator = coordinator_ingress_application(env);
     let snapshot = match coordinator
@@ -197,6 +197,23 @@ pub async fn dispatch(request: &mut Request, env: &Env) -> Result<Response> {
         Ok(value) => value,
         Err(error) => return signing_failure(actor.correlation_id().as_str(), error),
     };
+
+    // Device-job PUTs use the same D1 signed capability owner as the native
+    // profile successor and initial DRAFT. A frozen Delete denies the atomic
+    // reservation, even when an earlier job/Coordinator read succeeded.
+    if profile_generation_successor_observer(env)?
+        .reserve_generation_upload_capability(
+            actor,
+            &descriptor,
+            Some(&base_generation_id),
+            expected_version,
+            server_now(),
+        )
+        .await
+        .is_err()
+    {
+        return stale_authority(actor.correlation_id().as_str());
+    }
 
     Response::from_json(&DeviceGenerationUploadCapabilityResponse::upload_required(
         capability.url(),

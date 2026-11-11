@@ -215,6 +215,21 @@ pub(super) async fn dispatch(
                 Ok(value) => value,
                 Err(error) => return signing_failure(actor.correlation_id().as_str(), error),
             };
+            // DRAFT uses the same D1 lifecycle owner as READY: a signed
+            // upload never escapes after an owner-authorized DELETE freeze.
+            if profile_generation_successor_observer(env)?
+                .reserve_generation_upload_capability(
+                    actor,
+                    &descriptor,
+                    None,
+                    expected.value(),
+                    server_now(),
+                )
+                .await
+                .is_err()
+            {
+                return dependency(actor.correlation_id().as_str());
+            }
             machine_json(&BridgeGenerationUploadCapabilityResponse::upload_required(
                 capability.url(),
                 capability.headers(),

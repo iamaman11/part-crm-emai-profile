@@ -1,8 +1,9 @@
-import { invokeProfileBridgeLaunch } from './launchBridge';
+import { invokeProfileBridgeLaunch, localProfileOpenUri } from './launchBridge';
 import {
   activateProfileGeneration as activateProfileGenerationOperation,
   assignProfileToClient as assignProfileToClientOperation,
   createProfileMetadata as createProfileMetadataOperation,
+  deleteProfileMetadata as deleteProfileMetadataOperation,
   deactivateProfileGeneration as deactivateProfileGenerationOperation,
   detachProfileFromClient as detachProfileFromClientOperation,
   getProfileCoordinator as getProfileCoordinatorOperation,
@@ -10,7 +11,6 @@ import {
   getProfileMetadata as getProfileMetadataOperation,
   grantProfileAccess as grantProfileAccessOperation,
   issueProfileCoordinatorCommand as issueProfileCoordinatorCommandOperation,
-  launchProfile as launchProfileOperation,
   listProfiles as listProfilesOperation,
   quarantineProfileGeneration as quarantineProfileGenerationOperation,
   registerProfileGeneration as registerProfileGenerationOperation,
@@ -25,10 +25,10 @@ import type {
   CoordinatorResponseDto,
   MutationReceipt,
   ProfileCreateRequest,
+  ProfileDeleteResponse,
   ProfileDetachmentRequest,
   ProfileGenerationResponse,
   ProfileGrantRequest,
-  ProfileLaunchIntentProjectionV2,
   ProfileListPageDto,
   ProfileView,
   RegisterProfileGenerationRequest,
@@ -45,7 +45,6 @@ export type ChangeGenerationActivationInput = { readonly expectedProfileVersion:
 export type QuarantineGenerationInput = { readonly expectedGenerationVersion: number };
 export type ProfileProjection = ProfileView;
 export type GenerationProjection = ProfileGenerationResponse;
-export type ProfileLaunch = ProfileLaunchIntentProjectionV2;
 export type CoordinatorResponse = CoordinatorResponseDto;
 export type CoordinatorCommandDto = GeneratedCoordinatorCommandDto;
 export type { CoordinatorCommandRequestDto, ProfileListPageDto };
@@ -68,19 +67,24 @@ export function getProfile(tenantId: string, profileId: string): Promise<Profile
   return getProfileMetadataOperation({ tenantId, profileId });
 }
 
-export function launchProfile(
-  tenantId: string,
-  profileId: string,
-  idempotencyKey: string,
-): Promise<ProfileLaunch> {
-  return launchProfileOperation({ tenantId, profileId, idempotencyKey });
-}
-
 export function createProfile(tenantId: string, profileId: string, idempotencyKey: string): Promise<MutationReceipt> {
   return createProfileMetadataOperation({
     tenantId,
     body: { profileId },
     idempotencyKey,
+  });
+}
+
+export function deleteProfile(
+  tenantId: string,
+  profileId: string,
+  expectedProfileVersion: number,
+): Promise<ProfileDeleteResponse> {
+  // One user command; the existing Worker cron owns durable DELETING replay.
+  return deleteProfileMetadataOperation({
+    tenantId,
+    profileId,
+    body: { expectedProfileVersion },
   });
 }
 
@@ -216,12 +220,16 @@ export function commandCoordinator(
   return issueProfileCoordinatorCommandOperation({ tenantId, profileId, body: input });
 }
 
-export async function openBrowserProfile(tenantId: string, profileId: string, idempotencyKey: string): Promise<void> {
-  const launch = await launchProfile(tenantId, profileId, idempotencyKey);
-  invokeProfileBridgeLaunch(launch.launchUri);
-}
-
-export function dispatchBrowserProfileOpen(launchUri: string): void {
-  // A user click only dispatches the already authorized, prefetched local Bridge URI.
-  invokeProfileBridgeLaunch(launchUri);
+export function dispatchBrowserProfileOpen(
+  tenantId: string,
+  actorId: string,
+  profileId: string,
+  expectedVersion: number,
+  status: 'DRAFT' | 'READY',
+): void {
+  // The profile and authenticated tenant context are already selected.
+  // Installed Bridge still enforces device binding, local version and OS lock.
+  invokeProfileBridgeLaunch(
+    localProfileOpenUri(tenantId, actorId, profileId, expectedVersion, status),
+  );
 }

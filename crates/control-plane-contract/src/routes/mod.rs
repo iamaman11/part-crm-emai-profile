@@ -113,7 +113,12 @@ fn bridge_profile_generation_machine_route(method: &str, path: &str) -> bool {
             "profiles",
             _,
             "generation-successor",
-            "upload-capability" | "sealing-material" | "commit" | "observe" | "retry-decision"
+            "upload-capability"
+                | "sealing-material"
+                | "commit"
+                | "observe"
+                | "retry-decision"
+                | "cold-current-retirement"
         ] | [
             "bridge",
             "v1",
@@ -133,15 +138,6 @@ fn bridge_profile_generation_machine_route(method: &str, path: &str) -> bool {
             _,
             "generation-reopen",
             "download-capability" | "opening-material"
-        ] | [
-            "bridge",
-            "v1",
-            "tenants",
-            _,
-            "profiles",
-            _,
-            "generation-working-candidate",
-            "download-capability" | "opening-material" | "certify"
         ]
     )
 }
@@ -206,9 +202,7 @@ mod tests {
             "/bridge/v1/tenants/tenant_01/profiles/profile_01/generation-successor/local-unsynced/retry-decision",
             "/bridge/v1/tenants/tenant_01/profiles/profile_01/generation-reopen/download-capability",
             "/bridge/v1/tenants/tenant_01/profiles/profile_01/generation-reopen/opening-material",
-            "/bridge/v1/tenants/tenant_01/profiles/profile_01/generation-working-candidate/download-capability",
-            "/bridge/v1/tenants/tenant_01/profiles/profile_01/generation-working-candidate/opening-material",
-            "/bridge/v1/tenants/tenant_01/profiles/profile_01/generation-working-candidate/certify",
+            "/bridge/v1/tenants/tenant_01/profiles/profile_01/generation-successor/cold-current-retirement",
         ] {
             assert_eq!(classify("POST", path), RouteClass::ProfileCoordinatorApi);
             for method in ["GET", "PUT", "DELETE"] {
@@ -227,7 +221,11 @@ mod tests {
             "/bridge/v2/tenants/tenant_01/profiles/profile_01/generation-reopen/download-capability",
             "/bridge/v1/tenants/tenant_01/profiles/profile_01/generation-reopen/download-capability/extra",
             "/bridge/v1/tenants/tenant_01/profiles/profile_01/generation-reopen/opening-material/extra",
+            "/bridge/v1/tenants/tenant_01/profiles/profile_01/generation-working-candidate/download-capability",
+            "/bridge/v1/tenants/tenant_01/profiles/profile_01/generation-working-candidate/opening-material",
+            "/bridge/v1/tenants/tenant_01/profiles/profile_01/generation-working-candidate/certify",
             "/bridge/v1/tenants/tenant_01/profiles/profile_01/generation-working-candidate/download-capability/extra",
+            "/bridge/v1/tenants/tenant_01/profiles/profile_01/generation-successor/cold-current-retirement/extra",
             "/bridge/v2/tenants/tenant_01/profiles/profile_01/generation-working-candidate/certify",
             "/bridge/v1/tenants/tenant_01/profiles/profile_01/generation-working-candidate/commit",
         ] {

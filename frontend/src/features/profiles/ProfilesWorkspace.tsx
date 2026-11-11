@@ -1,12 +1,13 @@
-import { dispatchBrowserProfileOpen, launchProfile } from './api';
+import { dispatchBrowserProfileOpen } from './api';
 import { newIdempotencyKey } from '../../shared/api/idempotency';
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { useEffect, useRef, useState, type FormEvent } from 'react';
 import { useTenant } from '../../app/TenantContext';
 import {
   changeGenerationActivation,
   commandCoordinator,
   createProfile,
+  deleteProfile,
   getCoordinator,
   getGeneration,
   getProfile,
@@ -46,10 +47,12 @@ export function ProfilesWorkspace({
   selectedProfileId?: string | null;
   onProfileSelected: (profileId: string) => void;
 }) {
-  const { tenantId } = useTenant();
+  const { tenantId, contexts } = useTenant();
   const cache = useQueryClient();
   const [profileId, setProfileId] = useState(selectedProfileId ?? '');
   const [profile, setProfile] = useState<ProfileProjection | null>(null);
+  const activeTenant = contexts.find((context) => context.tenantId === tenantId);
+  const owner = activeTenant?.role === 'TENANT_OWNER';
   const [generationId, setGenerationId] = useState('');
   const [generation, setGeneration] = useState<GenerationProjection | null>(null);
   const [coordinator, setCoordinator] = useState<CoordinatorResponse | null>(null);
@@ -57,22 +60,26 @@ export function ProfilesWorkspace({
   const selected = useRef({ tenantId, profileId, generationId });
   selected.current = { tenantId, profileId, generationId };
 
-  const launchIntent = useQuery({
-    queryKey: ['operator-query', tenantId, 'profile-launch', profileId, profile?.version],
-    queryFn: () => launchProfile(tenantId, profileId, newIdempotencyKey()),
-    enabled: tenantId.length > 0 && profile !== null && profile.profileId === profileId
-      && ['DRAFT', 'READY'].includes(profile.status) && !generationRefreshUnconfirmed,
-    staleTime: 60_000,
-    retry: false,
-    refetchOnWindowFocus: false,
-    refetchOnReconnect: false,
-  });
-  const launch = useMutation({
-    mutationFn: async () => {
-      if (!launchIntent.data) throw new Error('The local browser open intent is not ready.');
-      dispatchBrowserProfileOpen(launchIntent.data.launchUri);
-    },
-  });
+  const [openError, setOpenError] = useState<Error | null>(null);
+  const openSelectedProfile = () => {
+    // Native protocol dispatch must stay synchronous in the actual user
+    // click. No ReactQuery mutation, background prefetch or Worker launch.
+    if (!activeTenant || !profile || profile.profileId !== profileId
+      || profile.canOperate !== true
+      || (profile.status !== 'DRAFT' && profile.status !== 'READY')
+      || generationRefreshUnconfirmed) {
+      setOpenError(new Error('The selected local profile is not ready to open.'));
+      return;
+    }
+    try {
+      setOpenError(null);
+      dispatchBrowserProfileOpen(
+        tenantId, activeTenant.actorId, profile.profileId, profile.version, profile.status,
+      );
+    } catch {
+      setOpenError(new Error('Native Profile Bridge did not accept this profile Open.'));
+    }
+  };
   const lookup = useMutation({
     mutationFn: (target: ProfileSelection) => getProfile(target.tenantId, target.profileId),
     onSuccess: (data, target) => {
@@ -86,6 +93,26 @@ export function ProfilesWorkspace({
     onSuccess: (receipt) => {
       void cache.invalidateQueries({ queryKey: ['operator-query', tenantId, 'profiles'] });
       if (receipt?.resourceId) onProfileSelected(receipt.resourceId);
+    },
+  });
+  const deleteAction = useMutation({
+    mutationFn: async ({ targetTenant, targetProfile, expectedVersion }: {
+      targetTenant: string;
+      targetProfile: string;
+      expectedVersion: number;
+    }) => deleteProfile(targetTenant, targetProfile, expectedVersion),
+    onSuccess: async (receipt, variables) => {
+      await cache.invalidateQueries({ queryKey: ['operator-query', variables.targetTenant, 'profiles'] });
+      if (selected.current.tenantId !== variables.targetTenant
+        || selected.current.profileId !== variables.targetProfile) return;
+      try {
+        const refreshed = await getProfile(variables.targetTenant, variables.targetProfile);
+        setProfile(refreshed ?? null);
+      } catch {
+        // A stale local projection cannot be used as proof of deletion.
+        setProfile(null);
+      }
+      if (receipt.status === 'DELETED') setGeneration(null);
     },
   });
   const grant = useLogicalCommandMutation((input: GrantDraft & { revoke: boolean }, idempotencyKey) => setProfileGrant(
@@ -231,13 +258,35 @@ export function ProfilesWorkspace({
         )}
         {profile && <>
           <div className="action-row">
-            <button type="button" disabled={launch.isPending || launchIntent.isPending || !launchIntent.data || generationAction.isPending || generationRefreshUnconfirmed || !['DRAFT', 'READY'].includes(profile.status)} onClick={() => launch.mutate()}>{launch.isPending ? 'Opening…' : 'Open browser'}</button>
+            <button type="button" disabled={!activeTenant || profile.profileId !== profileId || profile.canOperate !== true || generationAction.isPending || generationRefreshUnconfirmed || !['DRAFT', 'READY'].includes(profile.status)} onClick={openSelectedProfile}>Open browser</button>
             <button type="button" disabled={lookup.isPending} onClick={() => {
               void cache.invalidateQueries({ queryKey: ['operator-query', tenantId, 'profiles'] });
               lookup.mutate({ tenantId, profileId });
             }}>Refresh status</button>
+            {owner && ['DRAFT', 'READY', 'SUSPENDED', 'QUARANTINED'].includes(profile.status) && (
+              <ConfirmAction
+                label="Delete profile"
+                consequence={<>Delete this profile and its encrypted cloud snapshots. This cannot be undone. The browser must be closed.</>}
+                disabled={deleteAction.isPending}
+                onConfirm={async () => {
+                  await deleteAction.mutateAsync({
+                    targetTenant: tenantId,
+                    targetProfile: profile.profileId,
+                    expectedVersion: profile.version,
+                  });
+                }}
+              />
+            )}
           </div>
-          <StatusMessage state={launch.error ?? launchIntent.error ?? (launch.isPending ? 'Opening your profile…' : launchIntent.isPending ? 'Preparing local browser access…' : null)} />
+          <StatusMessage state={openError} />
+          <StatusMessage state={deleteAction.error ?? (deleteAction.data
+            ? deleteAction.data.status === 'DELETED'
+              ? 'Profile and all cloud objects deleted.'
+              : 'Deletion is pending; the server resumes automatically after signed upload permissions expire. Refresh for status.'
+            : null)} />
+          {profile.status === 'DELETING' && (
+            <p>Deletion is in progress. The server continues automatically; use Refresh status to check the result.</p>
+          )}
         </>}
         {profile && (
           <dl className="projection">

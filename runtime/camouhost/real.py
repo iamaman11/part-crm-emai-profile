@@ -1490,10 +1490,11 @@ def run_ipc() -> int:
                 report_runtime_failure("cleanup", error)
 
 
-def read_local_open_request() -> tuple[dict[str, Any], bool]:
+def read_local_open_request() -> tuple[dict[str, Any] | None, bool]:
     """Read Rust-owned canonical profile settings over the one-shot process stdin."""
     maximum_input = MAX_CONFIG_BYTES * 12 + 8192
-    raw = sys.stdin.read(maximum_input)
+    # One framed request, then keep stdin open for a first-profile identity ACK.
+    raw = sys.stdin.readline(maximum_input)
     if not raw or len(raw.encode("utf-8")) >= maximum_input:
         raise RuntimeContractError("local Open configuration input is missing or oversized")
     try:
@@ -1504,8 +1505,14 @@ def read_local_open_request() -> tuple[dict[str, Any], bool]:
         raise RuntimeContractError("local Open configuration contract is invalid")
     config_json = request.get("config_json")
     first_run = request.get("first_run")
-    if not isinstance(config_json, str) or not isinstance(first_run, bool):
-        raise RuntimeContractError("local Open configuration fields are invalid")
+    if not isinstance(first_run, bool):
+        raise RuntimeContractError("local Open first-run flag is invalid")
+    if config_json is None and first_run:
+        # Official fpgen may only draw for a new empty workspace. Rust owns the
+        # saved config file and must acknowledge its durable write before launch.
+        return None, True
+    if not isinstance(config_json, str):
+        raise RuntimeContractError("local Open saved fingerprint config is missing")
     config_bytes = config_json.encode("utf-8")
     if len(config_bytes) > MAX_CONFIG_BYTES:
         raise RuntimeContractError("local Open profile configuration exceeds its bound")
@@ -1519,15 +1526,32 @@ def read_local_open_request() -> tuple[dict[str, Any], bool]:
     return config, first_run
 
 
-async def run_local_profile(root: Path, config: dict[str, Any], first_run: bool) -> int:
+async def run_local_profile(root: Path, config: dict[str, Any] | None, first_run: bool) -> int:
     """Launch one local profile and wait passively for Playwright's close event."""
     from native_process import launch_native_camoufox
 
     session = None
     context_closed = False
     try:
+        if config is None:
+            if not first_run:
+                raise RuntimeContractError("existing profile must retain its saved identity")
+            # Same official Camoufox/BrowserForge draw as the previous helper,
+            # now in this same Python process, before Playwright starts.
+            with contextlib.redirect_stdout(sys.stderr):
+                generated = materialize_candidate_identity(root)
+            print(json.dumps(generated, separators=(",", ":"), sort_keys=True), flush=True)
+            acknowledgement = sys.stdin.readline(64)
+            if acknowledgement != "camouhost-identity-persisted\n":
+                raise RuntimeContractError("ProfileBridge did not persist the Camoufox identity")
+            config = json.loads(generated["camoufox_config_json"])
+            if not isinstance(config, dict):
+                raise RuntimeContractError("official fingerprint config invalid")
+        # Installer/runtime gate verified the bundled SDK and fpgen model.
+        # Warm local Open must not re-import and rehash the pinned model.
+        # Only the first empty DRAFT calls materialize_candidate_identity(),
+        # which performs the official model verification before fpgen.
         lock, _ = load_runtime_lock()
-        verify_python_components(lock)
         # Rust owns and holds exclusive local workspace admission. The
         # canonical configuration and first-run decision arrive in memory.
         options = camoufox_launch_options(lock, root, config, first_run=first_run)
@@ -1582,22 +1606,6 @@ def main() -> int:
             report_runtime_failure("startup", error)
             return 4
         return asyncio.run(run_local_profile(Path(sys.argv[2]), config, first_run))
-    if len(sys.argv) == 3 and sys.argv[1] == "--materialize-identity":
-        try:
-            with contextlib.redirect_stdout(sys.stderr):
-                report = materialize_candidate_identity(Path(sys.argv[2]))
-        except Exception as error:
-            line = 0
-            traceback = error.__traceback__
-            while traceback is not None:
-                if traceback.tb_frame.f_code.co_filename == __file__:
-                    line = traceback.tb_lineno
-                traceback = traceback.tb_next
-            failure = {"category": runtime_failure_category(error), "line": line}
-            print(json.dumps({"failure": failure}, separators=(",", ":")), flush=True)
-            return 7
-        print(json.dumps(report, ensure_ascii=True, separators=(",", ":"), sort_keys=True))
-        return 0
     if len(sys.argv) != 1:
         print("unsupported Camouhost invocation", file=sys.stderr)
         return 2

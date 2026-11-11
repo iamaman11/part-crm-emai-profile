@@ -258,6 +258,13 @@ pub async fn control_plane_schedule(_event: ScheduledEvent, env: Env, _context: 
     {
         worker::console_error!("mailbox scheduled operation failed");
     }
+    // BrowserProfiles is an existing activation unit. Scheduled replay only
+    // continues D1-frozen, owner-authorized deletes after signed PUT expiry.
+    if capability_context.unit_enabled(ActivationUnit::BrowserProfiles)
+        && profiles::resume_due_profile_deletes(&env).await.is_err()
+    {
+        worker::console_error!("profile delete scheduled replay failed");
+    }
 }
 
 const fn queue_surface(message: &ControlPlaneQueueMessage) -> RuntimeSurface {
@@ -361,7 +368,7 @@ mod tests {
     fn all_existing_bridge_generation_operations_reach_their_authorized_handlers() {
         // Worker::main classifies before calling dispatch_profile_coordinator.
         // Keep the outer allowlist exactly in sync with the existing handler,
-        // so a 404 cannot silently block Save, Reopen or WORKING/LKG recovery.
+        // so a 404 cannot silently block Save, CURRENT Restore or retirement.
         for (suffix, operation) in [
             (
                 "generation-initialization",
@@ -400,16 +407,8 @@ mod tests {
                 BridgeGenerationMachineOperation::OpeningMaterial,
             ),
             (
-                "generation-working-candidate/download-capability",
-                BridgeGenerationMachineOperation::PredecessorDownloadCapability,
-            ),
-            (
-                "generation-working-candidate/opening-material",
-                BridgeGenerationMachineOperation::PredecessorOpeningMaterial,
-            ),
-            (
-                "generation-working-candidate/certify",
-                BridgeGenerationMachineOperation::PredecessorCertifyWorking,
+                "generation-successor/cold-current-retirement",
+                BridgeGenerationMachineOperation::ColdCurrentRetirement,
             ),
         ] {
             let path = format!("/bridge/v1/tenants/tenant_01/profiles/profile_01/{suffix}");
@@ -438,6 +437,21 @@ mod tests {
                     None
                 );
             }
+        }
+    }
+
+    #[test]
+    fn obsolete_working_routes_have_no_executable_handler() {
+        for suffix in [
+            "generation-working-candidate/download-capability",
+            "generation-working-candidate/opening-material",
+            "generation-working-candidate/certify",
+        ] {
+            let path = format!("/bridge/v1/tenants/tenant_01/profiles/profile_01/{suffix}");
+            assert_eq!(
+                profile_generation_successor_ingress::operation(&path, Method::Post),
+                None,
+            );
         }
     }
 

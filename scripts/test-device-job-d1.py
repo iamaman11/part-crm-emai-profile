@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import sqlite3
+import re
 from pathlib import Path
 from typing import Callable
 
@@ -561,6 +562,110 @@ def test_authorization_version_and_revocation_shape(connection: sqlite3.Connecti
     assert claimable_ids(connection, 500) == []
 
 
+
+def test_exact_current_restore_admission_after_successor() -> None:
+    """Use the *actual* Rust D1 SQL, not a copy with weaker conditions."""
+    source = (
+        ROOT / "crates/cloudflare-adapters/src/d1_device_authorization.rs"
+    ).read_text(encoding="utf-8")
+    match = re.search(
+        r'const ADMIT_PROFILE_DEVICE: &str = r#"(.*?)"#;',
+        source,
+        re.DOTALL,
+    )
+    assert match, "exact CURRENT admission SQL missing"
+    admit_sql = match.group(1)
+    connection = database()
+    try:
+        seed_tenant(
+            connection, tenant=TENANT_A, owner=OWNER_A,
+            identity=IDENTITY_A, profile=PROFILE_A,
+            generation=GENERATION_A, device=DEVICE_A,
+        )
+        connection.execute(
+            "UPDATE device_actor_bindings SET evidence_reference=? "
+            "WHERE tenant_id=? AND actor_id=? AND device_id=?",
+            ("p256_spki_der:test-signed-binding", TENANT_A, OWNER_A, DEVICE_A),
+        )
+
+        def activate(generation: str, version: int, timestamp: int) -> None:
+            connection.execute(
+                "INSERT INTO profile_generation_activate_commands ("
+                "tenant_id, command_id, command_actor_id, profile_id,"
+                "generation_id, expected_profile_version, executed_at_ms"
+                ") VALUES (?,?,?,?,?,?,?)",
+                (TENANT_A, f"command_activate_{generation}", OWNER_A,
+                 PROFILE_A, generation, version, timestamp),
+            )
+
+        def add_generation(generation: str, timestamp: int) -> None:
+            connection.execute(
+                "INSERT INTO profile_generation_register_commands ("
+                "tenant_id, command_id, command_actor_id, profile_id, generation_id,"
+                "object_key, metadata_digest, container_digest, executed_at_ms"
+                ") VALUES (?,?,?,?,?,?,?,?,?)",
+                (TENANT_A, f"command_register_{generation}", OWNER_A, PROFILE_A,
+                 generation, f"profiles/v1/{generation}.enc",
+                 "c" * 64, "d" * 64, timestamp),
+            )
+            connection.execute(
+                "INSERT INTO profile_generation_verify_commands ("
+                "tenant_id, command_id, command_actor_id, profile_id, generation_id,"
+                "expected_generation_version, verification_reference, executed_at_ms"
+                ") VALUES (?,?,?,?,?,?,?,?)",
+                (TENANT_A, f"command_verify_{generation}", OWNER_A, PROFILE_A,
+                 generation, 1, f"verification_{generation}", timestamp + 1),
+            )
+
+        activate(GENERATION_A, 1, 60)
+        next_generation = "generation_restored_successor_01"
+        add_generation(next_generation, 70)
+        activate(next_generation, 2, 80)
+        # The historical device grant exists, but does NOT authorize CURRENT.
+        rows = connection.execute(
+            "SELECT generation_id FROM device_authorizations "
+            "WHERE tenant_id=? AND device_id=? AND profile_id=? AND status='ACTIVE'",
+            (TENANT_A, DEVICE_A, PROFILE_A),
+        ).fetchall()
+        assert [row[0] for row in rows] == [GENERATION_A]
+        grant = (TENANT_A, OWNER_A, PROFILE_A, 85, DEVICE_A)
+        assert connection.execute(admit_sql, grant).rowcount == 1
+        assert connection.execute(admit_sql, grant).rowcount == 0, (
+            "repeat CURRENT admission was not idempotent"
+        )
+        assert connection.execute(
+            "SELECT COUNT(*) FROM device_authorizations WHERE tenant_id=? "
+            "AND device_id=? AND profile_id=? AND generation_id=? AND status='ACTIVE'",
+            (TENANT_A, DEVICE_A, PROFILE_A, next_generation),
+        ).fetchone()[0] == 1
+        assert connection.execute(
+            admit_sql, (TENANT_A, OWNER_A, PROFILE_A, 90, DEVICE_B)
+        ).rowcount == 0, "unbound device acquired CURRENT"
+
+        last_generation = "generation_restore_revoked_02"
+        add_generation(last_generation, 92)
+        activate(last_generation, 3, 100)
+        connection.execute(
+            "UPDATE device_actor_bindings SET status='REVOKED', "
+            "version=version+1, updated_at_ms=105, revoked_at_ms=105 "
+            "WHERE tenant_id=? AND actor_id=? AND device_id=?",
+            (TENANT_A, OWNER_A, DEVICE_A),
+        )
+        assert connection.execute(
+            admit_sql, (TENANT_A, OWNER_A, PROFILE_A, 110, DEVICE_A)
+        ).rowcount == 0, "revoked device reacquired CURRENT"
+        assert connection.execute(
+            "SELECT COUNT(*) FROM device_authorizations WHERE tenant_id=? "
+            "AND profile_id=? AND generation_id=?",
+            (TENANT_A, PROFILE_A, last_generation),
+        ).fetchone()[0] == 0
+        assert connection.execute(
+            admit_sql, (TENANT_B, OWNER_A, PROFILE_A, 112, DEVICE_A)
+        ).rowcount == 0, "cross-tenant CURRENT admission"
+    finally:
+        connection.close()
+
+
 def main() -> int:
     connection = database()
     try:
@@ -569,6 +674,7 @@ def main() -> int:
         test_claimable_due_query_and_index(connection)
         test_claim_shape_and_stale_cas(connection)
         test_authorization_version_and_revocation_shape(connection)
+        test_exact_current_restore_admission_after_successor()
     finally:
         connection.close()
     print("Phase 2F device identity/authorization/job D1 invariants are valid.")

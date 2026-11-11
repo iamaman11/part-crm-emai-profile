@@ -8,7 +8,7 @@ use profile_platform_primitives::{DeviceId, GenerationId};
 use sha2::{Digest, Sha256};
 use std::fmt;
 use std::fs::{self, OpenOptions};
-use std::io::{BufRead, BufReader, Write};
+use std::io::{BufRead, BufReader, Read, Write};
 use std::path::Path;
 use std::process::{Command, Stdio};
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -22,6 +22,7 @@ const MAX_CONFIG_BYTES: u64 = 1024 * 1024;
 const LOCAL_UNSYNCED: &str = ".local-unsynced";
 const LOCAL_UNSYNCED_CONTENT: &[u8] = b"local-unsynced-v2";
 const CAMOUHOST_LAUNCH_READY_EVENT: &str = "camouhost_stage phase=launch step=ready";
+const IDENTITY_ACK: &[u8] = b"camouhost-identity-persisted\n";
 
 pub(crate) type ReadyConfirmation = Box<dyn FnOnce() -> bool + Send + 'static>;
 pub(crate) type BeforeLaunch =
@@ -74,14 +75,24 @@ fn admit_existing_workspace(
     current: crate::local_profile::GenerationWorkspace,
     intent: &InitialProfileOpen,
 ) -> Result<crate::local_profile::GenerationWorkspace, LocalOpenError> {
-    // A valid local folder is not automatically the Worker-selected CURRENT.
-    // Use the already-authorized launch version; never silently open an older
-    // generation or claim that pending local bytes can be overwritten.
-    let matches_status = match intent.status {
-        InitialProfileStatus::Draft => current.base_generation_id().is_none(),
-        InitialProfileStatus::Ready => current.base_generation_id().is_some(),
+    // The installed local marker is the sole Open state owner. A successful
+    // post-close Sync may already have advanced D1 CURRENT and this marker
+    // while the CRM tab still displays the old version. Such a previously
+    // admitted local copy must remain reopenable without another Worker call.
+    //
+    // Never open a local folder *behind* the known server projection, and
+    // never reinterpret an uncommitted DRAFT as a READY profile.
+    let local_version = current.profile_version();
+    let matches_state = match intent.status {
+        InitialProfileStatus::Draft if current.base_generation_id().is_none() => {
+            local_version == intent.expected_version
+        }
+        InitialProfileStatus::Draft => local_version > intent.expected_version,
+        InitialProfileStatus::Ready => {
+            current.base_generation_id().is_some() && local_version >= intent.expected_version
+        }
     };
-    if current.profile_version() != intent.expected_version || !matches_status {
+    if !matches_state {
         return Err(LocalOpenError::StaleLocalWorkspace);
     }
     Ok(current)
@@ -97,7 +108,13 @@ fn recheck_workspace_after_writer_admission(
     let current = root
         .open_profile_current(&intent.tenant_id, &intent.profile_id)
         .map_err(|_| LocalOpenError::InvalidLocalWorkspace)?;
-    if current.path() != observed.path() {
+    // A Sync may have advanced the marker after our preliminary read.
+    // Even if the original CRM version is old, never accept a *race* during
+    // writer admission: Open must retry against one stable local snapshot.
+    if current.path() != observed.path()
+        || current.profile_version() != observed.profile_version()
+        || current.base_generation_id() != observed.base_generation_id()
+    {
         return Err(LocalOpenError::StaleLocalWorkspace);
     }
     admit_existing_workspace(current, intent)
@@ -167,19 +184,22 @@ fn run_python(
     }
 
     let executable = runtime_root.join(PYTHON);
-    if action == "--materialize-identity" {
-        // Never attach a newly generated identity to pre-existing browser data.
-        require_empty_user_data(folder)?;
-        return materialize_identity_with_executable(&executable, runtime_root, folder);
-    }
     if action == "--local-open" {
         let first_run = ensure_user_data_directory(folder)?;
-        let config_json = read_profile_config(folder)?;
-        let input = serde_json::to_vec(&serde_json::json!({
-            "config_json": config_json,
+        let config = if folder.join(CONFIG).exists() {
+            Some(read_profile_config(folder)?)
+        } else {
+            // Official fpgen draws only when DRAFT has no existing browser bytes.
+            require_empty_user_data(folder)?;
+            None
+        };
+        let first_identity = config.is_none();
+        let mut input = serde_json::to_vec(&serde_json::json!({
+            "config_json": config,
             "first_run": first_run,
         }))
         .map_err(|_| LocalOpenError::IdentityPreparation)?;
+        input.push(b'\n');
         return run_python_with_input(
             &executable,
             runtime_root,
@@ -187,6 +207,7 @@ fn run_python(
             action,
             before_launch,
             Some(&input),
+            first_identity,
         );
     }
     run_python_with_input(
@@ -196,6 +217,7 @@ fn run_python(
         action,
         before_launch,
         None,
+        false,
     )
 }
 
@@ -245,30 +267,11 @@ fn read_profile_config(folder: &Path) -> Result<String, LocalOpenError> {
     String::from_utf8(bytes).map_err(|_| LocalOpenError::IdentityPreparation)
 }
 
-fn materialize_identity_with_executable(
-    executable: &Path,
-    runtime_root: &Path,
-    folder: &Path,
-) -> Result<bool, LocalOpenError> {
-    let output = Command::new(executable)
-        .arg("-B")
-        .arg(runtime_root.join(ENTRYPOINT))
-        .arg("--materialize-identity")
-        .arg(folder)
-        .current_dir(runtime_root)
-        .env("CAMOUHOST_RUNTIME_LOCK", runtime_root.join(LOCK))
-        .env("CAMOUHOST_EXECUTION_MODE", "user-native")
-        .env("CAMOUHOST_HEADLESS_MODE", "false")
-        .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::null())
-        .output()
-        .map_err(|_| LocalOpenError::RuntimeUnavailable)?;
-    if !output.status.success() {
-        return Ok(false);
-    }
+/// Rust owns the first local config write; the official SDK generated it
+/// inside the same process that waits for an acknowledgment before launching.
+fn persist_sdk_identity(folder: &Path, raw: &[u8]) -> Result<(), LocalOpenError> {
     let report: serde_json::Value =
-        serde_json::from_slice(&output.stdout).map_err(|_| LocalOpenError::IdentityPreparation)?;
+        serde_json::from_slice(raw).map_err(|_| LocalOpenError::IdentityPreparation)?;
     let config_json = report
         .get("camoufox_config_json")
         .and_then(serde_json::Value::as_str)
@@ -315,7 +318,7 @@ fn materialize_identity_with_executable(
     temporary
         .persist_noclobber(&destination)
         .map_err(|_| LocalOpenError::IdentityPreparation)?;
-    Ok(true)
+    Ok(())
 }
 
 fn run_python_with_executable(
@@ -332,6 +335,7 @@ fn run_python_with_executable(
         action,
         before_launch,
         None,
+        false,
     )
 }
 
@@ -342,6 +346,7 @@ fn run_python_with_input(
     action: &str,
     before_launch: Option<BeforeLaunch>,
     stdin_payload: Option<&[u8]>,
+    generate_identity: bool,
 ) -> Result<bool, LocalOpenError> {
     // Delivery health is supplied by the composition owner as a one-shot
     // callback. Local Open knows only when the native runtime is launched and
@@ -367,18 +372,20 @@ fn run_python_with_input(
         } else {
             Stdio::null()
         })
-        .stdout(Stdio::null())
+        .stdout(if generate_identity {
+            Stdio::piped()
+        } else {
+            Stdio::null()
+        })
         .stderr(Stdio::piped())
         .spawn()
         .map_err(|_| LocalOpenError::RuntimeUnavailable)?;
+    let mut stdin = child.stdin.take();
     if let Some(payload) = stdin_payload {
-        let Some(mut stdin) = child.stdin.take() else {
-            let _ = child.kill();
-            let _ = child.wait();
-            return Err(LocalOpenError::RuntimeUnavailable);
-        };
-        if stdin.write_all(payload).is_err() {
-            drop(stdin);
+        let written = stdin
+            .as_mut()
+            .is_some_and(|stream| stream.write_all(payload).is_ok());
+        if !written {
             let _ = child.kill();
             let _ = child.wait();
             return Err(LocalOpenError::RuntimeUnavailable);
@@ -404,6 +411,38 @@ fn run_python_with_input(
             }
         }
     });
+    if generate_identity {
+        // One bounded SDK result, persisted by the Rust file owner before
+        // Camoufox begins launching. Fail closed on a partial IPC exchange.
+        let persisted = (|| -> Result<(), LocalOpenError> {
+            let output = child
+                .stdout
+                .take()
+                .ok_or(LocalOpenError::IdentityPreparation)?;
+            let mut stream = BufReader::new(output).take(MAX_CONFIG_BYTES * 8);
+            let mut line = Vec::new();
+            stream
+                .read_until(b'\n', &mut line)
+                .map_err(|_| LocalOpenError::IdentityPreparation)?;
+            if !line.ends_with(b"\n") {
+                return Err(LocalOpenError::IdentityPreparation);
+            }
+            persist_sdk_identity(folder, &line)?;
+            stdin
+                .as_mut()
+                .ok_or(LocalOpenError::IdentityPreparation)?
+                .write_all(IDENTITY_ACK)
+                .map_err(|_| LocalOpenError::IdentityPreparation)
+        })();
+        if let Err(error) = persisted {
+            drop(stdin);
+            let _ = child.kill();
+            let _ = child.wait();
+            let _ = diagnostics.join();
+            return Err(error);
+        }
+    }
+    drop(stdin);
     let status = child.wait();
     let _ = diagnostics.join();
     let completed = status.map_err(|_| LocalOpenError::RuntimeUnavailable)?;
@@ -499,27 +538,8 @@ pub(crate) fn open_with_before_launch(
     ) {
         return Err(LocalOpenError::ProfileBusy);
     }
-    let config = workspace.path().join(CONFIG);
-    if !config.exists() {
-        // No R2 snapshot, cloud claim or generation initialization. Official
-        // Camoufox fpgen creates the only local v2 identity once.
-        if !run_python(
-            runtime_root,
-            workspace.path(),
-            "--materialize-identity",
-            None,
-        )? {
-            return Err(LocalOpenError::IdentityPreparation);
-        }
-    }
-    // Rust owns the native Firefox file-access proof. Camouhost only uses
-    // the official SDK and reports the Playwright close event.
-    if !matches!(
-        crate::browser_execution::browser_writer_locks_absent(&workspace),
-        Ok(true)
-    ) {
-        return Err(LocalOpenError::ProfileBusy);
-    }
+    // One Python process draws a new official identity only for an empty
+    // profile; existing saved SDK options go directly to native Camoufox.
     mark_local_unsynced(workspace.path())?;
     if !run_python(
         runtime_root,
@@ -831,6 +851,41 @@ sys.stderr.flush()
     }
 
     #[test]
+    fn locally_committed_current_reopens_with_stale_crm_projection_without_cloud() {
+        let directory = tempfile::tempdir().unwrap();
+        let root =
+            crate::local_profile::MaterializationRoot::open_or_create(directory.path()).unwrap();
+        let draft = intent();
+        let generation = local_generation(&draft).unwrap();
+        let first = open_or_create_workspace(&root, &draft, &generation).unwrap();
+        root.update_profile_current_sync_base(&first, &generation, 2)
+            .unwrap();
+        // The browser was closed and Sync finished, but the web tab still
+        // displays DRAFT v1. Do not require an extra cloud launch query.
+        let advanced = open_or_create_workspace(&root, &draft, &generation).unwrap();
+        assert_eq!(advanced.profile_version(), 2);
+        assert_eq!(advanced.base_generation_id(), Some(&generation));
+        assert_eq!(advanced.path(), first.path());
+
+        let mut cached_ready = draft.clone();
+        cached_ready.status = InitialProfileStatus::Ready;
+        cached_ready.expected_version = 1;
+        assert_eq!(
+            recheck_workspace_after_writer_admission(&root, &advanced, &cached_ready)
+                .unwrap()
+                .path(),
+            first.path()
+        );
+        // If the CRM projection is *newer* than local CURRENT, opening
+        // cannot silently select old bytes instead of requiring Restore.
+        cached_ready.expected_version = 3;
+        assert!(matches!(
+            open_or_create_workspace(&root, &cached_ready, &generation),
+            Err(LocalOpenError::StaleLocalWorkspace)
+        ));
+    }
+
+    #[test]
     fn readback_under_writer_lock_rejects_cloud_base_advanced_after_first_lookup() {
         let directory = tempfile::tempdir().unwrap();
         let root =
@@ -849,8 +904,14 @@ sys.stderr.flush()
         let mut ready = draft.clone();
         ready.status = InitialProfileStatus::Ready;
         ready.expected_version = 2;
+        // After a concurrent Sync, a new Open must begin with a new exact
+        // local-marker observation. Reusing the pre-Sync marker is not valid
+        // even when the caller refreshed the cloud version separately.
+        let refreshed = root
+            .open_profile_current(&draft.tenant_id, &draft.profile_id)
+            .unwrap();
         assert_eq!(
-            recheck_workspace_after_writer_admission(&root, &observed, &ready)
+            recheck_workspace_after_writer_admission(&root, &refreshed, &ready)
                 .unwrap()
                 .profile_version(),
             2

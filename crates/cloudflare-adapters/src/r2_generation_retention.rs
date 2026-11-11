@@ -21,10 +21,29 @@ impl R2GenerationRetention {
         Self { bucket }
     }
 
+    /// The caller must have first frozen a profile with its exact D1 deletion
+    /// inventory. This shares the exact-key R2 verification and effect used
+    /// by historical retirement, without prefix deletes or a second client.
+    pub async fn delete_frozen_profile_exact(
+        &self,
+        scope: &TenantScope,
+        reference: &GenerationObjectCatalogReference,
+    ) -> Result<(), GenerationPortError> {
+        self.delete_exact_after_d1_admission(scope, reference).await
+    }
+
     /// Caller must have already committed the exact D1 retirement receipt.
     /// An absent object is success on retry after a lost DELETE reply.
     /// HEAD must match all immutable metadata and checksum before DELETE.
     pub async fn delete_retired_exact(
+        &self,
+        scope: &TenantScope,
+        reference: &GenerationObjectCatalogReference,
+    ) -> Result<(), GenerationPortError> {
+        self.delete_exact_after_d1_admission(scope, reference).await
+    }
+
+    async fn delete_exact_after_d1_admission(
         &self,
         scope: &TenantScope,
         reference: &GenerationObjectCatalogReference,

@@ -247,6 +247,153 @@ where
     )
 }
 
+/// Observe the *real* authenticated CURRENT BPGC prelude already consumed
+/// by the canonical Restore port; no second R2 read or new materialization
+/// engine. The prelude later binds the immutable plaintext digest at Worker.
+#[cfg(windows)]
+struct ColdCurrentEvidenceControl<'a, C> {
+    delegate: &'a mut C,
+    authenticated_prelude: Option<Vec<u8>>,
+}
+
+#[cfg(windows)]
+impl<C: GenerationReopenControlPort> GenerationReopenControlPort
+    for ColdCurrentEvidenceControl<'_, C>
+{
+    type Error = C::Error;
+
+    fn download_capability(
+        &mut self,
+        tenant_id: &TenantId,
+        profile_id: &ProfileId,
+    ) -> Result<crate::generation_reopen::GenerationDownloadCapability, Self::Error> {
+        self.delegate.download_capability(tenant_id, profile_id)
+    }
+
+    fn opening_material(
+        &mut self,
+        tenant_id: &TenantId,
+        profile_id: &ProfileId,
+        metadata_prelude: &[u8],
+    ) -> Result<encrypted_generation_domain::GenerationDek, Self::Error> {
+        let key = self
+            .delegate
+            .opening_material(tenant_id, profile_id, metadata_prelude)?;
+        self.authenticated_prelude = Some(metadata_prelude.to_vec());
+        Ok(key)
+    }
+}
+
+/// Independently cold-restore the server-selected CURRENT into an ephemeral
+/// local root, then prove its complete native Firefox BPGW snapshot equals the
+/// original *closed* installed profile under the existing OS writer lock.
+///
+/// This is only a **recovery check**, not authority to remove R2 bytes. The
+/// D1 retirement owner must separately admit an exact-key effect after a
+/// durable, CURRENT-bound proof and after signed PUT capabilities expire.
+/// Never opens or manages a browser, creates a cloud generation, or changes
+/// the original profile. The scratch root is removed on all return paths.
+#[cfg(windows)]
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn prove_cold_current_restore<C, D>(
+    installed: &MaterializationRoot,
+    tenant_id: &TenantId,
+    profile_id: &ProfileId,
+    generation_id: &GenerationId,
+    profile_version: u64,
+    device_id: &DeviceId,
+    workspace_epoch: u64,
+    control: &mut C,
+    downloader: &mut D,
+) -> Result<([u8; 32], Vec<u8>), AuthoritativeGenerationMaterializationError>
+where
+    C: GenerationReopenControlPort,
+    C::Error: Into<GenerationReopenControlError>,
+    D: GenerationObjectDownloadPort,
+    D::Error: Into<GenerationObjectDownloadError>,
+{
+    use crate::generation_snapshot::digest_closed_workspace_streaming;
+    use AuthoritativeGenerationMaterializationError as Error;
+
+    // Force a genuine GET, AEAD open and BPGW materialization into a missing
+    // destination. Reusing the installed folder would silently skip the
+    // cloud read and would not prove independent recoverability.
+    let scratch = tempfile::Builder::new()
+        .prefix(".cold-current-")
+        .tempdir_in(installed.path())
+        .map_err(|_| Error::Local)?;
+    let recovery_root =
+        MaterializationRoot::open_or_create(scratch.path()).map_err(|_| Error::Local)?;
+    let mut witnessed = ColdCurrentEvidenceControl {
+        delegate: control,
+        authenticated_prelude: None,
+    };
+    ensure_authoritative_current(
+        &recovery_root,
+        tenant_id,
+        profile_id,
+        generation_id,
+        profile_version,
+        device_id,
+        workspace_epoch,
+        &mut witnessed,
+        downloader,
+    )?;
+    let prelude = witnessed
+        .authenticated_prelude
+        .ok_or(Error::InvalidLocalEvidence)?;
+    let restored = recovery_root
+        .open_profile_current(tenant_id, profile_id)
+        .map_err(|_| Error::Local)?;
+    if restored.base_generation_id() != Some(generation_id)
+        || restored.profile_version() != profile_version
+    {
+        return Err(Error::InvalidLocalEvidence);
+    }
+    let restored_inventory = restored.inventory().map_err(|_| Error::Local)?;
+    let (_, restored_digest) = digest_closed_workspace_streaming(&restored, &restored_inventory)
+        .map_err(|_| Error::Snapshot)?;
+
+    // Only a clean, unchanged local CURRENT is comparable. Never claim a
+    // cold proof after Firefox has reopened or local bytes became dirty.
+    let observed = installed
+        .open_profile_current(tenant_id, profile_id)
+        .map_err(|_| Error::InvalidLocalEvidence)?;
+    let lock =
+        BridgeWorkspaceLock::acquire_or_recover_interrupted(&observed, device_id, workspace_epoch)
+            .map_err(|_| Error::IncompleteLocalEvidence)?;
+    let checked = (|| {
+        let actual = installed
+            .open_profile_current(tenant_id, profile_id)
+            .map_err(|_| Error::InvalidLocalEvidence)?;
+        if actual.path() != observed.path()
+            || actual.profile_version() != observed.profile_version()
+            || actual.base_generation_id() != observed.base_generation_id()
+            || actual.profile_version() != profile_version
+            || actual.base_generation_id() != Some(generation_id)
+            || actual.pending_sync().is_some()
+            || !matches!(
+                fs::symlink_metadata(actual.path().join(".local-unsynced")),
+                Err(ref error) if error.kind() == std::io::ErrorKind::NotFound
+            )
+            || !matches!(browser_writer_locks_absent(&actual), Ok(true))
+        {
+            return Err(Error::IncompleteLocalEvidence);
+        }
+        let inventory = actual.inventory().map_err(|_| Error::Local)?;
+        let (_, local_digest) =
+            digest_closed_workspace_streaming(&actual, &inventory).map_err(|_| Error::Snapshot)?;
+        if local_digest != restored_digest {
+            return Err(Error::InvalidLocalEvidence);
+        }
+        Ok(restored_digest)
+    })();
+    let released = lock.release().map_err(|_| Error::Local);
+    let digest = checked?;
+    released?;
+    Ok((digest, prelude))
+}
+
 /// Read-only recovery for an already-committed READY N+1 whose HTTP
 /// receipt was lost. The verified D1 CURRENT and decrypted exact BPGW must
 /// match the ORIGINAL closed local browser bytes and old confirmed base.
@@ -1329,6 +1476,119 @@ mod tests {
         assert_eq!(
             fs::read(workspace.path().join("user_data/storage/state.bin"))?,
             b"changed"
+        );
+        fixture.cleanup();
+        Ok(())
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn exact_current_cold_restore_proves_native_bytes_without_replacing_original()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let fixture = Fixture::without_browser_identity()?;
+        let original = fixture.root.create_profile_current(
+            &fixture.tenant_id,
+            &fixture.profile_id,
+            &fixture.generation_id,
+            1,
+        )?;
+        fs::create_dir_all(original.path().join("user_data/storage"))?;
+        fs::write(original.path().join("prefs.js"), b"authoritative-prefs")?;
+        fs::write(
+            original.path().join("user_data/storage/state.bin"),
+            b"authoritative-state",
+        )?;
+        fs::write(
+            original.path().join("camoufox-config.json"),
+            &fixture.config_bytes,
+        )?;
+        fixture
+            .root
+            .update_profile_current_sync_base(&original, &fixture.generation_id, 2)?;
+        let mut control = fixture.control();
+        let mut downloader = FakeStreamDownloader {
+            container: fixture.container.clone(),
+            calls: 0,
+        };
+        let before = fs::read(original.path().join("user_data/storage/state.bin"))?;
+        let digest = super::prove_cold_current_restore(
+            &fixture.root,
+            &fixture.tenant_id,
+            &fixture.profile_id,
+            &fixture.generation_id,
+            2,
+            &DeviceId::parse("device_cold_current_test")?,
+            10,
+            &mut control,
+            &mut downloader,
+        )?;
+        assert_ne!(digest.0, [0; 32]);
+        assert!(!digest.1.is_empty());
+        assert_eq!(downloader.calls, 1);
+        assert_eq!(
+            fs::read(original.path().join("user_data/storage/state.bin"))?,
+            before
+        );
+        assert!(
+            fs::read_dir(fixture.root.path())?.all(|entry| {
+                !entry
+                    .unwrap()
+                    .file_name()
+                    .to_string_lossy()
+                    .starts_with(".cold-current-")
+            }),
+            "an ephemeral cold recovery must not leave another local profile",
+        );
+        fixture.cleanup();
+        Ok(())
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn cold_current_restore_refuses_diverged_local_bytes_without_mutation()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let fixture = Fixture::without_browser_identity()?;
+        let original = fixture.root.create_profile_current(
+            &fixture.tenant_id,
+            &fixture.profile_id,
+            &fixture.generation_id,
+            1,
+        )?;
+        fs::create_dir_all(original.path().join("user_data/storage"))?;
+        fs::write(original.path().join("prefs.js"), b"authoritative-prefs")?;
+        fs::write(
+            original.path().join("user_data/storage/state.bin"),
+            b"changed-local-session",
+        )?;
+        fs::write(
+            original.path().join("camoufox-config.json"),
+            &fixture.config_bytes,
+        )?;
+        fixture
+            .root
+            .update_profile_current_sync_base(&original, &fixture.generation_id, 2)?;
+        let mut control = fixture.control();
+        let mut downloader = FakeStreamDownloader {
+            container: fixture.container.clone(),
+            calls: 0,
+        };
+        assert_eq!(
+            super::prove_cold_current_restore(
+                &fixture.root,
+                &fixture.tenant_id,
+                &fixture.profile_id,
+                &fixture.generation_id,
+                2,
+                &DeviceId::parse("device_cold_current_diverged")?,
+                11,
+                &mut control,
+                &mut downloader,
+            ),
+            Err(AuthoritativeGenerationMaterializationError::InvalidLocalEvidence)
+        );
+        assert_eq!(
+            fs::read(original.path().join("user_data/storage/state.bin"))?,
+            b"changed-local-session"
         );
         fixture.cleanup();
         Ok(())

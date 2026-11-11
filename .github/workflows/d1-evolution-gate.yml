@@ -56,6 +56,7 @@ jobs:
         run: |
           python scripts/test-k2-working-proof-d1.py
           python scripts/test-k2-retirement-intent-d1.py
+          python scripts/test-profile-current-cold-retirement-d1.py
 
       - name: Execute all opsctl D1 commands as real CLI processes
         run: |

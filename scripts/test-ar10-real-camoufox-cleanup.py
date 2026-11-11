@@ -11,6 +11,7 @@ independent observation-surface failure.
 from __future__ import annotations
 
 import argparse
+import asyncio
 import contextlib
 import ctypes
 import importlib.util
@@ -190,8 +191,26 @@ def materialize(
     (root / ".profile-platform.lock").write_text(
         BRIDGE_LOCK, encoding="utf-8", newline="\n"
     )
+    # The retired CLI was only a redundant production Python process.
+    # This isolated test directly calls the same official fpgen function in
+    # the packaged runtime; only Rust/ProfileBridge persists its result in
+    # production, while this disposable fixture mirrors that exact write.
+    fixture = """
+import contextlib
+import importlib.util
+import json
+import sys
+from pathlib import Path
+camouhost, root = map(Path, sys.argv[1:])
+spec = importlib.util.spec_from_file_location("camouhost_fixture", camouhost)
+module = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(module)
+with contextlib.redirect_stdout(sys.stderr):
+    report = module.materialize_candidate_identity(root)
+print(json.dumps(report, separators=(",", ":"), sort_keys=True), flush=True)
+"""
     completed = subprocess.run(
-        [str(python), str(camouhost), "--materialize-identity", str(root)],
+        [str(python), "-c", fixture, str(camouhost), str(root)],
         env=runtime_env(runtime_lock, headless),
         text=True,
         capture_output=True,
@@ -356,7 +375,9 @@ def assert_writer_quiescent(_runtime: ModuleType, _root: Path, label: str) -> No
         encoding="utf-8"
     )
     assert "browser_writer_locks_absent_at" in browser_execution
-    assert local_open.count("browser_writer_locks_absent(&workspace)") >= 3
+    # The redundant pre-launch writer check was removed; the Rust owner
+    # still checks native writer quiescence before saving/after closure.
+    assert local_open.count("browser_writer_locks_absent(&workspace)") >= 2
     assert "firefox_writer_active" not in (root / "runtime/camouhost/real.py").read_text(
         encoding="utf-8"
     )
@@ -851,6 +872,8 @@ def prove_failure_observation_contract() -> None:
     proof = load_runtime(source_root / "scripts/test-ar10-real-camoufox.py")
     # Camoufox inherits the native environment: do not resurrect a filter.
     assert not hasattr(runtime, "browser_environment")
+    # Cold identity failures now happen inside the single user-native Open
+    # process, not in a separate CLI. Observe only the redacted fixed error.
     for error, category in (
         (runtime.RuntimeContractError("secret-config-path"), "contract"),
         (OSError("secret-config-path"), "io"),
@@ -858,14 +881,16 @@ def prove_failure_observation_contract() -> None:
     ):
         stdout = io.StringIO()
         stderr = io.StringIO()
-        with patch.object(sys, "argv", ["real.py", "--materialize-identity", "unused"]), \
-                patch.object(runtime, "materialize_candidate_identity", side_effect=error), \
+        with patch.dict(sys.modules, {
+                "native_process": SimpleNamespace(launch_native_camoufox=Mock())
+        }), patch.object(runtime, "materialize_candidate_identity", side_effect=error), \
                 contextlib.redirect_stdout(stdout), contextlib.redirect_stderr(stderr):
-            result = runtime.main()
-        report = json.loads(stdout.getvalue())
-        assert result == 7 and report["failure"]["category"] == category
-        assert isinstance(report["failure"]["line"], int)
-        assert len(stdout.getvalue().splitlines()) == 1
+            result = asyncio.run(runtime.run_local_profile(Path("unused"), None, True))
+        assert result == 5
+        assert stdout.getvalue() == ""
+        assert stderr.getvalue().strip() == (
+            f"camouhost_failure phase=launch category={category}"
+        )
         assert "secret" not in stdout.getvalue() + stderr.getvalue()
     timeout = type("TimeoutError", (Exception,), {})("secret-url-key-profile-content")
     frames = [f"hello|{IPC_VERSION}", f"launch|{SESSION}", f"observe_browser_visible|{SESSION}",

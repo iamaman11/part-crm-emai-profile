@@ -1,3 +1,4 @@
+mod profile_deletion;
 pub(crate) mod profile_launch;
 mod profile_launch_composition;
 
@@ -5,7 +6,7 @@ use crate::access_session::{
     correlation_hint, membership_role, neutral_not_found, problem, resolve_active_request_actor,
 };
 use crate::command_evidence;
-use crate::composition::profile_application;
+use crate::composition::{profile_application, profile_generation_application};
 use crate::request_evidence;
 use application_ports::profiles::ProfileStatus;
 use control_plane_contract::RouteClass;
@@ -32,6 +33,14 @@ use use_cases::profiles::{
 };
 use worker::{Env, Request, Response, Result};
 
+/// Reuse the already deployed scheduled Worker, not a parallel GC service.
+pub(crate) async fn resume_due_profile_deletes(env: &Env) -> Result<()> {
+    profile_deletion::resume_due_frozen_deletes(env).await?;
+    // The same already-running minute schedule also replays D1-admitted
+    // exact old-generation receipts. No parallel GC service is created.
+    crate::profile_generation_successor_ingress::resume_due_current_retirements(env).await
+}
+
 pub async fn dispatch(route: RouteClass, request: &mut Request, env: &Env) -> Result<Response> {
     let path = request.path();
     let segments: Vec<&str> = path
@@ -45,7 +54,13 @@ pub async fn dispatch(route: RouteClass, request: &mut Request, env: &Env) -> Re
         RouteClass::ProfileCollectionApi => create_profile(request, env, tenant_id).await,
         RouteClass::ProfileResourceApi => {
             let profile_id = segments.get(5).copied().unwrap_or_default();
-            get_profile(request, env, tenant_id, profile_id).await
+            match request.method().as_ref() {
+                "GET" => get_profile(request, env, tenant_id, profile_id).await,
+                "DELETE" => {
+                    profile_deletion::delete_profile(request, env, tenant_id, profile_id).await
+                }
+                _ => neutral_not_found(&correlation_hint(request)),
+            }
         }
         RouteClass::ProfileLaunchApi => {
             let profile_id = segments.get(5).copied().unwrap_or_default();
@@ -124,7 +139,23 @@ async fn get_profile(
     )
     .await
     {
-        Ok(profile) => Response::from_json(&profile_projection(&profile)),
+        Ok(profile) => {
+            // The GET projection may be visible to PROFILE_VIEWER, whereas
+            // native Open must retain the original Operate capability gate.
+            // Reuse the existing D1 authorization use case during this
+            // already authenticated read, never on each local Open click.
+            // Dependency uncertainty is fail-closed (can_operate=false).
+            let can_operate =
+                use_cases::generation_initialization::authorize_initial_generation_access(
+                    actor.actor(),
+                    membership_role(&actor),
+                    &profile_id,
+                    &profile_generation_application(env)?,
+                )
+                .await
+                .is_ok();
+            Response::from_json(&profile_projection(&profile, can_operate))
+        }
         Err(ProfileOperationError::NotFound) => {
             neutral_not_found(actor.actor().correlation_id().as_str())
         }
@@ -438,7 +469,7 @@ fn profile_grant_receipt(outcome: &ProfileGrantOutcome) -> Result<Response> {
     .map(|response| response.with_status(200))
 }
 
-fn profile_projection(profile: &ProfileDetails) -> ProfileProjectionDto {
+fn profile_projection(profile: &ProfileDetails, can_operate: bool) -> ProfileProjectionDto {
     ProfileProjectionDto {
         profile_id: profile.profile_id().as_str().to_owned(),
         status: profile_status(profile.status()),
@@ -446,6 +477,7 @@ fn profile_projection(profile: &ProfileDetails) -> ProfileProjectionDto {
         linked_client_id: profile
             .linked_client_id()
             .map(|value| value.as_str().to_owned()),
+        can_operate,
     }
 }
 
