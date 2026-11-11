@@ -140,7 +140,9 @@ mod windows {
     use crate::local_profile::{
         DeliveryActivationGuard, MaterializationRoot, PendingSyncDescriptor,
     };
-    use crate::shipping_control_plane::SyncEnrollmentPort;
+    use crate::shipping_control_plane::{
+        MachineHttpMethod, MachineHttpPort, SyncEnrollmentPort,
+    };
     use crate::shipping_control_plane::{
         ControlPlaneCoordinator, ControlPlaneEnrollment, SharedControlPlaneCoordinator,
         ShippingControlPlaneError,
@@ -764,7 +766,7 @@ mod windows {
                                 WindowsSignedGenerationObjectGet::from_system().map_err(|_| ())?;
                             let mut downloader =
                                 VerifiedGenerationObjectStreamDownloader::new(reader);
-                            prove_cold_current_restore(
+                            let (restored_digest, prelude) = prove_cold_current_restore(
                                 &root,
                                 &intent.tenant_id,
                                 &intent.profile_id,
@@ -775,12 +777,65 @@ mod windows {
                                 &mut remote,
                                 &mut downloader,
                             )
-                            .map_err(|_| ())
+                            .map_err(|_| ())?;
+                            let restored_native_sha256 = restored_digest
+                                .iter()
+                                .map(|byte| format!("{byte:02x}"))
+                                .collect::<String>();
+                            let metadata_prelude_hex = prelude
+                                .iter()
+                                .map(|byte| format!("{byte:02x}"))
+                                .collect::<String>();
+                            let body =
+                                control_plane_contract::profile_generation_api::BridgeCurrentColdRetirementRequest {
+                                    current_generation_id: current.as_str().to_owned(),
+                                    expected_profile_version: latest.profile_version(),
+                                    metadata_prelude_hex,
+                                    restored_native_sha256,
+                                };
+                            let encoded = serde_json::to_vec(&body).map_err(|_| ())?;
+                            let path = control_plane_contract::profile_generation_api::BRIDGE_PROFILE_CURRENT_COLD_RETIREMENT_PATH_TEMPLATE
+                                .replace("{tenantId}", intent.tenant_id.as_str())
+                                .replace("{profileId}", intent.profile_id.as_str());
+                            let correlation = profile_platform_primitives::CorrelationId::parse(
+                                "corr_cold_current_retire",
+                            )
+                            .map_err(|_| ())?;
+                            let application = WindowsDeviceApplication::from_system(
+                                config.control_plane_origin.clone(),
+                                binding.clone(),
+                            )
+                            .map_err(|_| ())?;
+                            let mut transport = application.transport();
+                            let response = transport
+                                .request(
+                                    MachineHttpMethod::PostJson,
+                                    path.as_str(),
+                                    &correlation,
+                                    Some(&encoded),
+                                )
+                                .map_err(|_| ())?;
+                            if !(200..300).contains(&response.status()) {
+                                return Err(());
+                            }
+                            let admitted = serde_json::from_slice::<serde_json::Value>(
+                                response.body(),
+                            )
+                            .map_err(|_| ())?
+                            .get("admitted")
+                            .and_then(serde_json::Value::as_bool);
+                            Ok(admitted)
                         })();
-                        if cold.is_ok() {
-                            eprintln!("BRIDGE_COLD_CURRENT_RESTORE=VERIFIED_LOCAL_ONLY");
-                        } else {
-                            eprintln!("BRIDGE_COLD_CURRENT_RESTORE=UNCONFIRMED_R2_RETAINED");
+                        match cold {
+                            Ok(Some(true)) => {
+                                eprintln!("BRIDGE_COLD_CURRENT_RETIREMENT=D1_ADMITTED");
+                            }
+                            Ok(Some(false)) => {
+                                eprintln!("BRIDGE_COLD_CURRENT_RESTORE=VERIFIED_NO_PREDECESSOR");
+                            }
+                            _ => {
+                                eprintln!("BRIDGE_COLD_CURRENT_RETIREMENT=UNCONFIRMED_R2_RETAINED");
+                            }
                         }
                     }
                     return Ok(());

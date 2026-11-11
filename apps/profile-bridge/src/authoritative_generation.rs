@@ -247,6 +247,45 @@ where
     )
 }
 
+/// Observe the *real* authenticated CURRENT BPGC prelude already consumed
+/// by the canonical Restore port; no second R2 read or new materialization
+/// engine. The prelude later binds the immutable plaintext digest at Worker.
+#[cfg(windows)]
+struct ColdCurrentEvidenceControl<'a, C> {
+    delegate: &'a mut C,
+    authenticated_prelude: Option<Vec<u8>>,
+}
+
+#[cfg(windows)]
+impl<C: GenerationReopenControlPort> GenerationReopenControlPort
+    for ColdCurrentEvidenceControl<'_, C>
+{
+    type Error = C::Error;
+
+    fn download_capability(
+        &mut self,
+        tenant_id: &TenantId,
+        profile_id: &ProfileId,
+    ) -> Result<crate::generation_reopen::GenerationDownloadCapability, Self::Error> {
+        self.delegate.download_capability(tenant_id, profile_id)
+    }
+
+    fn opening_material(
+        &mut self,
+        tenant_id: &TenantId,
+        profile_id: &ProfileId,
+        metadata_prelude: &[u8],
+    ) -> Result<encrypted_generation_domain::GenerationDek, Self::Error> {
+        let key = self.delegate.opening_material(
+            tenant_id,
+            profile_id,
+            metadata_prelude,
+        )?;
+        self.authenticated_prelude = Some(metadata_prelude.to_vec());
+        Ok(key)
+    }
+}
+
 /// Independently cold-restore the server-selected CURRENT into an ephemeral
 /// local root, then prove its complete native Firefox BPGW snapshot equals the
 /// original *closed* installed profile under the existing OS writer lock.
@@ -268,7 +307,7 @@ pub(crate) fn prove_cold_current_restore<C, D>(
     workspace_epoch: u64,
     control: &mut C,
     downloader: &mut D,
-) -> Result<[u8; 32], AuthoritativeGenerationMaterializationError>
+) -> Result<([u8; 32], Vec<u8>), AuthoritativeGenerationMaterializationError>
 where
     C: GenerationReopenControlPort,
     C::Error: Into<GenerationReopenControlError>,
@@ -287,6 +326,10 @@ where
         .map_err(|_| Error::Local)?;
     let recovery_root =
         MaterializationRoot::open_or_create(scratch.path()).map_err(|_| Error::Local)?;
+    let mut witnessed = ColdCurrentEvidenceControl {
+        delegate: control,
+        authenticated_prelude: None,
+    };
     ensure_authoritative_current(
         &recovery_root,
         tenant_id,
@@ -295,9 +338,10 @@ where
         profile_version,
         device_id,
         workspace_epoch,
-        control,
+        &mut witnessed,
         downloader,
     )?;
+    let prelude = witnessed.authenticated_prelude.ok_or(Error::InvalidLocalEvidence)?;
     let restored = recovery_root
         .open_profile_current(tenant_id, profile_id)
         .map_err(|_| Error::Local)?;
@@ -347,7 +391,7 @@ where
     let released = lock.release().map_err(|_| Error::Local);
     let digest = checked?;
     released?;
-    Ok(digest)
+    Ok((digest, prelude))
 }
 
 /// Read-only recovery for an already-committed READY N+1 whose HTTP
@@ -1478,7 +1522,8 @@ mod tests {
             &mut control,
             &mut downloader,
         )?;
-        assert_ne!(digest, [0; 32]);
+        assert_ne!(digest.0, [0; 32]);
+        assert!(!digest.1.is_empty());
         assert_eq!(downloader.calls, 1);
         assert_eq!(
             fs::read(original.path().join("user_data/storage/state.bin"))?,
