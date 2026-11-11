@@ -181,19 +181,20 @@ fn actual_deployed_context_traverses_separate_sealed_contract_and_current_expand
                 history[count + 2],
                 history[count + 3],
                 history[count + 4],
-                history[count + 5]
+                history[count + 5],
+                history[count + 6]
             ])
         } else {
             json!([history[count]])
         };
         assert_eq!(native_plan["planned_migrations"], expected);
         let expected_target = if count == 35 {
-            &history[count + 5]
+            &history[count + 6]
         } else {
             &history[count]
         };
         assert_eq!(native_plan["target_revision"], expected_target.as_str());
-        assert_eq!(native_plan["desired_target_revision"], history[40]);
+        assert_eq!(native_plan["desired_target_revision"], history[41]);
         write(&dir.join("native-stage.json"), &native_plan)?;
         write(
             &dir.join("deployment-snapshot.json"),

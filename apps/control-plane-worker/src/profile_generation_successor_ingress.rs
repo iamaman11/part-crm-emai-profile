@@ -431,6 +431,7 @@ pub(crate) async fn dispatch_authorized(
         | BridgeGenerationMachineOperation::PredecessorDownloadCapability
         | BridgeGenerationMachineOperation::PredecessorOpeningMaterial
         | BridgeGenerationMachineOperation::PredecessorCertifyWorking
+        | BridgeGenerationMachineOperation::ColdCurrentRetirement
         | BridgeGenerationMachineOperation::Observe
         | BridgeGenerationMachineOperation::RetryDecision
         | BridgeGenerationMachineOperation::LocalUnsyncedRetryDecision => {
@@ -1140,7 +1141,7 @@ async fn dispatch_cold_current_retirement(
         };
     if selected.generation_id() != &current_id
         || !opening_metadata_matches_descriptor(actor, profile_id, &descriptor, &inspected)
-        || lower_hex(inspected.metadata().plaintext_digest().bytes()) != body.restored_native_sha256
+        || lower_hex(&inspected.metadata().plaintext_digest().bytes()) != body.restored_native_sha256
     {
         return verification_conflict(correlation);
     }
