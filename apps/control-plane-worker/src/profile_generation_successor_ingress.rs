@@ -38,7 +38,7 @@ use control_plane_contract::generation_key_api::{
 use control_plane_contract::generation_reopen_api::{
     BridgeGenerationDownloadCapabilityRequest, BridgeGenerationDownloadCapabilityResponse,
     BridgeGenerationOpeningMaterialRequest, BridgeGenerationOpeningMaterialResponse,
-    BridgeGenerationWorkingProofRequest, GENERATION_DOWNLOAD_CAPABILITY_MAX_EXPIRES_SECONDS,
+    GENERATION_DOWNLOAD_CAPABILITY_MAX_EXPIRES_SECONDS,
 };
 use control_plane_contract::profile_generation_api::{
     BridgeCurrentColdRetirementRequest, BridgeGenerationLocalUnsyncedRetryDecisionRequest,
@@ -60,44 +60,6 @@ use profile_platform_primitives::{
 use worker::{Date, Env, Method, Request, Response, Result};
 
 const UPLOAD_CAPABILITY_EXPIRES_SECONDS: u32 = 300;
-/// Release-owned policy: exact native Camoufox inventory SHA-256. At most two
-/// approved digests while migrating CURRENT and one retained LKG. Absent or
-/// malformed configuration blocks only new WORKING proof, never local Open.
-const PROFILE_GENERATION_APPROVED_RUNTIME_INVENTORIES_VAR: &str =
-    "PROFILE_GENERATION_APPROVED_RUNTIME_INVENTORIES";
-
-/// No best-effort prefix matching, unknown versions, arbitrary lists or
-/// whitespace: the deployment's exact approved runtime artifacts are the
-/// source of truth, not the untrusted client-supplied certificate digest.
-fn is_approved_working_runtime(observed: &str, configured: Option<&str>) -> bool {
-    if !lower_sha256(observed) {
-        return false;
-    }
-    let Some(allowed) = configured else {
-        return false;
-    };
-    if allowed.len() != 64 && allowed.len() != 129 {
-        return false;
-    }
-    let mut items = allowed.split(',');
-    let Some(first) = items.next() else {
-        return false;
-    };
-    if !lower_sha256(first) {
-        return false;
-    }
-    let second = items.next();
-    if items.next().is_some() {
-        return false;
-    }
-    if let Some(other) = second {
-        if !lower_sha256(other) || first == other {
-            return false;
-        }
-    }
-    observed == first || second == Some(observed)
-}
-
 type UploadSigningTimeResult =
     core::result::Result<R2GenerationUploadSigningTime, R2GenerationUploadCapabilityError>;
 type DownloadSigningTimeResult =
@@ -116,7 +78,6 @@ pub(crate) enum BridgeGenerationMachineOperation {
     OpeningMaterial,
     PredecessorDownloadCapability,
     PredecessorOpeningMaterial,
-    PredecessorCertifyWorking,
     ColdCurrentRetirement,
 }
 
@@ -248,16 +209,6 @@ pub(crate) fn operation(path: &str, method: Method) -> Option<BridgeGenerationMa
             _,
             "profiles",
             _,
-            "generation-working-candidate",
-            "certify",
-        ] => Some(BridgeGenerationMachineOperation::PredecessorCertifyWorking),
-        [
-            "bridge",
-            "v1",
-            "tenants",
-            _,
-            "profiles",
-            _,
             "generation-successor",
             "cold-current-retirement",
         ] => Some(BridgeGenerationMachineOperation::ColdCurrentRetirement),
@@ -279,9 +230,6 @@ pub(crate) async fn dispatch_authorized(
     }
     if operation == BridgeGenerationMachineOperation::SealingMaterial {
         return dispatch_sealing_material(request, env, profile_id, actor, device_id).await;
-    }
-    if operation == BridgeGenerationMachineOperation::PredecessorCertifyWorking {
-        return dispatch_working_proof(request, env, profile_id, actor, device_id, role).await;
     }
     if operation == BridgeGenerationMachineOperation::ColdCurrentRetirement {
         return dispatch_cold_current_retirement(request, env, profile_id, actor, device_id).await;
@@ -430,7 +378,6 @@ pub(crate) async fn dispatch_authorized(
         | BridgeGenerationMachineOperation::OpeningMaterial
         | BridgeGenerationMachineOperation::PredecessorDownloadCapability
         | BridgeGenerationMachineOperation::PredecessorOpeningMaterial
-        | BridgeGenerationMachineOperation::PredecessorCertifyWorking
         | BridgeGenerationMachineOperation::ColdCurrentRetirement
         | BridgeGenerationMachineOperation::Observe
         | BridgeGenerationMachineOperation::RetryDecision
@@ -849,198 +796,6 @@ async fn dispatch_successor_retry_decision(
     Ok(response)
 }
 
-/// Production code path for all tenant-owned profiles. Environment and
-/// actor admission are still checked; no filename, prefix or disposable
-/// canary determines whether a verified historical browser may be certified.
-fn historical_browser_content_certification_implemented(
-    env: &Env,
-    _actor: &ActorContext,
-    _profile_id: &ProfileId,
-    role: identity_access_domain::MembershipRole,
-) -> bool {
-    let environment = env.var("CANONICAL_ENVIRONMENT").ok().map(|v| v.to_string());
-    role == identity_access_domain::MembershipRole::TenantOwner
-        && matches!(environment.as_deref(), Some("staging" | "production"))
-}
-
-/// The restored-byte digest must be freshly observed by the official Bridge
-/// under native locks. A standalone fingerprint/ready hash is not authority.
-fn exact_restored_native_digest(original: &str, before: &str, restored: &str) -> bool {
-    lower_sha256(original) && before == original && restored == original
-}
-
-/// Historical WORKING route. Identity, R2, key and fence checks below are
-/// necessary but NOT sufficient evidence that native cookies, tabs and
-/// IndexedDB were actually restored. Never persist D1 WORKING merely from
-/// this metadata-only request, even when a client calls the endpoint directly.
-async fn dispatch_working_proof(
-    request: &mut Request,
-    env: &Env,
-    profile_id: &ProfileId,
-    actor: &ActorContext,
-    device_id: &DeviceId,
-    role: identity_access_domain::MembershipRole,
-) -> Result<Response> {
-    // Client-side disabled calls do not protect this public machine route.
-    // This gate is checked before parsing claims or writing any WORKING D1
-    // receipt; no explicit canary or runtime allowlist may override it.
-    if !historical_browser_content_certification_implemented(env, actor, profile_id, role) {
-        return verification_conflict(actor.correlation_id().as_str());
-    }
-    let body = match request.json::<BridgeGenerationWorkingProofRequest>().await {
-        Ok(value) => value,
-        Err(_) => return invalid_request(actor.correlation_id().as_str()),
-    };
-    let current = match GenerationId::parse(body.current_generation_id().to_owned()) {
-        Ok(value) => value,
-        Err(_) => return invalid_request(actor.correlation_id().as_str()),
-    };
-    let historical = match GenerationId::parse(body.predecessor_generation_id().to_owned()) {
-        Ok(value) if value != current => value,
-        _ => return invalid_request(actor.correlation_id().as_str()),
-    };
-    // A hash supplied by the Bridge is not runtime authorization. The
-    // approved manifest inventory comes from the existing release-controlled
-    // Wrangler configuration, not from this request or the D1 receipt.
-    let configured_runtime = env
-        .var(PROFILE_GENERATION_APPROVED_RUNTIME_INVENTORIES_VAR)
-        .ok()
-        .map(|value| value.to_string());
-    if !is_approved_working_runtime(
-        body.runtime_inventory_sha256(),
-        configured_runtime.as_deref(),
-    ) {
-        return verification_conflict(actor.correlation_id().as_str());
-    }
-    let (session, fence) = match reopen_witness(
-        body.coordinator_session_id(),
-        body.coordinator_fencing_token(),
-        body.coordinator_epoch(),
-    ) {
-        Some(value) => value,
-        None => return invalid_request(actor.correlation_id().as_str()),
-    };
-    let prelude = match decode_bounded_lower_hex(
-        body.metadata_prelude_hex(),
-        MAX_GENERATION_METADATA_PRELUDE_BYTES,
-    ) {
-        Some(value) => value,
-        None => return invalid_request(actor.correlation_id().as_str()),
-    };
-    let inspected = match inspect_generation_metadata_prelude(&prelude) {
-        Ok(value) if value.prelude_bytes() == prelude.len() => value,
-        _ => return invalid_request(actor.correlation_id().as_str()),
-    };
-    let (reference, descriptor) = match historical_predecessor_reopen_descriptor(
-        env,
-        profile_id,
-        actor,
-        device_id,
-        session.clone(),
-        fence,
-        body.coordinator_epoch(),
-    )
-    .await
-    {
-        Ok(value) => value,
-        Err(error) => return error,
-    };
-    if reference.generation_id() != &historical
-        || !opening_metadata_matches_descriptor(actor, profile_id, &descriptor, &inspected)
-        || descriptor.generation_id() != &historical
-    {
-        return version_conflict(actor.correlation_id().as_str());
-    }
-    let active = device_execution_preconditions(env)?;
-    let actual_current = match active
-        .load_active_verified_generation_object(actor.tenant_scope(), profile_id)
-        .await
-    {
-        Ok(Some(value)) => value,
-        Ok(None) => return verification_conflict(actor.correlation_id().as_str()),
-        Err(error) => {
-            return object_verify_failure(actor.correlation_id().as_str(), error.class());
-        }
-    };
-    if actual_current.generation_id() != &current {
-        return version_conflict(actor.correlation_id().as_str());
-    }
-    let meta = inspected.metadata();
-    // Rust sealed this SHA over the complete native Firefox snapshot before
-    // R2 PUT. The independently cold restored snapshot must match this value.
-    let original_snapshot = meta
-        .plaintext_digest()
-        .bytes()
-        .iter()
-        .map(|byte| format!("{byte:02x}"))
-        .collect::<String>();
-    if !exact_restored_native_digest(
-        &original_snapshot,
-        body.native_snapshot_sha256(),
-        body.native_browser_witness_sha256(),
-    ) {
-        return verification_conflict(actor.correlation_id().as_str());
-    }
-    let keyring = match generation_root_keyring(env) {
-        Ok(value) => value,
-        Err(_) => return integrity_failure(actor.correlation_id().as_str()),
-    };
-    let old_key = match keyring.derive_for_key_id(
-        meta.key_id(),
-        actor.tenant_scope().tenant_id(),
-        profile_id,
-        &historical,
-        meta.plaintext_digest().bytes(),
-    ) {
-        Ok(value) => value,
-        Err(_) => return verification_conflict(actor.correlation_id().as_str()),
-    };
-    if old_key.key_id() != meta.key_id() || old_key.nonce_prefix() != meta.nonce_prefix() {
-        return integrity_failure(actor.correlation_id().as_str());
-    }
-    // Browser bytes, raw keys and private account material never enter D1.
-    let journal = profile_generation_successor_observer(env)?;
-    if let Err(error) = journal
-        .record_historical_working_proof(
-            actor,
-            profile_id,
-            &current,
-            &historical,
-            &descriptor,
-            meta.key_id().as_str(),
-            body.runtime_inventory_sha256(),
-            body.native_snapshot_sha256(),
-            body.native_browser_witness_sha256(),
-            device_id,
-            &session,
-            body.coordinator_epoch(),
-            server_now(),
-        )
-        .await
-    {
-        return object_verify_failure(actor.correlation_id().as_str(), error.class());
-    }
-    // The same signed device owner, CURRENT fence and exact certified native
-    // bytes govern both durable LKG and the single guarded R2 retirement.
-    // Failed/uncertain retirement retains its existing D1 intent for replay.
-    if retire_one_old_generation(
-        env,
-        actor,
-        profile_id,
-        device_id,
-        &current,
-        body.runtime_inventory_sha256(),
-        &session,
-        body.coordinator_epoch(),
-    )
-    .await
-    .is_err()
-    {
-        worker::console_warn!("K2_PRUNE_PENDING: cloud recovery copies retained");
-    }
-    machine_json(&serde_json::json!({"confirmed": true}))
-}
-
 /// The EXISTING minute Worker schedule is the only R2 retirement executor.
 /// Every candidate was frozen by a D1 exact CURRENT/cold-Restore admission.
 /// Never infer authority from object prefixes, local browser files or a clock
@@ -1216,108 +971,6 @@ async fn dispatch_cold_current_retirement(
         return version_conflict(correlation);
     }
     machine_json(&serde_json::json!({"admitted": true}))
-}
-
-/// Exactly one cloud-only retention effect per WORKING certification. Existing
-/// D1 owns the retirement receipt; the existing R2 bucket owns the DELETE.
-#[allow(clippy::too_many_arguments)]
-async fn retire_one_old_generation(
-    env: &Env,
-    actor: &ActorContext,
-    profile_id: &ProfileId,
-    device_id: &DeviceId,
-    current: &GenerationId,
-    runtime_inventory: &str,
-    session: &SessionId,
-    epoch: u64,
-) -> std::result::Result<(), ()> {
-    let scope = actor.tenant_scope();
-    let journal = profile_generation_successor_observer(env).map_err(|_| ())?;
-    let Some(working) = journal
-        .load_certified_working_reserve(scope, profile_id, current, runtime_inventory)
-        .await
-        .map_err(|_| ())?
-    else {
-        return Ok(());
-    };
-
-    // The D1 authorization owner releases only stale CLOUD grants with
-    // no unfinished device job. This lets normal repeated Save converge to
-    // CURRENT + one WORKING reserve without discarding any local user_data.
-    device_job_authorization(env)
-        .map_err(|_| ())?
-        .release_unused_historical_grants(
-            actor,
-            profile_id,
-            current,
-            working.generation_id(),
-            runtime_inventory,
-            server_now(),
-        )
-        .await
-        .map_err(|_| ())?;
-
-    let pending = journal
-        .load_pending_retirement(scope, profile_id, current, working.generation_id())
-        .await
-        .map_err(|_| ())?;
-    let candidate = if let Some(pending) = pending {
-        pending
-    } else {
-        let Some(candidate) = journal
-            .load_unproven_prune_review_candidate(scope, profile_id, current, runtime_inventory)
-            .await
-            .map_err(|_| ())?
-        else {
-            return Ok(());
-        };
-
-        // Before an irreversible retirement, verify the exact immutable R2
-        // object, including custom metadata and SHA-256, not its age or path.
-        let reader = generation_object_verifier(env).map_err(|_| ())?;
-        if reader
-            .load_generation_object_descriptor_exact(scope, &candidate)
-            .await
-            .map_err(|_| ())?
-            .is_none()
-        {
-            return Err(());
-        }
-        let Some(version) = journal
-            .load_retention_profile_version(scope, profile_id, current)
-            .await
-            .map_err(|_| ())?
-        else {
-            return Err(());
-        };
-        journal
-            .record_guarded_retirement_intent(
-                actor,
-                current,
-                working.generation_id(),
-                &candidate,
-                version,
-                runtime_inventory,
-                device_id,
-                session,
-                epoch,
-                server_now(),
-            )
-            .await
-            .map_err(|_| ())?;
-        candidate
-    };
-
-    generation_object_retention(env)
-        .map_err(|_| ())?
-        .delete_retired_exact(scope, &candidate)
-        .await
-        .map_err(|_| ())?;
-    journal
-        .complete_retirement_effect(scope, &candidate, server_now())
-        .await
-        .map_err(|_| ())?;
-    Ok(())
 }
 
 /// Some(None) is read-only CURRENT restoration. Every other generation
@@ -2162,8 +1815,7 @@ fn dependency(correlation_id: &str) -> Result<Response> {
 mod tests {
     use super::{
         BridgeGenerationMachineOperation, decode_bounded_lower_hex, decode_lower_sha256,
-        descriptor_shape_is_canonical, exact_restored_native_digest, is_approved_working_runtime,
-        operation, valid_stream_container_bytes,
+        descriptor_shape_is_canonical, operation, valid_stream_container_bytes,
     };
     use encrypted_generation_domain::canonical_generation_object_key;
     use profile_platform_primitives::{
@@ -2293,80 +1945,6 @@ mod tests {
         ] {
             assert_eq!(operation(path, method), None);
         }
-    }
-
-    #[test]
-    fn working_requires_same_immutable_before_and_cold_restored_native_bytes() {
-        let original = "a".repeat(64);
-        assert!(exact_restored_native_digest(
-            &original, &original, &original
-        ));
-        assert!(!exact_restored_native_digest(
-            &original,
-            &"b".repeat(64),
-            &original
-        ));
-        assert!(!exact_restored_native_digest(
-            &original,
-            &original,
-            &"b".repeat(64)
-        ));
-        assert!(!exact_restored_native_digest(
-            &original,
-            &original,
-            &"A".repeat(64)
-        ));
-        assert!(!exact_restored_native_digest(
-            "not-sha256",
-            &original,
-            &original
-        ));
-    }
-
-    #[test]
-    fn working_runtime_rejects_unpinned_or_malformed_inventory() {
-        let current = "a".repeat(64);
-        let old = "b".repeat(64);
-        let foreign = "c".repeat(64);
-        let approved = format!("{current},{old}");
-        assert!(is_approved_working_runtime(&current, Some(&approved)));
-        assert!(is_approved_working_runtime(&old, Some(&approved)));
-        assert!(is_approved_working_runtime(&current, Some(&current)));
-        assert!(!is_approved_working_runtime(&foreign, Some(&approved)));
-        assert!(!is_approved_working_runtime(&current, None));
-        assert!(!is_approved_working_runtime(&current, Some("")));
-        assert!(!is_approved_working_runtime(
-            &current,
-            Some(&format!("{current},"))
-        ));
-        assert!(!is_approved_working_runtime(
-            &current,
-            Some(&format!(",{current}"))
-        ));
-        assert!(!is_approved_working_runtime(
-            &current,
-            Some(&format!("{current},{current}"))
-        ));
-        assert!(!is_approved_working_runtime(
-            &current,
-            Some(&format!("{current}, {old}"))
-        ));
-        assert!(!is_approved_working_runtime(
-            &current,
-            Some(&format!("{current},{old},{foreign}"))
-        ));
-        assert!(!is_approved_working_runtime(
-            &current,
-            Some(&current.to_uppercase())
-        ));
-        assert!(!is_approved_working_runtime(
-            &current.to_uppercase(),
-            Some(&current)
-        ));
-        assert!(!is_approved_working_runtime(
-            &current,
-            Some(&format!("{current}x"))
-        ));
     }
 
     #[test]
