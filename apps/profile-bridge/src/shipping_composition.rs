@@ -122,7 +122,7 @@ pub fn run_delivery_command(
 mod windows {
     use super::{ShippingCompositionError, ShippingDeliveryCommand};
     use crate::authoritative_generation::{
-        ensure_authoritative_current, reconcile_closed_draft_with_confirmed_current,
+        ensure_authoritative_current, prove_cold_current_restore, reconcile_closed_draft_with_confirmed_current,
         reconcile_closed_ready_with_confirmed_current,
     };
     use crate::dirty_generation::{GenerationSealingMaterialPort, closed_current_candidate_id};
@@ -745,6 +745,43 @@ mod windows {
                     Err(ref error) if error.kind() == std::io::ErrorKind::NotFound
                 ) && latest.pending_sync().is_none()
                 {
+                    // A committed CURRENT may be used by the local browser
+                    // immediately, regardless of R2 availability. This
+                    // secondary, non-destructive proof never blocks Open or
+                    // replays Save. Without it, retirement stays forbidden.
+                    if let Some(current) = latest.base_generation_id() {
+                        let cold = (|| {
+                            let reader_app = WindowsDeviceApplication::from_system(
+                                config.control_plane_origin.clone(),
+                                binding.clone(),
+                            )
+                            .map_err(|_| ())?;
+                            let mut remote = ControlPlaneCoordinator::for_local_current_restore(
+                                reader_app.transport(),
+                            );
+                            let reader = WindowsSignedGenerationObjectGet::from_system()
+                                .map_err(|_| ())?;
+                            let mut downloader =
+                                VerifiedGenerationObjectStreamDownloader::new(reader);
+                            prove_cold_current_restore(
+                                &root,
+                                &intent.tenant_id,
+                                &intent.profile_id,
+                                current,
+                                latest.profile_version(),
+                                binding.device_id(),
+                                now().map_err(|_| ())?.value(),
+                                &mut remote,
+                                &mut downloader,
+                            )
+                            .map_err(|_| ())
+                        })();
+                        if cold.is_ok() {
+                            eprintln!("BRIDGE_COLD_CURRENT_RESTORE=VERIFIED_LOCAL_ONLY");
+                        } else {
+                            eprintln!("BRIDGE_COLD_CURRENT_RESTORE=UNCONFIRMED_R2_RETAINED");
+                        }
+                    }
                     return Ok(());
                 }
             }
