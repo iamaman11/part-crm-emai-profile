@@ -45,6 +45,7 @@ use control_plane_contract::profile_generation_api::{
     BridgeGenerationSuccessorCommitResponse, BridgeGenerationSuccessorObserveRequest,
     BridgeGenerationSuccessorObserveResponse, BridgeGenerationSuccessorRetryDecisionRequest,
     BridgeGenerationSuccessorRetryDecisionResponse, BridgeGenerationSuccessorRetryVerdict,
+    BridgeCurrentColdRetirementRequest,
     BridgeGenerationUploadCapabilityResponse, BridgeProfileGenerationSuccessorRequest,
 };
 use device_domain::DeviceJobTarget;
@@ -116,6 +117,7 @@ pub(crate) enum BridgeGenerationMachineOperation {
     PredecessorDownloadCapability,
     PredecessorOpeningMaterial,
     PredecessorCertifyWorking,
+    ColdCurrentRetirement,
 }
 
 #[must_use]
@@ -249,6 +251,16 @@ pub(crate) fn operation(path: &str, method: Method) -> Option<BridgeGenerationMa
             "generation-working-candidate",
             "certify",
         ] => Some(BridgeGenerationMachineOperation::PredecessorCertifyWorking),
+        [
+            "bridge",
+            "v1",
+            "tenants",
+            _,
+            "profiles",
+            _,
+            "generation-successor",
+            "cold-current-retirement",
+        ] => Some(BridgeGenerationMachineOperation::ColdCurrentRetirement),
         _ => None,
     }
 }
@@ -270,6 +282,9 @@ pub(crate) async fn dispatch_authorized(
     }
     if operation == BridgeGenerationMachineOperation::PredecessorCertifyWorking {
         return dispatch_working_proof(request, env, profile_id, actor, device_id, role).await;
+    }
+    if operation == BridgeGenerationMachineOperation::ColdCurrentRetirement {
+        return dispatch_cold_current_retirement(request, env, profile_id, actor, device_id).await;
     }
     if matches!(
         operation,
@@ -1082,6 +1097,130 @@ pub(crate) async fn resume_due_current_retirements(env: &Env) -> Result<()> {
         }
     }
     Ok(())
+}
+
+/// Post-close machine-only cold CURRENT recovery attestation. No R2 deletion
+/// is performed here. A successful INSERT is a *delayed*, exact-key D1 intent
+/// and never creates a new cloud generation or permanent WORKING reserve.
+async fn dispatch_cold_current_retirement(
+    request: &mut Request,
+    env: &Env,
+    profile_id: &ProfileId,
+    actor: &ActorContext,
+    device_id: &DeviceId,
+) -> Result<Response> {
+    let correlation = actor.correlation_id().as_str();
+    let body = match request.json::<BridgeCurrentColdRetirementRequest>().await {
+        Ok(value) if value.expected_profile_version > 0
+            && lower_sha256(&value.restored_native_sha256) =>
+        {
+            value
+        }
+        _ => return invalid_request(correlation),
+    };
+    let current_id = match GenerationId::parse(&body.current_generation_id) {
+        Ok(value) => value,
+        Err(_) => return invalid_request(correlation),
+    };
+    let prelude = match decode_bounded_lower_hex(
+        &body.metadata_prelude_hex,
+        MAX_GENERATION_METADATA_PRELUDE_BYTES,
+    ) {
+        Some(value) => value,
+        None => return invalid_request(correlation),
+    };
+    let inspected = match inspect_generation_metadata_prelude(&prelude) {
+        Ok(value) if value.prelude_bytes() == prelude.len() => value,
+        _ => return invalid_request(correlation),
+    };
+    let (selected, descriptor) = match authoritative_reopen_descriptor(
+        env, profile_id, actor, device_id, None,
+    )
+    .await
+    {
+        Ok(value) => value,
+        Err(response) => return response,
+    };
+    if selected.generation_id() != &current_id
+        || !opening_metadata_matches_descriptor(actor, profile_id, &descriptor, &inspected)
+        || lower_hex(inspected.metadata().plaintext_digest().bytes())
+            != body.restored_native_sha256
+    {
+        return verification_conflict(correlation);
+    }
+    // The original BPGC key identity is governed by the same deployed
+    // generation root keyring used by CURRENT Restore; never trust a supplied
+    // key ID or nonce without deriving and comparing the authentic version.
+    let keyring = match generation_root_keyring(env) {
+        Ok(value) => value,
+        Err(_) => return integrity_failure(correlation),
+    };
+    let metadata = inspected.metadata();
+    let key = match keyring.derive_for_key_id(
+        metadata.key_id(),
+        actor.tenant_scope().tenant_id(),
+        profile_id,
+        &current_id,
+        metadata.plaintext_digest().bytes(),
+    ) {
+        Ok(value) => value,
+        Err(_) => return verification_conflict(correlation),
+    };
+    if key.key_id() != metadata.key_id()
+        || key.nonce_prefix() != metadata.nonce_prefix()
+    {
+        return integrity_failure(correlation);
+    }
+
+    let journal = profile_generation_successor_observer(env)?;
+    let actual_version = match journal
+        .load_retention_profile_version(actor.tenant_scope(), profile_id, &current_id)
+        .await
+    {
+        Ok(Some(value)) => value,
+        Ok(None) => return version_conflict(correlation),
+        Err(error) => return object_verify_failure(correlation, error.class()),
+    };
+    if actual_version != body.expected_profile_version {
+        return version_conflict(correlation);
+    }
+    let previous = match journal
+        .load_verified_predecessor_of_active(actor.tenant_scope(), profile_id, &current_id)
+        .await
+    {
+        Ok(Some(value)) => value,
+        Ok(None) => return machine_json(&serde_json::json!({"admitted": false})),
+        Err(error) => return object_verify_failure(correlation, error.class()),
+    };
+    let verifier = generation_object_verifier(env)?;
+    match verifier
+        .load_generation_object_descriptor_exact(actor.tenant_scope(), &previous)
+        .await
+    {
+        Ok(Some(value)) if value.generation_id() == previous.generation_id() => {}
+        Ok(_) => return verification_conflict(correlation),
+        Err(error) => return object_verify_failure(correlation, error.class()),
+    }
+    if journal
+        .admit_cold_current_retirement(
+            actor,
+            device_id,
+            &previous,
+            &selected,
+            actual_version,
+            &body.restored_native_sha256,
+            &body.restored_native_sha256,
+            server_now().value(),
+        )
+        .await
+        .is_err()
+    {
+        // Could be active other-device recovery, an offline job, Coordinator
+        // lease, stale CURRENT or expiry conflict. No destructive R2 effect
+        // on an uncertain D1 transaction.
+        return version_conflict(correlation);
+    }
+    machine_json(&serde_json::json!({"admitted": true}))
 }
 
 /// Exactly one cloud-only retention effect per WORKING certification. Existing

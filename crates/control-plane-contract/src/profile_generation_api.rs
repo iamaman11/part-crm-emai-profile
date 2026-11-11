@@ -23,6 +23,23 @@ pub const BRIDGE_PROFILE_GENERATION_OBSERVE_PATH_TEMPLATE: &str =
 pub const BRIDGE_PROFILE_GENERATION_RETRY_DECISION_PATH_TEMPLATE: &str =
     "/bridge/v1/tenants/{tenantId}/profiles/{profileId}/generation-successor/retry-decision";
 pub const BRIDGE_PROFILE_GENERATION_LOCAL_UNSYNCED_RETRY_DECISION_PATH_TEMPLATE: &str = "/bridge/v1/tenants/{tenantId}/profiles/{profileId}/generation-successor/local-unsynced/retry-decision";
+pub const BRIDGE_PROFILE_CURRENT_COLD_RETIREMENT_PATH_TEMPLATE: &str =
+    "/bridge/v1/tenants/{tenantId}/profiles/{profileId}/generation-successor/cold-current-retirement";
+
+
+/// The same signed device independently cold-restored the exact current R2
+/// BPGC into a disposable local folder, compared every native Firefox byte
+/// with its clean original under the OS lock, and attests that completed
+/// recovery. The Worker separately re-authenticates the BPGC metadata and
+/// original sealed snapshot digest; a caller-supplied SHA is never authority.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct BridgeCurrentColdRetirementRequest {
+    pub current_generation_id: String,
+    pub expected_profile_version: u64,
+    pub metadata_prelude_hex: String,
+    pub restored_native_sha256: String,
+}
 
 /// Machine-authenticated, read-only exact successor reconciliation. No
 /// credential, lease/fencing token, signed URL or optimistic write version is
