@@ -1025,6 +1025,65 @@ async fn dispatch_working_proof(
     machine_json(&serde_json::json!({"confirmed": true}))
 }
 
+/// The EXISTING minute Worker schedule is the only R2 retirement executor.
+/// Every candidate was frozen by a D1 exact CURRENT/cold-Restore admission.
+/// Never infer authority from object prefixes, local browser files or a clock
+/// alone. The R2 adapter independently validates HEAD descriptor then exact
+/// DELETE and final strong-consistency HEAD absence; D1 owns the only receipt.
+pub(crate) async fn resume_due_current_retirements(env: &Env) -> Result<()> {
+    use application_ports::generation_objects::GenerationObjectCatalogReference;
+    use profile_platform_primitives::{TenantId, TenantScope};
+    use worker::Error;
+
+    let journal = profile_generation_successor_observer(env)?;
+    let due = journal
+        .due_cold_current_retirements(Date::now().as_millis())
+        .await?;
+    let r2 = generation_object_retention(env)?;
+    for intent in due {
+        let tenant_id = TenantId::parse(intent.tenant_id.as_str())
+            .map_err(|_| Error::RustError("invalid frozen current-retirement tenant".to_owned()))?;
+        let profile_id = ProfileId::parse(intent.profile_id.as_str())
+            .map_err(|_| Error::RustError("invalid frozen current-retirement profile".to_owned()))?;
+        let generation_id = GenerationId::parse(intent.generation_id.as_str())
+            .map_err(|_| Error::RustError("invalid frozen current-retirement generation".to_owned()))?;
+        if intent.object_key
+            != canonical_generation_object_key(&tenant_id, &profile_id, &generation_id)
+            || !lower_sha256(&intent.metadata_digest)
+            || !lower_sha256(&intent.container_digest)
+            || intent.not_before_at_ms < 0
+            || i64::try_from(Date::now().as_millis()).map_or(true, |at| at < intent.not_before_at_ms)
+        {
+            worker::console_warn!("CURRENT_RETIREMENT_D1_INTENT_INVALID");
+            continue;
+        }
+        let scope = TenantScope::new(tenant_id);
+        let exact = GenerationObjectCatalogReference::new(
+            profile_id,
+            generation_id,
+            intent.object_key,
+            intent.metadata_digest,
+            intent.container_digest,
+        );
+        if r2.delete_retired_exact(&scope, &exact).await.is_err() {
+            worker::console_warn!("CURRENT_RETIREMENT_R2_EXACT_REPLAY_PENDING");
+            continue;
+        }
+        if journal
+            .record_cold_retirement_absence(
+                &scope,
+                &exact,
+                Date::now().as_millis(),
+            )
+            .await
+            .is_err()
+        {
+            worker::console_warn!("CURRENT_RETIREMENT_D1_RECEIPT_REPLAY_PENDING");
+        }
+    }
+    Ok(())
+}
+
 /// Exactly one cloud-only retention effect per WORKING certification. Existing
 /// D1 owns the retirement receipt; the existing R2 bucket owns the DELETE.
 #[allow(clippy::too_many_arguments)]

@@ -35,7 +35,10 @@ use worker::{Env, Request, Response, Result};
 
 /// Reuse the already deployed scheduled Worker, not a parallel GC service.
 pub(crate) async fn resume_due_profile_deletes(env: &Env) -> Result<()> {
-    profile_deletion::resume_due_frozen_deletes(env).await
+    profile_deletion::resume_due_frozen_deletes(env).await?;
+    // The same already-running minute schedule also replays D1-admitted
+    // exact old-generation receipts. No parallel GC service is created.
+    crate::profile_generation_successor_ingress::resume_due_current_retirements(env).await
 }
 
 pub async fn dispatch(route: RouteClass, request: &mut Request, env: &Env) -> Result<Response> {
