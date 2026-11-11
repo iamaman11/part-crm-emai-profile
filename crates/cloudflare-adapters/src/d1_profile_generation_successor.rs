@@ -404,7 +404,6 @@ impl D1ProfileGenerationSuccessorCommitJournal {
             .map(|v| u64::try_from(v).map_err(|_| historical_integrity_failure()))
             .transpose()
     }
-
 }
 
 impl VerifiedPredecessorObjectReferencePort for D1ProfileGenerationSuccessorCommitJournal {

@@ -76,8 +76,6 @@ pub(crate) enum BridgeGenerationMachineOperation {
     LocalUnsyncedRetryDecision,
     DownloadCapability,
     OpeningMaterial,
-    PredecessorDownloadCapability,
-    PredecessorOpeningMaterial,
     ColdCurrentRetirement,
 }
 
@@ -189,26 +187,6 @@ pub(crate) fn operation(path: &str, method: Method) -> Option<BridgeGenerationMa
             _,
             "profiles",
             _,
-            "generation-working-candidate",
-            "download-capability",
-        ] => Some(BridgeGenerationMachineOperation::PredecessorDownloadCapability),
-        [
-            "bridge",
-            "v1",
-            "tenants",
-            _,
-            "profiles",
-            _,
-            "generation-working-candidate",
-            "opening-material",
-        ] => Some(BridgeGenerationMachineOperation::PredecessorOpeningMaterial),
-        [
-            "bridge",
-            "v1",
-            "tenants",
-            _,
-            "profiles",
-            _,
             "generation-successor",
             "cold-current-retirement",
         ] => Some(BridgeGenerationMachineOperation::ColdCurrentRetirement),
@@ -234,37 +212,11 @@ pub(crate) async fn dispatch_authorized(
     if operation == BridgeGenerationMachineOperation::ColdCurrentRetirement {
         return dispatch_cold_current_retirement(request, env, profile_id, actor, device_id).await;
     }
-    if matches!(
-        operation,
-        BridgeGenerationMachineOperation::DownloadCapability
-            | BridgeGenerationMachineOperation::PredecessorDownloadCapability
-    ) {
-        return dispatch_download_capability(
-            request,
-            env,
-            profile_id,
-            actor,
-            device_id,
-            operation == BridgeGenerationMachineOperation::PredecessorDownloadCapability,
-            role,
-        )
-        .await;
+    if operation == BridgeGenerationMachineOperation::DownloadCapability {
+        return dispatch_download_capability(request, env, profile_id, actor, device_id, role).await;
     }
-    if matches!(
-        operation,
-        BridgeGenerationMachineOperation::OpeningMaterial
-            | BridgeGenerationMachineOperation::PredecessorOpeningMaterial
-    ) {
-        return dispatch_opening_material(
-            request,
-            env,
-            profile_id,
-            actor,
-            device_id,
-            operation == BridgeGenerationMachineOperation::PredecessorOpeningMaterial,
-            role,
-        )
-        .await;
+    if operation == BridgeGenerationMachineOperation::OpeningMaterial {
+        return dispatch_opening_material(request, env, profile_id, actor, device_id, role).await;
     }
     if operation == BridgeGenerationMachineOperation::Observe {
         return dispatch_successor_observation(request, env, profile_id, actor, device_id).await;
@@ -376,8 +328,6 @@ pub(crate) async fn dispatch_authorized(
         | BridgeGenerationMachineOperation::SealingMaterial
         | BridgeGenerationMachineOperation::DownloadCapability
         | BridgeGenerationMachineOperation::OpeningMaterial
-        | BridgeGenerationMachineOperation::PredecessorDownloadCapability
-        | BridgeGenerationMachineOperation::PredecessorOpeningMaterial
         | BridgeGenerationMachineOperation::ColdCurrentRetirement
         | BridgeGenerationMachineOperation::Observe
         | BridgeGenerationMachineOperation::RetryDecision
@@ -896,7 +846,8 @@ async fn dispatch_cold_current_retirement(
         };
     if selected.generation_id() != &current_id
         || !opening_metadata_matches_descriptor(actor, profile_id, &descriptor, &inspected)
-        || lower_hex(&inspected.metadata().plaintext_digest().bytes()) != body.restored_native_sha256
+        || lower_hex(&inspected.metadata().plaintext_digest().bytes())
+            != body.restored_native_sha256
     {
         return verification_conflict(correlation);
     }
@@ -980,11 +931,9 @@ fn reopen_selection_witness(
     token: &str,
     epoch: u64,
     local_restore: bool,
-    historical: bool,
 ) -> Option<Option<(SessionId, FencingToken, u64)>> {
     if local_restore {
-        return (!historical && session.is_empty() && token.is_empty() && epoch == 0)
-            .then_some(None);
+        return (session.is_empty() && token.is_empty() && epoch == 0).then_some(None);
     }
     reopen_witness(session, token, epoch)
         .map(|(session_id, fencing_token)| Some((session_id, fencing_token, epoch)))
@@ -1043,7 +992,6 @@ async fn dispatch_download_capability(
     profile_id: &ProfileId,
     actor: &ActorContext,
     device_id: &DeviceId,
-    historical: bool,
     role: identity_access_domain::MembershipRole,
 ) -> Result<Response> {
     let body = match request
@@ -1058,7 +1006,6 @@ async fn dispatch_download_capability(
         body.coordinator_fencing_token(),
         body.coordinator_epoch(),
         body.is_local_restore(),
-        historical,
     ) {
         Some(value) => value,
         None => return invalid_request(actor.correlation_id().as_str()),
@@ -1071,28 +1018,7 @@ async fn dispatch_download_capability(
         }
     }
 
-    let selected = if historical {
-        historical_predecessor_reopen_descriptor(
-            env,
-            profile_id,
-            actor,
-            device_id,
-            witness
-                .as_ref()
-                .expect("historical requires witness")
-                .0
-                .clone(),
-            witness
-                .as_ref()
-                .expect("historical requires witness")
-                .1
-                .clone(),
-            body.coordinator_epoch(),
-        )
-        .await
-    } else {
-        authoritative_reopen_descriptor(env, profile_id, actor, device_id, witness).await
-    };
+    let selected = authoritative_reopen_descriptor(env, profile_id, actor, device_id, witness).await;
     let (reference, descriptor) = match selected {
         Ok(value) => value,
         Err(response) => return response,
@@ -1136,7 +1062,6 @@ async fn dispatch_opening_material(
     profile_id: &ProfileId,
     actor: &ActorContext,
     device_id: &DeviceId,
-    historical: bool,
     role: identity_access_domain::MembershipRole,
 ) -> Result<Response> {
     let body = match request
@@ -1151,7 +1076,6 @@ async fn dispatch_opening_material(
         body.coordinator_fencing_token(),
         body.coordinator_epoch(),
         body.is_local_restore(),
-        historical,
     ) {
         Some(value) => value,
         None => return invalid_request(actor.correlation_id().as_str()),
@@ -1175,28 +1099,7 @@ async fn dispatch_opening_material(
         Ok(_) | Err(_) => return invalid_request(actor.correlation_id().as_str()),
     };
 
-    let selected = if historical {
-        historical_predecessor_reopen_descriptor(
-            env,
-            profile_id,
-            actor,
-            device_id,
-            witness
-                .as_ref()
-                .expect("historical requires witness")
-                .0
-                .clone(),
-            witness
-                .as_ref()
-                .expect("historical requires witness")
-                .1
-                .clone(),
-            body.coordinator_epoch(),
-        )
-        .await
-    } else {
-        authoritative_reopen_descriptor(env, profile_id, actor, device_id, witness).await
-    };
+    let selected = authoritative_reopen_descriptor(env, profile_id, actor, device_id, witness).await;
     let (reference, descriptor) = match selected {
         Ok(value) => value,
         Err(response) => return response,
@@ -1336,102 +1239,6 @@ async fn authoritative_reopen_descriptor(
         }
     };
     Ok((reference, descriptor))
-}
-
-/// The device only requests a read-only historical candidate, never selects an
-/// ID/key. The active-profile authorization is checked against CURRENT before
-/// D1 supplies exactly its journal-linked verified predecessor. Neither request
-/// is a WORKING admission or permission to prune any immutable R2 object.
-async fn historical_predecessor_reopen_descriptor(
-    env: &Env,
-    profile_id: &ProfileId,
-    actor: &ActorContext,
-    device_id: &DeviceId,
-    session_id: SessionId,
-    fencing_token: FencingToken,
-    coordinator_epoch: u64,
-) -> core::result::Result<
-    (
-        application_ports::generation_objects::GenerationObjectCatalogReference,
-        GenerationObjectDescriptor,
-    ),
-    Result<Response>,
-> {
-    let (current, _) = authoritative_reopen_descriptor(
-        env,
-        profile_id,
-        actor,
-        device_id,
-        Some((session_id, fencing_token, coordinator_epoch)),
-    )
-    .await?;
-    let observer = match profile_generation_successor_observer(env) {
-        Ok(value) => value,
-        Err(error) => return Err(Err(error)),
-    };
-    let predecessor = match observer
-        .load_verified_predecessor_of_active(
-            actor.tenant_scope(),
-            profile_id,
-            current.generation_id(),
-        )
-        .await
-    {
-        Ok(Some(value)) => value,
-        Ok(None) => return Err(verification_conflict(actor.correlation_id().as_str())),
-        Err(error) => {
-            return Err(object_verify_failure(
-                actor.correlation_id().as_str(),
-                error.class(),
-            ));
-        }
-    };
-    if predecessor.generation_id() == current.generation_id() {
-        return Err(integrity_failure(actor.correlation_id().as_str()));
-    }
-    let objects = match generation_object_verifier(env) {
-        Ok(value) => value,
-        Err(error) => return Err(Err(error)),
-    };
-    let descriptor = match objects
-        .load_generation_object_descriptor_exact(actor.tenant_scope(), &predecessor)
-        .await
-    {
-        Ok(Some(value)) => value,
-        Ok(None) => return Err(verification_conflict(actor.correlation_id().as_str())),
-        Err(error) => {
-            return Err(object_verify_failure(
-                actor.correlation_id().as_str(),
-                error.class(),
-            ));
-        }
-    };
-    if descriptor.generation_id() != predecessor.generation_id() {
-        return Err(integrity_failure(actor.correlation_id().as_str()));
-    }
-    // A concurrent pointer change never makes this stale historical grant
-    // silently valid. A later successor transaction must re-authorize.
-    let active = match device_execution_preconditions(env) {
-        Ok(value) => value,
-        Err(error) => return Err(Err(error)),
-    };
-    let fresh_current = match active
-        .load_active_verified_generation_object(actor.tenant_scope(), profile_id)
-        .await
-    {
-        Ok(Some(value)) => value,
-        Ok(None) => return Err(verification_conflict(actor.correlation_id().as_str())),
-        Err(error) => {
-            return Err(object_verify_failure(
-                actor.correlation_id().as_str(),
-                error.class(),
-            ));
-        }
-    };
-    if fresh_current != current {
-        return Err(version_conflict(actor.correlation_id().as_str()));
-    }
-    Ok((predecessor, descriptor))
 }
 
 fn reopen_witness(
@@ -1825,12 +1632,11 @@ mod tests {
 
     #[test]
     fn local_current_restore_admits_only_empty_witness_not_historical_or_mutation() {
-        assert!(super::reopen_selection_witness("", "", 0, true, false).is_some());
-        assert!(super::reopen_selection_witness("", "", 0, true, true).is_none());
-        assert!(super::reopen_selection_witness("session_fake", "", 0, true, false).is_none());
-        assert!(super::reopen_selection_witness("", "token_fake", 0, true, false).is_none());
-        assert!(super::reopen_selection_witness("", "", 1, true, false).is_none());
-        assert!(super::reopen_selection_witness("", "", 0, false, false).is_none());
+        assert!(super::reopen_selection_witness("", "", 0, true).is_some());
+        assert!(super::reopen_selection_witness("session_fake", "", 0, true).is_none());
+        assert!(super::reopen_selection_witness("", "token_fake", 0, true).is_none());
+        assert!(super::reopen_selection_witness("", "", 1, true).is_none());
+        assert!(super::reopen_selection_witness("", "", 0, false).is_none());
     }
 
     #[test]
@@ -1891,20 +1697,14 @@ mod tests {
             ),
             Some(BridgeGenerationMachineOperation::OpeningMaterial)
         );
-        assert_eq!(
-            operation(
-                "/bridge/v1/tenants/tenant_01/profiles/profile_01/generation-working-candidate/download-capability",
-                Method::Post,
-            ),
-            Some(BridgeGenerationMachineOperation::PredecessorDownloadCapability)
-        );
-        assert_eq!(
-            operation(
-                "/bridge/v1/tenants/tenant_01/profiles/profile_01/generation-working-candidate/opening-material",
-                Method::Post,
-            ),
-            Some(BridgeGenerationMachineOperation::PredecessorOpeningMaterial)
-        );
+        // The retired WORKING/LKG read and certification endpoints are gone.
+        for path in [
+            "/bridge/v1/tenants/tenant_01/profiles/profile_01/generation-working-candidate/download-capability",
+            "/bridge/v1/tenants/tenant_01/profiles/profile_01/generation-working-candidate/opening-material",
+            "/bridge/v1/tenants/tenant_01/profiles/profile_01/generation-working-candidate/certify",
+        ] {
+            assert_eq!(operation(path, Method::Post), None);
+        }
         for (method, path) in [
             (
                 Method::Get,
