@@ -113,7 +113,12 @@ fn bridge_profile_generation_machine_route(method: &str, path: &str) -> bool {
             "profiles",
             _,
             "generation-successor",
-            "upload-capability" | "sealing-material" | "commit" | "observe" | "retry-decision" | "cold-current-retirement"
+            "upload-capability"
+                | "sealing-material"
+                | "commit"
+                | "observe"
+                | "retry-decision"
+                | "cold-current-retirement"
         ] | [
             "bridge",
             "v1",
