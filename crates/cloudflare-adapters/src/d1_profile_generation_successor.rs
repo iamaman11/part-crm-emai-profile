@@ -847,7 +847,7 @@ const fn dependency_failure() -> ProfileGenerationSuccessorCommitError {
 
 #[cfg(test)]
 mod tests {
-    use super::{SuccessorRow, observed_successor_is_exact, validate_request};
+    use super::{SuccessorRow, is_sha256_hex, observed_successor_is_exact, validate_request};
     use application_ports::generation_objects::GenerationObjectDescriptor;
     use application_ports::profile_generation_successor::{
         ProfileGenerationCommitWitness, ProfileGenerationSuccessorCommitRequest,

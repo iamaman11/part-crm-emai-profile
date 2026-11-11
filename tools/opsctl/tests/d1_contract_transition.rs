@@ -510,7 +510,7 @@ fn actual_deployed_context_traverses_separate_sealed_contract_and_current_expand
                 &count.to_string(),
             ],
         )?;
-        let stage_len = if count == 35 { 6 } else { 1 };
+        let stage_len = if count == 35 { 7 } else { 1 };
         for migration in &history[count..count + stage_len] {
             receipt = append_execution_event(
                 &receipt,
@@ -684,7 +684,7 @@ if count==34:
  # The first ALTER failed atomically, and the corrected SQL must retain all rows.
  assert db.execute("SELECT count(*) FROM sqlite_master WHERE name='idempotency_records_pas2_contract_legacy'").fetchone()==(0,)
  db.execute('PRAGMA case_sensitive_like=OFF')
-for i,m in enumerate(sources[count:count+(6 if count==35 else 1)],start=count):
+for i,m in enumerate(sources[count:count+(7 if count==35 else 1)],start=count):
  db.executescript((bounded/m['migration_file']).read_text())
  db.execute('INSERT INTO d1_migrations(id,name) VALUES(?,?)',(i+1,m['migration_file']))
 (scratch/'observed-ledger.json').write_text(json.dumps([r[0] for r in db.execute('SELECT name FROM d1_migrations ORDER BY id')]))

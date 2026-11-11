@@ -705,18 +705,13 @@ mod windows {
             return Ok(false);
         };
         let cold = (|| {
-            let reader_app = WindowsDeviceApplication::from_system(
-                origin.to_owned(),
-                binding.clone(),
-            )
-            .map_err(|_| ())?;
-            let mut remote = ControlPlaneCoordinator::for_local_current_restore(
-                reader_app.transport(),
-            );
-            let reader =
-                WindowsSignedGenerationObjectGet::from_system().map_err(|_| ())?;
-            let mut downloader =
-                VerifiedGenerationObjectStreamDownloader::new(reader);
+            let reader_app =
+                WindowsDeviceApplication::from_system(origin.to_owned(), binding.clone())
+                    .map_err(|_| ())?;
+            let mut remote =
+                ControlPlaneCoordinator::for_local_current_restore(reader_app.transport());
+            let reader = WindowsSignedGenerationObjectGet::from_system().map_err(|_| ())?;
+            let mut downloader = VerifiedGenerationObjectStreamDownloader::new(reader);
             let (restored_digest, prelude) = prove_cold_current_restore(
                 &root,
                 &intent.tenant_id,
@@ -748,15 +743,12 @@ mod windows {
             let path = control_plane_contract::profile_generation_api::BRIDGE_PROFILE_CURRENT_COLD_RETIREMENT_PATH_TEMPLATE
                 .replace("{tenantId}", intent.tenant_id.as_str())
                 .replace("{profileId}", intent.profile_id.as_str());
-            let correlation = profile_platform_primitives::CorrelationId::parse(
-                "corr_cold_current_retire",
-            )
-            .map_err(|_| ())?;
-            let application = WindowsDeviceApplication::from_system(
-                origin.to_owned(),
-                binding.clone(),
-            )
-            .map_err(|_| ())?;
+            let correlation =
+                profile_platform_primitives::CorrelationId::parse("corr_cold_current_retire")
+                    .map_err(|_| ())?;
+            let application =
+                WindowsDeviceApplication::from_system(origin.to_owned(), binding.clone())
+                    .map_err(|_| ())?;
             let mut transport = application.transport();
             let response = transport
                 .request(
@@ -769,11 +761,10 @@ mod windows {
             if !(200..300).contains(&response.status()) {
                 return Err(());
             }
-            let admitted =
-                serde_json::from_slice::<serde_json::Value>(response.body())
-                    .map_err(|_| ())?
-                    .get("admitted")
-                    .and_then(serde_json::Value::as_bool);
+            let admitted = serde_json::from_slice::<serde_json::Value>(response.body())
+                .map_err(|_| ())?
+                .get("admitted")
+                .and_then(serde_json::Value::as_bool);
             Ok(admitted)
         })();
         cold.and_then(|admitted| admitted.ok_or(()))
