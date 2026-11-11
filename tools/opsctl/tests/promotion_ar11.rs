@@ -627,7 +627,8 @@ fn real_d1_verdict_survives_release_projection_and_terminal_promotion()
             ("0038_profile_generation_working_proof.sql", false),
             ("0039_profile_generation_retirement_guard.sql", false),
             ("0040_native_browser_recovery_proof.sql", false),
-            ("0041_profile_delete_exact_r2_receipts.sql", true),
+            ("0041_profile_delete_exact_r2_receipts.sql", false),
+            ("0042_profile_current_cold_retirement.sql", true),
         ] {
             let count = sources
                 .iter()
@@ -729,45 +730,14 @@ print(json.dumps({'evidence': adapter['build'](release_id, native, None, None), 
                     "RUNTIME_SCHEMA_MIGRATION_REQUIRED"
                 );
                 assert_eq!(composed["outcome"]["owner_diagnostic"], native);
-                let missing = if revision == "0034_device_application_authority.sql" {
-                    json!([
-                        "0035_pas2_payload_fingerprint_contract.sql",
-                        "0036_profile_generation_initialization.sql",
-                        "0037_generation_streaming_container_limit.sql",
-                        "0038_profile_generation_working_proof.sql",
-                        "0039_profile_generation_retirement_guard.sql",
-                        "0040_native_browser_recovery_proof.sql",
-                        "0041_profile_delete_exact_r2_receipts.sql"
-                    ])
-                } else if revision == "0036_profile_generation_initialization.sql" {
-                    json!([
-                        "0037_generation_streaming_container_limit.sql",
-                        "0038_profile_generation_working_proof.sql",
-                        "0039_profile_generation_retirement_guard.sql",
-                        "0040_native_browser_recovery_proof.sql",
-                        "0041_profile_delete_exact_r2_receipts.sql"
-                    ])
-                } else if revision == "0037_generation_streaming_container_limit.sql" {
-                    json!([
-                        "0038_profile_generation_working_proof.sql",
-                        "0039_profile_generation_retirement_guard.sql",
-                        "0040_native_browser_recovery_proof.sql",
-                        "0041_profile_delete_exact_r2_receipts.sql"
-                    ])
-                } else if revision == "0038_profile_generation_working_proof.sql" {
-                    json!([
-                        "0039_profile_generation_retirement_guard.sql",
-                        "0040_native_browser_recovery_proof.sql",
-                        "0041_profile_delete_exact_r2_receipts.sql"
-                    ])
-                } else if revision == "0039_profile_generation_retirement_guard.sql" {
-                    json!([
-                        "0040_native_browser_recovery_proof.sql",
-                        "0041_profile_delete_exact_r2_receipts.sql"
-                    ])
-                } else {
-                    json!(["0041_profile_delete_exact_r2_receipts.sql"])
-                };
+                // The source catalog is the single migration authority.
+                // Never maintain a second hand-written list in the promotion test.
+                let missing = Value::Array(
+                    sources[count..]
+                        .iter()
+                        .map(|source| source["migration_file"].clone())
+                        .collect(),
+                );
                 assert_eq!(native["planned_migrations"], missing);
                 let behind_contract = revision == "0034_device_application_authority.sql";
                 assert_eq!(
