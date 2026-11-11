@@ -892,9 +892,9 @@ mod tests {
         assert_eq!(authority.ordered_history[34], SUCCESSOR_CONTRACT_REVISION);
         assert_eq!(
             authority.current_repository_revision,
-            PROFILE_DELETE_EXACT_REVISION
+            CURRENT_COLD_RETIREMENT_REVISION
         );
-        assert_eq!(authority.post_epoch.len(), 15);
+        assert_eq!(authority.post_epoch.len(), 16);
         Ok(())
     }
 
