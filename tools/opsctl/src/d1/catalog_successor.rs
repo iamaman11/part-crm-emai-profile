@@ -865,8 +865,9 @@ fn repository_identity_from_components(components: &[Value]) -> Result<String, D
 mod tests {
     use super::{
         BRIDGE_ENROLLMENT_REVISION, CURRENT_SUCCESSOR_ROOT, DEVICE_APPLICATION_AUTHORITY_REVISION,
-        NATIVE_BROWSER_RECOVERY_REVISION, PREDECESSOR_SUCCESSOR_ROOT,
-        PROFILE_DELETE_EXACT_REVISION, PUBLIC_KEY_BINDING_REVISION, RETIREMENT_GUARD_REVISION,
+        CURRENT_COLD_RETIREMENT_REVISION, NATIVE_BROWSER_RECOVERY_REVISION,
+        PREDECESSOR_SUCCESSOR_ROOT, PROFILE_DELETE_EXACT_REVISION, PUBLIC_KEY_BINDING_REVISION,
+        RETIREMENT_GUARD_REVISION,
         STREAMING_GENERATION_REVISION, SUCCESSOR_CONTRACT_REVISION, WORKING_PROOF_REVISION,
         component_authority, release_contract, repository_projection,
     };
@@ -881,7 +882,7 @@ mod tests {
     #[test]
     fn current_catalog_appends_initialization_after_pas2_contract() -> Result<(), Box<dyn Error>> {
         let authority = component_authority(&repository_root(), "catalog")?;
-        assert_eq!(authority.ordered_history.len(), 41);
+        assert_eq!(authority.ordered_history.len(), 42);
         assert_eq!(authority.ordered_history[31], BRIDGE_ENROLLMENT_REVISION);
         assert_eq!(authority.ordered_history[32], PUBLIC_KEY_BINDING_REVISION);
         assert_eq!(
