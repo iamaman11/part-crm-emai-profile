@@ -37,7 +37,8 @@ const WORKING_PROOF_REVISION: &str = "0038_profile_generation_working_proof.sql"
 const RETIREMENT_GUARD_REVISION: &str = "0039_profile_generation_retirement_guard.sql";
 const NATIVE_BROWSER_RECOVERY_REVISION: &str = "0040_native_browser_recovery_proof.sql";
 const PROFILE_DELETE_EXACT_REVISION: &str = "0041_profile_delete_exact_r2_receipts.sql";
-const CURRENT_SUCCESSOR_FILES: [&str; 10] = [
+const CURRENT_COLD_RETIREMENT_REVISION: &str = "0042_profile_current_cold_retirement.sql";
+const CURRENT_SUCCESSOR_FILES: [&str; 11] = [
     BRIDGE_ENROLLMENT_REVISION,
     PUBLIC_KEY_BINDING_REVISION,
     DEVICE_APPLICATION_AUTHORITY_REVISION,
@@ -48,6 +49,7 @@ const CURRENT_SUCCESSOR_FILES: [&str; 10] = [
     RETIREMENT_GUARD_REVISION,
     NATIVE_BROWSER_RECOVERY_REVISION,
     PROFILE_DELETE_EXACT_REVISION,
+    CURRENT_COLD_RETIREMENT_REVISION,
 ];
 
 #[derive(Debug, Clone)]
@@ -199,6 +201,17 @@ impl CatalogSuccessor {
         migration_source_roots.push(CURRENT_SUCCESSOR_ROOT.to_owned());
         post_epoch.push(MigrationContract {
             migration_file: PROFILE_DELETE_EXACT_REVISION.to_owned(),
+            migration_class: MigrationClass::Expand,
+            rollout_order: RolloutOrder::MigrateBeforeCode,
+            fail_forward_required: false,
+            destructive: false,
+            code_rollback_allowed: true,
+            contract_preconditions: Vec::new(),
+        });
+        ordered_history.push(CURRENT_COLD_RETIREMENT_REVISION.to_owned());
+        migration_source_roots.push(CURRENT_SUCCESSOR_ROOT.to_owned());
+        post_epoch.push(MigrationContract {
+            migration_file: CURRENT_COLD_RETIREMENT_REVISION.to_owned(),
             migration_class: MigrationClass::Expand,
             rollout_order: RolloutOrder::MigrateBeforeCode,
             fail_forward_required: false,
@@ -889,15 +902,15 @@ mod tests {
         let contract = release_contract(&repository_root(), "catalog")?;
         assert_eq!(
             contract["target_schema_revision"],
-            PROFILE_DELETE_EXACT_REVISION
+            CURRENT_COLD_RETIREMENT_REVISION
         );
         assert_eq!(
             contract["supported_schema_min"],
-            PROFILE_DELETE_EXACT_REVISION
+            CURRENT_COLD_RETIREMENT_REVISION
         );
         assert_eq!(
             contract["supported_schema_max"],
-            PROFILE_DELETE_EXACT_REVISION
+            CURRENT_COLD_RETIREMENT_REVISION
         );
         Ok(())
     }
@@ -929,7 +942,7 @@ mod tests {
         let sources = catalog["executable_migration_sources"]
             .as_array()
             .ok_or("executable migration source projection is missing")?;
-        assert_eq!(sources.len(), 41);
+        assert_eq!(sources.len(), 42);
         assert_eq!(sources[26]["source_root"], PREDECESSOR_SUCCESSOR_ROOT);
         assert_eq!(sources[27]["source_root"], "migrations/d1");
         assert_eq!(sources[31]["migration_file"], BRIDGE_ENROLLMENT_REVISION);
@@ -956,6 +969,8 @@ mod tests {
         assert_eq!(sources[39]["source_root"], CURRENT_SUCCESSOR_ROOT);
         assert_eq!(sources[40]["migration_file"], PROFILE_DELETE_EXACT_REVISION);
         assert_eq!(sources[40]["source_root"], CURRENT_SUCCESSOR_ROOT);
+        assert_eq!(sources[41]["migration_file"], CURRENT_COLD_RETIREMENT_REVISION);
+        assert_eq!(sources[41]["source_root"], CURRENT_SUCCESSOR_ROOT);
         assert_eq!(
             projection["executable_schema_authority"],
             serde_json::json!([
