@@ -46,15 +46,12 @@ def setup(*, extra_signed_put: bool = False) -> sqlite3.Connection:
             ),
         )
     FX["insert_device_commit"](db, FX["command_values"]())
-    assert db.execute(
+    actual = db.execute(
         "SELECT status,version,active_generation_id FROM browser_profiles "
         "WHERE tenant_id=? AND profile_id=?",
         (FX["TENANT"], FX["PROFILE"]),
-    ).fetchone() == ("READY", 3, FX["CANDIDATE"]) or tuple(db.execute(
-        "SELECT status,version,active_generation_id FROM browser_profiles "
-        "WHERE tenant_id=? AND profile_id=?",
-        (FX["TENANT"], FX["PROFILE"]),
-    ).fetchone()) == ("READY", 3, FX["CANDIDATE"])
+    ).fetchone()
+    assert tuple(actual) == ("READY", 3, FX["CANDIDATE"])
     # CURRENT Restore authorized the *same* authenticated Windows device.
     db.execute(
         "INSERT INTO device_authorizations "
@@ -181,10 +178,6 @@ def test_exact_current_and_one_way_receipt() -> None:
         )
         # Exact replay may not issue a second different retirement intent.
         denied(db)
-        db.execute(
-            "UPDATE profile_generation_current_retirement_intents "
-            "SET deleted_at_ms=360499"
-        ) if False else None
         try:
             db.execute(
                 "UPDATE profile_generation_current_retirement_intents "
