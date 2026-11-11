@@ -276,11 +276,9 @@ impl<C: GenerationReopenControlPort> GenerationReopenControlPort
         profile_id: &ProfileId,
         metadata_prelude: &[u8],
     ) -> Result<encrypted_generation_domain::GenerationDek, Self::Error> {
-        let key = self.delegate.opening_material(
-            tenant_id,
-            profile_id,
-            metadata_prelude,
-        )?;
+        let key = self
+            .delegate
+            .opening_material(tenant_id, profile_id, metadata_prelude)?;
         self.authenticated_prelude = Some(metadata_prelude.to_vec());
         Ok(key)
     }
@@ -341,7 +339,9 @@ where
         &mut witnessed,
         downloader,
     )?;
-    let prelude = witnessed.authenticated_prelude.ok_or(Error::InvalidLocalEvidence)?;
+    let prelude = witnessed
+        .authenticated_prelude
+        .ok_or(Error::InvalidLocalEvidence)?;
     let restored = recovery_root
         .open_profile_current(tenant_id, profile_id)
         .map_err(|_| Error::Local)?;

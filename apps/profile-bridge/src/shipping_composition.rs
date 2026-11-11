@@ -141,12 +141,10 @@ mod windows {
         DeliveryActivationGuard, MaterializationRoot, PendingSyncDescriptor,
     };
     use crate::shipping_control_plane::{
-        MachineHttpMethod, MachineHttpPort, SyncEnrollmentPort,
-    };
-    use crate::shipping_control_plane::{
         ControlPlaneCoordinator, ControlPlaneEnrollment, SharedControlPlaneCoordinator,
         ShippingControlPlaneError,
     };
+    use crate::shipping_control_plane::{MachineHttpMethod, MachineHttpPort, SyncEnrollmentPort};
     use crate::shipping_generation_successor_control::publish_closed_streamed_successor;
     use crate::windows_delivery_handoff::{
         DeliveryHandoffCoordinator, DeliveryHandoffRestartDisposition,
@@ -818,12 +816,11 @@ mod windows {
                             if !(200..300).contains(&response.status()) {
                                 return Err(());
                             }
-                            let admitted = serde_json::from_slice::<serde_json::Value>(
-                                response.body(),
-                            )
-                            .map_err(|_| ())?
-                            .get("admitted")
-                            .and_then(serde_json::Value::as_bool);
+                            let admitted =
+                                serde_json::from_slice::<serde_json::Value>(response.body())
+                                    .map_err(|_| ())?
+                                    .get("admitted")
+                                    .and_then(serde_json::Value::as_bool);
                             Ok(admitted)
                         })();
                         match cold {

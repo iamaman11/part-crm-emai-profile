@@ -23,9 +23,7 @@ pub const BRIDGE_PROFILE_GENERATION_OBSERVE_PATH_TEMPLATE: &str =
 pub const BRIDGE_PROFILE_GENERATION_RETRY_DECISION_PATH_TEMPLATE: &str =
     "/bridge/v1/tenants/{tenantId}/profiles/{profileId}/generation-successor/retry-decision";
 pub const BRIDGE_PROFILE_GENERATION_LOCAL_UNSYNCED_RETRY_DECISION_PATH_TEMPLATE: &str = "/bridge/v1/tenants/{tenantId}/profiles/{profileId}/generation-successor/local-unsynced/retry-decision";
-pub const BRIDGE_PROFILE_CURRENT_COLD_RETIREMENT_PATH_TEMPLATE: &str =
-    "/bridge/v1/tenants/{tenantId}/profiles/{profileId}/generation-successor/cold-current-retirement";
-
+pub const BRIDGE_PROFILE_CURRENT_COLD_RETIREMENT_PATH_TEMPLATE: &str = "/bridge/v1/tenants/{tenantId}/profiles/{profileId}/generation-successor/cold-current-retirement";
 
 /// The same signed device independently cold-restored the exact current R2
 /// BPGC into a disposable local folder, compared every native Firefox byte

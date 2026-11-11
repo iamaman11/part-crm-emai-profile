@@ -41,12 +41,12 @@ use control_plane_contract::generation_reopen_api::{
     BridgeGenerationWorkingProofRequest, GENERATION_DOWNLOAD_CAPABILITY_MAX_EXPIRES_SECONDS,
 };
 use control_plane_contract::profile_generation_api::{
-    BridgeGenerationLocalUnsyncedRetryDecisionRequest, BridgeGenerationSuccessorCommitOutcomeDto,
-    BridgeGenerationSuccessorCommitResponse, BridgeGenerationSuccessorObserveRequest,
-    BridgeGenerationSuccessorObserveResponse, BridgeGenerationSuccessorRetryDecisionRequest,
-    BridgeGenerationSuccessorRetryDecisionResponse, BridgeGenerationSuccessorRetryVerdict,
-    BridgeCurrentColdRetirementRequest,
-    BridgeGenerationUploadCapabilityResponse, BridgeProfileGenerationSuccessorRequest,
+    BridgeCurrentColdRetirementRequest, BridgeGenerationLocalUnsyncedRetryDecisionRequest,
+    BridgeGenerationSuccessorCommitOutcomeDto, BridgeGenerationSuccessorCommitResponse,
+    BridgeGenerationSuccessorObserveRequest, BridgeGenerationSuccessorObserveResponse,
+    BridgeGenerationSuccessorRetryDecisionRequest, BridgeGenerationSuccessorRetryDecisionResponse,
+    BridgeGenerationSuccessorRetryVerdict, BridgeGenerationUploadCapabilityResponse,
+    BridgeProfileGenerationSuccessorRequest,
 };
 use device_domain::DeviceJobTarget;
 use encrypted_generation_domain::{
@@ -1058,16 +1058,19 @@ pub(crate) async fn resume_due_current_retirements(env: &Env) -> Result<()> {
     for intent in due {
         let tenant_id = TenantId::parse(intent.tenant_id.as_str())
             .map_err(|_| Error::RustError("invalid frozen current-retirement tenant".to_owned()))?;
-        let profile_id = ProfileId::parse(intent.profile_id.as_str())
-            .map_err(|_| Error::RustError("invalid frozen current-retirement profile".to_owned()))?;
-        let generation_id = GenerationId::parse(intent.generation_id.as_str())
-            .map_err(|_| Error::RustError("invalid frozen current-retirement generation".to_owned()))?;
+        let profile_id = ProfileId::parse(intent.profile_id.as_str()).map_err(|_| {
+            Error::RustError("invalid frozen current-retirement profile".to_owned())
+        })?;
+        let generation_id = GenerationId::parse(intent.generation_id.as_str()).map_err(|_| {
+            Error::RustError("invalid frozen current-retirement generation".to_owned())
+        })?;
         if intent.object_key
             != canonical_generation_object_key(&tenant_id, &profile_id, &generation_id)
             || !lower_sha256(&intent.metadata_digest)
             || !lower_sha256(&intent.container_digest)
             || intent.not_before_at_ms < 0
-            || i64::try_from(Date::now().as_millis()).map_or(true, |at| at < intent.not_before_at_ms)
+            || i64::try_from(Date::now().as_millis())
+                .map_or(true, |at| at < intent.not_before_at_ms)
         {
             worker::console_warn!("CURRENT_RETIREMENT_D1_INTENT_INVALID");
             continue;
@@ -1085,11 +1088,7 @@ pub(crate) async fn resume_due_current_retirements(env: &Env) -> Result<()> {
             continue;
         }
         if journal
-            .record_cold_retirement_absence(
-                &scope,
-                &exact,
-                Date::now().as_millis(),
-            )
+            .record_cold_retirement_absence(&scope, &exact, Date::now().as_millis())
             .await
             .is_err()
         {
@@ -1111,8 +1110,9 @@ async fn dispatch_cold_current_retirement(
 ) -> Result<Response> {
     let correlation = actor.correlation_id().as_str();
     let body = match request.json::<BridgeCurrentColdRetirementRequest>().await {
-        Ok(value) if value.expected_profile_version > 0
-            && lower_sha256(&value.restored_native_sha256) =>
+        Ok(value)
+            if value.expected_profile_version > 0
+                && lower_sha256(&value.restored_native_sha256) =>
         {
             value
         }
@@ -1133,18 +1133,14 @@ async fn dispatch_cold_current_retirement(
         Ok(value) if value.prelude_bytes() == prelude.len() => value,
         _ => return invalid_request(correlation),
     };
-    let (selected, descriptor) = match authoritative_reopen_descriptor(
-        env, profile_id, actor, device_id, None,
-    )
-    .await
-    {
-        Ok(value) => value,
-        Err(response) => return response,
-    };
+    let (selected, descriptor) =
+        match authoritative_reopen_descriptor(env, profile_id, actor, device_id, None).await {
+            Ok(value) => value,
+            Err(response) => return response,
+        };
     if selected.generation_id() != &current_id
         || !opening_metadata_matches_descriptor(actor, profile_id, &descriptor, &inspected)
-        || lower_hex(inspected.metadata().plaintext_digest().bytes())
-            != body.restored_native_sha256
+        || lower_hex(inspected.metadata().plaintext_digest().bytes()) != body.restored_native_sha256
     {
         return verification_conflict(correlation);
     }
@@ -1166,9 +1162,7 @@ async fn dispatch_cold_current_retirement(
         Ok(value) => value,
         Err(_) => return verification_conflict(correlation),
     };
-    if key.key_id() != metadata.key_id()
-        || key.nonce_prefix() != metadata.nonce_prefix()
-    {
+    if key.key_id() != metadata.key_id() || key.nonce_prefix() != metadata.nonce_prefix() {
         return integrity_failure(correlation);
     }
 

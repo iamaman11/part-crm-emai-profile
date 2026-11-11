@@ -864,12 +864,11 @@ fn repository_identity_from_components(components: &[Value]) -> Result<String, D
 #[cfg(test)]
 mod tests {
     use super::{
-        BRIDGE_ENROLLMENT_REVISION, CURRENT_SUCCESSOR_ROOT, DEVICE_APPLICATION_AUTHORITY_REVISION,
-        CURRENT_COLD_RETIREMENT_REVISION, NATIVE_BROWSER_RECOVERY_REVISION,
+        BRIDGE_ENROLLMENT_REVISION, CURRENT_COLD_RETIREMENT_REVISION, CURRENT_SUCCESSOR_ROOT,
+        DEVICE_APPLICATION_AUTHORITY_REVISION, NATIVE_BROWSER_RECOVERY_REVISION,
         PREDECESSOR_SUCCESSOR_ROOT, PROFILE_DELETE_EXACT_REVISION, PUBLIC_KEY_BINDING_REVISION,
-        RETIREMENT_GUARD_REVISION,
-        STREAMING_GENERATION_REVISION, SUCCESSOR_CONTRACT_REVISION, WORKING_PROOF_REVISION,
-        component_authority, release_contract, repository_projection,
+        RETIREMENT_GUARD_REVISION, STREAMING_GENERATION_REVISION, SUCCESSOR_CONTRACT_REVISION,
+        WORKING_PROOF_REVISION, component_authority, release_contract, repository_projection,
     };
     use serde_json::Value;
     use std::error::Error;
@@ -970,7 +969,10 @@ mod tests {
         assert_eq!(sources[39]["source_root"], CURRENT_SUCCESSOR_ROOT);
         assert_eq!(sources[40]["migration_file"], PROFILE_DELETE_EXACT_REVISION);
         assert_eq!(sources[40]["source_root"], CURRENT_SUCCESSOR_ROOT);
-        assert_eq!(sources[41]["migration_file"], CURRENT_COLD_RETIREMENT_REVISION);
+        assert_eq!(
+            sources[41]["migration_file"],
+            CURRENT_COLD_RETIREMENT_REVISION
+        );
         assert_eq!(sources[41]["source_root"], CURRENT_SUCCESSOR_ROOT);
         assert_eq!(
             projection["executable_schema_authority"],

@@ -5,7 +5,7 @@
 
 use super::D1ProfileGenerationSuccessorCommitJournal;
 use application_ports::generation_objects::GenerationObjectCatalogReference;
-use profile_platform_primitives::{ActorContext, DeviceId, ProfileId, TenantScope};
+use profile_platform_primitives::{ActorContext, DeviceId, TenantScope};
 use serde::Deserialize;
 use worker::{Error, Result, query};
 
@@ -162,7 +162,9 @@ impl D1ProfileGenerationSuccessorCommitJournal {
         {
             return Ok(());
         }
-        Err(result.err().unwrap_or_else(|| invalid("retirement admission missing")))
+        Err(result
+            .err()
+            .unwrap_or_else(|| invalid("retirement admission missing")))
     }
 
     /// The existing single Worker scheduler replays only D1-admitted, fully

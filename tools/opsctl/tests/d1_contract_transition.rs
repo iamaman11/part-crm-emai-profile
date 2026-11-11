@@ -103,7 +103,11 @@ fn actual_deployed_context_traverses_separate_sealed_contract_and_current_expand
                 .ok_or("migration name is missing")
         })
         .collect::<Result<Vec<_>, _>>()?;
-    assert_eq!(history.len(), 41);
+    assert_eq!(history.len(), 42);
+    assert_eq!(
+        history.last().map(String::as_str),
+        Some("0042_profile_current_cold_retirement.sql")
+    );
     let target = json!({"source":{"authority":"accepted-main","repository":"iamaman11/part-crm-emai-profile","ref":"refs/heads/main","event":"push","commit_sha":SOURCE},"schema_contract":catalog["release_schema_contract"]});
     let mut current = target.clone();
     current["source"]["commit_sha"] = json!("fd6c29cc403053f10d9716ff7ad616887ab9850e");
