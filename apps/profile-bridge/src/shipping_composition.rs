@@ -122,7 +122,8 @@ pub fn run_delivery_command(
 mod windows {
     use super::{ShippingCompositionError, ShippingDeliveryCommand};
     use crate::authoritative_generation::{
-        ensure_authoritative_current, prove_cold_current_restore, reconcile_closed_draft_with_confirmed_current,
+        ensure_authoritative_current, prove_cold_current_restore,
+        reconcile_closed_draft_with_confirmed_current,
         reconcile_closed_ready_with_confirmed_current,
     };
     use crate::dirty_generation::{GenerationSealingMaterialPort, closed_current_candidate_id};
@@ -759,8 +760,8 @@ mod windows {
                             let mut remote = ControlPlaneCoordinator::for_local_current_restore(
                                 reader_app.transport(),
                             );
-                            let reader = WindowsSignedGenerationObjectGet::from_system()
-                                .map_err(|_| ())?;
+                            let reader =
+                                WindowsSignedGenerationObjectGet::from_system().map_err(|_| ())?;
                             let mut downloader =
                                 VerifiedGenerationObjectStreamDownloader::new(reader);
                             prove_cold_current_restore(

@@ -307,9 +307,8 @@ where
         return Err(Error::InvalidLocalEvidence);
     }
     let restored_inventory = restored.inventory().map_err(|_| Error::Local)?;
-    let (_, restored_digest) =
-        digest_closed_workspace_streaming(&restored, &restored_inventory)
-            .map_err(|_| Error::Snapshot)?;
+    let (_, restored_digest) = digest_closed_workspace_streaming(&restored, &restored_inventory)
+        .map_err(|_| Error::Snapshot)?;
 
     // Only a clean, unchanged local CURRENT is comparable. Never claim a
     // cold proof after Firefox has reopened or local bytes became dirty.
@@ -1455,12 +1454,13 @@ mod tests {
             original.path().join("user_data/storage/state.bin"),
             b"authoritative-state",
         )?;
-        fs::write(original.path().join("camoufox-config.json"), &fixture.config_bytes)?;
-        fixture.root.update_profile_current_sync_base(
-            &original,
-            &fixture.generation_id,
-            2,
+        fs::write(
+            original.path().join("camoufox-config.json"),
+            &fixture.config_bytes,
         )?;
+        fixture
+            .root
+            .update_profile_current_sync_base(&original, &fixture.generation_id, 2)?;
         let mut control = fixture.control();
         let mut downloader = FakeStreamDownloader {
             container: fixture.container.clone(),
@@ -1486,7 +1486,11 @@ mod tests {
         );
         assert!(
             fs::read_dir(fixture.root.path())?.all(|entry| {
-                !entry.unwrap().file_name().to_string_lossy().starts_with(".cold-current-")
+                !entry
+                    .unwrap()
+                    .file_name()
+                    .to_string_lossy()
+                    .starts_with(".cold-current-")
             }),
             "an ephemeral cold recovery must not leave another local profile",
         );
@@ -1511,8 +1515,13 @@ mod tests {
             original.path().join("user_data/storage/state.bin"),
             b"changed-local-session",
         )?;
-        fs::write(original.path().join("camoufox-config.json"), &fixture.config_bytes)?;
-        fixture.root.update_profile_current_sync_base(&original, &fixture.generation_id, 2)?;
+        fs::write(
+            original.path().join("camoufox-config.json"),
+            &fixture.config_bytes,
+        )?;
+        fixture
+            .root
+            .update_profile_current_sync_base(&original, &fixture.generation_id, 2)?;
         let mut control = fixture.control();
         let mut downloader = FakeStreamDownloader {
             container: fixture.container.clone(),
