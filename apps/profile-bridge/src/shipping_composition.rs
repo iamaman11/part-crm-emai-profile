@@ -691,6 +691,94 @@ mod windows {
         }
     }
 
+    /// Existing post-close Sync owner performs the only cold Restore proof.
+    /// No new local state, worker, browser controller or independent RETIRE API.
+    /// This operation can be retried against the same already-confirmed CURRENT.
+    fn try_admit_confirmed_current_retirement(
+        intent: &crate::generation_initialization::InitialProfileOpen,
+        binding: &WindowsDeviceApplicationBinding,
+        root: &MaterializationRoot,
+        latest: &crate::local_profile::GenerationWorkspace,
+        origin: &str,
+    ) -> Result<bool, ()> {
+        let Some(current) = latest.base_generation_id() else {
+            return Ok(false);
+        };
+        let cold = (|| {
+            let reader_app = WindowsDeviceApplication::from_system(
+                origin.to_owned(),
+                binding.clone(),
+            )
+            .map_err(|_| ())?;
+            let mut remote = ControlPlaneCoordinator::for_local_current_restore(
+                reader_app.transport(),
+            );
+            let reader =
+                WindowsSignedGenerationObjectGet::from_system().map_err(|_| ())?;
+            let mut downloader =
+                VerifiedGenerationObjectStreamDownloader::new(reader);
+            let (restored_digest, prelude) = prove_cold_current_restore(
+                &root,
+                &intent.tenant_id,
+                &intent.profile_id,
+                current,
+                latest.profile_version(),
+                binding.device_id(),
+                now().map_err(|_| ())?.value(),
+                &mut remote,
+                &mut downloader,
+            )
+            .map_err(|_| ())?;
+            let restored_native_sha256 = restored_digest
+                .iter()
+                .map(|byte| format!("{byte:02x}"))
+                .collect::<String>();
+            let metadata_prelude_hex = prelude
+                .iter()
+                .map(|byte| format!("{byte:02x}"))
+                .collect::<String>();
+            let body =
+                control_plane_contract::profile_generation_api::BridgeCurrentColdRetirementRequest {
+                    current_generation_id: current.as_str().to_owned(),
+                    expected_profile_version: latest.profile_version(),
+                    metadata_prelude_hex,
+                    restored_native_sha256,
+                };
+            let encoded = serde_json::to_vec(&body).map_err(|_| ())?;
+            let path = control_plane_contract::profile_generation_api::BRIDGE_PROFILE_CURRENT_COLD_RETIREMENT_PATH_TEMPLATE
+                .replace("{tenantId}", intent.tenant_id.as_str())
+                .replace("{profileId}", intent.profile_id.as_str());
+            let correlation = profile_platform_primitives::CorrelationId::parse(
+                "corr_cold_current_retire",
+            )
+            .map_err(|_| ())?;
+            let application = WindowsDeviceApplication::from_system(
+                origin.to_owned(),
+                binding.clone(),
+            )
+            .map_err(|_| ())?;
+            let mut transport = application.transport();
+            let response = transport
+                .request(
+                    MachineHttpMethod::PostJson,
+                    path.as_str(),
+                    &correlation,
+                    Some(&encoded),
+                )
+                .map_err(|_| ())?;
+            if !(200..300).contains(&response.status()) {
+                return Err(());
+            }
+            let admitted =
+                serde_json::from_slice::<serde_json::Value>(response.body())
+                    .map_err(|_| ())?
+                    .get("admitted")
+                    .and_then(serde_json::Value::as_bool);
+            Ok(admitted)
+        })();
+        cold.and_then(|admitted| admitted.ok_or(()))
+    }
+
     pub fn run_closed_sync(
         intent: &crate::generation_initialization::InitialProfileOpen,
     ) -> Result<(), ShippingCompositionError> {
@@ -708,6 +796,7 @@ mod windows {
             .map_err(|_| ShippingCompositionError::Configuration)?;
         let mut retry_delay_seconds = 2_u64;
         let mut attempt = 0_u64;
+        let mut retirement_attempts = 0_u8;
         loop {
             let workspace = root
                 .open_profile_current(&intent.tenant_id, &intent.profile_id)
@@ -718,7 +807,37 @@ mod windows {
                 Err(ref error) if error.kind() == std::io::ErrorKind::NotFound
             ) && workspace.pending_sync().is_none()
             {
-                return Ok(());
+                match try_admit_confirmed_current_retirement(
+                    intent,
+                    &binding,
+                    &root,
+                    &workspace,
+                    &config.control_plane_origin,
+                ) {
+                    Ok(true) => {
+                        eprintln!("BRIDGE_COLD_CURRENT_RETIREMENT=D1_ADMITTED");
+                        return Ok(());
+                    }
+                    Ok(false) => {
+                        eprintln!("BRIDGE_COLD_CURRENT_RESTORE=VERIFIED_NO_PREDECESSOR");
+                        return Ok(());
+                    }
+                    Err(_) if retirement_attempts < 2 => {
+                        // Retry a failed exact GET or lost D1 reply WITHOUT a
+                        // new R2 PUT or a new cloud generation.
+                        retirement_attempts += 1;
+                        thread::sleep(Duration::from_secs(retry_delay_seconds));
+                        retry_delay_seconds = next_sync_retry_delay(retry_delay_seconds);
+                        continue;
+                    }
+                    Err(_) => {
+                        // Sync is confirmed; never mark it failed or create
+                        // another generation to compensate for R2 retention.
+                        // A later normal Close retries this same clean path.
+                        eprintln!("BRIDGE_COLD_CURRENT_RETIREMENT=UNCONFIRMED_R2_RETAINED");
+                        return Ok(());
+                    }
+                }
             }
             // If Camouhost exited before Playwright could deliver its close
             // event, this same process waits for the native OS file lock to
@@ -746,96 +865,10 @@ mod windows {
                     Err(ref error) if error.kind() == std::io::ErrorKind::NotFound
                 ) && latest.pending_sync().is_none()
                 {
-                    // A committed CURRENT may be used by the local browser
-                    // immediately, regardless of R2 availability. This
-                    // secondary, non-destructive proof never blocks Open or
-                    // replays Save. Without it, retirement stays forbidden.
-                    if let Some(current) = latest.base_generation_id() {
-                        let cold = (|| {
-                            let reader_app = WindowsDeviceApplication::from_system(
-                                config.control_plane_origin.clone(),
-                                binding.clone(),
-                            )
-                            .map_err(|_| ())?;
-                            let mut remote = ControlPlaneCoordinator::for_local_current_restore(
-                                reader_app.transport(),
-                            );
-                            let reader =
-                                WindowsSignedGenerationObjectGet::from_system().map_err(|_| ())?;
-                            let mut downloader =
-                                VerifiedGenerationObjectStreamDownloader::new(reader);
-                            let (restored_digest, prelude) = prove_cold_current_restore(
-                                &root,
-                                &intent.tenant_id,
-                                &intent.profile_id,
-                                current,
-                                latest.profile_version(),
-                                binding.device_id(),
-                                now().map_err(|_| ())?.value(),
-                                &mut remote,
-                                &mut downloader,
-                            )
-                            .map_err(|_| ())?;
-                            let restored_native_sha256 = restored_digest
-                                .iter()
-                                .map(|byte| format!("{byte:02x}"))
-                                .collect::<String>();
-                            let metadata_prelude_hex = prelude
-                                .iter()
-                                .map(|byte| format!("{byte:02x}"))
-                                .collect::<String>();
-                            let body =
-                                control_plane_contract::profile_generation_api::BridgeCurrentColdRetirementRequest {
-                                    current_generation_id: current.as_str().to_owned(),
-                                    expected_profile_version: latest.profile_version(),
-                                    metadata_prelude_hex,
-                                    restored_native_sha256,
-                                };
-                            let encoded = serde_json::to_vec(&body).map_err(|_| ())?;
-                            let path = control_plane_contract::profile_generation_api::BRIDGE_PROFILE_CURRENT_COLD_RETIREMENT_PATH_TEMPLATE
-                                .replace("{tenantId}", intent.tenant_id.as_str())
-                                .replace("{profileId}", intent.profile_id.as_str());
-                            let correlation = profile_platform_primitives::CorrelationId::parse(
-                                "corr_cold_current_retire",
-                            )
-                            .map_err(|_| ())?;
-                            let application = WindowsDeviceApplication::from_system(
-                                config.control_plane_origin.clone(),
-                                binding.clone(),
-                            )
-                            .map_err(|_| ())?;
-                            let mut transport = application.transport();
-                            let response = transport
-                                .request(
-                                    MachineHttpMethod::PostJson,
-                                    path.as_str(),
-                                    &correlation,
-                                    Some(&encoded),
-                                )
-                                .map_err(|_| ())?;
-                            if !(200..300).contains(&response.status()) {
-                                return Err(());
-                            }
-                            let admitted =
-                                serde_json::from_slice::<serde_json::Value>(response.body())
-                                    .map_err(|_| ())?
-                                    .get("admitted")
-                                    .and_then(serde_json::Value::as_bool);
-                            Ok(admitted)
-                        })();
-                        match cold {
-                            Ok(Some(true)) => {
-                                eprintln!("BRIDGE_COLD_CURRENT_RETIREMENT=D1_ADMITTED");
-                            }
-                            Ok(Some(false)) => {
-                                eprintln!("BRIDGE_COLD_CURRENT_RESTORE=VERIFIED_NO_PREDECESSOR");
-                            }
-                            _ => {
-                                eprintln!("BRIDGE_COLD_CURRENT_RETIREMENT=UNCONFIRMED_R2_RETAINED");
-                            }
-                        }
-                    }
-                    return Ok(());
+                    // The cloud Save is complete. The same loop re-enters its
+                    // clean branch for the read-only CURRENT Restore proof;
+                    // never seal or upload again merely to retry retirement.
+                    continue;
                 }
             }
             eprintln!(
