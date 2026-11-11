@@ -213,7 +213,8 @@ pub(crate) async fn dispatch_authorized(
         return dispatch_cold_current_retirement(request, env, profile_id, actor, device_id).await;
     }
     if operation == BridgeGenerationMachineOperation::DownloadCapability {
-        return dispatch_download_capability(request, env, profile_id, actor, device_id, role).await;
+        return dispatch_download_capability(request, env, profile_id, actor, device_id, role)
+            .await;
     }
     if operation == BridgeGenerationMachineOperation::OpeningMaterial {
         return dispatch_opening_material(request, env, profile_id, actor, device_id, role).await;
@@ -1018,7 +1019,8 @@ async fn dispatch_download_capability(
         }
     }
 
-    let selected = authoritative_reopen_descriptor(env, profile_id, actor, device_id, witness).await;
+    let selected =
+        authoritative_reopen_descriptor(env, profile_id, actor, device_id, witness).await;
     let (reference, descriptor) = match selected {
         Ok(value) => value,
         Err(response) => return response,
@@ -1099,7 +1101,8 @@ async fn dispatch_opening_material(
         Ok(_) | Err(_) => return invalid_request(actor.correlation_id().as_str()),
     };
 
-    let selected = authoritative_reopen_descriptor(env, profile_id, actor, device_id, witness).await;
+    let selected =
+        authoritative_reopen_descriptor(env, profile_id, actor, device_id, witness).await;
     let (reference, descriptor) = match selected {
         Ok(value) => value,
         Err(response) => return response,
