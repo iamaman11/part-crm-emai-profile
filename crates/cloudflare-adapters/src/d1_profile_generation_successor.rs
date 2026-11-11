@@ -1,3 +1,6 @@
+mod current_retirement;
+pub use current_retirement::DueCurrentRetirement;
+
 use application_ports::generation_objects::{
     GenerationObjectCatalogReference, GenerationObjectDescriptor,
     VerifiedPredecessorObjectReferencePort,
