@@ -10,9 +10,9 @@ use serde::Deserialize;
 use worker::{Error, Result, query};
 
 const ADMIT: &str = r#"
-INSERT INTO profile_generation_current_retirement_intents (
+INSERT INTO profile_generation_retirement_intents (
  tenant_id,profile_id,generation_id,observed_current_generation_id,
- observed_profile_version,object_key,metadata_digest,container_digest,
+ expected_profile_version,object_key,metadata_digest,container_digest,
  current_object_key,current_metadata_digest,current_container_digest,
  sealed_current_native_sha256,restored_current_native_sha256,
  admitted_by_actor_id,admitted_by_device_id,admitted_at_ms,not_before_at_ms
@@ -20,26 +20,26 @@ INSERT INTO profile_generation_current_retirement_intents (
 "#;
 
 const LOAD_EXACT: &str = r#"
-SELECT generation_id,observed_current_generation_id,observed_profile_version,
+SELECT generation_id,observed_current_generation_id,expected_profile_version,
  object_key,metadata_digest,container_digest,
  current_object_key,current_metadata_digest,current_container_digest,
  sealed_current_native_sha256,restored_current_native_sha256,
  admitted_by_actor_id,admitted_by_device_id
-FROM profile_generation_current_retirement_intents
+FROM profile_generation_retirement_intents
 WHERE tenant_id=? AND profile_id=? AND generation_id=?
 "#;
 
 const DUE: &str = r#"
 SELECT tenant_id,profile_id,generation_id,object_key,metadata_digest,
  container_digest,not_before_at_ms
-FROM profile_generation_current_retirement_intents
+FROM profile_generation_retirement_intents
 WHERE deleted_at_ms IS NULL AND not_before_at_ms <= ?
 ORDER BY not_before_at_ms,tenant_id,profile_id,generation_id
 LIMIT 8
 "#;
 
 const RECORD_ABSENCE: &str = r#"
-UPDATE profile_generation_current_retirement_intents
+UPDATE profile_generation_retirement_intents
 SET deleted_at_ms=?
 WHERE tenant_id=? AND profile_id=? AND generation_id=?
  AND object_key=? AND metadata_digest=? AND container_digest=?
@@ -48,7 +48,7 @@ RETURNING generation_id
 "#;
 
 const REPLAY_ABSENCE: &str = r#"
-SELECT generation_id FROM profile_generation_current_retirement_intents
+SELECT generation_id FROM profile_generation_retirement_intents
 WHERE tenant_id=? AND profile_id=? AND generation_id=?
  AND object_key=? AND metadata_digest=? AND container_digest=?
  AND deleted_at_ms IS NOT NULL
@@ -58,7 +58,7 @@ WHERE tenant_id=? AND profile_id=? AND generation_id=?
 struct Existing {
     generation_id: String,
     observed_current_generation_id: String,
-    observed_profile_version: i64,
+    expected_profile_version: i64,
     object_key: String,
     metadata_digest: String,
     container_digest: String,
@@ -148,7 +148,7 @@ impl D1ProfileGenerationSuccessorCommitJournal {
         if let Some(row) = existing
             && row.generation_id == old_id
             && row.observed_current_generation_id == current.generation_id().as_str()
-            && row.observed_profile_version == version
+            && row.expected_profile_version == version
             && row.object_key == old.object_key()
             && row.metadata_digest == old.metadata_digest()
             && row.container_digest == old.container_digest()

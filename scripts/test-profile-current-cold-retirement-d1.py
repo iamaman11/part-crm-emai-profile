@@ -18,7 +18,7 @@ ROOT_MIGRATIONS = ROOT / "migrations/d1-successor-v2"
 
 COLUMNS = (
     "tenant_id", "profile_id", "generation_id", "observed_current_generation_id",
-    "observed_profile_version", "object_key", "metadata_digest", "container_digest",
+    "expected_profile_version", "object_key", "metadata_digest", "container_digest",
     "current_object_key", "current_metadata_digest", "current_container_digest",
     "sealed_current_native_sha256", "restored_current_native_sha256",
     "admitted_by_actor_id", "admitted_by_device_id", "admitted_at_ms", "not_before_at_ms",
@@ -31,6 +31,8 @@ def setup(*, extra_signed_put: bool = False) -> sqlite3.Connection:
         matches = list(ROOT_MIGRATIONS.glob(f"{revision:04d}_*.sql"))
         assert len(matches) == 1, (revision, matches)
         db.executescript(matches[0].read_text(encoding="utf-8"))
+    # One canonical journal; the parallel cold-current table must not exist.
+    assert db.execute("SELECT count(*) FROM sqlite_master WHERE type='table' AND name='profile_generation_current_retirement_intents'").fetchone()[0] == 0
     if extra_signed_put:
         # A signed old-generation PUT might be issued before the successor
         # CAS. Future R2 absence must wait until *its* real expiry as well.
@@ -81,7 +83,7 @@ def intent(**overrides: object) -> dict[str, object]:
         "profile_id": FX["PROFILE"],
         "generation_id": FX["BASE"],
         "observed_current_generation_id": FX["CANDIDATE"],
-        "observed_profile_version": 3,
+        "expected_profile_version": 3,
         "object_key": FX["canonical_key"](FX["BASE"]),
         "metadata_digest": "a" * 64,
         "container_digest": "b" * 64,
@@ -103,7 +105,7 @@ def admit(db: sqlite3.Connection, **changes: object) -> None:
     data = intent(**changes)
     assert set(data) == set(COLUMNS)
     db.execute(
-        "INSERT INTO profile_generation_current_retirement_intents ("
+        "INSERT INTO profile_generation_retirement_intents ("
         + ",".join(COLUMNS) + ") VALUES ("
         + ",".join("?" for _ in COLUMNS) + ")",
         tuple(data[name] for name in COLUMNS),
@@ -127,7 +129,7 @@ def test_exact_current_and_one_way_receipt() -> None:
     db = setup()
     try:
         denied(db, restored_current_native_sha256="0" * 64)
-        denied(db, observed_profile_version=2)
+        denied(db, expected_profile_version=2)
         denied(db, observed_current_generation_id=FX["BASE"])
         denied(db, current_container_digest="1" * 64)
         denied(db, metadata_digest="2" * 64)
@@ -180,7 +182,7 @@ def test_exact_current_and_one_way_receipt() -> None:
         denied(db)
         try:
             db.execute(
-                "UPDATE profile_generation_current_retirement_intents "
+                "UPDATE profile_generation_retirement_intents "
                 "SET deleted_at_ms=360499"
             )
         except sqlite3.IntegrityError:
@@ -188,12 +190,12 @@ def test_exact_current_and_one_way_receipt() -> None:
         else:
             raise AssertionError("early R2 deletion receipt accepted")
         db.execute(
-            "UPDATE profile_generation_current_retirement_intents "
+            "UPDATE profile_generation_retirement_intents "
             "SET deleted_at_ms=360500"
         )
         try:
             db.execute(
-                "UPDATE profile_generation_current_retirement_intents "
+                "UPDATE profile_generation_retirement_intents "
                 "SET deleted_at_ms=360600"
             )
         except sqlite3.IntegrityError:
@@ -222,7 +224,7 @@ def test_signed_put_expiry_prevents_early_intent() -> None:
         admit(db, not_before_at_ms=360500)
         assert db.execute(
             "SELECT not_before_at_ms,deleted_at_ms "
-            "FROM profile_generation_current_retirement_intents"
+            "FROM profile_generation_retirement_intents"
         ).fetchone()[0] == 360500
         assert db.execute("PRAGMA foreign_key_check").fetchall() == []
     finally:
