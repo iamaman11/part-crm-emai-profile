@@ -52,7 +52,7 @@ pub async fn delete_profile(
         return problem(
             correlation,
             409,
-            "profile_delete_conflict",
+            "conflict",
             "Profile Delete Conflict",
         );
     }
