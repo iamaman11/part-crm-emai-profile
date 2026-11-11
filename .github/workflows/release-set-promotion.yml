@@ -710,14 +710,14 @@ jobs:
           test "$GITHUB_EVENT_NAME" = workflow_dispatch
           main_sha="$GITHUB_SHA"
           [[ "$main_sha" =~ ^[0-9a-f]{40}$ ]]
-          gh api "repos/$GITHUB_REPOSITORY/issues/830" > "$RUNNER_TEMP/current-plan.json"
+          gh api "repos/$GITHUB_REPOSITORY/issues/849" > "$RUNNER_TEMP/current-plan.json"
           python - "$RUNNER_TEMP/current-plan.json" "$main_sha" "$RUNNER_TEMP/dispatch-intent.json" <<'PY'
           import json, os, re, sys
           current_path, main_sha, output_path = sys.argv[1:]
           issue = json.load(open(current_path, encoding='utf-8'))
           body = issue.get('body')
           if not isinstance(body, str):
-              raise SystemExit('canonical #830 plan body is missing')
+              raise SystemExit('canonical #849 plan body is missing')
           def parse(block):
               fields = {}
               for raw in block.splitlines():
@@ -731,7 +731,7 @@ jobs:
           parsed = [parse(block) for block in re.findall(r'```(?:text)?\s*\n(.*?)```', body, flags=re.S)]
           candidates = [item for item in parsed if item.get('STAGING_CANDIDATE') == 'RELEASE_SET_V3']
           if len(candidates) != 1:
-              raise SystemExit('Issue #830 must contain exactly one current STAGING_CANDIDATE')
+              raise SystemExit('Issue #849 must contain exactly one current STAGING_CANDIDATE')
           candidate = candidates[0]
           expected_keys = {
               'STAGING_CANDIDATE', 'ENVIRONMENT', 'SOURCE_SHA', 'RELEASE_SET_ID',
