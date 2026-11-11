@@ -292,9 +292,9 @@ impl CatalogSuccessor {
             .ordered_history
             .last()
             .ok_or_else(|| D1Error::new("Catalog successor-v2 migration lineage is empty"))?;
-        if latest != PROFILE_DELETE_EXACT_REVISION {
+        if latest != CURRENT_COLD_RETIREMENT_REVISION {
             return Err(D1Error::new(
-                "Catalog profile deletion requires exact schema0041",
+                "Catalog CURRENT retention requires exact schema0042",
             ));
         }
         let target = latest;
