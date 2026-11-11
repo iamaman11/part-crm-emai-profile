@@ -549,9 +549,7 @@ jobs:
             --arg release_verify_sha256 "$(sha256sum "$RUNNER_TEMP/release-verify.json" | cut -d' ' -f1)" \
             --arg preflight_sha256 "$(sha256sum "$RUNNER_TEMP/promotion-preflight.json" | cut -d' ' -f1)" \
             --arg plan_sha256 "$(sha256sum "$RUNNER_TEMP/promotion-plan.json" | cut -d' ' -f1)" \
-            --arg approved_runtime_inventories "$(jq -jer '.env.staging.vars.PROFILE_GENERATION_APPROVED_RUNTIME_INVENTORIES' "$WRANGLER_CONFIG")" \
-            --arg runtime_policy_sha256 "$(jq -j '.env.staging.vars.PROFILE_GENERATION_APPROVED_RUNTIME_INVENTORIES' "$WRANGLER_CONFIG" | sha256sum | cut -d' ' -f1)" \
-            '{schema_version:1,kind:"AR11_READY_TO_MUTATE",ready:true,environment:"staging",source_sha:$source_sha,release_set_id:$release_set_id,expected_current_release_set_id:$expected_current,expected_current_capability_profile_id:$expected_current_profile,target_capability_profile_id:$target_profile,admission_mode:$admission_mode,worker_exists:true,worker_identity_sha256:$worker_identity_sha256,d1_head:$d1_head,d1_ledger_sha256:$d1_ledger_sha256,secret_bindings_verified:true,quiescence:{seconds:30,worker_identity_stable:true,d1_ledger_stable:true},promotion_id:$promotion_id,recovery_strategy:$recovery_strategy,release_verify_sha256:$release_verify_sha256,promotion_preflight_sha256:$preflight_sha256,promotion_plan_sha256:$plan_sha256,approved_runtime_inventories:$approved_runtime_inventories,runtime_policy_sha256:$runtime_policy_sha256,credential_values_accessed:false,provider_mutation:false,production_mutation:false}' \
+            '{schema_version:1,kind:"AR11_READY_TO_MUTATE",ready:true,environment:"staging",source_sha:$source_sha,release_set_id:$release_set_id,expected_current_release_set_id:$expected_current,expected_current_capability_profile_id:$expected_current_profile,target_capability_profile_id:$target_profile,admission_mode:$admission_mode,worker_exists:true,worker_identity_sha256:$worker_identity_sha256,d1_head:$d1_head,d1_ledger_sha256:$d1_ledger_sha256,secret_bindings_verified:true,quiescence:{seconds:30,worker_identity_stable:true,d1_ledger_stable:true},promotion_id:$promotion_id,recovery_strategy:$recovery_strategy,release_verify_sha256:$release_verify_sha256,promotion_preflight_sha256:$preflight_sha256,promotion_plan_sha256:$plan_sha256,credential_values_accessed:false,provider_mutation:false,production_mutation:false}' \
             > "$RUNNER_TEMP/ready-to-mutate.json"
           jq -e --arg source "$SOURCE_SHA" --arg target "$RELEASE_SET_ID" --arg current "${{ steps.observe.outputs.current_id }}" --arg current_profile "${{ steps.observe.outputs.current_profile }}" --arg target_profile "${{ steps.policy.outputs.target_profile }}" --arg admission_mode "${{ steps.policy.outputs.admission_mode }}" '.kind == "AR11_READY_TO_MUTATE" and .ready == true and .source_sha == $source and .release_set_id == $target and .expected_current_release_set_id == $current and .expected_current_capability_profile_id == $current_profile and .target_capability_profile_id == $target_profile and .admission_mode == $admission_mode and .worker_exists == true and .secret_bindings_verified == true and .quiescence.worker_identity_stable == true and .quiescence.d1_ledger_stable == true and .credential_values_accessed == false and .provider_mutation == false and .production_mutation == false' "$RUNNER_TEMP/ready-to-mutate.json" >/dev/null
           ready_sha="$(sha256sum "$RUNNER_TEMP/ready-to-mutate.json" | cut -d' ' -f1)"
@@ -831,7 +829,6 @@ jobs:
           mkdir -p "$ready_root"
           gh run download "$READY_RUN_ID" --repo "$GITHUB_REPOSITORY" --name "$READY_ARTIFACT_NAME" --dir "$ready_root"
           for name in ready-to-mutate.json release-set.json accepted-source-evidence.json release-verify.json compatibility-evidence.json promotion-plan.json promotion-preflight.json pre-snapshot.json d1-names-after.json; do test -f "$ready_root/$name"; done
-          jq -e '.runtime_policy_sha256 | type == "string" and test("^[0-9a-f]{64}$")' "$ready_root/ready-to-mutate.json" >/dev/null
           jq -e '.schema_version == 2 and .command == "promotion.preflight" and .ready == true and (.recovery_strategy == "VERIFIED_ROLLBACK" or .recovery_strategy == "CURRENT_FORWARD_ONLY" or .recovery_strategy == "FRESH_BASELINE")' "$ready_root/promotion-preflight.json" >/dev/null
           native_recovery="$(jq -er '.recovery_strategy' "$ready_root/promotion-preflight.json")"
           jq -e --arg recovery "$native_recovery" '.recovery_strategy == $recovery' "$ready_root/ready-to-mutate.json" >/dev/null
@@ -950,7 +947,6 @@ jobs:
           test "$(jq -r '.source_sha' "$ready_root/ready-to-mutate.json")" = "${{ needs.resolve-verify.outputs.main_sha }}"
           test "$(jq -r '.ready' "$ready_root/ready-to-mutate.json")" = true
           test "$(jq -r '.provider_mutation' "$ready_root/ready-to-mutate.json")" = false
-          jq -e '.runtime_policy_sha256 | type == "string" and test("^[0-9a-f]{64}$")' "$ready_root/ready-to-mutate.json" >/dev/null
           jq -n \
             --arg dispatch_digest "$DISPATCH_DIGEST" \
             --arg ready_evidence_sha256 "$READY_EVIDENCE_SHA256" \
@@ -1009,7 +1005,6 @@ jobs:
             --ready-policy-evidence "$RUNNER_TEMP/ready/ready-to-mutate.json" \
             --expected-previous-release-set-id "$EXPECTED_CURRENT" \
             --environment staging --output "$RUNNER_TEMP/wrangler.staging.json"
-          test "$(jq -j '.env.staging.vars.PROFILE_GENERATION_APPROVED_RUNTIME_INVENTORIES' "$RUNNER_TEMP/wrangler.staging.json" | sha256sum | cut -d' ' -f1)" = "$(jq -er '.runtime_policy_sha256' "$RUNNER_TEMP/ready/ready-to-mutate.json")"
           echo "DEPLOY_MANIFEST=$RUNNER_TEMP/deploy-manifest.json" >> "$GITHUB_ENV"
           echo "WRANGLER_CONFIG=$RUNNER_TEMP/wrangler.staging.json" >> "$GITHUB_ENV"
           npx --yes wrangler@4.94.0 deploy --dry-run --config "$RUNNER_TEMP/wrangler.staging.json" --env staging --experimental-autoconfig=false
@@ -1248,7 +1243,6 @@ jobs:
             --ready-policy-evidence "$ready_root/ready-to-mutate.json" \
             --expected-previous-release-set-id "$previous_id" \
             --environment staging --output "$RUNNER_TEMP/wrangler.staging.json"
-          test "$(jq -j '.env.staging.vars.PROFILE_GENERATION_APPROVED_RUNTIME_INVENTORIES' "$RUNNER_TEMP/wrangler.staging.json" | sha256sum | cut -d' ' -f1)" = "$(jq -er '.runtime_policy_sha256' "$ready_root/ready-to-mutate.json")"
           echo "DEPLOY_MANIFEST=$RUNNER_TEMP/deploy-manifest.json" >> "$GITHUB_ENV"
           echo "WRANGLER_CONFIG=$RUNNER_TEMP/wrangler.staging.json" >> "$GITHUB_ENV"
 
