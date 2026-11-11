@@ -49,12 +49,7 @@ pub async fn delete_profile(
         .await
         .is_err()
     {
-        return problem(
-            correlation,
-            409,
-            "conflict",
-            "Profile Delete Conflict",
-        );
+        return problem(correlation, 409, "conflict", "Profile Delete Conflict");
     }
     // HTTP only freezes the command and returns its current projection.
     // The existing minute cron is the sole exact R2 DELETE executor: no
