@@ -142,7 +142,10 @@ fn actual_deployed_context_traverses_separate_sealed_contract_and_current_expand
         "deployment_snapshot":{"id":"11111111-1111-4111-8111-111111111111","versions":[{"version_id":"22222222-2222-4222-8222-222222222222","percentage":100.0}]}});
     write(&dir.join("runtime-context.json"), &context)?;
     let mut prior_authorization: Option<Value> = None;
-    for count in [34, 35] {
+    // The existing bounded migration policy can execute eight EXPAND steps
+    // after the separate CONTRACT. Schema0044 is a final third step, not
+    // permission to widen the per-transaction cap.
+    for count in [34, 35, 43] {
         let ledger = json!([{"success":true,"results":history[..count].iter().enumerate().map(|(i,n)|json!({"id":i+1,"name":n})).collect::<Vec<_>>()}]);
         write(&dir.join("ledger.json"), &ledger)?;
         let observed = json!({"schema_version":1,"target":{"environment":"staging","account_id":"account-1","database_name":"isolated-local-test","database_id":"database-1"},
@@ -195,7 +198,7 @@ fn actual_deployed_context_traverses_separate_sealed_contract_and_current_expand
             &history[count]
         };
         assert_eq!(native_plan["target_revision"], expected_target.as_str());
-        assert_eq!(native_plan["desired_target_revision"], history[42]);
+        assert_eq!(native_plan["desired_target_revision"], history[43]);
         write(&dir.join("native-stage.json"), &native_plan)?;
         write(
             &dir.join("deployment-snapshot.json"),
