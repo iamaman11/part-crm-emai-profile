@@ -46,7 +46,10 @@ fn encrypted_snapshot_excludes_only_recreatable_firefox_caches()
     for (relative, bytes) in [
         ("cache2/entries/disposable-cache", b"cache".as_slice()),
         ("startupCache/startupCache.8.little", b"startup".as_slice()),
-        ("storage/default/example.org/data.bin", b"indexeddb".as_slice()),
+        (
+            "storage/default/example.org/data.bin",
+            b"indexeddb".as_slice(),
+        ),
         ("sessionstore-backups/recovery.jsonlz4", b"tabs".as_slice()),
         ("cookies.sqlite", b"cookies".as_slice()),
         ("prefs.js", b"preferences".as_slice()),
@@ -54,10 +57,17 @@ fn encrypted_snapshot_excludes_only_recreatable_firefox_caches()
         fs::write(data.join(relative), bytes)?;
     }
     let inventory = workspace.inventory()?;
-    let paths: Vec<&str> = inventory.entries().iter()
-        .map(|entry| entry.relative_path()).collect();
+    let paths: Vec<&str> = inventory
+        .entries()
+        .iter()
+        .map(|entry| entry.relative_path())
+        .collect();
     assert!(!paths.iter().any(|p| p.starts_with("user_data/cache2/")));
-    assert!(!paths.iter().any(|p| p.starts_with("user_data/startupCache/")));
+    assert!(
+        !paths
+            .iter()
+            .any(|p| p.starts_with("user_data/startupCache/"))
+    );
     for required in [
         "user_data/storage/default/example.org/data.bin",
         "user_data/sessionstore-backups/recovery.jsonlz4",
