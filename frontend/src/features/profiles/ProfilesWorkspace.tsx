@@ -266,7 +266,7 @@ export function ProfilesWorkspace({
             {owner && ['DRAFT', 'READY', 'SUSPENDED', 'QUARANTINED'].includes(profile.status) && (
               <ConfirmAction
                 label="Delete profile"
-                consequence={<>Delete this profile and its encrypted cloud snapshots. This cannot be undone. The browser must be closed.</>}
+                consequence={<>Delete this profile and its encrypted cloud snapshots. This cannot be undone. Close any open browser first if you need to save unsynced local changes.</>}
                 disabled={deleteAction.isPending}
                 onConfirm={async () => {
                   await deleteAction.mutateAsync({

@@ -431,62 +431,78 @@ def project_coordinator_for_delete(
     )
 
 
-def test_stale_writer_cannot_be_cleared_by_expiry_or_d1_delete() -> None:
-    # D1 is a projection, not an authoritative DO recovery witness. Even an
-    # expired hard lease must not silently become permission to Delete.
+def test_owner_delete_revokes_stale_lease_without_resetting_coordinator() -> None:
+    # Delete is an irreversible owner-requested CLOUD revocation, not a
+    # substitute for browser recovery. Never forge a coordinator idle event.
+    for state in ("active", "uncertain"):
+        connection = make_database()
+        try:
+            profile = BASE["PROFILE_A"]
+            project_coordinator_for_delete(connection, profile, 0, state)
+            before = connection.execute(
+                "SELECT coordinator_status,coordinator_sequence "
+                "FROM profile_coordinator_projections WHERE profile_id=?",
+                (profile,),
+            ).fetchone()
+            begin(connection, profile, 1, 360001)
+            assert tuple(connection.execute(
+                "SELECT status,version FROM browser_profiles WHERE profile_id=?",
+                (profile,),
+            ).fetchone()) == ("DELETING", 2)
+            after = connection.execute(
+                "SELECT coordinator_status,coordinator_sequence "
+                "FROM profile_coordinator_projections WHERE profile_id=?",
+                (profile,),
+            ).fetchone()
+            assert tuple(after) == tuple(before) == (state, 0)
+            # The D1 completion fence still waits for potentially signed PUTs.
+            expect_denied(lambda: finish(connection, profile, 2, 360002))
+            finish(connection, profile, 2, 720002)
+            assert connection.execute(
+                "SELECT status FROM browser_profiles WHERE profile_id=?",
+                (profile,),
+            ).fetchone()[0] == "DELETED"
+            assert connection.execute("PRAGMA foreign_key_check").fetchall() == []
+        finally:
+            connection.close()
+
+
+def test_old_launch_claim_cannot_block_owner_delete_or_spawn_new_claim() -> None:
     connection = make_database()
     try:
         profile = BASE["PROFILE_A"]
-        project_coordinator_for_delete(connection, profile, 0, "active")
-        expect_denied(lambda: begin(connection, profile, 1, 360000))
-        assert connection.execute(
-            "SELECT COUNT(*) FROM profile_delete_commands WHERE profile_id=?",
+        tenant, owner = BASE["TENANT_A"], BASE["OWNER_A"]
+        def claim(key: str, when: int) -> None:
+            connection.execute(
+                "INSERT INTO profile_launch_claims "
+                "(tenant_id,actor_id,idempotency_key,payload_fingerprint,claim_digest,"
+                "profile_id,generation_id,device_id,correlation_id,audit_event_id,"
+                "issued_at_ms,expires_at_ms) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
+                (tenant, owner, key, "a" * 64,
+                 ("b" if when == 40 else "c") * 64,
+                 profile, "generation_launch_delete_test_01",
+                 "device_launch_delete_test_01", f"corr_{key}",
+                 f"audit_{key}", when, when + 300000),
+            )
+        claim("launch_delete_old_01", 40)
+        begin(connection, profile, 1, 41)
+        assert tuple(connection.execute(
+            "SELECT status,version FROM browser_profiles WHERE profile_id=?",
             (profile,),
-        ).fetchone()[0] == 0
-        project_coordinator_for_delete(connection, profile, 1, "uncertain")
-        expect_denied(lambda: begin(connection, profile, 1, 360001))
+        ).fetchone()) == ("DELETING", 2)
+        expect_denied(lambda: claim("launch_delete_new_01", 42))
         assert connection.execute(
-            "SELECT status FROM browser_profiles WHERE profile_id=?",
+            "SELECT COUNT(*) FROM profile_launch_claims WHERE profile_id=?",
             (profile,),
-        ).fetchone()[0] == "DRAFT"
-
-        # Only the DO-issued and projected governed recovery transition may
-        # clear the fence; this SQLite fixture tests the projection admission,
-        # not proof of any real Windows/browser recovery.
-        project_coordinator_for_delete(connection, profile, 2, "idle")
-        begin(connection, profile, 1, 360002)
-        assert connection.execute(
-            "SELECT status FROM browser_profiles WHERE profile_id=?",
-            (profile,),
-        ).fetchone()[0] == "DELETING"
-    finally:
-        connection.close()
-
-
-def test_unredeemed_launch_cannot_be_deleted_until_claim_expiry() -> None:
-    connection = make_database()
-    try:
-        profile = BASE["PROFILE_A"]
-        connection.execute(
-            "INSERT INTO profile_launch_claims "
-            "(tenant_id,actor_id,idempotency_key,payload_fingerprint,claim_digest,"
-            "profile_id,generation_id,device_id,correlation_id,audit_event_id,"
-            "issued_at_ms,expires_at_ms) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
-            (BASE["TENANT_A"], BASE["OWNER_A"], "launch_delete_conflict_01",
-             "a" * 64, "b" * 64, profile, "generation_launch_delete_test_01",
-             "device_launch_delete_test_01", "corr_launch_delete_01",
-             "audit_launch_delete_01", 40, 340),
-        )
-        expect_denied(lambda: begin(connection, profile, 1, 339))
-        assert connection.execute(
-            "SELECT COUNT(*) FROM profile_delete_commands WHERE profile_id=?",
-            (profile,),
-        ).fetchone()[0] == 0
-        begin(connection, profile, 1, 340)
+        ).fetchone()[0] == 1
+        # Even a late or lost-reply DELETE response cannot allow cloud
+        # content loss until every pre-existing upload PUT capability expires.
+        finish(connection, profile, 2, 360042)
+        expect_denied(lambda: claim("launch_delete_new_02", 360043))
         assert connection.execute(
             "SELECT status FROM browser_profiles WHERE profile_id=?",
             (profile,),
-        ).fetchone()[0] == "DELETING"
+        ).fetchone()[0] == "DELETED"
     finally:
         connection.close()
 
@@ -496,8 +512,8 @@ def main() -> int:
     test_ready_profile_requires_all_exact_object_receipts()
     test_delete_closes_client_assignment_and_blocks_races()
     test_completed_delete_reconciles_old_assignment_history()
-    test_stale_writer_cannot_be_cleared_by_expiry_or_d1_delete()
-    test_unredeemed_launch_cannot_be_deleted_until_claim_expiry()
+    test_owner_delete_revokes_stale_lease_without_resetting_coordinator()
+    test_old_launch_claim_cannot_block_owner_delete_or_spawn_new_claim()
     print("profile DELETE D1 frozen object inventory, exact receipts, terminal status PASS")
     return 0
 

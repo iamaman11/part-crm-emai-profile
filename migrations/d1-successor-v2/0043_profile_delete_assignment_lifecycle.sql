@@ -198,3 +198,123 @@ WHERE assignment.closed_at_ms IS NULL
         AND completion.profile_id = assignment.profile_id
         AND completion.completed_at_ms >= assignment.assigned_at_ms
   );
+
+-- A tenant owner's destructive Delete revokes cloud admission by changing the
+-- existing browser_profiles status/version. It does NOT acquire, reset or
+-- claim any browser lease. A stale DO projection, outstanding device job or
+-- unredeemed launch claim is therefore not a veto on revocation. Their
+-- independent operations fail closed against DELETING/DELETED.
+-- In-flight signed R2 PUTs remain protected by the original 360-second
+-- object deletion/completion fence, which is deliberately unchanged.
+DROP TRIGGER profile_delete_admit;
+CREATE TRIGGER profile_delete_admit
+BEFORE INSERT ON profile_delete_commands
+FOR EACH ROW
+BEGIN
+    SELECT RAISE(ABORT, 'profile_delete_owner_required')
+    WHERE NOT EXISTS (
+        SELECT 1 FROM memberships AS member
+        WHERE member.tenant_id = NEW.tenant_id
+          AND member.actor_id = NEW.command_actor_id
+          AND member.status = 'ACTIVE'
+          AND member.role = 'TENANT_OWNER'
+    );
+    SELECT RAISE(ABORT, 'profile_delete_version_or_state_conflict')
+    WHERE NOT EXISTS (
+        SELECT 1 FROM browser_profiles AS profile
+        WHERE profile.tenant_id = NEW.tenant_id
+          AND profile.profile_id = NEW.profile_id
+          AND profile.version = NEW.expected_profile_version
+          AND profile.status IN ('DRAFT','READY','SUSPENDED','QUARANTINED')
+          AND profile.updated_at_ms <= NEW.requested_at_ms
+    );
+    -- A signed candidate is immutable even before it is committed into
+    -- profile_generations. A mismatched descriptor may not be hidden by
+    -- INSERT OR IGNORE when the frozen inventory is assembled.
+    SELECT RAISE(ABORT, 'profile_delete_upload_registry_conflict')
+    WHERE EXISTS (
+        SELECT 1 FROM profile_generation_upload_reservations AS issued
+        JOIN profile_generations AS registered
+          ON registered.tenant_id = issued.tenant_id
+         AND registered.profile_id = issued.profile_id
+         AND registered.generation_id = issued.generation_id
+        WHERE issued.tenant_id = NEW.tenant_id
+          AND issued.profile_id = NEW.profile_id
+          AND (issued.object_key <> registered.object_key
+            OR issued.metadata_digest <> registered.metadata_digest
+            OR issued.container_digest <> registered.container_digest)
+    );
+END;
+
+DROP TRIGGER profile_delete_complete_admit;
+CREATE TRIGGER profile_delete_complete_admit
+BEFORE INSERT ON profile_delete_completion_commands
+FOR EACH ROW
+BEGIN
+    SELECT RAISE(ABORT, 'profile_delete_complete_owner_required')
+    WHERE NOT EXISTS (
+        SELECT 1 FROM memberships
+        WHERE tenant_id = NEW.tenant_id
+          AND actor_id = NEW.command_actor_id
+          AND role = 'TENANT_OWNER'
+          AND status = 'ACTIVE'
+    );
+    SELECT RAISE(ABORT, 'profile_delete_complete_state_mismatch')
+    WHERE NOT EXISTS (
+        SELECT 1 FROM browser_profiles AS profile
+        JOIN profile_delete_commands AS command
+          ON command.tenant_id = profile.tenant_id
+         AND command.profile_id = profile.profile_id
+        WHERE profile.tenant_id = NEW.tenant_id
+          AND profile.profile_id = NEW.profile_id
+          AND profile.status = 'DELETING'
+          AND profile.version = NEW.expected_profile_version
+          AND NEW.completed_at_ms >= profile.updated_at_ms
+    );
+    SELECT RAISE(ABORT, 'profile_delete_presigned_put_not_expired')
+    WHERE EXISTS (
+        SELECT 1 FROM profile_delete_commands AS command
+        WHERE command.tenant_id = NEW.tenant_id
+          AND command.profile_id = NEW.profile_id
+          AND NEW.completed_at_ms < MAX(
+              command.requested_at_ms + 360000,
+              COALESCE((
+                  SELECT MAX(reservation.expires_at_ms)
+                  FROM profile_generation_upload_reservations AS reservation
+                  WHERE reservation.tenant_id = command.tenant_id
+                    AND reservation.profile_id = command.profile_id
+              ), 0)
+          )
+    );
+    SELECT RAISE(ABORT, 'profile_delete_objects_remain')
+    WHERE EXISTS (
+        SELECT 1 FROM profile_delete_objects AS object
+        WHERE object.tenant_id = NEW.tenant_id
+          AND object.profile_id = NEW.profile_id
+          AND NOT EXISTS (
+              SELECT 1 FROM profile_delete_object_receipts AS receipt
+              WHERE receipt.tenant_id = object.tenant_id
+                AND receipt.profile_id = object.profile_id
+                AND receipt.generation_id = object.generation_id
+                AND receipt.object_key = object.object_key
+                AND receipt.metadata_digest = object.metadata_digest
+                AND receipt.container_digest = object.container_digest
+          )
+    );
+END;
+
+-- The original D1 launch claim table already holds all short-lived claims.
+-- Fence a claim issued concurrently with owner Delete in this same database,
+-- without a new claim registry, cancellation service or coordinator.
+CREATE TRIGGER profile_launch_claim_delete_fence
+BEFORE INSERT ON profile_launch_claims
+FOR EACH ROW
+WHEN EXISTS (
+    SELECT 1 FROM browser_profiles AS profile
+    WHERE profile.tenant_id = NEW.tenant_id
+      AND profile.profile_id = NEW.profile_id
+      AND profile.status IN ('DELETING','DELETED')
+)
+BEGIN
+    SELECT RAISE(ABORT, 'profile_launch_profile_deleted');
+END;
