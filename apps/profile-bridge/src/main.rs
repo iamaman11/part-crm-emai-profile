@@ -443,11 +443,13 @@ mod tests {
 
     #[test]
     fn terminal_delete_uri_is_one_bounded_native_command_not_open() {
-        let parsed = parse_command([
-            "profile-bridge".to_owned(),
-            "profilebridge://delete/v1/tenant_delete_test_01/actor_delete_test_01/profile_delete_test_01/4".to_owned(),
-        ]).expect("typed delete");
-        assert!(matches!(parsed, BridgeCommand::TerminalDelete(_)));
+        assert!(matches!(
+            parse_command([
+                "profile-bridge".to_owned(),
+                "profilebridge://delete/v1/tenant_delete_test_01/actor_delete_test_01/profile_delete_test_01/4".to_owned(),
+            ]),
+            Ok(BridgeCommand::TerminalDelete(_))
+        ));
         for uri in [
             "profilebridge://delete/v1/tenant_delete_test_01/actor_delete_test_01/profile_delete_test_01/4/extra",
             "profilebridge://delete/v1/tenant_delete_test_01/actor_delete_test_01/profile_delete_test_01/0",

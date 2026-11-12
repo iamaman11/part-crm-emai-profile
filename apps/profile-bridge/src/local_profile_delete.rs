@@ -174,10 +174,10 @@ mod tests {
             Ok(MachineHttpResponse::new(self.status, self.body.clone()))
         }
     }
-    fn intent() -> TerminalProfileDelete {
+    fn intent() -> Result<TerminalProfileDelete, bridge_domain::BridgePortError> {
         TerminalProfileDelete::parse(
-            "profilebridge://delete/v1/tenant_delete_test_01/actor_delete_test_01/profile_delete_test_01/4"
-        ).expect("valid typed terminal URI")
+            "profilebridge://delete/v1/tenant_delete_test_01/actor_delete_test_01/profile_delete_test_01/4",
+        )
     }
     fn response(status: &str, version: u64) -> Readback {
         Readback { status: 200, body: format!(
@@ -185,8 +185,9 @@ mod tests {
         ).into_bytes() }
     }
     #[test]
-    fn parsing_never_accepts_open_or_forged_extra_segments() {
-        let valid = intent();
+    fn parsing_never_accepts_open_or_forged_extra_segments()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let valid = intent()?;
         assert_eq!(valid.expected_deleted_version, 4);
         for invalid in [
             "profilebridge://delete/v1/tenant_delete_test_01/actor_delete_test_01/profile_delete_test_01/0",
@@ -197,11 +198,14 @@ mod tests {
             assert!(TerminalProfileDelete::parse(invalid).is_err());
         }
         assert!(TERMINAL_DELETE_URI_PREFIX.ends_with("/v1/"));
+        Ok(())
     }
+
     #[test]
-    fn only_exact_terminal_machine_response_authorizes_cleanup() {
-        let intent = intent();
-        confirm_terminal_delete(&intent, &mut response("DELETED", 5)).unwrap();
+    fn only_exact_terminal_machine_response_authorizes_cleanup()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let intent = intent()?;
+        confirm_terminal_delete(&intent, &mut response("DELETED", 5))?;
         for mut denied in [
             response("READY", 4),
             response("DELETING", 5),
@@ -216,13 +220,15 @@ mod tests {
                 Err(TerminalDeleteError::AuthorizationUnconfirmed)
             );
         }
+        Ok(())
     }
+
     #[test]
     fn local_current_cleanup_preserves_dirty_and_is_idempotent()
     -> Result<(), Box<dyn std::error::Error>> {
         let directory = tempfile::tempdir()?;
         let root = MaterializationRoot::open_or_create(directory.path())?;
-        let intent = intent();
+        let intent = intent()?;
         let generation = GenerationId::parse("generation_delete_test_01")?;
         let workspace =
             root.create_profile_current(&intent.tenant_id, &intent.profile_id, &generation, 2)?;
