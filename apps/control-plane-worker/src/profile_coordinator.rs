@@ -9,9 +9,6 @@ use application_ports::profile_generation_successor::{
 use cloudflare_adapters::d1_device_generation_commit::{
     D1DeviceGenerationCommitJournal, DeviceGenerationCommitJournalOutcome,
 };
-use cloudflare_adapters::d1_profile_coordinator::{
-    CoordinatorProjectionMutation, CoordinatorProjectionOutcome, D1ProfileCoordinatorRepository,
-};
 use cloudflare_adapters::d1_profile_generation_successor::D1ProfileGenerationSuccessorCommitJournal;
 use cloudflare_adapters::device_generation_commit_runtime::{
     DEVICE_GENERATION_COMMIT_PATH, DeviceGenerationCommitInternalErrorClass,
@@ -31,13 +28,12 @@ use cloudflare_adapters::profile_generation_successor_runtime::{
 };
 use control_plane_contract::D1_CATALOG_BINDING;
 use profile_platform_primitives::{
-    DeviceId, FencingToken, OutboxEventId, ProfileId, SessionId, TenantId, TenantScope, UnixMillis,
+    DeviceId, FencingToken, ProfileId, SessionId, TenantId, UnixMillis,
 };
 use serde::{Deserialize, Serialize};
 use session_domain::coordinator::{
     CoordinatorConfig, CoordinatorOutcome, CoordinatorStatus, ProfileCoordinatorState,
 };
-use sha2::{Digest, Sha256};
 use worker::{
     Date, DateInit, DurableObject, Env, Error, Method, Request, Response, Result, ScheduledTime,
     State, durable_object,
@@ -107,10 +103,6 @@ impl DurableObject for ProfileCoordinator {
         let applied = document.apply(envelope).map_err(adapter_error)?;
         if applied.appended() {
             self.state.storage().put(STORAGE_KEY, &document).await?;
-            // A Durable Object timeout is authoritative, but Delete reads its
-            // D1 projection. Publish the existing journal outcome, or let the
-            // alarm retry a failed projection instead of leaving it stale.
-            project_alarm_outcome(&self.env, &applied).await?;
         }
         schedule_alarm(&self.state, applied.next_alarm_at()).await?;
         Response::from_json(&CoordinatorObjectResponse::from_applied(&applied))
@@ -589,72 +581,6 @@ impl CoordinatorObjectResponse {
             projection: applied.projection().clone(),
         }
     }
-}
-
-async fn project_alarm_outcome(
-    env: &Env,
-    applied: &cloudflare_adapters::profile_coordinator::CoordinatorApplied,
-) -> Result<()> {
-    let projection = applied.projection();
-    let tenant = TenantId::parse(projection.tenant_id.clone()).map_err(identifier_error)?;
-    let profile_id = ProfileId::parse(projection.profile_id.clone()).map_err(identifier_error)?;
-    let scope = TenantScope::new(tenant);
-    let journal = D1ProfileCoordinatorRepository::new(env.d1(D1_CATALOG_BINDING)?);
-    if journal
-        .projected_sequence(&scope, &profile_id)
-        .await?
-        .is_some_and(|sequence| sequence >= projection.sequence)
-    {
-        return Ok(());
-    }
-    let outcome = match applied.decision().outcome() {
-        CoordinatorOutcome::TimedOut { .. } => CoordinatorProjectionOutcome::TimedOut,
-        CoordinatorOutcome::LaunchIntentExpired => {
-            CoordinatorProjectionOutcome::LaunchIntentExpired
-        }
-        CoordinatorOutcome::NoChange => CoordinatorProjectionOutcome::NoChange,
-        _ => {
-            return Err(Error::RustError(
-                "unexpected coordinator alarm transition".to_owned(),
-            ));
-        }
-    };
-    // A stable outbox identity is safe across Durable Object alarm retries.
-    let identity = format!(
-        "{}:{}:{}",
-        projection.tenant_id, projection.profile_id, projection.sequence
-    );
-    let digest = Sha256::digest(identity.as_bytes());
-    let digest_hex = digest
-        .iter()
-        .map(|byte| format!("{byte:02x}"))
-        .collect::<String>();
-    let event_id =
-        OutboxEventId::parse(format!("outbox_alarm_{digest_hex}")).map_err(identifier_error)?;
-    let projected = journal
-        .project(
-            &scope,
-            CoordinatorProjectionMutation {
-                profile_id: &profile_id,
-                projection,
-                outcome,
-                outbox_event_id: &event_id,
-                projected_at: UnixMillis::new(Date::now().as_millis()),
-            },
-        )
-        .await;
-    if let Err(error) = projected {
-        // An interleaved foreground command may have already projected a
-        // newer sequence; never overwrite or reject that newer authority.
-        if journal
-            .projected_sequence(&scope, &profile_id)
-            .await?
-            .is_none_or(|sequence| sequence < projection.sequence)
-        {
-            return Err(error);
-        }
-    }
-    Ok(())
 }
 
 async fn schedule_alarm(state: &State, deadline: Option<UnixMillis>) -> Result<()> {
