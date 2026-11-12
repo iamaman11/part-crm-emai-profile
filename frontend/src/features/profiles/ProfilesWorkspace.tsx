@@ -240,6 +240,18 @@ export function ProfilesWorkspace({
     : generationAction.isPending ? 'The profile generation is being updated. Wait for the result.'
     : generationRefreshUnconfirmed ? 'The latest profile version is not confirmed. Refresh status.'
     : null;
+  // A mutation receipt is historical; the last confirmed Profile projection is
+  // the only authority for a terminal Delete. Do not leave DELETING on-screen
+  // after a later Refresh observes DELETED (or reuse another profile's error).
+  const deleteBelongsToSelection = deleteAction.variables?.targetTenant === tenantId
+    && deleteAction.variables.targetProfile === profileId;
+  const deletionStatus = !profile ? null
+    : profile.status === 'DELETED' ? 'Profile and all cloud objects deleted.'
+    : profile.status === 'DELETING'
+      ? 'Deletion is pending; the server resumes automatically after signed upload permissions expire.'
+      : deleteBelongsToSelection && deleteAction.variables?.expectedVersion === profile.version
+        ? deleteAction.error
+        : null;
   const profileLoaded = enabled && profileId.length > 0 && profile !== null;
   const actionTarget = generationAction.variables?.input.target;
   const actionBelongsToSelection = actionTarget?.tenantId === tenantId
@@ -292,14 +304,7 @@ export function ProfilesWorkspace({
           </div>
           {openUnavailableReason && <p id="profile-open-status" role="status">{openUnavailableReason}</p>}
           <StatusMessage state={openError} />
-          <StatusMessage state={deleteAction.error ?? (deleteAction.data
-            ? deleteAction.data.status === 'DELETED'
-              ? 'Profile and all cloud objects deleted.'
-              : 'Deletion is pending; the server resumes automatically after signed upload permissions expire. Refresh for status.'
-            : null)} />
-          {profile.status === 'DELETING' && (
-            <p>Deletion is in progress. The server continues automatically; use Refresh status to check the result.</p>
-          )}
+          <StatusMessage state={deletionStatus} />
         </>}
         {profile && (
           <dl className="projection">
