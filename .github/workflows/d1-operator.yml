@@ -379,6 +379,15 @@ jobs:
               raise SystemExit('live stage pointer #266 does not select exactly one CURRENT stage issue')
           issue = int(matches[0])
 
+          # Refresh comments are one-shot intents for the accepted main that
+          # existed when the OWNER posted them. Older comments must not
+          # block a manual dispatch against a newer immutable main.
+          source_commit = gh(f'repos/{repo}/commits/{source}')
+          source_date = ((source_commit.get('commit') or {}).get('committer') or {}).get('date')
+          if not isinstance(source_date, str) or not source_date:
+              raise SystemExit('exact accepted-main source commit has no committer timestamp')
+          source_epoch = epoch(source_date)
+
           commands = []
           page = 1
           while True:
@@ -388,13 +397,16 @@ jobs:
               for comment in comments:
                   if comment.get('author_association') != 'OWNER' or comment.get('created_at') != comment.get('updated_at'):
                       continue
+                  created = epoch(comment['created_at'])
+                  if created < source_epoch:
+                      continue
                   text = comment.get('body')
                   if text == '/d1 operator':
-                      commands.append((epoch(comment['created_at']), int(comment['id']), 'operator', ''))
+                      commands.append((created, int(comment['id']), 'operator', ''))
                       continue
                   match = re.fullmatch(r'/d1 operator-refresh ([0-9a-f]{64})', text or '')
                   if match is not None:
-                      commands.append((epoch(comment['created_at']), int(comment['id']), 'operator_refresh', match.group(1)))
+                      commands.append((created, int(comment['id']), 'operator_refresh', match.group(1)))
               if len(comments) < 100:
                   break
               page += 1
