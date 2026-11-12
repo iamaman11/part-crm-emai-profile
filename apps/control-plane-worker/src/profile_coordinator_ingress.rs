@@ -127,11 +127,12 @@ async fn dispatch_bridge(
             return neutral_not_found(actor.correlation_id().as_str());
         }
         let application = crate::composition::profile_application(env)?;
-        let confirmed = use_cases::profiles::get_visible_profile(
-            &actor, role, &application, &profile_id,
-        ).await;
+        let confirmed =
+            use_cases::profiles::get_visible_profile(&actor, role, &application, &profile_id).await;
         return match confirmed {
-            Ok(profile) if profile.status() == application_ports::profiles::ProfileStatus::Deleted => {
+            Ok(profile)
+                if profile.status() == application_ports::profiles::ProfileStatus::Deleted =>
+            {
                 Response::from_json(&crate::profiles::profile_projection(&profile, false))
             }
             _ => neutral_not_found(actor.correlation_id().as_str()),
