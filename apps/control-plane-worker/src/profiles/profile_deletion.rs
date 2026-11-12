@@ -3,7 +3,9 @@
 use crate::access_session::{
     correlation_hint, membership_role, neutral_not_found, problem, resolve_active_request_actor,
 };
-use crate::composition::{coordinator_ingress_application, generation_object_retention, profile_deletion};
+use crate::composition::{
+    coordinator_ingress_application, generation_object_retention, profile_deletion,
+};
 use application_ports::coordinator_ingress::CoordinatorIngressApplicationPort;
 use control_plane_contract::profile_generation_api::{
     ProfileDeleteRequest, ProfileDeleteResponse, ProfileStatusDto,
