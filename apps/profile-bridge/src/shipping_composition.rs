@@ -848,6 +848,19 @@ mod windows {
             .map_err(ShippingCompositionError::LocalDelete)
     }
 
+    /// The first DRAFT -> VERIFIED CURRENT commit has no predecessor R2 key.
+    /// Do not download/materialize the brand-new CURRENT just to request
+    /// retirement of an object which cannot exist. Subsequent READY Saves
+    /// retain the full independent cold-Restore proof before retirement.
+    fn first_draft_commit_has_no_predecessor(
+        original_status: InitialProfileStatus,
+        opened_version: u64,
+        saved_version: u64,
+    ) -> bool {
+        original_status == InitialProfileStatus::Draft
+            && opened_version.checked_add(1) == Some(saved_version)
+    }
+
     pub fn run_closed_sync(
         intent: &crate::generation_initialization::InitialProfileOpen,
     ) -> Result<(), ShippingCompositionError> {
@@ -876,6 +889,12 @@ mod windows {
                 Err(ref error) if error.kind() == std::io::ErrorKind::NotFound
             ) && workspace.pending_sync().is_none()
             {
+                if first_draft_commit_has_no_predecessor(
+                    intent.status, intent.expected_version, workspace.profile_version(),
+                ) {
+                    eprintln!("BRIDGE_COLD_CURRENT_RETIREMENT=NOT_APPLICABLE_FIRST_DRAFT");
+                    return Ok(());
+                }
                 match try_admit_confirmed_current_retirement(
                     intent,
                     &binding,
@@ -987,6 +1006,26 @@ mod windows {
                     "BRIDGE_SYNC_INLINE_FALLBACK_PENDING;error={error:?};NEXT_SAFE_STEP=PRESERVE_LOCAL_BYTES"
                 );
             }
+        }
+    }
+
+    #[cfg(test)]
+    mod first_draft_retirement_tests {
+        use super::first_draft_commit_has_no_predecessor;
+        use crate::generation_initialization::InitialProfileStatus;
+
+        #[test]
+        fn only_first_verified_draft_current_skips_unnecessary_cold_retirement() {
+            assert!(first_draft_commit_has_no_predecessor(
+                InitialProfileStatus::Draft, 1, 2));
+            assert!(first_draft_commit_has_no_predecessor(
+                InitialProfileStatus::Draft, 5, 6));
+            assert!(!first_draft_commit_has_no_predecessor(
+                InitialProfileStatus::Ready, 1, 2));
+            assert!(!first_draft_commit_has_no_predecessor(
+                InitialProfileStatus::Draft, 1, 3));
+            assert!(!first_draft_commit_has_no_predecessor(
+                InitialProfileStatus::Draft, u64::MAX, 0));
         }
     }
 
