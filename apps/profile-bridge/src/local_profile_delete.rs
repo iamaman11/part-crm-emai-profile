@@ -249,4 +249,62 @@ mod tests {
         cleanup_confirmed_current(&root, &intent)?;
         Ok(())
     }
+
+    #[test]
+    fn local_cleanup_removes_only_the_selected_profile()
+    -> Result<(), Box<dyn std::error::Error>> {
+        use profile_platform_primitives::ProfileId;
+        let directory = tempfile::tempdir()?;
+        let root = MaterializationRoot::open_or_create(directory.path())?;
+        let target = intent()?;
+        let other = ProfileId::parse("profile_delete_other_01")?;
+        let generation = GenerationId::parse("generation_delete_other_01")?;
+        let selected_workspace = root.create_profile_current(
+            &target.tenant_id, &target.profile_id, &generation, 4,
+        )?;
+        let other_workspace = root.create_profile_current(
+            &target.tenant_id, &other, &generation, 4,
+        )?;
+        fs::write(other_workspace.path().join("keep.txt"), b"unrelated")?;
+        cleanup_confirmed_current(&root, &target)?;
+        assert!(!selected_workspace.path().exists());
+        assert_eq!(fs::read(other_workspace.path().join("keep.txt"))?, b"unrelated");
+        Ok(())
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn local_cleanup_refuses_live_firefox_without_a_bridge_process()
+    -> Result<(), Box<dyn std::error::Error>> {
+        use std::os::windows::fs::OpenOptionsExt;
+        let directory = tempfile::tempdir()?;
+        let root = MaterializationRoot::open_or_create(directory.path())?;
+        let target = intent()?;
+        let generation = GenerationId::parse("generation_delete_firefox_01")?;
+        let workspace = root.create_profile_current(
+            &target.tenant_id, &target.profile_id, &generation, 4,
+        )?;
+        let browser_data = workspace.path().join("user_data");
+        fs::create_dir(&browser_data)?;
+        let cookies = browser_data.join("cookies.sqlite");
+        fs::write(&cookies, b"native-data-must-survive")?;
+        let parent_lock = browser_data.join("parent.lock");
+        fs::write(&parent_lock, b"firefox-writer")?;
+        let firefox_handle = fs::OpenOptions::new()
+            .read(true)
+            .share_mode(0)
+            .open(&parent_lock)?;
+
+        assert_eq!(
+            cleanup_confirmed_current(&root, &target),
+            Err(TerminalDeleteError::LocalBusyOrDirty)
+        );
+        assert_eq!(fs::read(&cookies)?, b"native-data-must-survive");
+        drop(firefox_handle);
+
+        // Stale parent.lock after normal native Close is not a live writer.
+        cleanup_confirmed_current(&root, &target)?;
+        assert!(!workspace.path().exists());
+        Ok(())
+    }
 }

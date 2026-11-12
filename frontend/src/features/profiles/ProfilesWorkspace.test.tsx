@@ -196,7 +196,7 @@ describe('ProfilesWorkspace generation refresh (#802 F06)', () => {
     await screen.findByText(/Deletion is pending; the server resumes automatically/i);
     current = { ...current!, status: 'DELETED', version: 4 };
     fireEvent.click(screen.getByRole('button', { name: 'Refresh status' }));
-    await screen.findByText('Profile and all cloud objects deleted.');
+    await screen.findByText('Cloud profile and encrypted snapshots deleted. Local copy removal is not confirmed.');
     expect(screen.queryByText(/Deletion is pending/)).toBeNull();
     expect((screen.getByRole('button', { name: 'Open browser' }) as HTMLButtonElement).disabled).toBe(true);
     expect(vi.mocked(deleteProfile)).toHaveBeenCalledTimes(1);

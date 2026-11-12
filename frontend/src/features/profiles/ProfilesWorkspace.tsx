@@ -265,7 +265,7 @@ export function ProfilesWorkspace({
   const deleteBelongsToSelection = deleteAction.variables?.targetTenant === tenantId
     && deleteAction.variables.targetProfile === profileId;
   const deletionStatus = !profile ? null
-    : profile.status === 'DELETED' ? 'Profile and all cloud objects deleted.'
+    : profile.status === 'DELETED' ? 'Cloud profile and encrypted snapshots deleted. Local copy removal is not confirmed.'
     : profile.status === 'DELETING'
       ? 'Deletion is pending; the server resumes automatically after signed upload permissions expire.'
       : deleteBelongsToSelection && deleteAction.variables?.expectedVersion === profile.version
