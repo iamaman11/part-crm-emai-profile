@@ -392,7 +392,9 @@ impl CoordinatorIngressApplicationPort for CloudflareCoordinatorIngressApplicati
     ) -> Result<CoordinatorRuntimeResult, CoordinatorIngressPortError> {
         let snapshot = self.runtime_request(scope, profile_id, None).await?;
         let journal = D1ProfileCoordinatorRepository::new(
-            self.env.d1(self.d1_binding).map_err(map_worker_dependency)?,
+            self.env
+                .d1(self.d1_binding)
+                .map_err(map_worker_dependency)?,
         );
         let observed_sequence = snapshot.projection().sequence();
         if journal

@@ -6,11 +6,11 @@ use application_ports::profile_generation_successor::{
     ProfileGenerationSuccessorCommitOutcome, ProfileGenerationSuccessorCommitPort,
     ProfileGenerationSuccessorCommitRequest,
 };
-use cloudflare_adapters::d1_profile_coordinator::{
-    CoordinatorProjectionMutation, CoordinatorProjectionOutcome, D1ProfileCoordinatorRepository,
-};
 use cloudflare_adapters::d1_device_generation_commit::{
     D1DeviceGenerationCommitJournal, DeviceGenerationCommitJournalOutcome,
+};
+use cloudflare_adapters::d1_profile_coordinator::{
+    CoordinatorProjectionMutation, CoordinatorProjectionOutcome, D1ProfileCoordinatorRepository,
 };
 use cloudflare_adapters::d1_profile_generation_successor::D1ProfileGenerationSuccessorCommitJournal;
 use cloudflare_adapters::device_generation_commit_runtime::{
@@ -34,10 +34,10 @@ use profile_platform_primitives::{
     DeviceId, FencingToken, OutboxEventId, ProfileId, SessionId, TenantId, TenantScope, UnixMillis,
 };
 use serde::{Deserialize, Serialize};
-use sha2::{Digest, Sha256};
 use session_domain::coordinator::{
     CoordinatorConfig, CoordinatorOutcome, CoordinatorStatus, ProfileCoordinatorState,
 };
+use sha2::{Digest, Sha256};
 use worker::{
     Date, DateInit, DurableObject, Env, Error, Method, Request, Response, Result, ScheduledTime,
     State, durable_object,
@@ -591,7 +591,6 @@ impl CoordinatorObjectResponse {
     }
 }
 
-
 async fn project_alarm_outcome(
     env: &Env,
     applied: &cloudflare_adapters::profile_coordinator::CoordinatorApplied,
@@ -610,7 +609,9 @@ async fn project_alarm_outcome(
     }
     let outcome = match applied.decision().outcome() {
         CoordinatorOutcome::TimedOut { .. } => CoordinatorProjectionOutcome::TimedOut,
-        CoordinatorOutcome::LaunchIntentExpired => CoordinatorProjectionOutcome::LaunchIntentExpired,
+        CoordinatorOutcome::LaunchIntentExpired => {
+            CoordinatorProjectionOutcome::LaunchIntentExpired
+        }
         CoordinatorOutcome::NoChange => CoordinatorProjectionOutcome::NoChange,
         _ => {
             return Err(Error::RustError(
@@ -624,8 +625,8 @@ async fn project_alarm_outcome(
         projection.tenant_id, projection.profile_id, projection.sequence
     );
     let digest = Sha256::digest(identity.as_bytes());
-    let event_id = OutboxEventId::parse(format!("outbox_alarm_{digest:x}"))
-        .map_err(identifier_error)?;
+    let event_id =
+        OutboxEventId::parse(format!("outbox_alarm_{digest:x}")).map_err(identifier_error)?;
     let projected = journal
         .project(
             &scope,
