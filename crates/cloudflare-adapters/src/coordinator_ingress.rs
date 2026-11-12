@@ -390,44 +390,7 @@ impl CoordinatorIngressApplicationPort for CloudflareCoordinatorIngressApplicati
         scope: &TenantScope,
         profile_id: &ProfileId,
     ) -> Result<CoordinatorRuntimeResult, CoordinatorIngressPortError> {
-        let snapshot = self.runtime_request(scope, profile_id, None).await?;
-        let journal = D1ProfileCoordinatorRepository::new(
-            self.env
-                .d1(self.d1_binding)
-                .map_err(map_worker_dependency)?,
-        );
-        let observed_sequence = snapshot.projection().sequence();
-        if journal
-            .projected_sequence(scope, profile_id)
-            .await
-            .map_err(map_worker_dependency)?
-            .is_none_or(|sequence| sequence < observed_sequence)
-        {
-            // Read-repair an authoritative DO alarm from an older release
-            // without fabricating a new transition or mutating D1 by hand.
-            let event_id = self.new_outbox_event_id()?;
-            let projected = self
-                .project(
-                    scope,
-                    profile_id,
-                    &snapshot,
-                    &event_id,
-                    UnixMillis::new(Date::now().as_millis()),
-                )
-                .await;
-            if let Err(error) = projected {
-                // A later command can legitimately win the projection race.
-                if journal
-                    .projected_sequence(scope, profile_id)
-                    .await
-                    .map_err(map_worker_dependency)?
-                    .is_none_or(|sequence| sequence < observed_sequence)
-                {
-                    return Err(error);
-                }
-            }
-        }
-        Ok(snapshot)
+        self.runtime_request(scope, profile_id, None).await
     }
 
     async fn execute(

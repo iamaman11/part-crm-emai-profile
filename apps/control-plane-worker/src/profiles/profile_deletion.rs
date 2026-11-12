@@ -3,10 +3,7 @@
 use crate::access_session::{
     correlation_hint, membership_role, neutral_not_found, problem, resolve_active_request_actor,
 };
-use crate::composition::{
-    coordinator_ingress_application, generation_object_retention, profile_deletion,
-};
-use application_ports::coordinator_ingress::CoordinatorIngressApplicationPort;
+use crate::composition::{generation_object_retention, profile_deletion};
 use control_plane_contract::profile_generation_api::{
     ProfileDeleteRequest, ProfileDeleteResponse, ProfileStatusDto,
 };
@@ -52,22 +49,7 @@ pub async fn delete_profile(
         .await
         .is_err()
     {
-        // A DO alarm may have advanced its own authoritative journal before
-        // an older D1 projection was refreshed. Use the existing coordinator
-        // ingress owner for a single read-repair, then retry the same guarded
-        // Delete command. Never clear an uncertain/active writer or claims.
-        let repaired = coordinator_ingress_application(env)
-            .snapshot(actor.tenant_scope(), &profile_id)
-            .await
-            .is_ok();
-        if !repaired
-            || journal
-                .begin_or_replay(actor, &profile_id, body.expected_profile_version, now_ms())
-                .await
-                .is_err()
-        {
-            return problem(correlation, 409, "conflict", "Profile Delete Conflict");
-        }
+        return problem(correlation, 409, "conflict", "Profile Delete Conflict");
     }
     // HTTP only freezes the command and returns its current projection.
     // The existing minute cron is the sole exact R2 DELETE executor: no
