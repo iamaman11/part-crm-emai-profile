@@ -1,4 +1,4 @@
-import { dispatchBrowserProfileOpen } from './api';
+import { dispatchBrowserProfileDelete, dispatchBrowserProfileOpen } from './api';
 import { newIdempotencyKey } from '../../shared/api/idempotency';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { useEffect, useRef, useState, type FormEvent } from 'react';
@@ -61,6 +61,19 @@ export function ProfilesWorkspace({
   selected.current = { tenantId, profileId, generationId };
 
   const [openError, setOpenError] = useState<Error | null>(null);
+  const [localDeleteError, setLocalDeleteError] = useState<Error | null>(null);
+  const requestLocalDeletion = (terminal: ProfileProjection) => {
+    if (!owner || !activeTenant || terminal.status !== 'DELETED'
+      || terminal.profileId !== profileId) return;
+    try {
+      setLocalDeleteError(null);
+      dispatchBrowserProfileDelete(
+        tenantId, activeTenant.actorId, terminal.profileId, terminal.version,
+      );
+    } catch {
+      setLocalDeleteError(new Error('Installed Profile Bridge did not accept local cleanup.'));
+    }
+  };
   const openSelectedProfile = () => {
     // Native protocol dispatch must stay synchronous in the actual user
     // click. No ReactQuery mutation, background prefetch or Worker launch.
@@ -108,6 +121,12 @@ export function ProfilesWorkspace({
       try {
         const refreshed = await getProfile(variables.targetTenant, variables.targetProfile);
         setProfile(refreshed ?? null);
+        // Best-effort native handoff after confirmed terminal D1; Chrome may
+        // restrict protocol launches after async work. Keep an explicit
+        // retry control below, rather than claim that local deletion succeeded.
+        if (refreshed?.status === 'DELETED' && activeTenant && owner) {
+          requestLocalDeletion(refreshed);
+        }
       } catch {
         // A stale local projection cannot be used as proof of deletion.
         setProfile(null);
@@ -305,6 +324,16 @@ export function ProfilesWorkspace({
           {openUnavailableReason && <p id="profile-open-status" role="status">{openUnavailableReason}</p>}
           <StatusMessage state={openError} />
           <StatusMessage state={deletionStatus} />
+          {owner && profile.status === 'DELETED' && (
+            <div>
+              <button type="button" onClick={() => requestLocalDeletion(profile)}>
+                Remove local copy
+              </button>
+              <p>Cloud deletion is confirmed. Installed Profile Bridge independently
+                verifies DELETED and native file locks before removing local files.</p>
+              <StatusMessage state={localDeleteError} />
+            </div>
+          )}
         </>}
         {profile && (
           <dl className="projection">
