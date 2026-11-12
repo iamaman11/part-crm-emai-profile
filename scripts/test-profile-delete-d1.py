@@ -276,12 +276,13 @@ def test_ready_profile_requires_all_exact_object_receipts() -> None:
             (tenant,profile,unsigned_generation),
         ).fetchone()[0] == unsigned_key
         expect_denied(lambda: finish(connection, profile, 3, 65))
-        # DELETE must not receipt a key while an old signed PUT can recreate it.
+        # The most recent signed PUT expires at 360058; a receipt at
+        # 360057 is unsafe, but 360059 is now allowed by the exact expiry.
         expect_denied(lambda: connection.execute(
             "INSERT INTO profile_delete_object_receipts "
             "(tenant_id,profile_id,generation_id,object_key,"
             "metadata_digest,container_digest,deleted_at_ms) "
-            "VALUES (?,?,?,?,?,?,360059)",
+            "VALUES (?,?,?,?,?,?,360057)",
             (tenant,profile,generation,key,metadata_digest,container_digest),
         ))
         expect_denied(lambda: connection.execute(
