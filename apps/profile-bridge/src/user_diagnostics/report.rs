@@ -36,6 +36,7 @@ pub enum Stage {
     LocalUnsynced,
     CloudSaveAttempt,
     CloudSaveConfirmed,
+    LocalDelete,
     RecoveryRequired,
     Pairing,
     Delivery,
