@@ -163,6 +163,7 @@ mod windows {
         ShippingControlPlaneError,
     };
     use crate::shipping_control_plane::{MachineHttpMethod, MachineHttpPort, SyncEnrollmentPort};
+    use crate::user_diagnostics::report::{self, Cause, Cloud, Outcome, Stage};
     use crate::shipping_generation_successor_control::publish_closed_streamed_successor;
     use crate::windows_delivery_handoff::{
         DeliveryHandoffCoordinator, DeliveryHandoffRestartDisposition,
@@ -181,7 +182,7 @@ mod windows {
     use std::sync::atomic::{AtomicBool, Ordering};
     use std::sync::{Arc, mpsc};
     use std::thread;
-    use std::time::{Duration, SystemTime, UNIX_EPOCH};
+    use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
     const NETWORK_POLICY_PATH_ENV: &str = "PROFILE_BRIDGE_NETWORK_POLICY_PATH";
     const PROXY_CONFIG_PATH_ENV: &str = "PROFILE_BRIDGE_PROXY_CONFIG_PATH";
@@ -313,6 +314,15 @@ mod windows {
     ///
     /// This does not launch Camoufox, clone Firefox into a generation folder,
     /// introduce a daemon or replace the stable local current path.
+    // Diagnostics only: duration cannot authorize an upload, a retry or a Delete.
+    // No source paths, browser state or secrets ever enter the observation.
+    fn observe_sync_phase(stage: Stage, started: Instant) {
+        let millis = u64::try_from(started.elapsed().as_millis())
+            .unwrap_or(u64::MAX)
+            .min(86_400_000);
+        report::record_current(stage, Outcome::Succeeded, Cloud::Unknown, Cause::None, millis);
+    }
+
     fn pending_descriptor_matches_current(
         pending: &PendingSyncDescriptor,
         current: &crate::generation_reopen::GenerationDownloadCapability,
@@ -443,6 +453,7 @@ mod windows {
             return Err(());
         }
         let device = binding.device_id();
+        let snapshot_started = Instant::now();
         let lock = BridgeWorkspaceLock::acquire_or_recover_interrupted(
             &workspace,
             device,
@@ -461,6 +472,7 @@ mod windows {
         let unlock = lock.release().map_err(|_| ());
         let (original_inventory, plaintext_bytes, digest) = captured?;
         unlock?;
+        observe_sync_phase(Stage::SyncSnapshot, snapshot_started);
         let candidate =
             closed_current_candidate_id(&intent.tenant_id, &intent.profile_id, &base, digest)
                 .map_err(|_| ())?;
@@ -543,6 +555,7 @@ mod windows {
                 .map_err(|_| ())?;
             // Network/key service does not hold the local admission. Only the
             // ORIGINAL closed folder is read for the streaming BPGC seal.
+            let seal_started = Instant::now();
             let lock = BridgeWorkspaceLock::acquire_or_recover_interrupted(
                 &workspace,
                 device,
@@ -579,9 +592,11 @@ mod windows {
             let unlock = lock.release().map_err(|_| ());
             let (encrypted, pending) = encrypted?;
             unlock?;
+            observe_sync_phase(Stage::SyncSeal, seal_started);
             if !heartbeat.is_healthy() {
                 return Err(());
             }
+            let publish_started = Instant::now();
             let mut upload = WindowsSignedGenerationObjectPut::from_system().map_err(|_| ())?;
             publish_closed_streamed_successor(
                 &intent.tenant_id,
@@ -594,6 +609,7 @@ mod windows {
                 &mut upload,
             )
             .map_err(|_| ())?;
+            observe_sync_phase(Stage::SyncPublish, publish_started);
             if !heartbeat.is_healthy() {
                 return Err(());
             }
@@ -722,6 +738,7 @@ mod windows {
         let Some(current) = latest.base_generation_id() else {
             return Ok(false);
         };
+        let cold_started = Instant::now();
         let cold = (|| {
             let reader_app =
                 WindowsDeviceApplication::from_system(origin.to_owned(), binding.clone())
@@ -785,7 +802,11 @@ mod windows {
                 .and_then(serde_json::Value::as_bool);
             Ok(admitted)
         })();
-        cold.and_then(|admitted| admitted.ok_or(()))
+        let confirmed = cold.and_then(|admitted| admitted.ok_or(()));
+        if confirmed.is_ok() {
+            observe_sync_phase(Stage::SyncColdProof, cold_started);
+        }
+        confirmed
     }
 
     pub fn run_terminal_delete(
