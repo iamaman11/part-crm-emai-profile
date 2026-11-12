@@ -50,10 +50,10 @@ INSERT INTO profile_delete_completion_commands (
 ) VALUES (?,?,?,?,?)
 ON CONFLICT(tenant_id,profile_id) DO NOTHING
 "#;
-// Every old signed PUT is accounted for before deleting a frozen key.
-// At least 360s from freeze also drains URLs issued before migration 0041.
-// The existing Worker cron can resume the same frozen Delete command; no
-// second deletion owner or Cloudflare service is required.
+// Signed R2 PUTs are recorded in the existing append-only reservation ledger
+// before disclosure. A DELETE has already made the profile non-writable, so
+// no new capability can be issued; empty DRAFT profiles have no expiry to wait
+// for. The same existing Worker cron resumes exact frozen R2 effects.
 const DUE_FROZEN_DELETES: &str = r#"
 SELECT command.tenant_id, command.profile_id, command.command_actor_id,
        command.expected_profile_version
@@ -66,13 +66,12 @@ JOIN memberships AS original_owner
  AND original_owner.status='ACTIVE'
  AND original_owner.role='TENANT_OWNER'
 WHERE profile.status='DELETING'
-  AND MAX(command.requested_at_ms + 360000,
-          COALESCE((
-              SELECT MAX(reservation.expires_at_ms)
-              FROM profile_generation_upload_reservations AS reservation
-              WHERE reservation.tenant_id = command.tenant_id
-                AND reservation.profile_id = command.profile_id
-          ),0)) <= ?
+  AND COALESCE((
+      SELECT MAX(reservation.expires_at_ms)
+      FROM profile_generation_upload_reservations AS reservation
+      WHERE reservation.tenant_id = command.tenant_id
+        AND reservation.profile_id = command.profile_id
+  ), 0) <= ?
 ORDER BY command.requested_at_ms, command.tenant_id, command.profile_id
 LIMIT 8
 "#;
