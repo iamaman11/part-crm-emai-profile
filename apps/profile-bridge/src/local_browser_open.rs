@@ -345,7 +345,11 @@ fn run_python_with_executable(
 // Official Playwright close confirmation can precede a driver teardown error.
 // The native Firefox OS file lock still has to be independently released by
 // Rust before the caller treats this as a safe post-close filesystem state.
-fn adapter_completed_after_native_close(action: &str, process_success: bool, close_seen: bool) -> bool {
+fn adapter_completed_after_native_close(
+    action: &str,
+    process_success: bool,
+    close_seen: bool,
+) -> bool {
     process_success || (action == "--local-open" && close_seen)
 }
 
