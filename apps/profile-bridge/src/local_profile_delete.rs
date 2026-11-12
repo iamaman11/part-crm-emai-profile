@@ -119,9 +119,12 @@ pub fn cleanup_confirmed_current(
         Err(LocalProfileError::Io(std::io::ErrorKind::NotFound)) => return Ok(()),
         Err(_) => return Err(TerminalDeleteError::LocalFilesystem),
     };
-    if workspace.pending_sync().is_some()
-        || fs::symlink_metadata(workspace.path().join(".local-unsynced")).is_ok()
-    {
+    let dirty = match fs::symlink_metadata(workspace.path().join(".local-unsynced")) {
+        Ok(_) => true,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => false,
+        Err(_) => return Err(TerminalDeleteError::LocalFilesystem),
+    };
+    if workspace.pending_sync().is_some() || dirty {
         return Err(TerminalDeleteError::LocalBusyOrDirty);
     }
     // Metadata traversal rejects links/reparse points and unexpected special
