@@ -82,10 +82,19 @@ fn bridge_profile_coordinator_route(method: &str, path: &str) -> bool {
     matches!(
         segments.as_slice(),
         ["bridge", "v1", "tenants", _, "profiles", _, "coordinator"]
-    ) || (method == "GET" && matches!(
-        segments.as_slice(),
-        ["bridge", "v1", "tenants", _, "profiles", _, "delete-readback"]
-    ))
+    ) || (method == "GET"
+        && matches!(
+            segments.as_slice(),
+            [
+                "bridge",
+                "v1",
+                "tenants",
+                _,
+                "profiles",
+                _,
+                "delete-readback"
+            ]
+        ))
 }
 
 #[must_use]
@@ -201,7 +210,10 @@ mod tests {
         for method in ["POST", "DELETE", "PUT"] {
             assert_eq!(classify(method, path), RouteClass::BridgeDeniedByDefault);
         }
-        assert_eq!(classify("GET", &(path.to_owned() + "/extra")), RouteClass::BridgeDeniedByDefault);
+        assert_eq!(
+            classify("GET", &(path.to_owned() + "/extra")),
+            RouteClass::BridgeDeniedByDefault
+        );
     }
 
     #[test]
