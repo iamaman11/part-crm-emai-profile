@@ -1526,7 +1526,10 @@ fn collect_inventory(
         // encrypted storage or network bandwidth hashing and uploading them.
         // Only exclude these exact directories in the existing inventory;
         // the local browser folder is NEVER modified or cleared.
-        if matches!(relative_path.as_str(), "user_data/cache2" | "user_data/startupCache") {
+        if matches!(
+            relative_path.as_str(),
+            "user_data/cache2" | "user_data/startupCache"
+        ) {
             if file_type.is_dir() {
                 continue;
             }
