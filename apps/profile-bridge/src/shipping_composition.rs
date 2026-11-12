@@ -792,27 +792,31 @@ mod windows {
         intent: &crate::local_profile_delete::TerminalProfileDelete,
     ) -> Result<(), ShippingCompositionError> {
         let config = ShippingConfig::from_installation()?;
-        let binding = WindowsDeviceApplicationBinding::open(
-            &config.device_application_binding_path,
-        ).map_err(|_| ShippingCompositionError::Configuration)?;
+        let binding =
+            WindowsDeviceApplicationBinding::open(&config.device_application_binding_path)
+                .map_err(|_| ShippingCompositionError::Configuration)?;
         if binding.tenant_id() != &intent.tenant_id || binding.actor_id() != &intent.actor_id {
             return Err(ShippingCompositionError::LocalDelete(
                 crate::local_profile_delete::TerminalDeleteError::AuthorizationUnconfirmed,
             ));
         }
-        let application = WindowsDeviceApplication::from_system(
-            config.control_plane_origin,
-            binding,
-        ).map_err(|_| ShippingCompositionError::LocalDelete(
-            crate::local_profile_delete::TerminalDeleteError::AuthorizationUnconfirmed,
-        ))?;
+        let application =
+            WindowsDeviceApplication::from_system(config.control_plane_origin, binding).map_err(
+                |_| {
+                    ShippingCompositionError::LocalDelete(
+                        crate::local_profile_delete::TerminalDeleteError::AuthorizationUnconfirmed,
+                    )
+                },
+            )?;
         let mut transport = application.transport();
         crate::local_profile_delete::confirm_terminal_delete(intent, &mut transport)
             .map_err(ShippingCompositionError::LocalDelete)?;
-        let root = MaterializationRoot::open_or_create(&config.materialization_root)
-            .map_err(|_| ShippingCompositionError::LocalDelete(
-                crate::local_profile_delete::TerminalDeleteError::LocalFilesystem,
-            ))?;
+        let root =
+            MaterializationRoot::open_or_create(&config.materialization_root).map_err(|_| {
+                ShippingCompositionError::LocalDelete(
+                    crate::local_profile_delete::TerminalDeleteError::LocalFilesystem,
+                )
+            })?;
         crate::local_profile_delete::cleanup_confirmed_current(&root, intent)
             .map_err(ShippingCompositionError::LocalDelete)
     }
