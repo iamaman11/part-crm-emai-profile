@@ -163,8 +163,8 @@ mod windows {
         ShippingControlPlaneError,
     };
     use crate::shipping_control_plane::{MachineHttpMethod, MachineHttpPort, SyncEnrollmentPort};
-    use crate::user_diagnostics::report::{self, Cause, Cloud, Outcome, Stage};
     use crate::shipping_generation_successor_control::publish_closed_streamed_successor;
+    use crate::user_diagnostics::report::{self, Cause, Cloud, Outcome, Stage};
     use crate::windows_delivery_handoff::{
         DeliveryHandoffCoordinator, DeliveryHandoffRestartDisposition,
     };
@@ -320,7 +320,13 @@ mod windows {
         let millis = u64::try_from(started.elapsed().as_millis())
             .unwrap_or(u64::MAX)
             .min(86_400_000);
-        report::record_current(stage, Outcome::Succeeded, Cloud::Unknown, Cause::None, millis);
+        report::record_current(
+            stage,
+            Outcome::Succeeded,
+            Cloud::Unknown,
+            Cause::None,
+            millis,
+        );
     }
 
     fn pending_descriptor_matches_current(
