@@ -25,6 +25,7 @@ pub mod launch_binding;
 #[cfg(windows)]
 pub mod local_browser_open;
 pub mod local_profile;
+pub mod local_profile_delete;
 pub mod operator_flow;
 pub mod runtime_bundle;
 pub mod shipping_composition;
