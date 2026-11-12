@@ -4,6 +4,7 @@
 
 use crate::generation_initialization::{InitialProfileOpen, InitialProfileStatus};
 use crate::local_profile::{BridgeWorkspaceLock, LocalProfileError, MaterializationRoot};
+use crate::user_diagnostics::report::{self, Cause, Cloud, Outcome, Stage};
 use profile_platform_primitives::{DeviceId, GenerationId};
 use sha2::{Digest, Sha256};
 use std::fmt;
@@ -13,7 +14,7 @@ use std::path::Path;
 use std::process::{Command, Stdio};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 const PYTHON: &str = "python/python.exe";
 const ENTRYPOINT: &str = "camouhost/real.py";
@@ -375,6 +376,7 @@ fn run_python_with_input(
     let native_close_seen = Arc::new(AtomicBool::new(false));
     let close_seen_by_reader = Arc::clone(&native_close_seen);
 
+    let native_started = Instant::now();
     let mut child = Command::new(executable)
         .arg("-B")
         .arg(runtime_root.join(ENTRYPOINT))
@@ -413,7 +415,17 @@ fn run_python_with_input(
         .take()
         .ok_or(LocalOpenError::RuntimeUnavailable)?;
     let diagnostics = std::thread::spawn(move || {
+        let mut native_ready_observed = false;
         for line in BufReader::new(stderr).lines().map_while(Result::ok) {
+            if line == CAMOUHOST_LAUNCH_READY_EVENT && !native_ready_observed {
+                native_ready_observed = true;
+                let duration = u64::try_from(native_started.elapsed().as_millis())
+                    .unwrap_or(u64::MAX)
+                    .min(86_400_000);
+                report::record_current(
+                    Stage::BrowserReady, Outcome::Observed, Cloud::Unknown, Cause::None, duration,
+                );
+            }
             if line == CAMOUHOST_NATIVE_CLOSE_EVENT {
                 close_seen_by_reader.store(true, Ordering::Release);
             }
@@ -523,6 +535,7 @@ pub(crate) fn open_with_before_launch(
     runtime_root: &Path,
     before_launch: Option<BeforeLaunch>,
 ) -> Result<(), LocalOpenError> {
+    let local_started = Instant::now();
     let generation = local_generation(intent)?;
     let workspace = open_or_create_workspace(root, intent, &generation)?;
     let epoch = SystemTime::now()
@@ -562,6 +575,12 @@ pub(crate) fn open_with_before_launch(
     // One Python process draws a new official identity only for an empty
     // profile; existing saved SDK options go directly to native Camoufox.
     mark_local_unsynced(workspace.path())?;
+    let local_ms = u64::try_from(local_started.elapsed().as_millis())
+        .unwrap_or(u64::MAX)
+        .min(86_400_000);
+    report::record_current(
+        Stage::CamouhostLaunch, Outcome::Started, Cloud::Unknown, Cause::None, local_ms,
+    );
     if !run_python(
         runtime_root,
         workspace.path(),
