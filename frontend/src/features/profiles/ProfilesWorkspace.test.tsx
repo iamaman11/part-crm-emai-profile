@@ -7,6 +7,7 @@ import { ProfilesWorkspace } from './ProfilesWorkspace';
 
 vi.mock('./api', () => ({
   dispatchBrowserProfileOpen: vi.fn(),
+  dispatchBrowserProfileDelete: vi.fn(),
   changeGenerationActivation: vi.fn(),
   commandCoordinator: vi.fn(),
   createProfile: vi.fn(),
@@ -172,7 +173,7 @@ describe('ProfilesWorkspace generation refresh (#802 F06)', () => {
       profileId: 'profile_disposable', status: 'READY', version: 2,
       linkedClientId: null, canOperate: true, activeGenerationId: 'generation_disposable',
     };
-    profileLookup.mockImplementation(async () => ({ ...current }));
+    profileLookup.mockImplementation(async () => ({ ...current! }));
     vi.mocked(deleteProfile).mockImplementation(async () => {
       current = { ...current!, status: 'DELETING', version: 3 };
       return { profileId: 'profile_disposable', status: 'DELETING', version: 3 }
