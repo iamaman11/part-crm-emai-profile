@@ -423,12 +423,15 @@ impl UserDiagnostic {
                 }
                 ShippingCompositionError::SyncUnconfirmed => "BRIDGE_CLOUD_SYNC_UNCONFIRMED",
                 ShippingCompositionError::LocalDelete(error) => match error {
-                    crate::local_profile_delete::TerminalDeleteError::AuthorizationUnconfirmed =>
-                        "BRIDGE_LOCAL_DELETE_CLOUD_UNCONFIRMED",
-                    crate::local_profile_delete::TerminalDeleteError::LocalBusyOrDirty =>
-                        "BRIDGE_LOCAL_DELETE_BROWSER_BUSY",
-                    crate::local_profile_delete::TerminalDeleteError::LocalFilesystem =>
-                        "BRIDGE_LOCAL_DELETE_FAILED",
+                    crate::local_profile_delete::TerminalDeleteError::AuthorizationUnconfirmed => {
+                        "BRIDGE_LOCAL_DELETE_CLOUD_UNCONFIRMED"
+                    }
+                    crate::local_profile_delete::TerminalDeleteError::LocalBusyOrDirty => {
+                        "BRIDGE_LOCAL_DELETE_BROWSER_BUSY"
+                    }
+                    crate::local_profile_delete::TerminalDeleteError::LocalFilesystem => {
+                        "BRIDGE_LOCAL_DELETE_FAILED"
+                    }
                 },
                 ShippingCompositionError::Operator(error) => operator_code(error),
                 ShippingCompositionError::ActiveSessionMissing => "BRIDGE_ACTIVE_SESSION_MISSING",
