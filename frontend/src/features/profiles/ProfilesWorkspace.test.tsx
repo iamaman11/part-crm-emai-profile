@@ -171,7 +171,7 @@ describe('ProfilesWorkspace generation refresh (#802 F06)', () => {
   it('replaces a pending Delete receipt with terminal DELETED after Refresh', async () => {
     let current: Awaited<ReturnType<typeof getProfile>> = {
       profileId: 'profile_disposable', status: 'READY', version: 2,
-      linkedClientId: null, canOperate: true, activeGenerationId: 'generation_disposable',
+      linkedClientId: null, canOperate: true,
     };
     profileLookup.mockImplementation(async () => ({ ...current! }));
     vi.mocked(deleteProfile).mockImplementation(async () => {
