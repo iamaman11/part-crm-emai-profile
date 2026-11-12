@@ -460,7 +460,7 @@ def validate_d1_projection(payload: dict[str, Any]) -> None:
         fail("Catalog successor lineage identity drifted")
     if catalog.get("current_repository_revision") != "0043_profile_delete_assignment_lifecycle.sql":
         fail("Catalog successor current repository revision drifted")
-    if catalog.get("migration_count") != 42 or catalog.get("post_epoch_migration_count") != 16:
+    if catalog.get("migration_count") != 43 or catalog.get("post_epoch_migration_count") != 17:
         fail("Catalog successor migration cardinality drifted")
     legacy = catalog.get("legacy_history")
     if legacy != {
@@ -487,7 +487,7 @@ def validate_d1_projection(payload: dict[str, Any]) -> None:
         or catalog_contract.get("supported_schema_min") != "0043_profile_delete_assignment_lifecycle.sql"
         or catalog_contract.get("supported_schema_max") != "0043_profile_delete_assignment_lifecycle.sql"
     ):
-        fail("Catalog successor exact schema0042 CURRENT retirement release window drifted")
+        fail("Catalog successor exact schema0043 profile Delete relationship release window drifted")
 
 
 def validate(root: Path = ROOT) -> None:
