@@ -679,19 +679,16 @@ jobs:
                       and run.get('conclusion') == 'success']
               runs.sort(key=lambda item: epoch(item['created_at']), reverse=True)
               for run in runs:
+                  # A transaction is bound to the exact accepted source tree.
+                  # Previous main's retained Prepare artifacts are history,
+                  # never the predecessor of this source's D1 migration.
+                  if run.get('head_sha') != SOURCE:
+                      continue
                   run_artifacts = artifacts(run['id'])
                   artifact = transaction_artifact(run)
                   if artifact is None:
                       names = [item.get('name') for item in run_artifacts if isinstance(item.get('name'), str)]
                       if any(name.startswith('d1-reconstruction-') for name in names):
-                          continue
-                      # Another source's absent/expired workflow output is history, not a transaction.
-                      # Retained evidence and current-source omissions still require exact reconciliation.
-                      historical_source = run.get('head_sha')
-                      if (isinstance(historical_source, str)
-                              and re.fullmatch(r'[0-9a-f]{40}', historical_source)
-                              and historical_source != SOURCE
-                              and (not run_artifacts or all(item.get('expired') is True for item in run_artifacts))):
                           continue
                       raise SystemExit(f"successful ordinary Prepare run {run['id']} missing/ambiguous transaction artifact")
                   prepare_epoch = epoch(run['created_at'])
