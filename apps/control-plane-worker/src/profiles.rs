@@ -469,7 +469,10 @@ fn profile_grant_receipt(outcome: &ProfileGrantOutcome) -> Result<Response> {
     .map(|response| response.with_status(200))
 }
 
-pub(crate) fn profile_projection(profile: &ProfileDetails, can_operate: bool) -> ProfileProjectionDto {
+pub(crate) fn profile_projection(
+    profile: &ProfileDetails,
+    can_operate: bool,
+) -> ProfileProjectionDto {
     ProfileProjectionDto {
         profile_id: profile.profile_id().as_str().to_owned(),
         status: profile_status(profile.status()),
