@@ -176,8 +176,8 @@ describe('ProfilesWorkspace generation refresh (#802 F06)', () => {
     profileLookup.mockImplementation(async () => ({ ...current! }));
     vi.mocked(deleteProfile).mockImplementation(async () => {
       current = { ...current!, status: 'DELETING', version: 3 };
-      return ({ profileId: 'profile_disposable', status: 'DELETING', version: 3 })
-        as Awaited<ReturnType<typeof deleteProfile>>;
+      return { profileId: 'profile_disposable', status: 'DELETING', version: 3, pendingObjects: 0 }
+        satisfies Awaited<ReturnType<typeof deleteProfile>>;
     });
     const cache = new QueryClient({ defaultOptions: { queries: { retry: false } } });
     render(
