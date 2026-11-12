@@ -458,7 +458,7 @@ def validate_d1_projection(payload: dict[str, Any]) -> None:
         fail("Catalog live successor migration root drifted")
     if catalog.get("migration_lineage") != "catalog-successor-v2":
         fail("Catalog successor lineage identity drifted")
-    if catalog.get("current_repository_revision") != "0042_profile_current_cold_retirement.sql":
+    if catalog.get("current_repository_revision") != "0043_profile_delete_assignment_lifecycle.sql":
         fail("Catalog successor current repository revision drifted")
     if catalog.get("migration_count") != 42 or catalog.get("post_epoch_migration_count") != 16:
         fail("Catalog successor migration cardinality drifted")
@@ -483,9 +483,9 @@ def validate_d1_projection(payload: dict[str, Any]) -> None:
     if not isinstance(catalog_contract, dict):
         fail("Catalog successor release contract is missing")
     if (
-        catalog_contract.get("target_schema_revision") != "0042_profile_current_cold_retirement.sql"
-        or catalog_contract.get("supported_schema_min") != "0042_profile_current_cold_retirement.sql"
-        or catalog_contract.get("supported_schema_max") != "0042_profile_current_cold_retirement.sql"
+        catalog_contract.get("target_schema_revision") != "0043_profile_delete_assignment_lifecycle.sql"
+        or catalog_contract.get("supported_schema_min") != "0043_profile_delete_assignment_lifecycle.sql"
+        or catalog_contract.get("supported_schema_max") != "0043_profile_delete_assignment_lifecycle.sql"
     ):
         fail("Catalog successor exact schema0042 CURRENT retirement release window drifted")
 

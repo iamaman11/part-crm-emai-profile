@@ -78,7 +78,7 @@ pub async fn delete_profile(
 /// commands. It creates no fresh profile Delete, browser owner or GC service.
 /// Bound the work per tick; a partial or failed exact R2 effect stays DELETING.
 pub(crate) async fn resume_due_frozen_deletes(env: &Env) -> Result<()> {
-    const MAX_OBJECTS_PER_PROFILE_PER_TICK: usize = 4;
+    const MAX_OBJECTS_PER_PROFILE_PER_TICK: usize = 16;
     let journal = profile_deletion(env)?;
     let frozen = journal.due_frozen_deletes(Date::now().as_millis()).await?;
     let r2 = generation_object_retention(env)?;

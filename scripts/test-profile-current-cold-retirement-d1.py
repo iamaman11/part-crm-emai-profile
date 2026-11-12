@@ -27,7 +27,7 @@ COLUMNS = (
 
 def setup(*, extra_signed_put: bool = False) -> sqlite3.Connection:
     db = FX["seed"]()
-    for revision in range(37, 43):
+    for revision in range(37, 44):
         matches = list(ROOT_MIGRATIONS.glob(f"{revision:04d}_*.sql"))
         assert len(matches) == 1, (revision, matches)
         db.executescript(matches[0].read_text(encoding="utf-8"))
