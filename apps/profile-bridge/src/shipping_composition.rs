@@ -890,7 +890,9 @@ mod windows {
             ) && workspace.pending_sync().is_none()
             {
                 if first_draft_commit_has_no_predecessor(
-                    intent.status, intent.expected_version, workspace.profile_version(),
+                    intent.status,
+                    intent.expected_version,
+                    workspace.profile_version(),
                 ) {
                     eprintln!("BRIDGE_COLD_CURRENT_RETIREMENT=NOT_APPLICABLE_FIRST_DRAFT");
                     return Ok(());
@@ -1017,15 +1019,30 @@ mod windows {
         #[test]
         fn only_first_verified_draft_current_skips_unnecessary_cold_retirement() {
             assert!(first_draft_commit_has_no_predecessor(
-                InitialProfileStatus::Draft, 1, 2));
+                InitialProfileStatus::Draft,
+                1,
+                2
+            ));
             assert!(first_draft_commit_has_no_predecessor(
-                InitialProfileStatus::Draft, 5, 6));
+                InitialProfileStatus::Draft,
+                5,
+                6
+            ));
             assert!(!first_draft_commit_has_no_predecessor(
-                InitialProfileStatus::Ready, 1, 2));
+                InitialProfileStatus::Ready,
+                1,
+                2
+            ));
             assert!(!first_draft_commit_has_no_predecessor(
-                InitialProfileStatus::Draft, 1, 3));
+                InitialProfileStatus::Draft,
+                1,
+                3
+            ));
             assert!(!first_draft_commit_has_no_predecessor(
-                InitialProfileStatus::Draft, u64::MAX, 0));
+                InitialProfileStatus::Draft,
+                u64::MAX,
+                0
+            ));
         }
     }
 
