@@ -628,7 +628,8 @@ fn real_d1_verdict_survives_release_projection_and_terminal_promotion()
             ("0039_profile_generation_retirement_guard.sql", false),
             ("0040_native_browser_recovery_proof.sql", false),
             ("0041_profile_delete_exact_r2_receipts.sql", false),
-            ("0042_profile_current_cold_retirement.sql", true),
+            ("0042_profile_current_cold_retirement.sql", false),
+            ("0043_profile_delete_assignment_lifecycle.sql", true),
         ] {
             let count = sources
                 .iter()
