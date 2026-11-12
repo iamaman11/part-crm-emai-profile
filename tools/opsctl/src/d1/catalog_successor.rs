@@ -892,11 +892,10 @@ mod tests {
     use super::{
         BRIDGE_ENROLLMENT_REVISION, CURRENT_COLD_RETIREMENT_REVISION, CURRENT_SUCCESSOR_ROOT,
         DELETE_ASSIGNMENT_LIFECYCLE_REVISION, DELETE_SIGNED_PUT_EXPIRY_REVISION,
-        DEVICE_APPLICATION_AUTHORITY_REVISION,
-        NATIVE_BROWSER_RECOVERY_REVISION, PREDECESSOR_SUCCESSOR_ROOT,
-        PROFILE_DELETE_EXACT_REVISION, PUBLIC_KEY_BINDING_REVISION, RETIREMENT_GUARD_REVISION,
-        STREAMING_GENERATION_REVISION, SUCCESSOR_CONTRACT_REVISION, WORKING_PROOF_REVISION,
-        component_authority, release_contract, repository_projection,
+        DEVICE_APPLICATION_AUTHORITY_REVISION, NATIVE_BROWSER_RECOVERY_REVISION,
+        PREDECESSOR_SUCCESSOR_ROOT, PROFILE_DELETE_EXACT_REVISION, PUBLIC_KEY_BINDING_REVISION,
+        RETIREMENT_GUARD_REVISION, STREAMING_GENERATION_REVISION, SUCCESSOR_CONTRACT_REVISION,
+        WORKING_PROOF_REVISION, component_authority, release_contract, repository_projection,
     };
     use serde_json::Value;
     use std::error::Error;
@@ -1007,7 +1006,10 @@ mod tests {
             DELETE_ASSIGNMENT_LIFECYCLE_REVISION
         );
         assert_eq!(sources[42]["source_root"], CURRENT_SUCCESSOR_ROOT);
-        assert_eq!(sources[43]["migration_file"], DELETE_SIGNED_PUT_EXPIRY_REVISION);
+        assert_eq!(
+            sources[43]["migration_file"],
+            DELETE_SIGNED_PUT_EXPIRY_REVISION
+        );
         assert_eq!(sources[43]["source_root"], CURRENT_SUCCESSOR_ROOT);
         assert_eq!(
             projection["executable_schema_authority"],
