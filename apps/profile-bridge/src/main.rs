@@ -7,10 +7,8 @@ use profile_bridge::device_pairing::{
     PAIRING_COMPLETE_URI_PREFIX, PAIRING_START_URI_PREFIX, run_pairing_complete, run_pairing_start,
 };
 use profile_bridge::generation_initialization::{INITIAL_OPEN_URI_PREFIX, InitialProfileOpen};
-use profile_bridge::local_profile_delete::{
-    TerminalProfileDelete, TERMINAL_DELETE_URI_PREFIX,
-};
 use profile_bridge::installed_connection::ControlPlaneOrigin;
+use profile_bridge::local_profile_delete::{TERMINAL_DELETE_URI_PREFIX, TerminalProfileDelete};
 use profile_bridge::shipping_composition::run_closed_profile_sync;
 use profile_bridge::shipping_composition::{
     ShippingCompositionError, ShippingDeliveryCommand, run_delivery_command,
@@ -334,9 +332,11 @@ where
         value if value.starts_with(INITIAL_OPEN_URI_PREFIX) => InitialProfileOpen::parse(value)
             .map(BridgeCommand::InitialProfile)
             .map_err(|_| BridgeCliError::InvalidClaimUri),
-        value if value.starts_with(TERMINAL_DELETE_URI_PREFIX) => TerminalProfileDelete::parse(value)
-            .map(BridgeCommand::TerminalDelete)
-            .map_err(|_| BridgeCliError::InvalidClaimUri),
+        value if value.starts_with(TERMINAL_DELETE_URI_PREFIX) => {
+            TerminalProfileDelete::parse(value)
+                .map(BridgeCommand::TerminalDelete)
+                .map_err(|_| BridgeCliError::InvalidClaimUri)
+        }
         value if value.starts_with(PAIRING_START_URI_PREFIX) => DevicePairingStartUri::parse(value)
             .map(BridgeCommand::PairingStart)
             .map_err(|_| BridgeCliError::InvalidPairingUri),
