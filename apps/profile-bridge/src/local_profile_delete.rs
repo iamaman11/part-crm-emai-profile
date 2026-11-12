@@ -251,24 +251,24 @@ mod tests {
     }
 
     #[test]
-    fn local_cleanup_removes_only_the_selected_profile()
-    -> Result<(), Box<dyn std::error::Error>> {
+    fn local_cleanup_removes_only_the_selected_profile() -> Result<(), Box<dyn std::error::Error>> {
         use profile_platform_primitives::ProfileId;
         let directory = tempfile::tempdir()?;
         let root = MaterializationRoot::open_or_create(directory.path())?;
         let target = intent()?;
         let other = ProfileId::parse("profile_delete_other_01")?;
         let generation = GenerationId::parse("generation_delete_other_01")?;
-        let selected_workspace = root.create_profile_current(
-            &target.tenant_id, &target.profile_id, &generation, 4,
-        )?;
-        let other_workspace = root.create_profile_current(
-            &target.tenant_id, &other, &generation, 4,
-        )?;
+        let selected_workspace =
+            root.create_profile_current(&target.tenant_id, &target.profile_id, &generation, 4)?;
+        let other_workspace =
+            root.create_profile_current(&target.tenant_id, &other, &generation, 4)?;
         fs::write(other_workspace.path().join("keep.txt"), b"unrelated")?;
         cleanup_confirmed_current(&root, &target)?;
         assert!(!selected_workspace.path().exists());
-        assert_eq!(fs::read(other_workspace.path().join("keep.txt"))?, b"unrelated");
+        assert_eq!(
+            fs::read(other_workspace.path().join("keep.txt"))?,
+            b"unrelated"
+        );
         Ok(())
     }
 
@@ -281,9 +281,8 @@ mod tests {
         let root = MaterializationRoot::open_or_create(directory.path())?;
         let target = intent()?;
         let generation = GenerationId::parse("generation_delete_firefox_01")?;
-        let workspace = root.create_profile_current(
-            &target.tenant_id, &target.profile_id, &generation, 4,
-        )?;
+        let workspace =
+            root.create_profile_current(&target.tenant_id, &target.profile_id, &generation, 4)?;
         let browser_data = workspace.path().join("user_data");
         fs::create_dir(&browser_data)?;
         let cookies = browser_data.join("cookies.sqlite");
