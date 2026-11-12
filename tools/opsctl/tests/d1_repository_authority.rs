@@ -260,10 +260,7 @@ fn deployed_runtime_prefix_is_context_only_and_retains_all_migration_gates()
     let plan = invoke(&target_path, &current_path)?;
     assert_eq!(plan["decision"], "CONTRACT_BLOCKED");
     assert_eq!(plan["allowed"], false);
-    assert_eq!(
-        plan["target_revision"],
-        DELETE_SIGNED_PUT_EXPIRY_REVISION
-    );
+    assert_eq!(plan["target_revision"], DELETE_SIGNED_PUT_EXPIRY_REVISION);
     assert_eq!(
         plan["planned_migrations"],
         json!([
@@ -275,7 +272,8 @@ fn deployed_runtime_prefix_is_context_only_and_retains_all_migration_gates()
             NATIVE_RECOVERY_REVISION,
             PROFILE_DELETE_REVISION,
             CURRENT_COLD_RETIREMENT_REVISION,
-            DELETE_ASSIGNMENT_LIFECYCLE_REVISION
+            DELETE_ASSIGNMENT_LIFECYCLE_REVISION,
+            DELETE_SIGNED_PUT_EXPIRY_REVISION
         ])
     );
     assert_eq!(
