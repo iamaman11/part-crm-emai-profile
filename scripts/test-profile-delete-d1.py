@@ -28,6 +28,17 @@ def expect_denied(op) -> None:
 def make_database(*, include_lifecycle: bool = True) -> sqlite3.Connection:
     connection = BASE["open_database"]()
     BASE["apply_migrations"](connection)
+    # The real Cloudflare D1 migration executor owns this native ledger.
+    # Keep its recorded UTC apply time available for the fast-empty fence.
+    connection.execute(
+        "CREATE TABLE d1_migrations (id INTEGER PRIMARY KEY, name TEXT UNIQUE, "
+        "applied_at TEXT NOT NULL)"
+    )
+    connection.execute(
+        "INSERT INTO d1_migrations (id,name,applied_at) "
+        "VALUES (41,'0041_profile_delete_exact_r2_receipts.sql',"
+        "'1970-01-01 00:00:00')"
+    )
     # The accepted Catalog 0001-0031 base precedes the v2 lineage.
     # D1 0035 is a contract migration and must not be executed directly
     # against 0031. K2 uses the same physical 0037..0040 test schema.
@@ -396,11 +407,53 @@ def test_completed_delete_reconciles_old_assignment_history() -> None:
         connection.close()
 
 
+
+def test_truly_empty_draft_completes_immediately_after_legacy_capability_window() -> None:
+    connection = make_database()
+    try:
+        profile = BASE["PROFILE_A"]
+        begin(connection, profile, 1, 500000)
+        assert connection.execute(
+            "SELECT COUNT(*) FROM profile_delete_objects WHERE profile_id=?", (profile,)
+        ).fetchone()[0] == 0
+        # One millisecond after freeze, not six minutes later.
+        finish(connection, profile, 2, 500001)
+        assert connection.execute(
+            "SELECT status FROM browser_profiles WHERE profile_id=?", (profile,)
+        ).fetchone()[0] == "DELETED"
+    finally:
+        connection.close()
+
+
+def test_empty_draft_retains_pre_migration_put_fence_and_missing_ledger_denies() -> None:
+    connection = make_database()
+    try:
+        profile = BASE["PROFILE_A"]
+        begin(connection, profile, 1, 500000)
+        connection.execute(
+            "UPDATE d1_migrations SET applied_at='1970-01-01 00:07:00' "
+            "WHERE id=41"
+        )
+        expect_denied(lambda: finish(connection, profile, 2, 500001))
+        # The completed new migration is evidence, not a guessed timestamp.
+        connection.execute("DELETE FROM d1_migrations WHERE id=41")
+        expect_denied(lambda: finish(connection, profile, 2, 500002))
+        # The original 360-second fence remains a safe fallback.
+        finish(connection, profile, 2, 860001)
+        assert connection.execute(
+            "SELECT status FROM browser_profiles WHERE profile_id=?", (profile,)
+        ).fetchone()[0] == "DELETED"
+    finally:
+        connection.close()
+
+
 def main() -> int:
     test_draft_direct_exact_deletion()
     test_ready_profile_requires_all_exact_object_receipts()
     test_delete_closes_client_assignment_and_blocks_races()
     test_completed_delete_reconciles_old_assignment_history()
+    test_truly_empty_draft_completes_immediately_after_legacy_capability_window()
+    test_empty_draft_retains_pre_migration_put_fence_and_missing_ledger_denies()
     print("profile DELETE D1 frozen object inventory, exact receipts, terminal status PASS")
     return 0
 

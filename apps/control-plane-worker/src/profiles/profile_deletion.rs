@@ -57,6 +57,14 @@ pub async fn delete_profile(
     let pending = journal
         .pending_count(actor.tenant_scope(), &profile_id)
         .await?;
+    // No R2 objects means no R2 effects to schedule. The existing D1
+    // completion trigger alone decides whether the pre-signed PUT fence has
+    // drained; otherwise the existing minute cron continues this Delete.
+    if pending == 0 {
+        let _ = journal
+            .complete(actor, &profile_id, body.expected_profile_version, now_ms())
+            .await;
+    }
     let complete = journal
         .status(actor.tenant_scope(), &profile_id)
         .await?
