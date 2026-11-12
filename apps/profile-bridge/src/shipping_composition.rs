@@ -24,6 +24,7 @@ pub enum ShippingCompositionError {
     /// Cloud CURRENT recovery was required but not proven. Local bytes untouched.
     RestoreUnavailable,
     SyncUnconfirmed,
+    LocalDelete(crate::local_profile_delete::TerminalDeleteError),
     #[cfg(windows)]
     DeliveryRuntime(crate::windows_delivery_runtime::WindowsDeliveryRuntimeError),
     // Diagnostic-only historical outcomes; the v2 Open/Sync path cannot construct them.
@@ -58,6 +59,7 @@ impl core::fmt::Display for ShippingCompositionError {
                 "Verified cloud CURRENT could not be restored; local profile was not opened or overwritten"
             }
             Self::SyncUnconfirmed => "Native Close succeeded; cloud Sync not confirmed",
+            Self::LocalDelete(error) => return core::fmt::Display::fmt(error, formatter),
             #[cfg(windows)]
             Self::DeliveryRuntime(error) => return core::fmt::Display::fmt(error, formatter),
             Self::Operator(_) => "retired Profile Bridge operator outcome",
@@ -96,6 +98,22 @@ pub fn run_closed_profile_sync(
     #[cfg(windows)]
     {
         windows::run_closed_sync(intent)
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = intent;
+        Err(ShippingCompositionError::UnsupportedPlatform)
+    }
+}
+
+/// Only an authenticated terminal D1 readback permits the existing file owner
+/// to remove exact closed local CURRENT. No background GC or second process.
+pub fn run_terminal_profile_delete(
+    intent: &crate::local_profile_delete::TerminalProfileDelete,
+) -> Result<(), ShippingCompositionError> {
+    #[cfg(windows)]
+    {
+        windows::run_terminal_delete(intent)
     }
     #[cfg(not(windows))]
     {
@@ -768,6 +786,35 @@ mod windows {
             Ok(admitted)
         })();
         cold.and_then(|admitted| admitted.ok_or(()))
+    }
+
+    pub fn run_terminal_delete(
+        intent: &crate::local_profile_delete::TerminalProfileDelete,
+    ) -> Result<(), ShippingCompositionError> {
+        let config = ShippingConfig::from_installation()?;
+        let binding = WindowsDeviceApplicationBinding::open(
+            &config.device_application_binding_path,
+        ).map_err(|_| ShippingCompositionError::Configuration)?;
+        if binding.tenant_id() != &intent.tenant_id || binding.actor_id() != &intent.actor_id {
+            return Err(ShippingCompositionError::LocalDelete(
+                crate::local_profile_delete::TerminalDeleteError::AuthorizationUnconfirmed,
+            ));
+        }
+        let application = WindowsDeviceApplication::from_system(
+            config.control_plane_origin,
+            binding,
+        ).map_err(|_| ShippingCompositionError::LocalDelete(
+            crate::local_profile_delete::TerminalDeleteError::AuthorizationUnconfirmed,
+        ))?;
+        let mut transport = application.transport();
+        crate::local_profile_delete::confirm_terminal_delete(intent, &mut transport)
+            .map_err(ShippingCompositionError::LocalDelete)?;
+        let root = MaterializationRoot::open_or_create(&config.materialization_root)
+            .map_err(|_| ShippingCompositionError::LocalDelete(
+                crate::local_profile_delete::TerminalDeleteError::LocalFilesystem,
+            ))?;
+        crate::local_profile_delete::cleanup_confirmed_current(&root, intent)
+            .map_err(ShippingCompositionError::LocalDelete)
     }
 
     pub fn run_closed_sync(
