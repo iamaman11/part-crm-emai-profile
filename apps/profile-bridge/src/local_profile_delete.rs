@@ -57,12 +57,15 @@ pub enum TerminalDeleteError {
 impl core::fmt::Display for TerminalDeleteError {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         f.write_str(match self {
-            Self::AuthorizationUnconfirmed =>
-                "Cloud DELETED was not proven by the authenticated device; local files preserved",
-            Self::LocalBusyOrDirty =>
-                "Local native profile may be open or unsynced; local files preserved",
-            Self::LocalFilesystem =>
-                "Local profile cleanup could not be verified; inspect native local files",
+            Self::AuthorizationUnconfirmed => {
+                "Cloud DELETED was not proven by the authenticated device; local files preserved"
+            }
+            Self::LocalBusyOrDirty => {
+                "Local native profile may be open or unsynced; local files preserved"
+            }
+            Self::LocalFilesystem => {
+                "Local profile cleanup could not be verified; inspect native local files"
+            }
         })
     }
 }
@@ -84,7 +87,9 @@ pub fn confirm_terminal_delete<T: MachineHttpPort>(
         .map_err(|_| TerminalDeleteError::AuthorizationUnconfirmed)?
         .as_millis();
     let correlation = CorrelationId::parse(format!(
-        "corr_local_deleted_{}_{}", std::process::id(), epoch
+        "corr_local_deleted_{}_{}",
+        std::process::id(),
+        epoch
     ))
     .map_err(|_| TerminalDeleteError::AuthorizationUnconfirmed)?;
     let response = transport
@@ -138,8 +143,10 @@ pub fn cleanup_confirmed_current(
 
 #[cfg(test)]
 mod tests {
-    use super::{TERMINAL_DELETE_URI_PREFIX, TerminalProfileDelete, TerminalDeleteError,
-        cleanup_confirmed_current, confirm_terminal_delete};
+    use super::{
+        TERMINAL_DELETE_URI_PREFIX, TerminalDeleteError, TerminalProfileDelete,
+        cleanup_confirmed_current, confirm_terminal_delete,
+    };
     use crate::local_profile::MaterializationRoot;
     use crate::shipping_control_plane::{MachineHttpMethod, MachineHttpPort, MachineHttpResponse};
     use profile_platform_primitives::{CorrelationId, GenerationId};
@@ -151,10 +158,18 @@ mod tests {
     }
     impl MachineHttpPort for Readback {
         type Error = ();
-        fn request(&mut self, method: MachineHttpMethod, path: &str, _cid: &CorrelationId,
-            body: Option<&[u8]>) -> Result<MachineHttpResponse, Self::Error> {
+        fn request(
+            &mut self,
+            method: MachineHttpMethod,
+            path: &str,
+            _cid: &CorrelationId,
+            body: Option<&[u8]>,
+        ) -> Result<MachineHttpResponse, Self::Error> {
             assert_eq!(method, MachineHttpMethod::Get);
-            assert_eq!(path, "/bridge/v1/tenants/tenant_delete_test_01/profiles/profile_delete_test_01/delete-readback");
+            assert_eq!(
+                path,
+                "/bridge/v1/tenants/tenant_delete_test_01/profiles/profile_delete_test_01/delete-readback"
+            );
             assert!(body.is_none());
             Ok(MachineHttpResponse::new(self.status, self.body.clone()))
         }
@@ -188,26 +203,39 @@ mod tests {
         let intent = intent();
         confirm_terminal_delete(&intent, &mut response("DELETED", 5)).unwrap();
         for mut denied in [
-            response("READY", 4), response("DELETING", 5), response("DELETED", 3),
-            Readback { status: 404, body: response("DELETED", 5).body },
+            response("READY", 4),
+            response("DELETING", 5),
+            response("DELETED", 3),
+            Readback {
+                status: 404,
+                body: response("DELETED", 5).body,
+            },
         ] {
-            assert_eq!(confirm_terminal_delete(&intent, &mut denied),
-                Err(TerminalDeleteError::AuthorizationUnconfirmed));
+            assert_eq!(
+                confirm_terminal_delete(&intent, &mut denied),
+                Err(TerminalDeleteError::AuthorizationUnconfirmed)
+            );
         }
     }
     #[test]
-    fn local_current_cleanup_preserves_dirty_and_is_idempotent() -> Result<(), Box<dyn std::error::Error>> {
+    fn local_current_cleanup_preserves_dirty_and_is_idempotent()
+    -> Result<(), Box<dyn std::error::Error>> {
         let directory = tempfile::tempdir()?;
         let root = MaterializationRoot::open_or_create(directory.path())?;
         let intent = intent();
         let generation = GenerationId::parse("generation_delete_test_01")?;
-        let workspace = root.create_profile_current(
-            &intent.tenant_id, &intent.profile_id, &generation, 2)?;
+        let workspace =
+            root.create_profile_current(&intent.tenant_id, &intent.profile_id, &generation, 2)?;
         fs::create_dir(workspace.path().join("user_data"))?;
         fs::write(workspace.path().join("user_data/cookies.sqlite"), b"cookie")?;
-        fs::write(workspace.path().join(".local-unsynced"), b"local-unsynced-v2")?;
-        assert_eq!(cleanup_confirmed_current(&root, &intent),
-            Err(TerminalDeleteError::LocalBusyOrDirty));
+        fs::write(
+            workspace.path().join(".local-unsynced"),
+            b"local-unsynced-v2",
+        )?;
+        assert_eq!(
+            cleanup_confirmed_current(&root, &intent),
+            Err(TerminalDeleteError::LocalBusyOrDirty)
+        );
         assert!(workspace.path().join("user_data/cookies.sqlite").exists());
         fs::remove_file(workspace.path().join(".local-unsynced"))?;
         cleanup_confirmed_current(&root, &intent)?;
