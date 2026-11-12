@@ -166,6 +166,29 @@ describe('ProfilesWorkspace generation refresh (#802 F06)', () => {
     expect(generationLookup).toHaveBeenCalledTimes(2); // Initial lookup + original readback, never new generation.
   });
 
+  it('shows why a DELETED profile cannot be reopened without calling the Bridge', async () => {
+    profileLookup.mockResolvedValue({
+      profileId: 'profile_deleted', status: 'DELETED', version: 3,
+      activeGenerationId: null, linkedClientId: null, canOperate: true,
+    } as Awaited<ReturnType<typeof getProfile>>);
+    const cache = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    render(
+      <QueryClientProvider client={cache}>
+        <TenantProvider loadTenantContexts={async () => ({
+          tenants: [{ tenantId: 'tenant_test', displayName: 'Test tenant', actorId: 'actor_test', role: 'TENANT_OWNER' }],
+        })}>
+          <ProfilesWorkspace selectedProfileId="profile_deleted" onProfileSelected={() => undefined} />
+        </TenantProvider>
+      </QueryClientProvider>,
+    );
+    await screen.findByText('profile_deleted');
+    const open = screen.getByRole('button', { name: 'Open browser' }) as HTMLButtonElement;
+    expect(open.disabled).toBe(true);
+    expect(screen.getByText('This profile was deleted and cannot be opened.')).toBeTruthy();
+    fireEvent.click(open);
+    expect(localOpen).not.toHaveBeenCalled();
+  });
+
   it('never exposes native Open to an independently visible viewer-only profile', async () => {
     profileLookup.mockResolvedValue({
       profileId: 'profile_viewer', status: 'READY', version: 7,
@@ -185,6 +208,7 @@ describe('ProfilesWorkspace generation refresh (#802 F06)', () => {
     await screen.findByText('profile_viewer');
     const open = screen.getByRole('button', { name: 'Open browser' }) as HTMLButtonElement;
     expect(open.disabled).toBe(true);
+    expect(screen.getByText('This account has no operator permission for this profile.')).toBeTruthy();
     fireEvent.click(open);
     expect(localOpen).not.toHaveBeenCalled();
   });

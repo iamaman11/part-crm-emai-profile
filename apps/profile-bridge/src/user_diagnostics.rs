@@ -861,7 +861,7 @@ impl UserDiagnostic {
                         "Local Camoufox fingerprint initialization failed. Existing files were retained; review the local diagnostic."
                     }
                     Local::BrowserNotClosedCleanly => {
-                        "The native Firefox close was not verified. Local browser data was preserved; no cloud Save receipt was issued."
+                        "The native Firefox close could not be confirmed. Local browser data was preserved. Cloud Sync may still be pending; check the latest Save status before reopening."
                     }
                     Local::LaunchConfirmation => {
                         "The installed browser runtime did not confirm its Playwright-ready event. The activation was not marked healthy; keep local profile files and use the existing delivery recovery path."

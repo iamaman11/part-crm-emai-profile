@@ -34,10 +34,10 @@ def make_database(*, include_lifecycle: bool = True) -> sqlite3.Connection:
     # against 0031. K2 uses the same physical 0037..0040 test schema.
     migrations = [
         path for path in sorted(SUCCESSOR.glob("[0-9][0-9][0-9][0-9]_*.sql"))
-        if 37 <= int(path.name[:4]) <= 41 or (include_lifecycle and int(path.name[:4]) == 43)
+        if 37 <= int(path.name[:4]) <= 41 or (include_lifecycle and int(path.name[:4]) in (43, 44))
     ]
     versions = [int(path.name[:4]) for path in migrations]
-    assert versions == list(range(37, 42)) + ([43] if include_lifecycle else []), versions
+    assert versions == list(range(37, 42)) + ([43, 44] if include_lifecycle else []), versions
     for migration in migrations:
         connection.executescript(migration.read_text(encoding="utf-8"))
     BASE["seed_catalog"](connection)
@@ -134,6 +134,27 @@ def test_draft_direct_exact_deletion() -> None:
         connection.close()
 
 
+def test_empty_draft_delete_completes_without_synthetic_360_second_wait() -> None:
+    connection = make_database()
+    try:
+        profile = BASE["PROFILE_A"]
+        # No signed PUT reservation and no R2 object inventory.
+        assert connection.execute(
+            "SELECT COUNT(*) FROM profile_generation_upload_reservations "
+            "WHERE profile_id=?", (profile,),
+        ).fetchone()[0] == 0
+        begin(connection, profile, 1, 40)
+        assert connection.execute(
+            "SELECT COUNT(*) FROM profile_delete_objects WHERE profile_id=?", (profile,),
+        ).fetchone()[0] == 0
+        finish(connection, profile, 2, 41)
+        assert connection.execute(
+            "SELECT status FROM browser_profiles WHERE profile_id=?", (profile,),
+        ).fetchone()[0] == "DELETED"
+    finally:
+        connection.close()
+
+
 def test_ready_profile_requires_all_exact_object_receipts() -> None:
     connection = make_database()
     try:
@@ -202,8 +223,8 @@ def test_ready_profile_requires_all_exact_object_receipts() -> None:
         )
         assert due_match is not None
         due_sql = due_match.group(1)
-        assert connection.execute(due_sql, (360059,)).fetchall() == []
-        due = connection.execute(due_sql, (360060,)).fetchall()
+        assert connection.execute(due_sql, (360057,)).fetchall() == []
+        due = connection.execute(due_sql, (360058,)).fetchall()
         assert len(due) == 1
         assert tuple(due[0]) == (tenant, profile, owner, 2)
         expect_denied(lambda: connection.execute(
@@ -255,12 +276,13 @@ def test_ready_profile_requires_all_exact_object_receipts() -> None:
             (tenant,profile,unsigned_generation),
         ).fetchone()[0] == unsigned_key
         expect_denied(lambda: finish(connection, profile, 3, 65))
-        # DELETE must not receipt a key while an old signed PUT can recreate it.
+        # The most recent signed PUT expires at 360058; a receipt at
+        # 360057 is unsafe, but 360059 is now allowed by the exact expiry.
         expect_denied(lambda: connection.execute(
             "INSERT INTO profile_delete_object_receipts "
             "(tenant_id,profile_id,generation_id,object_key,"
             "metadata_digest,container_digest,deleted_at_ms) "
-            "VALUES (?,?,?,?,?,?,360059)",
+            "VALUES (?,?,?,?,?,?,360057)",
             (tenant,profile,generation,key,metadata_digest,container_digest),
         ))
         expect_denied(lambda: connection.execute(
@@ -455,9 +477,9 @@ def test_owner_delete_revokes_stale_lease_without_resetting_coordinator() -> Non
                 (profile,),
             ).fetchone()
             assert tuple(after) == tuple(before) == (state, 0)
-            # The D1 completion fence still waits for potentially signed PUTs.
-            expect_denied(lambda: finish(connection, profile, 2, 360002))
-            finish(connection, profile, 2, 720002)
+            # No signed PUT was ever issued: stale coordinator state is not
+            # an excuse for a six-minute Delete delay.
+            finish(connection, profile, 2, 360002)
             assert connection.execute(
                 "SELECT status FROM browser_profiles WHERE profile_id=?",
                 (profile,),
@@ -495,10 +517,10 @@ def test_old_launch_claim_cannot_block_owner_delete_or_spawn_new_claim() -> None
             "SELECT COUNT(*) FROM profile_launch_claims WHERE profile_id=?",
             (profile,),
         ).fetchone()[0] == 1
-        # Even a late or lost-reply DELETE response cannot allow cloud
-        # content loss until every pre-existing upload PUT capability expires.
-        finish(connection, profile, 2, 360042)
-        expect_denied(lambda: claim("launch_delete_new_02", 360043))
+        # The old launch claim was never a signed R2 PUT capability. A fresh
+        # claim remains fenced after immediate owner-authorized Delete.
+        finish(connection, profile, 2, 42)
+        expect_denied(lambda: claim("launch_delete_new_02", 43))
         assert connection.execute(
             "SELECT status FROM browser_profiles WHERE profile_id=?",
             (profile,),
@@ -509,6 +531,7 @@ def test_old_launch_claim_cannot_block_owner_delete_or_spawn_new_claim() -> None
 
 def main() -> int:
     test_draft_direct_exact_deletion()
+    test_empty_draft_delete_completes_without_synthetic_360_second_wait()
     test_ready_profile_requires_all_exact_object_receipts()
     test_delete_closes_client_assignment_and_blocks_races()
     test_completed_delete_reconciles_old_assignment_history()

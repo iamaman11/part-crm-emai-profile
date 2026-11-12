@@ -27,6 +27,62 @@ fn ids() -> Result<(TenantId, ProfileId), Box<dyn std::error::Error>> {
 }
 
 #[test]
+fn encrypted_snapshot_excludes_only_recreatable_firefox_caches()
+-> Result<(), Box<dyn std::error::Error>> {
+    let root_path = test_root("firefox-cache")?;
+    let root = MaterializationRoot::open_or_create(&root_path)?;
+    let (tenant, profile) = ids()?;
+    let generation = GenerationId::parse("generation_cache_exclusion")?;
+    let workspace = root.create_generation(&tenant, &profile, &generation)?;
+    let data = workspace.path().join("user_data");
+    for directory in [
+        "cache2/entries",
+        "startupCache",
+        "storage/default/example.org",
+        "sessionstore-backups",
+    ] {
+        fs::create_dir_all(data.join(directory))?;
+    }
+    for (relative, bytes) in [
+        ("cache2/entries/disposable-cache", b"cache".as_slice()),
+        ("startupCache/startupCache.8.little", b"startup".as_slice()),
+        (
+            "storage/default/example.org/data.bin",
+            b"indexeddb".as_slice(),
+        ),
+        ("sessionstore-backups/recovery.jsonlz4", b"tabs".as_slice()),
+        ("cookies.sqlite", b"cookies".as_slice()),
+        ("prefs.js", b"preferences".as_slice()),
+    ] {
+        fs::write(data.join(relative), bytes)?;
+    }
+    let inventory = workspace.inventory()?;
+    let paths: Vec<&str> = inventory
+        .entries()
+        .iter()
+        .map(|entry| entry.relative_path())
+        .collect();
+    assert!(!paths.iter().any(|p| p.starts_with("user_data/cache2/")));
+    assert!(
+        !paths
+            .iter()
+            .any(|p| p.starts_with("user_data/startupCache/"))
+    );
+    for required in [
+        "user_data/storage/default/example.org/data.bin",
+        "user_data/sessionstore-backups/recovery.jsonlz4",
+        "user_data/cookies.sqlite",
+        "user_data/prefs.js",
+    ] {
+        assert!(paths.contains(&required), "missing user state: {required}");
+    }
+    // Excluding caches from the encrypted snapshot never deletes local cache.
+    assert!(data.join("cache2/entries/disposable-cache").exists());
+    fs::remove_dir_all(root_path)?;
+    Ok(())
+}
+
+#[test]
 fn materialization_root_builds_opaque_generation_paths() -> Result<(), Box<dyn std::error::Error>> {
     let root_path = test_root("paths")?;
     let root = MaterializationRoot::open_or_create(&root_path)?;

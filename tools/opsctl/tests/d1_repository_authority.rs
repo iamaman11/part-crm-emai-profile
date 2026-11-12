@@ -25,6 +25,7 @@ const NATIVE_RECOVERY_REVISION: &str = "0040_native_browser_recovery_proof.sql";
 const PROFILE_DELETE_REVISION: &str = "0041_profile_delete_exact_r2_receipts.sql";
 const CURRENT_COLD_RETIREMENT_REVISION: &str = "0042_profile_current_cold_retirement.sql";
 const DELETE_ASSIGNMENT_LIFECYCLE_REVISION: &str = "0043_profile_delete_assignment_lifecycle.sql";
+const DELETE_SIGNED_PUT_EXPIRY_REVISION: &str = "0044_profile_delete_exact_upload_expiry.sql";
 
 fn repo_root() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..")
@@ -259,10 +260,7 @@ fn deployed_runtime_prefix_is_context_only_and_retains_all_migration_gates()
     let plan = invoke(&target_path, &current_path)?;
     assert_eq!(plan["decision"], "CONTRACT_BLOCKED");
     assert_eq!(plan["allowed"], false);
-    assert_eq!(
-        plan["target_revision"],
-        DELETE_ASSIGNMENT_LIFECYCLE_REVISION
-    );
+    assert_eq!(plan["target_revision"], DELETE_SIGNED_PUT_EXPIRY_REVISION);
     assert_eq!(
         plan["planned_migrations"],
         json!([
@@ -274,7 +272,8 @@ fn deployed_runtime_prefix_is_context_only_and_retains_all_migration_gates()
             NATIVE_RECOVERY_REVISION,
             PROFILE_DELETE_REVISION,
             CURRENT_COLD_RETIREMENT_REVISION,
-            DELETE_ASSIGNMENT_LIFECYCLE_REVISION
+            DELETE_ASSIGNMENT_LIFECYCLE_REVISION,
+            DELETE_SIGNED_PUT_EXPIRY_REVISION
         ])
     );
     assert_eq!(
@@ -441,7 +440,7 @@ fn frozen_epoch_and_current_projection_are_derived_from_real_sql_bytes()
         identity_digest(&catalog_legacy[..26])?,
         CATALOG_EPOCH_DIGEST
     );
-    assert_eq!(catalog_current.len(), 43);
+    assert_eq!(catalog_current.len(), 44);
     assert_eq!(catalog_current[26]["name"], SUCCESSOR_EXPAND_REVISION);
     assert_eq!(catalog_current[31]["name"], BRIDGE_ENROLLMENT_REVISION);
     assert_eq!(catalog_current[32]["name"], PUBLIC_KEY_BINDING_REVISION);
@@ -464,18 +463,22 @@ fn frozen_epoch_and_current_projection_are_derived_from_real_sql_bytes()
         catalog_current[42]["name"],
         DELETE_ASSIGNMENT_LIFECYCLE_REVISION
     );
+    assert_eq!(
+        catalog_current[43]["name"],
+        DELETE_SIGNED_PUT_EXPIRY_REVISION
+    );
     assert!(
         catalog_current
             .iter()
             .all(|entry| entry["name"] != LEGACY_PAS2_REVISION)
     );
-    assert_eq!(catalog["migration_count"], 43);
+    assert_eq!(catalog["migration_count"], 44);
     assert_eq!(
         catalog["current_repository_revision"],
-        DELETE_ASSIGNMENT_LIFECYCLE_REVISION
+        DELETE_SIGNED_PUT_EXPIRY_REVISION
     );
     assert_eq!(catalog["history_digest"], catalog_current_digest);
-    assert_eq!(catalog["post_epoch_migration_count"], 17);
+    assert_eq!(catalog["post_epoch_migration_count"], 18);
     assert_eq!(catalog["historical_epoch"]["migration_count"], 26);
     assert_eq!(
         catalog["historical_epoch"]["final_revision"],
@@ -632,7 +635,7 @@ fn legacy_and_successor_pas2_revisions_have_distinct_governed_roles() -> Result<
         predecessor_successor_files[1]["name"],
         PREDECESSOR_CONTRACT_REVISION
     );
-    assert_eq!(current_successor_files.len(), 12);
+    assert_eq!(current_successor_files.len(), 13);
     assert_eq!(current_successor_files[6]["name"], WORKING_PROOF_REVISION);
     assert_eq!(
         current_successor_files[7]["name"],
@@ -678,14 +681,14 @@ fn legacy_and_successor_pas2_revisions_have_distinct_governed_roles() -> Result<
     )?;
     assert!(corrected_contract.ends_with(&original_contract));
 
-    assert_eq!(catalog["migration_count"], 43);
-    assert_eq!(catalog["post_epoch_migration_count"], 17);
+    assert_eq!(catalog["migration_count"], 44);
+    assert_eq!(catalog["post_epoch_migration_count"], 18);
     assert_eq!(
         catalog["current_repository_revision"],
-        DELETE_ASSIGNMENT_LIFECYCLE_REVISION
+        DELETE_SIGNED_PUT_EXPIRY_REVISION
     );
     assert_eq!(catalog["migration_lineage"], "catalog-successor-v2");
-    assert_eq!(sources.len(), 43);
+    assert_eq!(sources.len(), 44);
     assert_eq!(sources[26]["migration_file"], SUCCESSOR_EXPAND_REVISION);
     assert_eq!(sources[26]["source_root"], "migrations/d1-successor");
     assert_eq!(
@@ -726,6 +729,11 @@ fn legacy_and_successor_pas2_revisions_have_distinct_governed_roles() -> Result<
         DELETE_ASSIGNMENT_LIFECYCLE_REVISION
     );
     assert_eq!(sources[42]["source_root"], "migrations/d1-successor-v2");
+    assert_eq!(
+        sources[43]["migration_file"],
+        DELETE_SIGNED_PUT_EXPIRY_REVISION
+    );
+    assert_eq!(sources[43]["source_root"], "migrations/d1-successor-v2");
     assert!(
         sources
             .iter()
@@ -750,15 +758,15 @@ fn legacy_and_successor_pas2_revisions_have_distinct_governed_roles() -> Result<
     );
     assert_eq!(
         catalog["release_schema_contract"]["target_schema_revision"],
-        DELETE_ASSIGNMENT_LIFECYCLE_REVISION
+        DELETE_SIGNED_PUT_EXPIRY_REVISION
     );
     assert_eq!(
         catalog["release_schema_contract"]["supported_schema_min"],
-        DELETE_ASSIGNMENT_LIFECYCLE_REVISION
+        DELETE_SIGNED_PUT_EXPIRY_REVISION
     );
     assert_eq!(
         catalog["release_schema_contract"]["supported_schema_max"],
-        DELETE_ASSIGNMENT_LIFECYCLE_REVISION
+        DELETE_SIGNED_PUT_EXPIRY_REVISION
     );
     assert_eq!(
         catalog["pre_migration_runtime_schema_contract"]["supported_schema_max"],

@@ -103,10 +103,10 @@ fn actual_deployed_context_traverses_separate_sealed_contract_and_current_expand
                 .ok_or("migration name is missing")
         })
         .collect::<Result<Vec<_>, _>>()?;
-    assert_eq!(history.len(), 43);
+    assert_eq!(history.len(), 44);
     assert_eq!(
         history.last().map(String::as_str),
-        Some("0043_profile_delete_assignment_lifecycle.sql")
+        Some("0044_profile_delete_exact_upload_expiry.sql")
     );
     let target = json!({"source":{"authority":"accepted-main","repository":"iamaman11/part-crm-emai-profile","ref":"refs/heads/main","event":"push","commit_sha":SOURCE},"schema_contract":catalog["release_schema_contract"]});
     let mut current = target.clone();
@@ -142,6 +142,8 @@ fn actual_deployed_context_traverses_separate_sealed_contract_and_current_expand
         "deployment_snapshot":{"id":"11111111-1111-4111-8111-111111111111","versions":[{"version_id":"22222222-2222-4222-8222-222222222222","percentage":100.0}]}});
     write(&dir.join("runtime-context.json"), &context)?;
     let mut prior_authorization: Option<Value> = None;
+    // Current ordinary migration planning includes every remaining typed
+    // successor expansion (0036..0044) after the separate sealed CONTRACT.
     for count in [34, 35] {
         let ledger = json!([{"success":true,"results":history[..count].iter().enumerate().map(|(i,n)|json!({"id":i+1,"name":n})).collect::<Vec<_>>()}]);
         write(&dir.join("ledger.json"), &ledger)?;
@@ -183,19 +185,20 @@ fn actual_deployed_context_traverses_separate_sealed_contract_and_current_expand
                 history[count + 4],
                 history[count + 5],
                 history[count + 6],
-                history[count + 7]
+                history[count + 7],
+                history[count + 8]
             ])
         } else {
             json!([history[count]])
         };
         assert_eq!(native_plan["planned_migrations"], expected);
         let expected_target = if count == 35 {
-            &history[count + 7]
+            &history[count + 8]
         } else {
             &history[count]
         };
         assert_eq!(native_plan["target_revision"], expected_target.as_str());
-        assert_eq!(native_plan["desired_target_revision"], history[42]);
+        assert_eq!(native_plan["desired_target_revision"], history[43]);
         write(&dir.join("native-stage.json"), &native_plan)?;
         write(
             &dir.join("deployment-snapshot.json"),
@@ -340,7 +343,7 @@ fn actual_deployed_context_traverses_separate_sealed_contract_and_current_expand
         )?;
         assert_eq!(tx.transaction_plan.phase, phase);
         let expected_transaction_target = if count == 35 {
-            &history[count + 7]
+            &history[count + 8]
         } else {
             &history[count]
         };
@@ -511,7 +514,7 @@ fn actual_deployed_context_traverses_separate_sealed_contract_and_current_expand
                 &count.to_string(),
             ],
         )?;
-        let stage_len = if count == 35 { 8 } else { 1 };
+        let stage_len = if count == 35 { 9 } else { 1 };
         for migration in &history[count..count + stage_len] {
             receipt = append_execution_event(
                 &receipt,
@@ -685,7 +688,7 @@ if count==34:
  # The first ALTER failed atomically, and the corrected SQL must retain all rows.
  assert db.execute("SELECT count(*) FROM sqlite_master WHERE name='idempotency_records_pas2_contract_legacy'").fetchone()==(0,)
  db.execute('PRAGMA case_sensitive_like=OFF')
-for i,m in enumerate(sources[count:count+(8 if count==35 else 1)],start=count):
+for i,m in enumerate(sources[count:count+(9 if count==35 else 1)],start=count):
  db.executescript((bounded/m['migration_file']).read_text())
  db.execute('INSERT INTO d1_migrations(id,name) VALUES(?,?)',(i+1,m['migration_file']))
 (scratch/'observed-ledger.json').write_text(json.dumps([r[0] for r in db.execute('SELECT name FROM d1_migrations ORDER BY id')]))

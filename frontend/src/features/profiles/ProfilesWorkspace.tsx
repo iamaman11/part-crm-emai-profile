@@ -228,6 +228,18 @@ export function ProfilesWorkspace({
   }, [tenantId, selectedProfileId, cache]);
 
   const enabled = tenantId.length > 0;
+  // Explain an existing projection directly. Never query Worker merely to
+  // decide whether a local Open button can be enabled.
+  const openUnavailableReason = !profile ? null
+    : profile.status === 'DELETED' ? 'This profile was deleted and cannot be opened.'
+    : profile.status === 'DELETING' ? 'This profile is being deleted and cannot be opened.'
+    : !['DRAFT', 'READY'].includes(profile.status) ? `This profile is ${profile.status} and cannot be opened.`
+    : !activeTenant ? 'Select an authorized tenant before opening this profile.'
+    : profile.profileId !== profileId ? 'Refresh the selected profile before opening it.'
+    : profile.canOperate !== true ? 'This account has no operator permission for this profile.'
+    : generationAction.isPending ? 'The profile generation is being updated. Wait for the result.'
+    : generationRefreshUnconfirmed ? 'The latest profile version is not confirmed. Refresh status.'
+    : null;
   const profileLoaded = enabled && profileId.length > 0 && profile !== null;
   const actionTarget = generationAction.variables?.input.target;
   const actionBelongsToSelection = actionTarget?.tenantId === tenantId
@@ -258,7 +270,7 @@ export function ProfilesWorkspace({
         )}
         {profile && <>
           <div className="action-row">
-            <button type="button" disabled={!activeTenant || profile.profileId !== profileId || profile.canOperate !== true || generationAction.isPending || generationRefreshUnconfirmed || !['DRAFT', 'READY'].includes(profile.status)} onClick={openSelectedProfile}>Open browser</button>
+            <button type="button" disabled={openUnavailableReason !== null} aria-describedby={openUnavailableReason ? 'profile-open-status' : undefined} onClick={openSelectedProfile}>Open browser</button>
             <button type="button" disabled={lookup.isPending} onClick={() => {
               void cache.invalidateQueries({ queryKey: ['operator-query', tenantId, 'profiles'] });
               lookup.mutate({ tenantId, profileId });
@@ -278,6 +290,7 @@ export function ProfilesWorkspace({
               />
             )}
           </div>
+          {openUnavailableReason && <p id="profile-open-status" role="status">{openUnavailableReason}</p>}
           <StatusMessage state={openError} />
           <StatusMessage state={deleteAction.error ?? (deleteAction.data
             ? deleteAction.data.status === 'DELETED'

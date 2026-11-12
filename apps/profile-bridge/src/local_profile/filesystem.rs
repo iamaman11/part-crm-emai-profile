@@ -1521,6 +1521,20 @@ fn collect_inventory(
             }
             return Err(LocalProfileError::SpecialFileRejected);
         }
+        // Firefox's HTTP/startup caches are reproducible runtime artifacts,
+        // not cookies, logins, IndexedDB or SessionStore. Do not spend CPU,
+        // encrypted storage or network bandwidth hashing and uploading them.
+        // Only exclude these exact directories in the existing inventory;
+        // the local browser folder is NEVER modified or cleared.
+        if matches!(
+            relative_path.as_str(),
+            "user_data/cache2" | "user_data/startupCache"
+        ) {
+            if file_type.is_dir() {
+                continue;
+            }
+            return Err(LocalProfileError::SpecialFileRejected);
+        }
         if file_type.is_symlink() {
             return Err(LocalProfileError::SymbolicLinkRejected);
         }
