@@ -423,7 +423,11 @@ fn run_python_with_input(
                     .unwrap_or(u64::MAX)
                     .min(86_400_000);
                 report::record_current(
-                    Stage::BrowserReady, Outcome::Observed, Cloud::Unknown, Cause::None, duration,
+                    Stage::BrowserReady,
+                    Outcome::Observed,
+                    Cloud::Unknown,
+                    Cause::None,
+                    duration,
                 );
             }
             if line == CAMOUHOST_NATIVE_CLOSE_EVENT {
@@ -579,7 +583,11 @@ pub(crate) fn open_with_before_launch(
         .unwrap_or(u64::MAX)
         .min(86_400_000);
     report::record_current(
-        Stage::CamouhostLaunch, Outcome::Started, Cloud::Unknown, Cause::None, local_ms,
+        Stage::CamouhostLaunch,
+        Outcome::Started,
+        Cloud::Unknown,
+        Cause::None,
+        local_ms,
     );
     if !run_python(
         runtime_root,
