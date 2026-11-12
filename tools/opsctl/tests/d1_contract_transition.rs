@@ -142,10 +142,9 @@ fn actual_deployed_context_traverses_separate_sealed_contract_and_current_expand
         "deployment_snapshot":{"id":"11111111-1111-4111-8111-111111111111","versions":[{"version_id":"22222222-2222-4222-8222-222222222222","percentage":100.0}]}});
     write(&dir.join("runtime-context.json"), &context)?;
     let mut prior_authorization: Option<Value> = None;
-    // The existing bounded migration policy can execute eight EXPAND steps
-    // after the separate CONTRACT. Schema0044 is a final third step, not
-    // permission to widen the per-transaction cap.
-    for count in [34, 35, 43] {
+    // Current ordinary migration planning includes every remaining typed
+    // successor expansion (0036..0044) after the separate sealed CONTRACT.
+    for count in [34, 35] {
         let ledger = json!([{"success":true,"results":history[..count].iter().enumerate().map(|(i,n)|json!({"id":i+1,"name":n})).collect::<Vec<_>>()}]);
         write(&dir.join("ledger.json"), &ledger)?;
         let observed = json!({"schema_version":1,"target":{"environment":"staging","account_id":"account-1","database_name":"isolated-local-test","database_id":"database-1"},
@@ -186,14 +185,15 @@ fn actual_deployed_context_traverses_separate_sealed_contract_and_current_expand
                 history[count + 4],
                 history[count + 5],
                 history[count + 6],
-                history[count + 7]
+                history[count + 7],
+                history[count + 8]
             ])
         } else {
             json!([history[count]])
         };
         assert_eq!(native_plan["planned_migrations"], expected);
         let expected_target = if count == 35 {
-            &history[count + 7]
+            &history[count + 8]
         } else {
             &history[count]
         };
@@ -343,7 +343,7 @@ fn actual_deployed_context_traverses_separate_sealed_contract_and_current_expand
         )?;
         assert_eq!(tx.transaction_plan.phase, phase);
         let expected_transaction_target = if count == 35 {
-            &history[count + 7]
+            &history[count + 8]
         } else {
             &history[count]
         };
@@ -514,7 +514,7 @@ fn actual_deployed_context_traverses_separate_sealed_contract_and_current_expand
                 &count.to_string(),
             ],
         )?;
-        let stage_len = if count == 35 { 8 } else { 1 };
+        let stage_len = if count == 35 { 9 } else { 1 };
         for migration in &history[count..count + stage_len] {
             receipt = append_execution_event(
                 &receipt,
@@ -688,7 +688,7 @@ if count==34:
  # The first ALTER failed atomically, and the corrected SQL must retain all rows.
  assert db.execute("SELECT count(*) FROM sqlite_master WHERE name='idempotency_records_pas2_contract_legacy'").fetchone()==(0,)
  db.execute('PRAGMA case_sensitive_like=OFF')
-for i,m in enumerate(sources[count:count+(8 if count==35 else 1)],start=count):
+for i,m in enumerate(sources[count:count+(9 if count==35 else 1)],start=count):
  db.executescript((bounded/m['migration_file']).read_text())
  db.execute('INSERT INTO d1_migrations(id,name) VALUES(?,?)',(i+1,m['migration_file']))
 (scratch/'observed-ledger.json').write_text(json.dumps([r[0] for r in db.execute('SELECT name FROM d1_migrations ORDER BY id')]))
