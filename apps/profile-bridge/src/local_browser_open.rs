@@ -11,8 +11,8 @@ use std::fs::{self, OpenOptions};
 use std::io::{BufRead, BufReader, Read, Write};
 use std::path::Path;
 use std::process::{Command, Stdio};
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 const PYTHON: &str = "python/python.exe";
@@ -24,7 +24,8 @@ const MAX_CONFIG_BYTES: u64 = 1024 * 1024;
 const LOCAL_UNSYNCED: &str = ".local-unsynced";
 const LOCAL_UNSYNCED_CONTENT: &[u8] = b"local-unsynced-v2";
 const CAMOUHOST_LAUNCH_READY_EVENT: &str = "camouhost_stage phase=launch step=ready";
-const CAMOUHOST_NATIVE_CLOSE_EVENT: &str = "camouhost_stage phase=close step=browser_context_closed";
+const CAMOUHOST_NATIVE_CLOSE_EVENT: &str =
+    "camouhost_stage phase=close step=browser_context_closed";
 const IDENTITY_ACK: &[u8] = b"camouhost-identity-persisted\n";
 
 pub(crate) type ReadyConfirmation = Box<dyn FnOnce() -> bool + Send + 'static>;
@@ -660,13 +661,27 @@ mod tests {
 
     #[test]
     fn post_close_playwright_driver_failure_does_not_invalidate_native_close_proof() {
-        assert!(super::adapter_completed_after_native_close("--local-open", true, false));
+        assert!(super::adapter_completed_after_native_close(
+            "--local-open",
+            true,
+            false
+        ));
         // Driver teardown failed after the official BrowserContext.close event;
         // Rust still gates cloud Sync on the native Windows Firefox file lock.
-        assert!(super::adapter_completed_after_native_close("--local-open", false, true));
+        assert!(super::adapter_completed_after_native_close(
+            "--local-open",
+            false,
+            true
+        ));
         // Launch/runtime failures without the exact native close event remain errors.
-        assert!(!super::adapter_completed_after_native_close("--local-open", false, false));
-        assert!(!super::adapter_completed_after_native_close("--other", false, true));
+        assert!(!super::adapter_completed_after_native_close(
+            "--local-open",
+            false,
+            false
+        ));
+        assert!(!super::adapter_completed_after_native_close(
+            "--other", false, true
+        ));
     }
 
     #[test]
