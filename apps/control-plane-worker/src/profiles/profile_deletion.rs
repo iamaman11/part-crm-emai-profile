@@ -49,12 +49,7 @@ pub async fn delete_profile(
         .await
         .is_err()
     {
-        return problem(
-            correlation,
-            409,
-            "profile_delete_conflict",
-            "Profile Delete Conflict",
-        );
+        return problem(correlation, 409, "conflict", "Profile Delete Conflict");
     }
     // HTTP only freezes the command and returns its current projection.
     // The existing minute cron is the sole exact R2 DELETE executor: no
@@ -83,7 +78,7 @@ pub async fn delete_profile(
 /// commands. It creates no fresh profile Delete, browser owner or GC service.
 /// Bound the work per tick; a partial or failed exact R2 effect stays DELETING.
 pub(crate) async fn resume_due_frozen_deletes(env: &Env) -> Result<()> {
-    const MAX_OBJECTS_PER_PROFILE_PER_TICK: usize = 4;
+    const MAX_OBJECTS_PER_PROFILE_PER_TICK: usize = 16;
     let journal = profile_deletion(env)?;
     let frozen = journal.due_frozen_deletes(Date::now().as_millis()).await?;
     let r2 = generation_object_retention(env)?;

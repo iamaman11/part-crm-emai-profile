@@ -165,6 +165,22 @@ def main() -> int:
                     "application use case must authorize visible/coordinatable profile before coordinator runtime access"
                 )
 
+        # A coordinator snapshot is a read, never an event-producing command.
+        # D1 projection/outbox writes are allowed only for executed commands.
+        adapter_path = root / "crates/cloudflare-adapters/src/coordinator_ingress.rs"
+        if adapter_path.exists():
+            adapter_source = adapter_path.read_text(encoding="utf-8")
+            start = adapter_source.find("    async fn snapshot(")
+            end = adapter_source.find("    async fn execute(", start)
+            if start < 0 or end < 0 or start >= end:
+                errors.append("coordinator snapshot/execute adapter boundary missing")
+            else:
+                snapshot_body = adapter_source[start:end]
+                if ".project(" in snapshot_body or "profile_coordinator_projection_commands" in snapshot_body:
+                    errors.append(
+                        "coordinator snapshot must not write D1 projection commands or outbox events"
+                    )
+
         transport_path = root / "apps/control-plane-worker/src/profile_coordinator_ingress.rs"
         if transport_path.exists():
             transport = transport_path.read_text(encoding="utf-8")

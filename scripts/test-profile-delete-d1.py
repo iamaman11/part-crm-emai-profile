@@ -10,6 +10,7 @@ from __future__ import annotations
 import runpy
 import re
 import sqlite3
+import json
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -25,7 +26,7 @@ def expect_denied(op) -> None:
     raise AssertionError("unsafe profile deletion state transition accepted")
 
 
-def make_database() -> sqlite3.Connection:
+def make_database(*, include_lifecycle: bool = True) -> sqlite3.Connection:
     connection = BASE["open_database"]()
     BASE["apply_migrations"](connection)
     # The accepted Catalog 0001-0031 base precedes the v2 lineage.
@@ -33,10 +34,10 @@ def make_database() -> sqlite3.Connection:
     # against 0031. K2 uses the same physical 0037..0040 test schema.
     migrations = [
         path for path in sorted(SUCCESSOR.glob("[0-9][0-9][0-9][0-9]_*.sql"))
-        if 37 <= int(path.name[:4]) <= 41
+        if 37 <= int(path.name[:4]) <= 41 or (include_lifecycle and int(path.name[:4]) == 43)
     ]
     versions = [int(path.name[:4]) for path in migrations]
-    assert versions == list(range(37, 42)), versions
+    assert versions == list(range(37, 42)) + ([43] if include_lifecycle else []), versions
     for migration in migrations:
         connection.executescript(migration.read_text(encoding="utf-8"))
     BASE["seed_catalog"](connection)
@@ -299,9 +300,220 @@ def test_ready_profile_requires_all_exact_object_receipts() -> None:
         connection.close()
 
 
+
+def assign_client_for_delete(connection: sqlite3.Connection, command: str) -> str:
+    assignment = "assignment_delete_lifecycle_01"
+    connection.execute(
+        "INSERT INTO profile_assignment_commands "
+        "(tenant_id,command_id,command_actor_id,assignment_id,"
+        "profile_id,client_id,expected_profile_version,reason,executed_at_ms) "
+        "VALUES (?,?,?,?,?,?,1,'test profile assignment',35)",
+        (BASE["TENANT_A"], command, BASE["OWNER_A"], assignment,
+         BASE["PROFILE_A"], BASE["CLIENT_A"]),
+    )
+    return assignment
+
+
+def test_delete_closes_client_assignment_and_blocks_races() -> None:
+    connection = make_database()
+    try:
+        tenant, owner = BASE["TENANT_A"], BASE["OWNER_A"]
+        profile, client = BASE["PROFILE_A"], BASE["CLIENT_A"]
+        assignment = assign_client_for_delete(connection, "command_assign_delete_lifecycle_01")
+        assert connection.execute(
+            "SELECT version FROM browser_profiles WHERE tenant_id=? AND profile_id=?",
+            (tenant, profile),
+        ).fetchone()[0] == 2
+
+        begin(connection, profile, 2, 40)
+        assert tuple(connection.execute(
+            "SELECT status,version FROM browser_profiles WHERE tenant_id=? AND profile_id=?",
+            (tenant, profile),
+        ).fetchone()) == ("DELETING", 3)
+        assert connection.execute(
+            "SELECT closed_at_ms FROM profile_client_assignments "
+            "WHERE tenant_id=? AND assignment_id=?",
+            (tenant, assignment),
+        ).fetchone()[0] == 40
+
+        # Assign/Detach cannot mutate or consume a frozen profile version.
+        expect_denied(lambda: connection.execute(
+            "INSERT INTO profile_assignment_commands "
+            "(tenant_id,command_id,command_actor_id,assignment_id,profile_id,"
+            "client_id,expected_profile_version,reason,executed_at_ms) "
+            "VALUES (?,?,?,?,?,?,3,'racing assign',41)",
+            (tenant, "command_assign_race_delete_01", owner,
+             "assignment_race_delete_01", profile, client),
+        ))
+        expect_denied(lambda: connection.execute(
+            "INSERT INTO profile_assignment_commands "
+            "(tenant_id,command_id,command_actor_id,assignment_id,profile_id,"
+            "client_id,expected_profile_version,reason,executed_at_ms,operation) "
+            "VALUES (?,?,?,?,?,?,3,'racing detach',41,'DETACH')",
+            (tenant, "command_detach_race_delete_01", owner,
+             assignment, profile, client),
+        ))
+        finish(connection, profile, 3, 360100)
+        assert connection.execute(
+            "SELECT status FROM browser_profiles WHERE tenant_id=? AND profile_id=?",
+            (tenant, profile),
+        ).fetchone()[0] == "DELETED"
+        assert connection.execute(
+            "SELECT COUNT(*) FROM profile_client_assignments "
+            "WHERE tenant_id=? AND profile_id=? AND closed_at_ms IS NULL",
+            (tenant, profile),
+        ).fetchone()[0] == 0
+        assert connection.execute("PRAGMA foreign_key_check").fetchall() == []
+    finally:
+        connection.close()
+
+
+def test_completed_delete_reconciles_old_assignment_history() -> None:
+    # Simulate staging before migration 0043: the old Delete completed but
+    # left a Client detail orphan. Reconciliation must use its real completion.
+    connection = make_database(include_lifecycle=False)
+    try:
+        tenant, profile = BASE["TENANT_A"], BASE["PROFILE_A"]
+        assignment = assign_client_for_delete(connection, "command_assign_legacy_delete_01")
+        begin(connection, profile, 2, 40)
+        finish(connection, profile, 3, 360100)
+        assert connection.execute(
+            "SELECT closed_at_ms FROM profile_client_assignments "
+            "WHERE tenant_id=? AND assignment_id=?",
+            (tenant, assignment),
+        ).fetchone()[0] is None
+
+        connection.executescript(
+            (SUCCESSOR / "0043_profile_delete_assignment_lifecycle.sql")
+            .read_text(encoding="utf-8")
+        )
+        assert connection.execute(
+            "SELECT closed_at_ms FROM profile_client_assignments "
+            "WHERE tenant_id=? AND assignment_id=?",
+            (tenant, assignment),
+        ).fetchone()[0] == 360100
+        assert connection.execute("PRAGMA foreign_key_check").fetchall() == []
+    finally:
+        connection.close()
+
+
+
+def project_coordinator_for_delete(
+    connection: sqlite3.Connection, profile: str, sequence: int, status: str,
+) -> None:
+    active = status == "active"
+    projection = {
+        "tenant_id": BASE["TENANT_A"],
+        "profile_id": profile,
+        "status": status,
+        "version": sequence + 1,
+        "sequence": sequence,
+        "next_epoch": 1,
+        "active_session_id": "session_delete_stale_01" if active else None,
+        "active_device_id": "device_delete_stale_01" if active else None,
+        "active_epoch": 1 if active else None,
+        "idle_expires_at_ms": 100 if active else None,
+        "hard_expires_at_ms": 200 if active else None,
+        "drain_deadline_ms": None,
+        "pending_launch_intent_id": None,
+        "pending_intent_expires_at_ms": None,
+    }
+    outcome = ("snapshot" if sequence == 0 else
+               "timed_out" if status == "uncertain" else "recovered")
+    connection.execute(
+        "INSERT INTO profile_coordinator_projection_commands "
+        "(tenant_id,profile_id,coordinator_sequence,coordinator_version,"
+        "outbox_event_id,outcome,projection_json,projected_at_ms) "
+        "VALUES (?,?,?,?,?,?,?,?)",
+        (BASE["TENANT_A"], profile, sequence, sequence + 1,
+         f"outbox_delete_coord_{sequence}", outcome,
+         json.dumps(projection, sort_keys=True), 10 + sequence),
+    )
+
+
+def test_owner_delete_revokes_stale_lease_without_resetting_coordinator() -> None:
+    # Delete is an irreversible owner-requested CLOUD revocation, not a
+    # substitute for browser recovery. Never forge a coordinator idle event.
+    for state in ("active", "uncertain"):
+        connection = make_database()
+        try:
+            profile = BASE["PROFILE_A"]
+            project_coordinator_for_delete(connection, profile, 0, state)
+            before = connection.execute(
+                "SELECT coordinator_status,coordinator_sequence "
+                "FROM profile_coordinator_projections WHERE profile_id=?",
+                (profile,),
+            ).fetchone()
+            begin(connection, profile, 1, 360001)
+            assert tuple(connection.execute(
+                "SELECT status,version FROM browser_profiles WHERE profile_id=?",
+                (profile,),
+            ).fetchone()) == ("DELETING", 2)
+            after = connection.execute(
+                "SELECT coordinator_status,coordinator_sequence "
+                "FROM profile_coordinator_projections WHERE profile_id=?",
+                (profile,),
+            ).fetchone()
+            assert tuple(after) == tuple(before) == (state, 0)
+            # The D1 completion fence still waits for potentially signed PUTs.
+            expect_denied(lambda: finish(connection, profile, 2, 360002))
+            finish(connection, profile, 2, 720002)
+            assert connection.execute(
+                "SELECT status FROM browser_profiles WHERE profile_id=?",
+                (profile,),
+            ).fetchone()[0] == "DELETED"
+            assert connection.execute("PRAGMA foreign_key_check").fetchall() == []
+        finally:
+            connection.close()
+
+
+def test_old_launch_claim_cannot_block_owner_delete_or_spawn_new_claim() -> None:
+    connection = make_database()
+    try:
+        profile = BASE["PROFILE_A"]
+        tenant, owner = BASE["TENANT_A"], BASE["OWNER_A"]
+        def claim(key: str, when: int) -> None:
+            connection.execute(
+                "INSERT INTO profile_launch_claims "
+                "(tenant_id,actor_id,idempotency_key,payload_fingerprint,claim_digest,"
+                "profile_id,generation_id,device_id,correlation_id,audit_event_id,"
+                "issued_at_ms,expires_at_ms) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
+                (tenant, owner, key, "a" * 64,
+                 ("b" if when == 40 else "c") * 64,
+                 profile, "generation_launch_delete_test_01",
+                 "device_launch_delete_test_01", f"corr_{key}",
+                 f"audit_{key}", when, when + 300000),
+            )
+        claim("launch_delete_old_01", 40)
+        begin(connection, profile, 1, 41)
+        assert tuple(connection.execute(
+            "SELECT status,version FROM browser_profiles WHERE profile_id=?",
+            (profile,),
+        ).fetchone()) == ("DELETING", 2)
+        expect_denied(lambda: claim("launch_delete_new_01", 42))
+        assert connection.execute(
+            "SELECT COUNT(*) FROM profile_launch_claims WHERE profile_id=?",
+            (profile,),
+        ).fetchone()[0] == 1
+        # Even a late or lost-reply DELETE response cannot allow cloud
+        # content loss until every pre-existing upload PUT capability expires.
+        finish(connection, profile, 2, 360042)
+        expect_denied(lambda: claim("launch_delete_new_02", 360043))
+        assert connection.execute(
+            "SELECT status FROM browser_profiles WHERE profile_id=?",
+            (profile,),
+        ).fetchone()[0] == "DELETED"
+    finally:
+        connection.close()
+
+
 def main() -> int:
     test_draft_direct_exact_deletion()
     test_ready_profile_requires_all_exact_object_receipts()
+    test_delete_closes_client_assignment_and_blocks_races()
+    test_completed_delete_reconciles_old_assignment_history()
+    test_owner_delete_revokes_stale_lease_without_resetting_coordinator()
+    test_old_launch_claim_cannot_block_owner_delete_or_spawn_new_claim()
     print("profile DELETE D1 frozen object inventory, exact receipts, terminal status PASS")
     return 0
 
