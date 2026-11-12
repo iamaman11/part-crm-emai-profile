@@ -625,8 +625,9 @@ async fn project_alarm_outcome(
         projection.tenant_id, projection.profile_id, projection.sequence
     );
     let digest = Sha256::digest(identity.as_bytes());
-    let event_id =
-        OutboxEventId::parse(format!("outbox_alarm_{digest:x}")).map_err(identifier_error)?;
+    let digest_hex = digest.iter().map(|byte| format!("{byte:02x}")).collect::<String>();
+    let event_id = OutboxEventId::parse(format!("outbox_alarm_{digest_hex}"))
+        .map_err(identifier_error)?;
     let projected = journal
         .project(
             &scope,
