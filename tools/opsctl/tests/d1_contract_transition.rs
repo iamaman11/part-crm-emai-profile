@@ -182,14 +182,15 @@ fn actual_deployed_context_traverses_separate_sealed_contract_and_current_expand
                 history[count + 3],
                 history[count + 4],
                 history[count + 5],
-                history[count + 6]
+                history[count + 6],
+                history[count + 7]
             ])
         } else {
             json!([history[count]])
         };
         assert_eq!(native_plan["planned_migrations"], expected);
         let expected_target = if count == 35 {
-            &history[count + 6]
+            &history[count + 7]
         } else {
             &history[count]
         };
@@ -339,7 +340,7 @@ fn actual_deployed_context_traverses_separate_sealed_contract_and_current_expand
         )?;
         assert_eq!(tx.transaction_plan.phase, phase);
         let expected_transaction_target = if count == 35 {
-            &history[count + 6]
+            &history[count + 7]
         } else {
             &history[count]
         };
@@ -510,7 +511,7 @@ fn actual_deployed_context_traverses_separate_sealed_contract_and_current_expand
                 &count.to_string(),
             ],
         )?;
-        let stage_len = if count == 35 { 7 } else { 1 };
+        let stage_len = if count == 35 { 8 } else { 1 };
         for migration in &history[count..count + stage_len] {
             receipt = append_execution_event(
                 &receipt,
@@ -684,7 +685,7 @@ if count==34:
  # The first ALTER failed atomically, and the corrected SQL must retain all rows.
  assert db.execute("SELECT count(*) FROM sqlite_master WHERE name='idempotency_records_pas2_contract_legacy'").fetchone()==(0,)
  db.execute('PRAGMA case_sensitive_like=OFF')
-for i,m in enumerate(sources[count:count+(7 if count==35 else 1)],start=count):
+for i,m in enumerate(sources[count:count+(8 if count==35 else 1)],start=count):
  db.executescript((bounded/m['migration_file']).read_text())
  db.execute('INSERT INTO d1_migrations(id,name) VALUES(?,?)',(i+1,m['migration_file']))
 (scratch/'observed-ledger.json').write_text(json.dumps([r[0] for r in db.execute('SELECT name FROM d1_migrations ORDER BY id')]))

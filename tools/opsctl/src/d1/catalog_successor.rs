@@ -988,7 +988,10 @@ mod tests {
             CURRENT_COLD_RETIREMENT_REVISION
         );
         assert_eq!(sources[41]["source_root"], CURRENT_SUCCESSOR_ROOT);
-        assert_eq!(sources[42]["migration_file"], DELETE_ASSIGNMENT_LIFECYCLE_REVISION);
+        assert_eq!(
+            sources[42]["migration_file"],
+            DELETE_ASSIGNMENT_LIFECYCLE_REVISION
+        );
         assert_eq!(sources[42]["source_root"], CURRENT_SUCCESSOR_ROOT);
         assert_eq!(
             projection["executable_schema_authority"],

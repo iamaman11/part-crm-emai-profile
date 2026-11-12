@@ -259,7 +259,10 @@ fn deployed_runtime_prefix_is_context_only_and_retains_all_migration_gates()
     let plan = invoke(&target_path, &current_path)?;
     assert_eq!(plan["decision"], "CONTRACT_BLOCKED");
     assert_eq!(plan["allowed"], false);
-    assert_eq!(plan["target_revision"], DELETE_ASSIGNMENT_LIFECYCLE_REVISION);
+    assert_eq!(
+        plan["target_revision"],
+        DELETE_ASSIGNMENT_LIFECYCLE_REVISION
+    );
     assert_eq!(
         plan["planned_migrations"],
         json!([
@@ -457,7 +460,10 @@ fn frozen_epoch_and_current_projection_are_derived_from_real_sql_bytes()
         catalog_current[41]["name"],
         CURRENT_COLD_RETIREMENT_REVISION
     );
-    assert_eq!(catalog_current[42]["name"], DELETE_ASSIGNMENT_LIFECYCLE_REVISION);
+    assert_eq!(
+        catalog_current[42]["name"],
+        DELETE_ASSIGNMENT_LIFECYCLE_REVISION
+    );
     assert!(
         catalog_current
             .iter()
@@ -638,7 +644,10 @@ fn legacy_and_successor_pas2_revisions_have_distinct_governed_roles() -> Result<
         current_successor_files[10]["name"],
         CURRENT_COLD_RETIREMENT_REVISION
     );
-    assert_eq!(current_successor_files[11]["name"], DELETE_ASSIGNMENT_LIFECYCLE_REVISION);
+    assert_eq!(
+        current_successor_files[11]["name"],
+        DELETE_ASSIGNMENT_LIFECYCLE_REVISION
+    );
     assert_eq!(
         current_successor_files[0]["name"],
         BRIDGE_ENROLLMENT_REVISION
@@ -712,7 +721,10 @@ fn legacy_and_successor_pas2_revisions_have_distinct_governed_roles() -> Result<
         CURRENT_COLD_RETIREMENT_REVISION
     );
     assert_eq!(sources[41]["source_root"], "migrations/d1-successor-v2");
-    assert_eq!(sources[42]["migration_file"], DELETE_ASSIGNMENT_LIFECYCLE_REVISION);
+    assert_eq!(
+        sources[42]["migration_file"],
+        DELETE_ASSIGNMENT_LIFECYCLE_REVISION
+    );
     assert_eq!(sources[42]["source_root"], "migrations/d1-successor-v2");
     assert!(
         sources
