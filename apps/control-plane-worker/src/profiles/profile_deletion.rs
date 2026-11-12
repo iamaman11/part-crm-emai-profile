@@ -51,12 +51,24 @@ pub async fn delete_profile(
     {
         return problem(correlation, 409, "conflict", "Profile Delete Conflict");
     }
-    // HTTP only freezes the command and returns its current projection.
-    // The existing minute cron is the sole exact R2 DELETE executor: no
-    // duplicate R2 side-effect loop and no browser/process ownership.
+    // The existing cron remains the sole R2 deletion executor. For a profile
+    // with no frozen objects (including a new DRAFT), complete the SAME D1
+    // command immediately if its signed PUT reservation fence has expired.
+    // A still-valid capability rejects this D1 completion; the cron will
+    // resume after expiry. No duplicate object deletion path is introduced.
     let pending = journal
         .pending_count(actor.tenant_scope(), &profile_id)
         .await?;
+    if pending == 0
+        && journal
+            .complete(actor, &profile_id, body.expected_profile_version, now_ms())
+            .await
+            .is_err()
+    {
+        // The initial command is safely DELETING. Preserve that projection;
+        // a non-expired signed URL must not be forced into DELETED.
+        worker::console_warn!("PROFILE_DELETE_COMPLETION_PENDING");
+    }
     let complete = journal
         .status(actor.tenant_scope(), &profile_id)
         .await?
