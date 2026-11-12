@@ -2,7 +2,7 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { TenantProvider } from '../../app/TenantContext';
-import { changeGenerationActivation, dispatchBrowserProfileOpen, getCoordinator, getGeneration, getProfile } from './api';
+import { changeGenerationActivation, deleteProfile, dispatchBrowserProfileOpen, getCoordinator, getGeneration, getProfile } from './api';
 import { ProfilesWorkspace } from './ProfilesWorkspace';
 
 vi.mock('./api', () => ({
@@ -10,6 +10,7 @@ vi.mock('./api', () => ({
   changeGenerationActivation: vi.fn(),
   commandCoordinator: vi.fn(),
   createProfile: vi.fn(),
+  deleteProfile: vi.fn(),
   getCoordinator: vi.fn(),
   getGeneration: vi.fn(),
   getProfile: vi.fn(),
@@ -164,6 +165,40 @@ describe('ProfilesWorkspace generation refresh (#802 F06)', () => {
     expect(screen.queryByText('SUCCEEDED: profile_old')).toBeNull();
     expect(activation).toHaveBeenCalledTimes(1);
     expect(generationLookup).toHaveBeenCalledTimes(2); // Initial lookup + original readback, never new generation.
+  });
+
+  it('replaces a pending Delete receipt with terminal DELETED after Refresh', async () => {
+    let current: Awaited<ReturnType<typeof getProfile>> = {
+      profileId: 'profile_disposable', status: 'READY', version: 2,
+      linkedClientId: null, canOperate: true, activeGenerationId: 'generation_disposable',
+    };
+    profileLookup.mockImplementation(async () => ({ ...current }));
+    vi.mocked(deleteProfile).mockImplementation(async () => {
+      current = { ...current!, status: 'DELETING', version: 3 };
+      return { profileId: 'profile_disposable', status: 'DELETING', version: 3 }
+        as Awaited<ReturnType<typeof deleteProfile>>;
+    });
+    const cache = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    render(
+      <QueryClientProvider client={cache}>
+        <TenantProvider loadTenantContexts={async () => ({
+          tenants: [{ tenantId: 'tenant_test', displayName: 'Test tenant',
+            actorId: 'actor_test', role: 'TENANT_OWNER' }],
+        })}>
+          <ProfilesWorkspace selectedProfileId="profile_disposable" onProfileSelected={() => undefined} />
+        </TenantProvider>
+      </QueryClientProvider>,
+    );
+    await screen.findByText('profile_disposable');
+    fireEvent.click(screen.getByRole('button', { name: 'Delete profile' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Confirm Delete profile' }));
+    await screen.findByText(/Deletion is pending; the server resumes automatically/i);
+    current = { ...current!, status: 'DELETED', version: 4 };
+    fireEvent.click(screen.getByRole('button', { name: 'Refresh status' }));
+    await screen.findByText('Profile and all cloud objects deleted.');
+    expect(screen.queryByText(/Deletion is pending/)).toBeNull();
+    expect((screen.getByRole('button', { name: 'Open browser' }) as HTMLButtonElement).disabled).toBe(true);
+    expect(vi.mocked(deleteProfile)).toHaveBeenCalledTimes(1);
   });
 
   it('shows why a DELETED profile cannot be reopened without calling the Bridge', async () => {
