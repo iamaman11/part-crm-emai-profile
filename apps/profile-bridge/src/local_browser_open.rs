@@ -11,7 +11,9 @@ use std::fs::{self, OpenOptions};
 use std::io::{BufRead, BufReader, Read, Write};
 use std::path::Path;
 use std::process::{Command, Stdio};
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 const PYTHON: &str = "python/python.exe";
 const ENTRYPOINT: &str = "camouhost/real.py";
@@ -22,6 +24,7 @@ const MAX_CONFIG_BYTES: u64 = 1024 * 1024;
 const LOCAL_UNSYNCED: &str = ".local-unsynced";
 const LOCAL_UNSYNCED_CONTENT: &[u8] = b"local-unsynced-v2";
 const CAMOUHOST_LAUNCH_READY_EVENT: &str = "camouhost_stage phase=launch step=ready";
+const CAMOUHOST_NATIVE_CLOSE_EVENT: &str = "camouhost_stage phase=close step=browser_context_closed";
 const IDENTITY_ACK: &[u8] = b"camouhost-identity-persisted\n";
 
 pub(crate) type ReadyConfirmation = Box<dyn FnOnce() -> bool + Send + 'static>;
@@ -339,6 +342,13 @@ fn run_python_with_executable(
     )
 }
 
+// Official Playwright close confirmation can precede a driver teardown error.
+// The native Firefox OS file lock still has to be independently released by
+// Rust before the caller treats this as a safe post-close filesystem state.
+fn adapter_completed_after_native_close(action: &str, process_success: bool, close_seen: bool) -> bool {
+    process_success || (action == "--local-open" && close_seen)
+}
+
 fn run_python_with_input(
     executable: &Path,
     runtime_root: &Path,
@@ -357,6 +367,8 @@ fn run_python_with_input(
         .flatten();
     let health_required = health_confirmation.is_some();
     let (health_result_tx, health_result_rx) = std::sync::mpsc::channel();
+    let native_close_seen = Arc::new(AtomicBool::new(false));
+    let close_seen_by_reader = Arc::clone(&native_close_seen);
 
     let mut child = Command::new(executable)
         .arg("-B")
@@ -397,6 +409,9 @@ fn run_python_with_input(
         .ok_or(LocalOpenError::RuntimeUnavailable)?;
     let diagnostics = std::thread::spawn(move || {
         for line in BufReader::new(stderr).lines().map_while(Result::ok) {
+            if line == CAMOUHOST_NATIVE_CLOSE_EVENT {
+                close_seen_by_reader.store(true, Ordering::Release);
+            }
             // Consume only the exact SDK/Playwright context-ready milestone.
             // Option::take makes confirmation one-shot even if stderr repeats it.
             if let Some(confirmed) = observe_runtime_ready_line(&line, &mut health_confirmation) {
@@ -446,13 +461,14 @@ fn run_python_with_input(
     let status = child.wait();
     let _ = diagnostics.join();
     let completed = status.map_err(|_| LocalOpenError::RuntimeUnavailable)?;
-    if !completed.success() {
-        return Ok(false);
-    }
     if health_required && !matches!(health_result_rx.try_recv(), Ok(true)) {
         return Err(LocalOpenError::LaunchConfirmation);
     }
-    Ok(true)
+    Ok(adapter_completed_after_native_close(
+        action,
+        completed.success(),
+        native_close_seen.load(Ordering::Acquire),
+    ))
 }
 
 fn mark_local_unsynced(folder: &Path) -> Result<(), LocalOpenError> {
@@ -552,10 +568,21 @@ pub(crate) fn open_with_before_launch(
         // must still block snapshot while Firefox owns the profile.
         return Err(LocalOpenError::BrowserNotClosedCleanly);
     }
-    if !matches!(
-        crate::browser_execution::browser_writer_locks_absent(&workspace),
-        Ok(true)
-    ) {
+    // Firefox may release its last Windows parent.lock handle just after the
+    // official Playwright close event. Read the SAME OS proof a few more times
+    // rather than misreporting an already closed browser as unverified.
+    let mut native_released = false;
+    for attempt in 0..20 {
+        match crate::browser_execution::browser_writer_locks_absent(&workspace) {
+            Ok(true) => {
+                native_released = true;
+                break;
+            }
+            Ok(false) if attempt < 19 => std::thread::sleep(Duration::from_millis(50)),
+            _ => break,
+        }
+    }
+    if !native_released {
         return Err(LocalOpenError::BrowserNotClosedCleanly);
     }
     writer
@@ -625,6 +652,17 @@ mod tests {
             Err(LocalOpenError::IdentityPreparation)
         );
         Ok(())
+    }
+
+    #[test]
+    fn post_close_playwright_driver_failure_does_not_invalidate_native_close_proof() {
+        assert!(super::adapter_completed_after_native_close("--local-open", true, false));
+        // Driver teardown failed after the official BrowserContext.close event;
+        // Rust still gates cloud Sync on the native Windows Firefox file lock.
+        assert!(super::adapter_completed_after_native_close("--local-open", false, true));
+        // Launch/runtime failures without the exact native close event remain errors.
+        assert!(!super::adapter_completed_after_native_close("--local-open", false, false));
+        assert!(!super::adapter_completed_after_native_close("--other", false, true));
     }
 
     #[test]
