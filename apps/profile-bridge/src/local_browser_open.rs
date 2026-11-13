@@ -882,7 +882,10 @@ mod tests {
         let (status, adapter_stopped) =
             super::await_adapter_or_native_release(&mut child, root.path(), &ready)?;
         released.join().expect("native writer release thread");
-        assert!(adapter_stopped, "only the proven released adapter may be stopped");
+        assert!(
+            adapter_stopped,
+            "only the proven released adapter may be stopped"
+        );
         assert!(!status.success(), "the sleeping adapter was terminated");
         assert!(started.elapsed() >= Duration::from_secs(2));
         assert!(crate::browser_execution::browser_writer_locks_absent_at(
@@ -903,8 +906,14 @@ mod tests {
         let ready = AtomicBool::new(true);
         let (status, stopped) =
             super::await_adapter_or_native_release(&mut child, root.path(), &ready)?;
-        assert!(status.success(), "live writer requires natural child completion");
-        assert!(!stopped, "an active Firefox writer must never authorize stop");
+        assert!(
+            status.success(),
+            "live writer requires natural child completion"
+        );
+        assert!(
+            !stopped,
+            "an active Firefox writer must never authorize stop"
+        );
 
         let mut child = spawn_native_adapter_fixture(400)?;
         let ready = AtomicBool::new(false);
