@@ -366,6 +366,36 @@ fn native_adapter_shutdown_allowed(
         && no_writer_for.is_some_and(|elapsed| elapsed >= Duration::from_secs(2))
 }
 
+// A process exiting just before termination is a normal SDK completion,
+// not evidence that the native fallback stopped it. Failed termination of a
+// still-running adapter must never turn into a synthetic close receipt.
+#[cfg(windows)]
+fn stop_stuck_native_adapter(
+    child: &mut std::process::Child,
+) -> Result<(std::process::ExitStatus, bool), LocalOpenError> {
+    if let Some(status) = child
+        .try_wait()
+        .map_err(|_| LocalOpenError::RuntimeUnavailable)?
+    {
+        return Ok((status, false));
+    }
+    match child.kill() {
+        Ok(()) => {
+            let status = child
+                .wait()
+                .map_err(|_| LocalOpenError::RuntimeUnavailable)?;
+            Ok((status, true))
+        }
+        Err(_) => match child
+            .try_wait()
+            .map_err(|_| LocalOpenError::RuntimeUnavailable)?
+        {
+            Some(status) => Ok((status, false)),
+            None => Err(LocalOpenError::RuntimeUnavailable),
+        },
+    }
+}
+
 // Persistent BrowserContext.close may be lost when Firefox has already exited.
 // The existing OS file-lock proof determines whether native bytes are safe;
 // no browser PID, window, or Firefox close command is used. Once the verified
@@ -401,11 +431,7 @@ fn await_adapter_or_native_release(
                     ) {
                         // Firefox already released the Windows writer lock.
                         // Never terminate or close the browser process here.
-                        let _ = child.kill();
-                        let status = child
-                            .wait()
-                            .map_err(|_| LocalOpenError::RuntimeUnavailable)?;
-                        return Ok((status, true));
+                        return stop_stuck_native_adapter(child);
                     }
                 }
                 _ => released_since = None,
@@ -788,6 +814,113 @@ mod tests {
             true,
             Some(Duration::from_secs(2)),
         ));
+    }
+
+    // Exercise the actual Windows child-process boundary, not just a boolean
+    // predicate. This filtered test binary is the stand-in for a stuck Python
+    // adapter; its sleep is enabled only in a separately spawned child.
+    #[cfg(windows)]
+    #[test]
+    fn native_adapter_child_fixture() {
+        if let Ok(delay_ms) = std::env::var("PROFILE_BRIDGE_TEST_CHILD_SLEEP_MS") {
+            let delay_ms: u64 = delay_ms.parse().expect("test child delay");
+            std::thread::sleep(std::time::Duration::from_millis(delay_ms));
+        }
+    }
+
+    #[cfg(windows)]
+    fn spawn_native_adapter_fixture(
+        delay_ms: u64,
+    ) -> Result<std::process::Child, Box<dyn std::error::Error>> {
+        use std::process::{Command, Stdio};
+
+        Ok(Command::new(std::env::current_exe()?)
+            .arg("native_adapter_child_fixture")
+            .env("PROFILE_BRIDGE_TEST_CHILD_SLEEP_MS", delay_ms.to_string())
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()?)
+    }
+
+    #[cfg(windows)]
+    fn hold_native_writer_lock(
+        folder: &std::path::Path,
+    ) -> Result<std::fs::File, Box<dyn std::error::Error>> {
+        use std::fs::{self, OpenOptions};
+        use std::os::windows::fs::OpenOptionsExt;
+
+        let browser_data = folder.join("user_data");
+        fs::create_dir_all(&browser_data)?;
+        let lock = OpenOptions::new()
+            .create(true)
+            .write(true)
+            .share_mode(0)
+            .open(browser_data.join("parent.lock"))?;
+        assert!(!crate::browser_execution::browser_writer_locks_absent_at(
+            folder
+        )?);
+        Ok(lock)
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn native_adapter_release_ends_only_stuck_child_after_real_windows_lock_release()
+    -> Result<(), Box<dyn std::error::Error>> {
+        use std::sync::atomic::AtomicBool;
+        use std::time::{Duration, Instant};
+
+        let root = tempfile::tempdir()?;
+        let writer = hold_native_writer_lock(root.path())?;
+        let mut child = spawn_native_adapter_fixture(10_000)?;
+        let ready = AtomicBool::new(true);
+        let released = std::thread::spawn(move || {
+            std::thread::sleep(Duration::from_millis(500));
+            drop(writer);
+        });
+        let started = Instant::now();
+        let (status, adapter_stopped) =
+            super::await_adapter_or_native_release(&mut child, root.path(), &ready)?;
+        released.join().expect("native writer release thread");
+        assert!(adapter_stopped, "only the proven released adapter may be stopped");
+        assert!(!status.success(), "the sleeping adapter was terminated");
+        assert!(started.elapsed() >= Duration::from_secs(2));
+        assert!(crate::browser_execution::browser_writer_locks_absent_at(
+            root.path()
+        )?);
+        Ok(())
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn native_adapter_release_never_stops_child_without_complete_writer_proof()
+    -> Result<(), Box<dyn std::error::Error>> {
+        use std::sync::atomic::AtomicBool;
+
+        let root = tempfile::tempdir()?;
+        let writer = hold_native_writer_lock(root.path())?;
+        let mut child = spawn_native_adapter_fixture(400)?;
+        let ready = AtomicBool::new(true);
+        let (status, stopped) =
+            super::await_adapter_or_native_release(&mut child, root.path(), &ready)?;
+        assert!(status.success(), "live writer requires natural child completion");
+        assert!(!stopped, "an active Firefox writer must never authorize stop");
+
+        let mut child = spawn_native_adapter_fixture(400)?;
+        let ready = AtomicBool::new(false);
+        let (status, stopped) =
+            super::await_adapter_or_native_release(&mut child, root.path(), &ready)?;
+        assert!(status.success());
+        assert!(!stopped, "missing READY must not authorize stop");
+        drop(writer);
+
+        let mut child = spawn_native_adapter_fixture(400)?;
+        let ready = AtomicBool::new(true);
+        let (status, stopped) =
+            super::await_adapter_or_native_release(&mut child, root.path(), &ready)?;
+        assert!(status.success());
+        assert!(!stopped, "unobserved writer must not authorize stop");
+        Ok(())
     }
 
     #[test]
