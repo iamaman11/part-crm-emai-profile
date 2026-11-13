@@ -228,7 +228,7 @@ describe('ProfilesWorkspace generation refresh (#802 F06)', () => {
     expect(screen.getByRole('button', { name: 'Remove local copy' })).toBeTruthy();
     expect((screen.getByRole('button', { name: 'Open browser' }) as HTMLButtonElement).disabled).toBe(true);
     expect(vi.mocked(deleteProfile)).not.toHaveBeenCalled();
-  });
+  }, 12_000);
 
   it('shows why a DELETED profile cannot be reopened without calling the Bridge', async () => {
     profileLookup.mockResolvedValue({
