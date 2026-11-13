@@ -136,12 +136,6 @@ export function ProfilesWorkspace({
       try {
         const refreshed = await getProfile(variables.targetTenant, variables.targetProfile);
         setProfile((previous) => acceptProfileReadback(previous, refreshed ?? null));
-        // Best-effort native handoff after confirmed terminal D1; Chrome may
-        // restrict protocol launches after async work. Keep an explicit
-        // retry control below, rather than claim that local deletion succeeded.
-        if (refreshed?.status === 'DELETED' && activeTenant && owner) {
-          requestLocalDeletion(refreshed);
-        }
       } catch {
         // A stale local projection cannot be used as proof of deletion.
         setProfile(null);
@@ -309,7 +303,7 @@ export function ProfilesWorkspace({
   const deleteBelongsToSelection = deleteAction.variables?.targetTenant === tenantId
     && deleteAction.variables.targetProfile === profileId;
   const deletionStatus = !profile ? null
-    : profile.status === 'DELETED' ? 'Cloud profile and encrypted snapshots deleted. Local copy removal is not confirmed.'
+    : profile.status === 'DELETED' ? 'Cloud deletion confirmed. To discard the local browser copy, close Camoufox and click Remove local copy. Local removal has not been verified.'
     : profile.status === 'DELETING'
       ? 'Deletion is pending; the server resumes automatically after signed upload permissions expire.'
       : deleteBelongsToSelection && deleteAction.variables?.expectedVersion === profile.version
@@ -373,8 +367,8 @@ export function ProfilesWorkspace({
               <button type="button" onClick={() => requestLocalDeletion(profile)}>
                 Remove local copy
               </button>
-              <p>Cloud deletion is confirmed. Installed Profile Bridge independently
-                verifies DELETED and native file locks before removing local files.</p>
+              <p>Cloud deletion is confirmed. This button asks installed Profile Bridge to
+                verify DELETED and native browser locks before removing local files. The browser does not receive a completion receipt.</p>
               <StatusMessage state={localDeleteError} />
             </div>
           )}
