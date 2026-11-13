@@ -117,8 +117,8 @@ pub fn cleanup_confirmed_current(
     root: &MaterializationRoot,
     intent: &TerminalProfileDelete,
 ) -> Result<(), TerminalDeleteError> {
-    let _guard = DeliveryActivationGuard::acquire(root)
-        .map_err(|_| TerminalDeleteError::LocalBusy)?;
+    let _guard =
+        DeliveryActivationGuard::acquire(root).map_err(|_| TerminalDeleteError::LocalBusy)?;
     let workspace = match root.open_profile_current(&intent.tenant_id, &intent.profile_id) {
         Ok(value) => value,
         Err(LocalProfileError::Io(std::io::ErrorKind::NotFound)) => return Ok(()),
@@ -230,7 +230,10 @@ mod tests {
             root.create_profile_current(&intent.tenant_id, &intent.profile_id, &generation, 2)?;
         fs::create_dir(workspace.path().join("user_data"))?;
         fs::write(workspace.path().join("user_data/cookies.sqlite"), b"cookie")?;
-        fs::write(workspace.path().join(".local-unsynced"), b"local-unsynced-v2")?;
+        fs::write(
+            workspace.path().join(".local-unsynced"),
+            b"local-unsynced-v2",
+        )?;
 
         for mut refused in [response("READY", 4), response("DELETING", 5)] {
             assert_eq!(
@@ -257,16 +260,20 @@ mod tests {
         let generation = GenerationId::parse("generation_delete_test_pending")?;
         let workspace =
             root.create_profile_current(&intent.tenant_id, &intent.profile_id, &generation, 2)?;
-        let unrelated =
-            root.create_profile_current(&intent.tenant_id, &other, &generation, 2)?;
+        let unrelated = root.create_profile_current(&intent.tenant_id, &other, &generation, 2)?;
         fs::create_dir(workspace.path().join("user_data"))?;
-        fs::write(workspace.path().join("user_data/cookies.sqlite"), b"discard")?;
+        fs::write(
+            workspace.path().join("user_data/cookies.sqlite"),
+            b"discard",
+        )?;
         fs::write(unrelated.path().join("keep.txt"), b"keep")?;
         let candidate = GenerationId::parse("generation_delete_pending_successor")?;
-        let pending = PendingSyncDescriptor::new(
-            candidate, [0x11; 32], [0x22; 32], 4096, [0x33; 32], 7,
-        )?;
-        let marked = root.set_profile_current_pending_sync(&workspace, pending)?;
+        let pending =
+            PendingSyncDescriptor::new(candidate, [0x11; 32], [0x22; 32], 4096, [0x33; 32], 7)?;
+        // An N+1 candidate is valid only after the local folder has a cloud
+        // base. Test the real READY successor path rather than a DRAFT.
+        let ready = root.update_profile_current_sync_base(&workspace, &generation, 2)?;
+        let marked = root.set_profile_current_pending_sync(&ready, pending)?;
         assert!(marked.pending_sync().is_some());
         fs::write(marked.path().join(".local-unsynced"), b"local-unsynced-v2")?;
         confirm_terminal_delete(&intent, &mut response("DELETED", 5))?;
@@ -313,7 +320,10 @@ mod tests {
         fs::create_dir(&browser_data)?;
         let cookies = browser_data.join("cookies.sqlite");
         fs::write(&cookies, b"native-data-must-survive")?;
-        fs::write(workspace.path().join(".local-unsynced"), b"local-unsynced-v2")?;
+        fs::write(
+            workspace.path().join(".local-unsynced"),
+            b"local-unsynced-v2",
+        )?;
         let parent_lock = browser_data.join("parent.lock");
         fs::write(&parent_lock, b"firefox-writer")?;
         let firefox_handle = fs::OpenOptions::new()

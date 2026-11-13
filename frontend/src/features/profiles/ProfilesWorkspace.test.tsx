@@ -2,7 +2,7 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { TenantProvider } from '../../app/TenantContext';
-import { changeGenerationActivation, deleteProfile, dispatchBrowserProfileOpen, getCoordinator, getGeneration, getProfile } from './api';
+import { changeGenerationActivation, deleteProfile, dispatchBrowserProfileDelete, dispatchBrowserProfileOpen, getCoordinator, getGeneration, getProfile } from './api';
 import { ProfilesWorkspace } from './ProfilesWorkspace';
 
 vi.mock('./api', () => ({
@@ -26,6 +26,9 @@ const generationLookup = vi.mocked(getGeneration);
 const coordinatorLookup = vi.mocked(getCoordinator);
 const activation = vi.mocked(changeGenerationActivation);
 const localOpen = vi.mocked(dispatchBrowserProfileOpen);
+const localDelete = vi.mocked(dispatchBrowserProfileDelete);
+const terminalDeletedText =
+  'Cloud deletion confirmed. To discard the local browser copy, close Camoufox and click Remove local copy. Local removal has not been verified.';
 
 describe('ProfilesWorkspace generation refresh (#802 F06)', () => {
   it('opens with the authenticated tenant and selected local profile without a Worker launch request', async () => {
@@ -196,7 +199,7 @@ describe('ProfilesWorkspace generation refresh (#802 F06)', () => {
     await screen.findByText(/Deletion is pending; the server resumes automatically/i);
     current = { ...current!, status: 'DELETED', version: 4 };
     fireEvent.click(screen.getByRole('button', { name: 'Refresh status' }));
-    await screen.findByText('Cloud profile and encrypted snapshots deleted. Local copy removal is not confirmed.');
+    await screen.findByText(terminalDeletedText);
     expect(screen.queryByText(/Deletion is pending/)).toBeNull();
     expect((screen.getByRole('button', { name: 'Open browser' }) as HTMLButtonElement).disabled).toBe(true);
     expect(vi.mocked(deleteProfile)).toHaveBeenCalledTimes(1);
@@ -221,13 +224,20 @@ describe('ProfilesWorkspace generation refresh (#802 F06)', () => {
     await screen.findByText(/Deletion is pending; the server resumes automatically/i);
     current = { ...current!, status: 'DELETED', version: 4 };
     await screen.findByText(
-      'Cloud profile and encrypted snapshots deleted. Local copy removal is not confirmed.',
+      terminalDeletedText,
       {},
       { timeout: 7500 },
     );
     expect(screen.getByRole('button', { name: 'Remove local copy' })).toBeTruthy();
     expect((screen.getByRole('button', { name: 'Open browser' }) as HTMLButtonElement).disabled).toBe(true);
     expect(vi.mocked(deleteProfile)).not.toHaveBeenCalled();
+    // The async cloud poll must not launch a native protocol outside a
+    // trusted click. The explicit terminal action does, once.
+    expect(localDelete).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole('button', { name: 'Remove local copy' }));
+    expect(localDelete).toHaveBeenCalledWith(
+      'tenant_test', 'actor_test', 'profile_pending', 4,
+    );
   }, 12_000);
 
   it('never replaces a terminal DELETED projection with an older same-profile Refresh', async () => {
@@ -264,10 +274,10 @@ describe('ProfilesWorkspace generation refresh (#802 F06)', () => {
     await waitFor(() => expect(profileLookup).toHaveBeenCalledTimes(2));
     fireEvent.click(screen.getByRole('button', { name: 'Delete profile' }));
     fireEvent.click(screen.getByRole('button', { name: 'Confirm Delete profile' }));
-    await screen.findByText('Cloud profile and encrypted snapshots deleted. Local copy removal is not confirmed.');
+    await screen.findByText(terminalDeletedText);
     resolveOld(ready);
     await act(async () => { await Promise.resolve(); });
-    expect(screen.getByText('Cloud profile and encrypted snapshots deleted. Local copy removal is not confirmed.')).toBeTruthy();
+    expect(screen.getByText(terminalDeletedText)).toBeTruthy();
     expect((screen.getByRole('button', { name: 'Open browser' }) as HTMLButtonElement).disabled).toBe(true);
     expect(vi.mocked(deleteProfile)).toHaveBeenCalledTimes(1);
   });
