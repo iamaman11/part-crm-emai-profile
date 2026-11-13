@@ -91,6 +91,7 @@ impl InitialProfileOpen {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum InitialProfileError {
     Authorization,
+    LeaseConflict,
     RuntimeBundle,
     Runtime,
     Snapshot,
@@ -104,6 +105,7 @@ impl core::fmt::Display for InitialProfileError {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         f.write_str(match self {
             Self::Authorization => "profile Sync authorization was not confirmed",
+            Self::LeaseConflict => "confirmed Coordinator lease conflict; local unsynced browser data preserved",
             Self::RuntimeBundle | Self::Runtime => "installed runtime is unavailable",
             Self::Snapshot => "closed local snapshot could not be verified",
             Self::Encryption => "generation encryption could not be verified",
@@ -131,9 +133,18 @@ fn post<T: MachineHttpPort>(
         SEQUENCE.fetch_add(1, Ordering::Relaxed)
     ))
     .map_err(|_| InitialProfileError::Authorization)?;
-    transport
+    let response = transport
         .request(MachineHttpMethod::PostJson, path, &id, Some(&body))
-        .map_err(|_| InitialProfileError::Authorization)
+        .map_err(|_| InitialProfileError::Authorization)?;
+    // Only the existing bounded, correlated 409 parser can prove a durable
+    // coordinator conflict. Unknown 409 and transport errors remain unconfirmed.
+    if response.status() == 409
+        && crate::shipping_control_plane::safe_machine_problem_code(&response, &id)
+            == Some("lease_conflict")
+    {
+        return Err(InitialProfileError::LeaseConflict);
+    }
+    Ok(response)
 }
 fn decode<D: serde::de::DeserializeOwned>(
     response: MachineHttpResponse,
@@ -1573,6 +1584,68 @@ mod tests {
             Err(InitialProfileError::Authorization)
         );
         assert_eq!(draft.calls, 1);
+        Ok(())
+    }
+
+    #[test]
+    fn ready_reauthorization_distinguishes_verified_lease_conflict_from_unknown_409()
+    -> Result<(), Box<dyn std::error::Error>> {
+        use profile_platform_primitives::TenantScope;
+
+        struct Refusal {
+            correlated: bool,
+        }
+        impl MachineHttpPort for Refusal {
+            type Error = ();
+            fn request(
+                &mut self,
+                method: MachineHttpMethod,
+                path: &str,
+                correlation_id: &CorrelationId,
+                body: Option<&[u8]>,
+            ) -> Result<MachineHttpResponse, ()> {
+                assert_eq!(method, MachineHttpMethod::PostJson);
+                assert!(path.ends_with("/generation-initialization"));
+                assert!(body.is_some());
+                let payload = control_plane_contract::public_api::ProblemPayload {
+                    problem_type: "urn:part-crm:problem:lease-conflict".to_owned(),
+                    title: "Lease Conflict".to_owned(),
+                    status: 409,
+                    code: "lease_conflict".to_owned(),
+                    correlation_id: if self.correlated {
+                        correlation_id.as_str().to_owned()
+                    } else {
+                        "corr_foreign_request".to_owned()
+                    },
+                };
+                Ok(MachineHttpResponse::new(
+                    409,
+                    serde_json::to_vec(&payload).map_err(|_| ())?,
+                ))
+            }
+        }
+
+        let intent = InitialProfileOpen::parse(
+            "profilebridge://open/v2/tenant_123/actor_123/profile_123/1/READY",
+        )?;
+        let actor = ActorContext::new(
+            TenantScope::new(intent.tenant_id.clone()),
+            ActorId::parse("actor_123")?,
+            CorrelationId::parse("corr_retry_conflict")?,
+        );
+        let device = DeviceId::parse("device_123")?;
+        assert_eq!(
+            reauthorize_current_ready_generation(
+                &intent, &actor, &device, &mut Refusal { correlated: true }
+            ),
+            Err(InitialProfileError::LeaseConflict)
+        );
+        assert_eq!(
+            reauthorize_current_ready_generation(
+                &intent, &actor, &device, &mut Refusal { correlated: false }
+            ),
+            Err(InitialProfileError::Authorization)
+        );
         Ok(())
     }
 

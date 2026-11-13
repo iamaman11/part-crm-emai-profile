@@ -24,6 +24,7 @@ pub enum ShippingCompositionError {
     /// Cloud CURRENT recovery was required but not proven. Local bytes untouched.
     RestoreUnavailable,
     SyncUnconfirmed,
+    SyncLeaseConflict,
     LocalDelete(crate::local_profile_delete::TerminalDeleteError),
     #[cfg(windows)]
     DeliveryRuntime(crate::windows_delivery_runtime::WindowsDeliveryRuntimeError),
@@ -59,6 +60,7 @@ impl core::fmt::Display for ShippingCompositionError {
                 "Verified cloud CURRENT could not be restored; local profile was not opened or overwritten"
             }
             Self::SyncUnconfirmed => "Native Close succeeded; cloud Sync not confirmed",
+            Self::SyncLeaseConflict => "Coordinator lease conflict: original local unsynced data preserved; explicit recovery required",
             Self::LocalDelete(error) => return core::fmt::Display::fmt(error, formatter),
             #[cfg(windows)]
             Self::DeliveryRuntime(error) => return core::fmt::Display::fmt(error, formatter),
@@ -339,12 +341,24 @@ mod windows {
             && current.container_bytes() == pending.container_bytes()
     }
 
+    #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+    enum ClosedReadySyncError {
+        Unconfirmed,
+        LeaseConflict,
+    }
+
+    impl From<()> for ClosedReadySyncError {
+        fn from(_: ()) -> Self {
+            Self::Unconfirmed
+        }
+    }
+
     fn sync_closed_ready(
         intent: &crate::generation_initialization::InitialProfileOpen,
         binding: &WindowsDeviceApplicationBinding,
         root: &MaterializationRoot,
         origin: &str,
-    ) -> Result<(), ()> {
+    ) -> Result<(), ClosedReadySyncError> {
         use crate::browser_execution::browser_writer_locks_absent;
         use crate::local_profile::BridgeWorkspaceLock;
         use std::fs;
@@ -380,7 +394,11 @@ mod windows {
                 let unlocked = guard.release().map_err(|_| ());
                 let unchanged = applied?;
                 unlocked?;
-                return if unchanged { Ok(()) } else { Err(()) };
+                return if unchanged {
+                    Ok(())
+                } else {
+                    Err(ClosedReadySyncError::Unconfirmed)
+                };
             }
             if !pending.is_committed()
                 && workspace
@@ -412,7 +430,7 @@ mod windows {
                     .open_profile_current(&intent.tenant_id, &intent.profile_id)
                     .map_err(|_| ())?;
             } else {
-                return Err(());
+                return Err(ClosedReadySyncError::Unconfirmed);
             }
         }
         let Some(base) = workspace.base_generation_id().cloned() else {
@@ -424,7 +442,7 @@ mod windows {
                 || fs::read(workspace.path().join(".local-unsynced")).map_err(|_| ())?
                     != b"local-unsynced-v2"
             {
-                return Err(());
+                return Err(ClosedReadySyncError::Unconfirmed);
             }
             let application =
                 WindowsDeviceApplication::from_system(origin.to_owned(), binding.clone())
@@ -435,7 +453,7 @@ mod windows {
                 .download_capability(&intent.tenant_id, &intent.profile_id)
                 .map_err(|_| ())?;
             if confirmed.generation_id() != workspace.generation_id() {
-                return Err(());
+                return Err(ClosedReadySyncError::Unconfirmed);
             }
             let reader = WindowsSignedGenerationObjectGet::from_system().map_err(|_| ())?;
             let mut downloader = VerifiedGenerationObjectStreamDownloader::new(reader);
@@ -450,13 +468,13 @@ mod windows {
                 &mut control,
                 &mut downloader,
             )
-            .map_err(|_| ());
+            .map_err(|_| ClosedReadySyncError::Unconfirmed);
         };
         if workspace.profile_version() != intent.expected_version
             || fs::read(workspace.path().join(".local-unsynced")).map_err(|_| ())?
                 != b"local-unsynced-v2"
         {
-            return Err(());
+            return Err(ClosedReadySyncError::Unconfirmed);
         }
         let device = binding.device_id();
         // Retry diagnostics only: identify a native snapshot attempt without
@@ -517,10 +535,10 @@ mod windows {
                 &mut read_only,
                 &mut downloader,
             )
-            .map_err(|_| ());
+            .map_err(|_| ClosedReadySyncError::Unconfirmed);
         }
         if current.generation_id() != &base {
-            return Err(());
+            return Err(ClosedReadySyncError::Unconfirmed);
         }
 
         let application = WindowsDeviceApplication::from_system(origin.to_owned(), binding.clone())
@@ -534,7 +552,12 @@ mod windows {
         );
         // Sync-only fresh Coordinator witness. Native Open uses no lease.
         let claim = reauthorize_current_ready_generation(intent, &actor, device, &mut transport)
-            .map_err(|_| ())?;
+            .map_err(|error| match error {
+                crate::generation_initialization::InitialProfileError::LeaseConflict => {
+                    ClosedReadySyncError::LeaseConflict
+                }
+                _ => ClosedReadySyncError::Unconfirmed,
+            })?;
         let mut enrollment = ControlPlaneEnrollment::new(transport.clone());
         let enrolled = enrollment
             .redeem_claim(&claim, device, now().map_err(|_| ())?)
@@ -544,7 +567,7 @@ mod windows {
             || enrolled.profile_id() != &intent.profile_id
             || enrolled.generation_id() != &base
         {
-            return Err(());
+            return Err(ClosedReadySyncError::Unconfirmed);
         }
         let mut coordinator =
             SharedControlPlaneCoordinator::new(ControlPlaneCoordinator::new(transport.clone()));
@@ -555,7 +578,10 @@ mod windows {
                 device,
                 enrolled.launch_intent_id(),
             )
-            .map_err(|_| ())?;
+            .map_err(|error| match error {
+                ShippingControlPlaneError::LaunchLeaseConflict => ClosedReadySyncError::LeaseConflict,
+                _ => ClosedReadySyncError::Unconfirmed,
+            })?;
         let heartbeat = RetainedSaveHeartbeat::start(coordinator.clone(), lease.clone());
         let outcome = (|| {
             let mut sealer = coordinator.clone();
@@ -638,7 +664,7 @@ mod windows {
         }
         let (committed, pending) = outcome?;
         if &committed != pending.candidate_generation_id() {
-            return Err(());
+            return Err(ClosedReadySyncError::Unconfirmed);
         }
 
         // The exact encrypted descriptor was durably checkpointed before
@@ -666,7 +692,7 @@ mod windows {
         let unchanged = applied?;
         unlocked?;
         if !unchanged {
-            return Err(());
+            return Err(ClosedReadySyncError::Unconfirmed);
         }
         Ok(())
     }
@@ -680,8 +706,10 @@ mod windows {
         origin: &str,
     ) -> Result<(), ShippingCompositionError> {
         if intent.status == InitialProfileStatus::Ready {
-            sync_closed_ready(intent, binding, root, origin)
-                .map_err(|_| ShippingCompositionError::SyncUnconfirmed)
+            sync_closed_ready(intent, binding, root, origin).map_err(|error| match error {
+                ClosedReadySyncError::LeaseConflict => ShippingCompositionError::SyncLeaseConflict,
+                ClosedReadySyncError::Unconfirmed => ShippingCompositionError::SyncUnconfirmed,
+            })
         } else {
             let application =
                 WindowsDeviceApplication::from_system(origin.to_owned(), binding.clone())
@@ -705,6 +733,9 @@ mod windows {
             ) {
                 Ok(()) => Ok(()),
                 Err(error) => {
+                    if error == crate::generation_initialization::InitialProfileError::LeaseConflict {
+                        return Err(ShippingCompositionError::SyncLeaseConflict);
+                    }
                     // The first exact D1 Commit may have succeeded while its
                     // HTTP reply was lost. ONLY a verified server-selected
                     // CURRENT matching the original local native bytes may
@@ -715,8 +746,10 @@ mod windows {
                         .expected_version
                         .checked_add(1)
                         .ok_or(ShippingCompositionError::Initialization(error))?;
-                    sync_closed_ready(&proof, binding, root, origin)
-                        .map_err(|_| ShippingCompositionError::Initialization(error))
+                    sync_closed_ready(&proof, binding, root, origin).map_err(|recovery| match recovery {
+                        ClosedReadySyncError::LeaseConflict => ShippingCompositionError::SyncLeaseConflict,
+                        ClosedReadySyncError::Unconfirmed => ShippingCompositionError::Initialization(error),
+                    })
                 }
             }
         }
@@ -963,6 +996,16 @@ mod windows {
             }
             let outcome =
                 sync_after_native_close(&effective, &binding, &root, &config.control_plane_origin);
+            if matches!(outcome, Err(ShippingCompositionError::SyncLeaseConflict)) {
+                report::record_current(
+                    Stage::RecoveryRequired,
+                    Outcome::Unconfirmed,
+                    Cloud::NotConfirmed,
+                    Cause::CoordinatorLeaseConflict,
+                    0,
+                );
+                return outcome;
+            }
             if outcome.is_err() {
                 // A long-lived retry must not look like an indefinitely silent
                 // operation. Reuse bounded typed diagnostics, never a retry log
