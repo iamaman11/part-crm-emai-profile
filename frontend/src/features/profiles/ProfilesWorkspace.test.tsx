@@ -230,6 +230,48 @@ describe('ProfilesWorkspace generation refresh (#802 F06)', () => {
     expect(vi.mocked(deleteProfile)).not.toHaveBeenCalled();
   }, 12_000);
 
+  it('never replaces a terminal DELETED projection with an older same-profile Refresh', async () => {
+    let resolveOld: (value: Awaited<ReturnType<typeof getProfile>>) => void = () => undefined;
+    const oldRead = new Promise<Awaited<ReturnType<typeof getProfile>>>((resolve) => {
+      resolveOld = resolve;
+    });
+    const ready = { profileId: 'profile_same', status: 'READY', version: 2,
+      linkedClientId: null, canOperate: true } as Awaited<ReturnType<typeof getProfile>>;
+    const deleted = { ...ready, status: 'DELETED', version: 4,
+      canOperate: false } as Awaited<ReturnType<typeof getProfile>>;
+    let requests = 0;
+    profileLookup.mockImplementation(async () => {
+      requests += 1;
+      if (requests === 1) return ready;
+      if (requests === 2) return oldRead;
+      return deleted;
+    });
+    vi.mocked(deleteProfile).mockResolvedValue({
+      profileId: 'profile_same', status: 'DELETED', pendingObjects: 0,
+    } as Awaited<ReturnType<typeof deleteProfile>>);
+    const cache = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    render(
+      <QueryClientProvider client={cache}>
+        <TenantProvider loadTenantContexts={async () => ({
+          tenants: [{ tenantId: 'tenant_test', displayName: 'Test tenant', actorId: 'actor_test', role: 'TENANT_OWNER' }],
+        })}>
+          <ProfilesWorkspace selectedProfileId="profile_same" onProfileSelected={() => undefined} />
+        </TenantProvider>
+      </QueryClientProvider>,
+    );
+    await screen.findByText('profile_same');
+    fireEvent.click(screen.getByRole('button', { name: 'Refresh status' }));
+    await waitFor(() => expect(profileLookup).toHaveBeenCalledTimes(2));
+    fireEvent.click(screen.getByRole('button', { name: 'Delete profile' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Confirm Delete profile' }));
+    await screen.findByText('Cloud profile and encrypted snapshots deleted. Local copy removal is not confirmed.');
+    resolveOld(ready);
+    await act(async () => { await Promise.resolve(); });
+    expect(screen.getByText('Cloud profile and encrypted snapshots deleted. Local copy removal is not confirmed.')).toBeTruthy();
+    expect((screen.getByRole('button', { name: 'Open browser' }) as HTMLButtonElement).disabled).toBe(true);
+    expect(vi.mocked(deleteProfile)).toHaveBeenCalledTimes(1);
+  });
+
   it('shows why a DELETED profile cannot be reopened without calling the Bridge', async () => {
     profileLookup.mockResolvedValue({
       profileId: 'profile_deleted', status: 'DELETED', version: 3,

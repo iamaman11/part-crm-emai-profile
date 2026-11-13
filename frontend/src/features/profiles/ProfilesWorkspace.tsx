@@ -40,6 +40,19 @@ interface GrantDraft {
   expectedProfileVersion: number;
 }
 
+// Projection reads can finish out of order for the same selected profile.
+// Keep the last authoritative version; terminal DELETED must not resurrect Open.
+function acceptProfileReadback(
+  previous: ProfileProjection | null,
+  latest: ProfileProjection | null,
+): ProfileProjection | null {
+  if (!previous || !latest || previous.profileId !== latest.profileId) return latest;
+  if (latest.version < previous.version || (previous.status === 'DELETED' && latest.status !== 'DELETED')) {
+    return previous;
+  }
+  return latest;
+}
+
 export function ProfilesWorkspace({
   selectedProfileId = null,
   onProfileSelected,
@@ -99,7 +112,9 @@ export function ProfilesWorkspace({
       // Late readback for the previous profile/tenant must never replace the
       // newly selected profile, even if the previous request succeeded.
       if (selected.current.tenantId === target.tenantId
-        && selected.current.profileId === target.profileId) setProfile(data ?? null);
+        && selected.current.profileId === target.profileId) {
+        setProfile((previous) => acceptProfileReadback(previous, data ?? null));
+      }
     },
   });
   const create = useLogicalCommandMutation((id: string, idempotencyKey) => createProfile(tenantId, id, idempotencyKey), {
@@ -120,7 +135,7 @@ export function ProfilesWorkspace({
         || selected.current.profileId !== variables.targetProfile) return;
       try {
         const refreshed = await getProfile(variables.targetTenant, variables.targetProfile);
-        setProfile(refreshed ?? null);
+        setProfile((previous) => acceptProfileReadback(previous, refreshed ?? null));
         // Best-effort native handoff after confirmed terminal D1; Chrome may
         // restrict protocol launches after async work. Keep an explicit
         // retry control below, rather than claim that local deletion succeeded.
@@ -260,10 +275,7 @@ export function ProfilesWorkspace({
           if (!cancelled && latest?.profileId === profileId
             && selected.current.tenantId === tenantId
             && selected.current.profileId === profileId) {
-            setProfile((previous) => {
-              if (!previous || previous.profileId !== profileId || latest.version < previous.version) return previous;
-              return latest.version > previous.version || latest.status !== previous.status ? latest : previous;
-            });
+            setProfile((previous) => acceptProfileReadback(previous, latest));
           }
         } catch {
           // Keep the last confirmed projection; normal Refresh remains usable.
