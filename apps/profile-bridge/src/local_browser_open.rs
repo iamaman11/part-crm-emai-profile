@@ -897,13 +897,12 @@ mod tests {
             drop(writer);
         });
         let started = Instant::now();
-        let (status, adapter_stopped) =
-            super::await_adapter_or_native_release(
-                &mut child,
-                root.path(),
-                &ready,
-                Duration::from_secs(30),
-            )?;
+        let (status, adapter_stopped) = super::await_adapter_or_native_release(
+            &mut child,
+            root.path(),
+            &ready,
+            Duration::from_secs(30),
+        )?;
         released.join().expect("native writer release thread");
         assert!(
             adapter_stopped,
@@ -928,13 +927,12 @@ mod tests {
         let writer = hold_native_writer_lock(root.path())?;
         let mut child = spawn_native_adapter_fixture(400)?;
         let ready = AtomicBool::new(true);
-        let (status, stopped) =
-            super::await_adapter_or_native_release(
-                &mut child,
-                root.path(),
-                &ready,
-                Duration::from_secs(30),
-            )?;
+        let (status, stopped) = super::await_adapter_or_native_release(
+            &mut child,
+            root.path(),
+            &ready,
+            Duration::from_secs(30),
+        )?;
         assert!(
             status.success(),
             "live writer requires natural child completion"
@@ -946,26 +944,24 @@ mod tests {
 
         let mut child = spawn_native_adapter_fixture(400)?;
         let ready = AtomicBool::new(false);
-        let (status, stopped) =
-            super::await_adapter_or_native_release(
-                &mut child,
-                root.path(),
-                &ready,
-                Duration::from_secs(30),
-            )?;
+        let (status, stopped) = super::await_adapter_or_native_release(
+            &mut child,
+            root.path(),
+            &ready,
+            Duration::from_secs(30),
+        )?;
         assert!(status.success());
         assert!(!stopped, "missing READY must not authorize stop");
         drop(writer);
 
         let mut child = spawn_native_adapter_fixture(400)?;
         let ready = AtomicBool::new(true);
-        let (status, stopped) =
-            super::await_adapter_or_native_release(
-                &mut child,
-                root.path(),
-                &ready,
-                Duration::from_secs(30),
-            )?;
+        let (status, stopped) = super::await_adapter_or_native_release(
+            &mut child,
+            root.path(),
+            &ready,
+            Duration::from_secs(30),
+        )?;
         assert!(status.success());
         assert!(!stopped, "unobserved writer must not authorize stop");
         Ok(())
@@ -997,7 +993,10 @@ mod tests {
             }
             child.wait()?;
             assert_eq!(outcome, Err(LocalOpenError::LaunchConfirmation));
-            assert!(still_running, "unknown browser state must not terminate child");
+            assert!(
+                still_running,
+                "unknown browser state must not terminate child"
+            );
             assert!(started.elapsed() < Duration::from_secs(3));
         }
         Ok(())
