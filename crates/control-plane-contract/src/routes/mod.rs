@@ -82,7 +82,19 @@ fn bridge_profile_coordinator_route(method: &str, path: &str) -> bool {
     matches!(
         segments.as_slice(),
         ["bridge", "v1", "tenants", _, "profiles", _, "coordinator"]
-    )
+    ) || (method == "GET"
+        && matches!(
+            segments.as_slice(),
+            [
+                "bridge",
+                "v1",
+                "tenants",
+                _,
+                "profiles",
+                _,
+                "delete-readback"
+            ]
+        ))
 }
 
 #[must_use]
@@ -189,6 +201,19 @@ mod tests {
         ] {
             assert_eq!(classify(method, invalid), RouteClass::BridgeDeniedByDefault);
         }
+    }
+
+    #[test]
+    fn only_machine_delete_readback_get_is_routed() {
+        let path = "/bridge/v1/tenants/tenant_01/profiles/profile_01/delete-readback";
+        assert_eq!(classify("GET", path), RouteClass::ProfileCoordinatorApi);
+        for method in ["POST", "DELETE", "PUT"] {
+            assert_eq!(classify(method, path), RouteClass::BridgeDeniedByDefault);
+        }
+        assert_eq!(
+            classify("GET", &(path.to_owned() + "/extra")),
+            RouteClass::BridgeDeniedByDefault
+        );
     }
 
     #[test]

@@ -422,6 +422,17 @@ impl UserDiagnostic {
                     }
                 }
                 ShippingCompositionError::SyncUnconfirmed => "BRIDGE_CLOUD_SYNC_UNCONFIRMED",
+                ShippingCompositionError::LocalDelete(error) => match error {
+                    crate::local_profile_delete::TerminalDeleteError::AuthorizationUnconfirmed => {
+                        "BRIDGE_LOCAL_DELETE_CLOUD_UNCONFIRMED"
+                    }
+                    crate::local_profile_delete::TerminalDeleteError::LocalBusyOrDirty => {
+                        "BRIDGE_LOCAL_DELETE_BROWSER_BUSY"
+                    }
+                    crate::local_profile_delete::TerminalDeleteError::LocalFilesystem => {
+                        "BRIDGE_LOCAL_DELETE_FAILED"
+                    }
+                },
                 ShippingCompositionError::Operator(error) => operator_code(error),
                 ShippingCompositionError::ActiveSessionMissing => "BRIDGE_ACTIVE_SESSION_MISSING",
                 ShippingCompositionError::CloseObservation(_) => "BRIDGE_CLOSE_OBSERVATION_FAILED",
@@ -871,6 +882,14 @@ impl UserDiagnostic {
             Self::Launch(Launch::CommittedRecoveryRequired) => {
                 "The new profile state was confirmed by the server, but local cleanup needs recovery. Return to the application to review the session. Keep local profile files."
             }
+            Self::Launch(Launch::LocalDelete(error)) => match error {
+                crate::local_profile_delete::TerminalDeleteError::AuthorizationUnconfirmed =>
+                    "Cloud DELETED was not confirmed by this connected Windows device. Local browser data was preserved. Refresh the Profile status and retry local cleanup.",
+                crate::local_profile_delete::TerminalDeleteError::LocalBusyOrDirty =>
+                    "Local profile files are still open or contain unsynced changes. Close Camoufox and retry local cleanup. Existing data was preserved.",
+                crate::local_profile_delete::TerminalDeleteError::LocalFilesystem =>
+                    "Local profile cleanup failed safely. Cloud objects may already be deleted; check installed Profile Bridge diagnostics before retrying.",
+            },
             Self::Launch(Launch::SyncUnconfirmed) => {
                 "The browser closed locally and its files are intact, but cloud synchronization is not confirmed. Local pending-sync evidence was retained for a later exact retry."
             }

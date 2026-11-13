@@ -8,6 +8,7 @@ use profile_bridge::device_pairing::{
 };
 use profile_bridge::generation_initialization::{INITIAL_OPEN_URI_PREFIX, InitialProfileOpen};
 use profile_bridge::installed_connection::ControlPlaneOrigin;
+use profile_bridge::local_profile_delete::{TERMINAL_DELETE_URI_PREFIX, TerminalProfileDelete};
 use profile_bridge::shipping_composition::run_closed_profile_sync;
 use profile_bridge::shipping_composition::{
     ShippingCompositionError, ShippingDeliveryCommand, run_delivery_command,
@@ -72,6 +73,7 @@ where
         }
         BridgeCommand::InitialProfile(_) => Stage::OpenRequested,
         BridgeCommand::SyncClosed(_) => Stage::CloudSaveAttempt,
+        BridgeCommand::TerminalDelete(_) => Stage::LocalDelete,
         BridgeCommand::PairingStart(_) | BridgeCommand::PairingComplete(_) => Stage::Pairing,
         BridgeCommand::DeliveryActivateStaged => Stage::InstallActivate,
         BridgeCommand::DeliveryInstallStaged(_) | BridgeCommand::DeliveryHandoffArrived => {
@@ -141,6 +143,10 @@ where
         }
         BridgeCommand::SyncClosed(intent) => {
             run_closed_profile_sync(&intent).map_err(BridgeCliError::LaunchFailed)
+        }
+        BridgeCommand::TerminalDelete(intent) => {
+            profile_bridge::shipping_composition::run_terminal_profile_delete(&intent)
+                .map_err(BridgeCliError::LaunchFailed)
         }
         BridgeCommand::PairingStart(uri) => {
             run_pairing_start(&uri).map_err(BridgeCliError::PairingFailed)
@@ -234,6 +240,7 @@ enum BridgeCommand {
     ReadOnlyS1(PathBuf, PathBuf, Option<PathBuf>),
     InitialProfile(InitialProfileOpen),
     SyncClosed(InitialProfileOpen),
+    TerminalDelete(TerminalProfileDelete),
     PairingStart(DevicePairingStartUri),
     PairingComplete(DevicePairingCompleteUri),
     DeliveryActivateStaged,
@@ -325,6 +332,11 @@ where
         value if value.starts_with(INITIAL_OPEN_URI_PREFIX) => InitialProfileOpen::parse(value)
             .map(BridgeCommand::InitialProfile)
             .map_err(|_| BridgeCliError::InvalidClaimUri),
+        value if value.starts_with(TERMINAL_DELETE_URI_PREFIX) => {
+            TerminalProfileDelete::parse(value)
+                .map(BridgeCommand::TerminalDelete)
+                .map_err(|_| BridgeCliError::InvalidClaimUri)
+        }
         value if value.starts_with(PAIRING_START_URI_PREFIX) => DevicePairingStartUri::parse(value)
             .map(BridgeCommand::PairingStart)
             .map_err(|_| BridgeCliError::InvalidPairingUri),
@@ -427,6 +439,23 @@ mod tests {
             ])
             .is_err()
         );
+    }
+
+    #[test]
+    fn terminal_delete_uri_is_one_bounded_native_command_not_open() {
+        assert!(matches!(
+            parse_command([
+                "profile-bridge".to_owned(),
+                "profilebridge://delete/v1/tenant_delete_test_01/actor_delete_test_01/profile_delete_test_01/4".to_owned(),
+            ]),
+            Ok(BridgeCommand::TerminalDelete(_))
+        ));
+        for uri in [
+            "profilebridge://delete/v1/tenant_delete_test_01/actor_delete_test_01/profile_delete_test_01/4/extra",
+            "profilebridge://delete/v1/tenant_delete_test_01/actor_delete_test_01/profile_delete_test_01/0",
+        ] {
+            assert!(parse_command(["profile-bridge".to_owned(), uri.to_owned()]).is_err());
+        }
     }
 
     #[test]

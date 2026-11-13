@@ -2,14 +2,16 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { TenantProvider } from '../../app/TenantContext';
-import { changeGenerationActivation, dispatchBrowserProfileOpen, getCoordinator, getGeneration, getProfile } from './api';
+import { changeGenerationActivation, deleteProfile, dispatchBrowserProfileOpen, getCoordinator, getGeneration, getProfile } from './api';
 import { ProfilesWorkspace } from './ProfilesWorkspace';
 
 vi.mock('./api', () => ({
   dispatchBrowserProfileOpen: vi.fn(),
+  dispatchBrowserProfileDelete: vi.fn(),
   changeGenerationActivation: vi.fn(),
   commandCoordinator: vi.fn(),
   createProfile: vi.fn(),
+  deleteProfile: vi.fn(),
   getCoordinator: vi.fn(),
   getGeneration: vi.fn(),
   getProfile: vi.fn(),
@@ -164,6 +166,110 @@ describe('ProfilesWorkspace generation refresh (#802 F06)', () => {
     expect(screen.queryByText('SUCCEEDED: profile_old')).toBeNull();
     expect(activation).toHaveBeenCalledTimes(1);
     expect(generationLookup).toHaveBeenCalledTimes(2); // Initial lookup + original readback, never new generation.
+  });
+
+  it('replaces a pending Delete receipt with terminal DELETED after Refresh', async () => {
+    let current: Awaited<ReturnType<typeof getProfile>> = {
+      profileId: 'profile_disposable', status: 'READY', version: 2,
+      linkedClientId: null, canOperate: true,
+    };
+    profileLookup.mockImplementation(async () => ({ ...current! }));
+    vi.mocked(deleteProfile).mockImplementation(async () => {
+      current = { ...current!, status: 'DELETING', version: 3 };
+      return { profileId: 'profile_disposable', status: 'DELETING',
+        pendingObjects: 0 } as Awaited<ReturnType<typeof deleteProfile>>;
+    });
+    const cache = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    render(
+      <QueryClientProvider client={cache}>
+        <TenantProvider loadTenantContexts={async () => ({
+          tenants: [{ tenantId: 'tenant_test', displayName: 'Test tenant',
+            actorId: 'actor_test', role: 'TENANT_OWNER' }],
+        })}>
+          <ProfilesWorkspace selectedProfileId="profile_disposable" onProfileSelected={() => undefined} />
+        </TenantProvider>
+      </QueryClientProvider>,
+    );
+    await screen.findByText('profile_disposable');
+    fireEvent.click(screen.getByRole('button', { name: 'Delete profile' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Confirm Delete profile' }));
+    await screen.findByText(/Deletion is pending; the server resumes automatically/i);
+    current = { ...current!, status: 'DELETED', version: 4 };
+    fireEvent.click(screen.getByRole('button', { name: 'Refresh status' }));
+    await screen.findByText('Cloud profile and encrypted snapshots deleted. Local copy removal is not confirmed.');
+    expect(screen.queryByText(/Deletion is pending/)).toBeNull();
+    expect((screen.getByRole('button', { name: 'Open browser' }) as HTMLButtonElement).disabled).toBe(true);
+    expect(vi.mocked(deleteProfile)).toHaveBeenCalledTimes(1);
+  });
+
+  it('automatically reads terminal DELETED without replaying the cloud Delete command', async () => {
+    let current: Awaited<ReturnType<typeof getProfile>> = {
+      profileId: 'profile_pending', status: 'DELETING', version: 3,
+      linkedClientId: null, canOperate: false,
+    };
+    profileLookup.mockImplementation(async () => ({ ...current! }));
+    const cache = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    render(
+      <QueryClientProvider client={cache}>
+        <TenantProvider loadTenantContexts={async () => ({
+          tenants: [{ tenantId: 'tenant_test', displayName: 'Test tenant', actorId: 'actor_test', role: 'TENANT_OWNER' }],
+        })}>
+          <ProfilesWorkspace selectedProfileId="profile_pending" onProfileSelected={() => undefined} />
+        </TenantProvider>
+      </QueryClientProvider>,
+    );
+    await screen.findByText(/Deletion is pending; the server resumes automatically/i);
+    current = { ...current!, status: 'DELETED', version: 4 };
+    await screen.findByText(
+      'Cloud profile and encrypted snapshots deleted. Local copy removal is not confirmed.',
+      {},
+      { timeout: 7500 },
+    );
+    expect(screen.getByRole('button', { name: 'Remove local copy' })).toBeTruthy();
+    expect((screen.getByRole('button', { name: 'Open browser' }) as HTMLButtonElement).disabled).toBe(true);
+    expect(vi.mocked(deleteProfile)).not.toHaveBeenCalled();
+  }, 12_000);
+
+  it('never replaces a terminal DELETED projection with an older same-profile Refresh', async () => {
+    let resolveOld: (value: Awaited<ReturnType<typeof getProfile>>) => void = () => undefined;
+    const oldRead = new Promise<Awaited<ReturnType<typeof getProfile>>>((resolve) => {
+      resolveOld = resolve;
+    });
+    const ready = { profileId: 'profile_same', status: 'READY', version: 2,
+      linkedClientId: null, canOperate: true } as Awaited<ReturnType<typeof getProfile>>;
+    const deleted = { ...ready, status: 'DELETED', version: 4,
+      canOperate: false } as Awaited<ReturnType<typeof getProfile>>;
+    let requests = 0;
+    profileLookup.mockImplementation(async () => {
+      requests += 1;
+      if (requests === 1) return ready;
+      if (requests === 2) return oldRead;
+      return deleted;
+    });
+    vi.mocked(deleteProfile).mockResolvedValue({
+      profileId: 'profile_same', status: 'DELETED', pendingObjects: 0,
+    } as Awaited<ReturnType<typeof deleteProfile>>);
+    const cache = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    render(
+      <QueryClientProvider client={cache}>
+        <TenantProvider loadTenantContexts={async () => ({
+          tenants: [{ tenantId: 'tenant_test', displayName: 'Test tenant', actorId: 'actor_test', role: 'TENANT_OWNER' }],
+        })}>
+          <ProfilesWorkspace selectedProfileId="profile_same" onProfileSelected={() => undefined} />
+        </TenantProvider>
+      </QueryClientProvider>,
+    );
+    await screen.findByText('profile_same');
+    fireEvent.click(screen.getByRole('button', { name: 'Refresh status' }));
+    await waitFor(() => expect(profileLookup).toHaveBeenCalledTimes(2));
+    fireEvent.click(screen.getByRole('button', { name: 'Delete profile' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Confirm Delete profile' }));
+    await screen.findByText('Cloud profile and encrypted snapshots deleted. Local copy removal is not confirmed.');
+    resolveOld(ready);
+    await act(async () => { await Promise.resolve(); });
+    expect(screen.getByText('Cloud profile and encrypted snapshots deleted. Local copy removal is not confirmed.')).toBeTruthy();
+    expect((screen.getByRole('button', { name: 'Open browser' }) as HTMLButtonElement).disabled).toBe(true);
+    expect(vi.mocked(deleteProfile)).toHaveBeenCalledTimes(1);
   });
 
   it('shows why a DELETED profile cannot be reopened without calling the Bridge', async () => {

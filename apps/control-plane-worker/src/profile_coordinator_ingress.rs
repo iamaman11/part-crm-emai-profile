@@ -15,6 +15,7 @@ use control_plane_contract::coordinator_api::{
     CoordinatorProjectionDto, CoordinatorReleaseDispositionDto, CoordinatorResponseDto,
     CoordinatorStatusDto,
 };
+use control_plane_contract::profile_generation_api::BRIDGE_PROFILE_DELETE_READBACK_PATH_TEMPLATE;
 use control_plane_contract::{D1_CATALOG_BINDING, PROFILE_COORDINATOR_BINDING};
 use identity_access_domain::MembershipRole;
 use profile_platform_primitives::{
@@ -114,6 +115,29 @@ async fn dispatch_bridge(
         Ok(None) => return neutral_not_found(actor.correlation_id().as_str()),
         Err(error) => return membership_failure(actor.correlation_id().as_str(), error.class()),
     };
+
+    // This is the existing profile projection owner, served only through the
+    // authenticated device-proof ingress. Never accept a browser's Delete
+    // receipt as authorization to erase native Firefox files.
+    let terminal_path = BRIDGE_PROFILE_DELETE_READBACK_PATH_TEMPLATE
+        .replace("{tenantId}", tenant_value)
+        .replace("{profileId}", profile_value);
+    if request.method() == Method::Get && request.path() == terminal_path {
+        if role != MembershipRole::TenantOwner {
+            return neutral_not_found(actor.correlation_id().as_str());
+        }
+        let application = crate::composition::profile_application(env)?;
+        let confirmed =
+            use_cases::profiles::get_visible_profile(&actor, role, &application, &profile_id).await;
+        return match confirmed {
+            Ok(profile)
+                if profile.status() == application_ports::profiles::ProfileStatus::Deleted =>
+            {
+                Response::from_json(&crate::profiles::profile_projection(&profile, false))
+            }
+            _ => neutral_not_found(actor.correlation_id().as_str()),
+        };
+    }
 
     execute_authorized(
         request,

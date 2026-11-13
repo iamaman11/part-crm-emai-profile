@@ -14,6 +14,10 @@ pub const PROFILE_STATUSES: [&str; 9] = [
 ];
 pub const PROFILE_GRANT_ROLES: [&str; 2] = ["PROFILE_VIEWER", "PROFILE_OPERATOR"];
 pub const GENERATION_STATUSES: [&str; 3] = ["REGISTERED", "VERIFIED", "QUARANTINED"];
+/// A P-256 machine-authenticated, read-only terminal D1 receipt for the
+/// existing ProfileBridge local file owner; never a browser-supplied delete grant.
+pub const BRIDGE_PROFILE_DELETE_READBACK_PATH_TEMPLATE: &str =
+    "/bridge/v1/tenants/{tenantId}/profiles/{profileId}/delete-readback";
 pub const BRIDGE_PROFILE_GENERATION_UPLOAD_CAPABILITY_PATH_TEMPLATE: &str =
     "/bridge/v1/tenants/{tenantId}/profiles/{profileId}/generation-successor/upload-capability";
 pub const BRIDGE_PROFILE_GENERATION_COMMIT_PATH_TEMPLATE: &str =

@@ -1,4 +1,6 @@
-import { invokeProfileBridgeLaunch, localProfileOpenUri } from './launchBridge';
+import {
+  invokeProfileBridgeLaunch, localProfileOpenUri, invokeProfileBridgeDeletion, localProfileDeleteUri,
+} from './launchBridge';
 import {
   activateProfileGeneration as activateProfileGenerationOperation,
   assignProfileToClient as assignProfileToClientOperation,
@@ -232,4 +234,13 @@ export function dispatchBrowserProfileOpen(
   invokeProfileBridgeLaunch(
     localProfileOpenUri(tenantId, actorId, profileId, expectedVersion, status),
   );
+}
+
+/** Local deletion is an explicit installed Bridge effect. Cloud DELETE/terminal
+ * projection is a prerequisite, never delegated to the browser.
+ */
+export function dispatchBrowserProfileDelete(
+  tenantId: string, actorId: string, profileId: string, terminalVersion: number,
+): void {
+  invokeProfileBridgeDeletion(localProfileDeleteUri(tenantId, actorId, profileId, terminalVersion));
 }

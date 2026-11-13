@@ -1,4 +1,4 @@
-import { dispatchBrowserProfileOpen } from './api';
+import { dispatchBrowserProfileDelete, dispatchBrowserProfileOpen } from './api';
 import { newIdempotencyKey } from '../../shared/api/idempotency';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { useEffect, useRef, useState, type FormEvent } from 'react';
@@ -40,6 +40,19 @@ interface GrantDraft {
   expectedProfileVersion: number;
 }
 
+// Projection reads can finish out of order for the same selected profile.
+// Keep the last authoritative version; terminal DELETED must not resurrect Open.
+function acceptProfileReadback(
+  previous: ProfileProjection | null,
+  latest: ProfileProjection | null,
+): ProfileProjection | null {
+  if (!previous || !latest || previous.profileId !== latest.profileId) return latest;
+  if (latest.version < previous.version || (previous.status === 'DELETED' && latest.status !== 'DELETED')) {
+    return previous;
+  }
+  return latest;
+}
+
 export function ProfilesWorkspace({
   selectedProfileId = null,
   onProfileSelected,
@@ -61,6 +74,19 @@ export function ProfilesWorkspace({
   selected.current = { tenantId, profileId, generationId };
 
   const [openError, setOpenError] = useState<Error | null>(null);
+  const [localDeleteError, setLocalDeleteError] = useState<Error | null>(null);
+  const requestLocalDeletion = (terminal: ProfileProjection) => {
+    if (!owner || !activeTenant || terminal.status !== 'DELETED'
+      || terminal.profileId !== profileId) return;
+    try {
+      setLocalDeleteError(null);
+      dispatchBrowserProfileDelete(
+        tenantId, activeTenant.actorId, terminal.profileId, terminal.version,
+      );
+    } catch {
+      setLocalDeleteError(new Error('Installed Profile Bridge did not accept local cleanup.'));
+    }
+  };
   const openSelectedProfile = () => {
     // Native protocol dispatch must stay synchronous in the actual user
     // click. No ReactQuery mutation, background prefetch or Worker launch.
@@ -86,7 +112,9 @@ export function ProfilesWorkspace({
       // Late readback for the previous profile/tenant must never replace the
       // newly selected profile, even if the previous request succeeded.
       if (selected.current.tenantId === target.tenantId
-        && selected.current.profileId === target.profileId) setProfile(data ?? null);
+        && selected.current.profileId === target.profileId) {
+        setProfile((previous) => acceptProfileReadback(previous, data ?? null));
+      }
     },
   });
   const create = useLogicalCommandMutation((id: string, idempotencyKey) => createProfile(tenantId, id, idempotencyKey), {
@@ -107,7 +135,13 @@ export function ProfilesWorkspace({
         || selected.current.profileId !== variables.targetProfile) return;
       try {
         const refreshed = await getProfile(variables.targetTenant, variables.targetProfile);
-        setProfile(refreshed ?? null);
+        setProfile((previous) => acceptProfileReadback(previous, refreshed ?? null));
+        // Best-effort native handoff after confirmed terminal D1; Chrome may
+        // restrict protocol launches after async work. Keep an explicit
+        // retry control below, rather than claim that local deletion succeeded.
+        if (refreshed?.status === 'DELETED' && activeTenant && owner) {
+          requestLocalDeletion(refreshed);
+        }
       } catch {
         // A stale local projection cannot be used as proof of deletion.
         setProfile(null);
@@ -227,6 +261,35 @@ export function ProfilesWorkspace({
     };
   }, [tenantId, selectedProfileId, cache]);
 
+  useEffect(() => {
+    // Only a confirmed DELETING projection needs periodic readback. The existing
+    // Worker remains the sole Delete owner; never replay its mutation or launch
+    // the native protocol from an asynchronous browser callback.
+    if (!tenantId || !profileId || profile?.status !== 'DELETING' || profile.profileId !== profileId) return;
+    let cancelled = false;
+    let timer: ReturnType<typeof setTimeout>;
+    const refreshPendingDelete = async () => {
+      if (globalThis.document.visibilityState === 'visible') {
+        try {
+          const latest = await getProfile(tenantId, profileId);
+          if (!cancelled && latest?.profileId === profileId
+            && selected.current.tenantId === tenantId
+            && selected.current.profileId === profileId) {
+            setProfile((previous) => acceptProfileReadback(previous, latest));
+          }
+        } catch {
+          // Keep the last confirmed projection; normal Refresh remains usable.
+        }
+      }
+      if (!cancelled) timer = globalThis.setTimeout(() => { void refreshPendingDelete(); }, 5000);
+    };
+    timer = globalThis.setTimeout(() => { void refreshPendingDelete(); }, 5000);
+    return () => {
+      cancelled = true;
+      globalThis.clearTimeout(timer);
+    };
+  }, [tenantId, profileId, profile?.status, profile?.version]);
+
   const enabled = tenantId.length > 0;
   // Explain an existing projection directly. Never query Worker merely to
   // decide whether a local Open button can be enabled.
@@ -240,6 +303,18 @@ export function ProfilesWorkspace({
     : generationAction.isPending ? 'The profile generation is being updated. Wait for the result.'
     : generationRefreshUnconfirmed ? 'The latest profile version is not confirmed. Refresh status.'
     : null;
+  // A mutation receipt is historical; the last confirmed Profile projection is
+  // the only authority for a terminal Delete. Do not leave DELETING on-screen
+  // after a later Refresh observes DELETED (or reuse another profile's error).
+  const deleteBelongsToSelection = deleteAction.variables?.targetTenant === tenantId
+    && deleteAction.variables.targetProfile === profileId;
+  const deletionStatus = !profile ? null
+    : profile.status === 'DELETED' ? 'Cloud profile and encrypted snapshots deleted. Local copy removal is not confirmed.'
+    : profile.status === 'DELETING'
+      ? 'Deletion is pending; the server resumes automatically after signed upload permissions expire.'
+      : deleteBelongsToSelection && deleteAction.variables?.expectedVersion === profile.version
+        ? deleteAction.error
+        : null;
   const profileLoaded = enabled && profileId.length > 0 && profile !== null;
   const actionTarget = generationAction.variables?.input.target;
   const actionBelongsToSelection = actionTarget?.tenantId === tenantId
@@ -292,13 +367,16 @@ export function ProfilesWorkspace({
           </div>
           {openUnavailableReason && <p id="profile-open-status" role="status">{openUnavailableReason}</p>}
           <StatusMessage state={openError} />
-          <StatusMessage state={deleteAction.error ?? (deleteAction.data
-            ? deleteAction.data.status === 'DELETED'
-              ? 'Profile and all cloud objects deleted.'
-              : 'Deletion is pending; the server resumes automatically after signed upload permissions expire. Refresh for status.'
-            : null)} />
-          {profile.status === 'DELETING' && (
-            <p>Deletion is in progress. The server continues automatically; use Refresh status to check the result.</p>
+          <StatusMessage state={deletionStatus} />
+          {owner && profile.status === 'DELETED' && (
+            <div>
+              <button type="button" onClick={() => requestLocalDeletion(profile)}>
+                Remove local copy
+              </button>
+              <p>Cloud deletion is confirmed. Installed Profile Bridge independently
+                verifies DELETED and native file locks before removing local files.</p>
+              <StatusMessage state={localDeleteError} />
+            </div>
           )}
         </>}
         {profile && (

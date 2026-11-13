@@ -24,6 +24,7 @@ pub enum ShippingCompositionError {
     /// Cloud CURRENT recovery was required but not proven. Local bytes untouched.
     RestoreUnavailable,
     SyncUnconfirmed,
+    LocalDelete(crate::local_profile_delete::TerminalDeleteError),
     #[cfg(windows)]
     DeliveryRuntime(crate::windows_delivery_runtime::WindowsDeliveryRuntimeError),
     // Diagnostic-only historical outcomes; the v2 Open/Sync path cannot construct them.
@@ -58,6 +59,7 @@ impl core::fmt::Display for ShippingCompositionError {
                 "Verified cloud CURRENT could not be restored; local profile was not opened or overwritten"
             }
             Self::SyncUnconfirmed => "Native Close succeeded; cloud Sync not confirmed",
+            Self::LocalDelete(error) => return core::fmt::Display::fmt(error, formatter),
             #[cfg(windows)]
             Self::DeliveryRuntime(error) => return core::fmt::Display::fmt(error, formatter),
             Self::Operator(_) => "retired Profile Bridge operator outcome",
@@ -96,6 +98,22 @@ pub fn run_closed_profile_sync(
     #[cfg(windows)]
     {
         windows::run_closed_sync(intent)
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = intent;
+        Err(ShippingCompositionError::UnsupportedPlatform)
+    }
+}
+
+/// Only an authenticated terminal D1 readback permits the existing file owner
+/// to remove exact closed local CURRENT. No background GC or second process.
+pub fn run_terminal_profile_delete(
+    intent: &crate::local_profile_delete::TerminalProfileDelete,
+) -> Result<(), ShippingCompositionError> {
+    #[cfg(windows)]
+    {
+        windows::run_terminal_delete(intent)
     }
     #[cfg(not(windows))]
     {
@@ -146,6 +164,7 @@ mod windows {
     };
     use crate::shipping_control_plane::{MachineHttpMethod, MachineHttpPort, SyncEnrollmentPort};
     use crate::shipping_generation_successor_control::publish_closed_streamed_successor;
+    use crate::user_diagnostics::report::{self, Cause, Cloud, Outcome, Stage};
     use crate::windows_delivery_handoff::{
         DeliveryHandoffCoordinator, DeliveryHandoffRestartDisposition,
     };
@@ -163,7 +182,7 @@ mod windows {
     use std::sync::atomic::{AtomicBool, Ordering};
     use std::sync::{Arc, mpsc};
     use std::thread;
-    use std::time::{Duration, SystemTime, UNIX_EPOCH};
+    use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
     const NETWORK_POLICY_PATH_ENV: &str = "PROFILE_BRIDGE_NETWORK_POLICY_PATH";
     const PROXY_CONFIG_PATH_ENV: &str = "PROFILE_BRIDGE_PROXY_CONFIG_PATH";
@@ -295,6 +314,21 @@ mod windows {
     ///
     /// This does not launch Camoufox, clone Firefox into a generation folder,
     /// introduce a daemon or replace the stable local current path.
+    // Diagnostics only: duration cannot authorize an upload, a retry or a Delete.
+    // No source paths, browser state or secrets ever enter the observation.
+    fn observe_sync_phase(stage: Stage, started: Instant) {
+        let millis = u64::try_from(started.elapsed().as_millis())
+            .unwrap_or(u64::MAX)
+            .min(86_400_000);
+        report::record_current(
+            stage,
+            Outcome::Succeeded,
+            Cloud::Unknown,
+            Cause::None,
+            millis,
+        );
+    }
+
     fn pending_descriptor_matches_current(
         pending: &PendingSyncDescriptor,
         current: &crate::generation_reopen::GenerationDownloadCapability,
@@ -425,6 +459,7 @@ mod windows {
             return Err(());
         }
         let device = binding.device_id();
+        let snapshot_started = Instant::now();
         let lock = BridgeWorkspaceLock::acquire_or_recover_interrupted(
             &workspace,
             device,
@@ -443,6 +478,7 @@ mod windows {
         let unlock = lock.release().map_err(|_| ());
         let (original_inventory, plaintext_bytes, digest) = captured?;
         unlock?;
+        observe_sync_phase(Stage::SyncSnapshot, snapshot_started);
         let candidate =
             closed_current_candidate_id(&intent.tenant_id, &intent.profile_id, &base, digest)
                 .map_err(|_| ())?;
@@ -525,6 +561,7 @@ mod windows {
                 .map_err(|_| ())?;
             // Network/key service does not hold the local admission. Only the
             // ORIGINAL closed folder is read for the streaming BPGC seal.
+            let seal_started = Instant::now();
             let lock = BridgeWorkspaceLock::acquire_or_recover_interrupted(
                 &workspace,
                 device,
@@ -561,9 +598,11 @@ mod windows {
             let unlock = lock.release().map_err(|_| ());
             let (encrypted, pending) = encrypted?;
             unlock?;
+            observe_sync_phase(Stage::SyncSeal, seal_started);
             if !heartbeat.is_healthy() {
                 return Err(());
             }
+            let publish_started = Instant::now();
             let mut upload = WindowsSignedGenerationObjectPut::from_system().map_err(|_| ())?;
             publish_closed_streamed_successor(
                 &intent.tenant_id,
@@ -576,6 +615,7 @@ mod windows {
                 &mut upload,
             )
             .map_err(|_| ())?;
+            observe_sync_phase(Stage::SyncPublish, publish_started);
             if !heartbeat.is_healthy() {
                 return Err(());
             }
@@ -704,6 +744,7 @@ mod windows {
         let Some(current) = latest.base_generation_id() else {
             return Ok(false);
         };
+        let cold_started = Instant::now();
         let cold = (|| {
             let reader_app =
                 WindowsDeviceApplication::from_system(origin.to_owned(), binding.clone())
@@ -767,7 +808,57 @@ mod windows {
                 .and_then(serde_json::Value::as_bool);
             Ok(admitted)
         })();
-        cold.and_then(|admitted| admitted.ok_or(()))
+        let confirmed = cold.and_then(|admitted| admitted.ok_or(()));
+        if confirmed.is_ok() {
+            observe_sync_phase(Stage::SyncColdProof, cold_started);
+        }
+        confirmed
+    }
+
+    pub fn run_terminal_delete(
+        intent: &crate::local_profile_delete::TerminalProfileDelete,
+    ) -> Result<(), ShippingCompositionError> {
+        let config = ShippingConfig::from_installation()?;
+        let binding =
+            WindowsDeviceApplicationBinding::open(&config.device_application_binding_path)
+                .map_err(|_| ShippingCompositionError::Configuration)?;
+        if binding.tenant_id() != &intent.tenant_id || binding.actor_id() != &intent.actor_id {
+            return Err(ShippingCompositionError::LocalDelete(
+                crate::local_profile_delete::TerminalDeleteError::AuthorizationUnconfirmed,
+            ));
+        }
+        let application =
+            WindowsDeviceApplication::from_system(config.control_plane_origin, binding).map_err(
+                |_| {
+                    ShippingCompositionError::LocalDelete(
+                        crate::local_profile_delete::TerminalDeleteError::AuthorizationUnconfirmed,
+                    )
+                },
+            )?;
+        let mut transport = application.transport();
+        crate::local_profile_delete::confirm_terminal_delete(intent, &mut transport)
+            .map_err(ShippingCompositionError::LocalDelete)?;
+        let root =
+            MaterializationRoot::open_or_create(&config.materialization_root).map_err(|_| {
+                ShippingCompositionError::LocalDelete(
+                    crate::local_profile_delete::TerminalDeleteError::LocalFilesystem,
+                )
+            })?;
+        crate::local_profile_delete::cleanup_confirmed_current(&root, intent)
+            .map_err(ShippingCompositionError::LocalDelete)
+    }
+
+    /// The first DRAFT -> VERIFIED CURRENT commit has no predecessor R2 key.
+    /// Do not download/materialize the brand-new CURRENT just to request
+    /// retirement of an object which cannot exist. Subsequent READY Saves
+    /// retain the full independent cold-Restore proof before retirement.
+    fn first_draft_commit_has_no_predecessor(
+        original_status: InitialProfileStatus,
+        opened_version: u64,
+        saved_version: u64,
+    ) -> bool {
+        original_status == InitialProfileStatus::Draft
+            && opened_version.checked_add(1) == Some(saved_version)
     }
 
     pub fn run_closed_sync(
@@ -798,6 +889,14 @@ mod windows {
                 Err(ref error) if error.kind() == std::io::ErrorKind::NotFound
             ) && workspace.pending_sync().is_none()
             {
+                if first_draft_commit_has_no_predecessor(
+                    intent.status,
+                    intent.expected_version,
+                    workspace.profile_version(),
+                ) {
+                    eprintln!("BRIDGE_COLD_CURRENT_RETIREMENT=NOT_APPLICABLE_FIRST_DRAFT");
+                    return Ok(());
+                }
                 match try_admit_confirmed_current_retirement(
                     intent,
                     &binding,
@@ -909,6 +1008,41 @@ mod windows {
                     "BRIDGE_SYNC_INLINE_FALLBACK_PENDING;error={error:?};NEXT_SAFE_STEP=PRESERVE_LOCAL_BYTES"
                 );
             }
+        }
+    }
+
+    #[cfg(test)]
+    mod first_draft_retirement_tests {
+        use super::first_draft_commit_has_no_predecessor;
+        use crate::generation_initialization::InitialProfileStatus;
+
+        #[test]
+        fn only_first_verified_draft_current_skips_unnecessary_cold_retirement() {
+            assert!(first_draft_commit_has_no_predecessor(
+                InitialProfileStatus::Draft,
+                1,
+                2
+            ));
+            assert!(first_draft_commit_has_no_predecessor(
+                InitialProfileStatus::Draft,
+                5,
+                6
+            ));
+            assert!(!first_draft_commit_has_no_predecessor(
+                InitialProfileStatus::Ready,
+                1,
+                2
+            ));
+            assert!(!first_draft_commit_has_no_predecessor(
+                InitialProfileStatus::Draft,
+                1,
+                3
+            ));
+            assert!(!first_draft_commit_has_no_predecessor(
+                InitialProfileStatus::Draft,
+                u64::MAX,
+                0
+            ));
         }
     }
 
