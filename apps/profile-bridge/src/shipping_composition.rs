@@ -795,12 +795,6 @@ mod windows {
                     .map_err(|_| ())?;
             let mut control =
                 ControlPlaneCoordinator::for_local_current_restore(application.transport());
-            let selected = control
-                .download_capability(&intent.tenant_id, &intent.profile_id)
-                .map_err(|_| ())?;
-            if selected.generation_id() != &generation {
-                return Err(());
-            }
             let reader = WindowsSignedGenerationObjectGet::from_system().map_err(|_| ())?;
             let mut downloader = VerifiedGenerationObjectStreamDownloader::new(reader);
             let (native_digest, metadata_prelude) = prove_cold_current_restore(
