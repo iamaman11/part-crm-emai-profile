@@ -246,6 +246,38 @@ export function ProfilesWorkspace({
     };
   }, [tenantId, selectedProfileId, cache]);
 
+  useEffect(() => {
+    // Only a confirmed DELETING projection needs periodic readback. The existing
+    // Worker remains the sole Delete owner; never replay its mutation or launch
+    // the native protocol from an asynchronous browser callback.
+    if (!tenantId || !profileId || profile?.status !== 'DELETING' || profile.profileId !== profileId) return;
+    let cancelled = false;
+    let timer: ReturnType<typeof setTimeout>;
+    const refreshPendingDelete = async () => {
+      if (globalThis.document.visibilityState === 'visible') {
+        try {
+          const latest = await getProfile(tenantId, profileId);
+          if (!cancelled && latest?.profileId === profileId
+            && selected.current.tenantId === tenantId
+            && selected.current.profileId === profileId) {
+            setProfile((previous) => {
+              if (!previous || previous.profileId !== profileId || latest.version < previous.version) return previous;
+              return latest.version > previous.version || latest.status !== previous.status ? latest : previous;
+            });
+          }
+        } catch {
+          // Keep the last confirmed projection; normal Refresh remains usable.
+        }
+      }
+      if (!cancelled) timer = globalThis.setTimeout(() => { void refreshPendingDelete(); }, 5000);
+    };
+    timer = globalThis.setTimeout(() => { void refreshPendingDelete(); }, 5000);
+    return () => {
+      cancelled = true;
+      globalThis.clearTimeout(timer);
+    };
+  }, [tenantId, profileId, profile?.status, profile?.version]);
+
   const enabled = tenantId.length > 0;
   // Explain an existing projection directly. Never query Worker merely to
   // decide whether a local Open button can be enabled.

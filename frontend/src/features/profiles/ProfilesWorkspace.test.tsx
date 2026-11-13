@@ -202,6 +202,34 @@ describe('ProfilesWorkspace generation refresh (#802 F06)', () => {
     expect(vi.mocked(deleteProfile)).toHaveBeenCalledTimes(1);
   });
 
+  it('automatically reads terminal DELETED without replaying the cloud Delete command', async () => {
+    let current: Awaited<ReturnType<typeof getProfile>> = {
+      profileId: 'profile_pending', status: 'DELETING', version: 3,
+      linkedClientId: null, canOperate: false, activeGenerationId: null,
+    };
+    profileLookup.mockImplementation(async () => ({ ...current! }));
+    const cache = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    render(
+      <QueryClientProvider client={cache}>
+        <TenantProvider loadTenantContexts={async () => ({
+          tenants: [{ tenantId: 'tenant_test', displayName: 'Test tenant', actorId: 'actor_test', role: 'TENANT_OWNER' }],
+        })}>
+          <ProfilesWorkspace selectedProfileId="profile_pending" onProfileSelected={() => undefined} />
+        </TenantProvider>
+      </QueryClientProvider>,
+    );
+    await screen.findByText(/Deletion is pending; the server resumes automatically/i);
+    current = { ...current!, status: 'DELETED', version: 4 };
+    await screen.findByText(
+      'Cloud profile and encrypted snapshots deleted. Local copy removal is not confirmed.',
+      {},
+      { timeout: 7500 },
+    );
+    expect(screen.getByRole('button', { name: 'Remove local copy' })).toBeTruthy();
+    expect((screen.getByRole('button', { name: 'Open browser' }) as HTMLButtonElement).disabled).toBe(true);
+    expect(vi.mocked(deleteProfile)).not.toHaveBeenCalled();
+  });
+
   it('shows why a DELETED profile cannot be reopened without calling the Bridge', async () => {
     profileLookup.mockResolvedValue({
       profileId: 'profile_deleted', status: 'DELETED', version: 3,
