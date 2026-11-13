@@ -906,9 +906,9 @@ mod windows {
                     Err(ref error) if error.kind() == std::io::ErrorKind::NotFound
                 ) && latest.pending_sync().is_none()
                 {
-                    // The cloud Save is complete. The same loop re-enters its
-                    // clean branch for the read-only CURRENT Restore proof;
-                    // never seal or upload again merely to retry retirement.
+                    // The exact cloud Save and local clean marker are complete.
+                    // Re-enter the clean branch and return without a redundant
+                    // cold Restore GET, a second seal, or predecessor retirement.
                     continue;
                 }
             }
