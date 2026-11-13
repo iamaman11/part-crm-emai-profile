@@ -355,7 +355,6 @@ fn adapter_completed_after_native_close(
     process_success || (action == "--local-open" && close_seen)
 }
 
-
 #[cfg(windows)]
 fn native_adapter_shutdown_allowed(
     browser_ready: bool,
@@ -774,7 +773,7 @@ mod tests {
     #[cfg(windows)]
     #[test]
     fn native_adapter_release_requires_ready_writer_and_stable_absence() {
-        use super::native_adapter_shutdown_allowed;
+        use super::{Duration, native_adapter_shutdown_allowed};
         let quiet = Some(Duration::from_secs(3));
         assert!(!native_adapter_shutdown_allowed(false, true, quiet));
         assert!(!native_adapter_shutdown_allowed(true, false, quiet));

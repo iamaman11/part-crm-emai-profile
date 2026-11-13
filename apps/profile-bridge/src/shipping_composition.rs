@@ -142,8 +142,7 @@ pub fn run_delivery_command(
 mod windows {
     use super::{ShippingCompositionError, ShippingDeliveryCommand};
     use crate::authoritative_generation::{
-        ensure_authoritative_current, prove_cold_current_restore,
-        reconcile_closed_draft_with_confirmed_current,
+        ensure_authoritative_current, reconcile_closed_draft_with_confirmed_current,
         reconcile_closed_ready_with_confirmed_current,
     };
     use crate::dirty_generation::{GenerationSealingMaterialPort, closed_current_candidate_id};
@@ -164,7 +163,7 @@ mod windows {
         ControlPlaneCoordinator, ControlPlaneEnrollment, SharedControlPlaneCoordinator,
         ShippingControlPlaneError,
     };
-    use crate::shipping_control_plane::{MachineHttpMethod, MachineHttpPort, SyncEnrollmentPort};
+    use crate::shipping_control_plane::SyncEnrollmentPort;
     use crate::shipping_generation_successor_control::publish_closed_streamed_successor;
     use crate::user_diagnostics::report::{self, Cause, Cloud, Outcome, Stage};
     use crate::windows_delivery_handoff::{
