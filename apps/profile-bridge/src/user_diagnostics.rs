@@ -430,7 +430,7 @@ impl UserDiagnostic {
                     crate::local_profile_delete::TerminalDeleteError::AuthorizationUnconfirmed => {
                         "BRIDGE_LOCAL_DELETE_CLOUD_UNCONFIRMED"
                     }
-                    crate::local_profile_delete::TerminalDeleteError::LocalBusyOrDirty => {
+                    crate::local_profile_delete::TerminalDeleteError::LocalBusy => {
                         "BRIDGE_LOCAL_DELETE_BROWSER_BUSY"
                     }
                     crate::local_profile_delete::TerminalDeleteError::LocalFilesystem => {
@@ -889,8 +889,8 @@ impl UserDiagnostic {
             Self::Launch(Launch::LocalDelete(error)) => match error {
                 crate::local_profile_delete::TerminalDeleteError::AuthorizationUnconfirmed =>
                     "Cloud DELETED was not confirmed by this connected Windows device. Local browser data was preserved. Refresh the Profile status and retry local cleanup.",
-                crate::local_profile_delete::TerminalDeleteError::LocalBusyOrDirty =>
-                    "Local profile files are still open or contain unsynced changes. Close Camoufox and retry local cleanup. Existing data was preserved.",
+                crate::local_profile_delete::TerminalDeleteError::LocalBusy =>
+                    "The native browser is still open or Windows cannot verify its writer lock. Close Camoufox before removing the local copy. Local profile files were preserved.",
                 crate::local_profile_delete::TerminalDeleteError::LocalFilesystem =>
                     "Local profile cleanup failed safely. Cloud objects may already be deleted; check installed Profile Bridge diagnostics before retrying.",
             },
