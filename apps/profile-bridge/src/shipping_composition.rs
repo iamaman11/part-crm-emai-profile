@@ -143,7 +143,8 @@ mod windows {
     use super::{ShippingCompositionError, ShippingDeliveryCommand};
     use crate::authoritative_generation::{
         ensure_authoritative_current, prove_cold_current_restore,
-        reconcile_closed_draft_with_confirmed_current, reconcile_closed_ready_with_confirmed_current,
+        reconcile_closed_draft_with_confirmed_current,
+        reconcile_closed_ready_with_confirmed_current,
     };
     use crate::dirty_generation::{GenerationSealingMaterialPort, closed_current_candidate_id};
     use crate::generation_initialization::{
@@ -789,11 +790,9 @@ mod windows {
             }
             let generation = workspace.base_generation_id().ok_or(())?.clone();
             let version = workspace.profile_version();
-            let application = WindowsDeviceApplication::from_system(
-                origin.to_owned(),
-                binding.clone(),
-            )
-            .map_err(|_| ())?;
+            let application =
+                WindowsDeviceApplication::from_system(origin.to_owned(), binding.clone())
+                    .map_err(|_| ())?;
             let mut control =
                 ControlPlaneCoordinator::for_local_current_restore(application.transport());
             let selected = control
