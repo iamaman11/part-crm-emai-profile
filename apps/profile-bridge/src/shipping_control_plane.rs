@@ -1767,6 +1767,42 @@ mod tests {
     use std::collections::VecDeque;
 
     #[test]
+    fn cold_retirement_requires_local_restore_mode_and_exact_native_evidence()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let tenant = TenantId::parse("tenant_cold_retirement")?;
+        let profile = ProfileId::parse("profile_cold_retirement")?;
+        let generation = GenerationId::parse("generation_cold_retirement")?;
+        let mut normal = ControlPlaneCoordinator::new(SealingMachineHttp::default());
+        assert_eq!(
+            normal.admit_cold_current_retirement(
+                &tenant,
+                &profile,
+                &generation,
+                2,
+                &[],
+                [0; 32],
+            ),
+            Err(ShippingControlPlaneError::InvalidResponse),
+            "an active coordinator is never an independent cold recovery proof",
+        );
+        let mut restore =
+            ControlPlaneCoordinator::for_local_current_restore(SealingMachineHttp::default());
+        assert_eq!(
+            restore.admit_cold_current_retirement(
+                &tenant,
+                &profile,
+                &generation,
+                2,
+                &[],
+                [0; 32],
+            ),
+            Err(ShippingControlPlaneError::InvalidResponse),
+            "missing native cold evidence must not issue any retirement request",
+        );
+        Ok(())
+    }
+
+    #[test]
     fn sealing_http_status_distinguishes_uncertain_server_effect_from_acl_denial() {
         use super::decode_sealing_material_response;
         for status in [408, 429, 500, 502, 503] {
