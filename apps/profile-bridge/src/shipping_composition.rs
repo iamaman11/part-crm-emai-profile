@@ -459,6 +459,15 @@ mod windows {
             return Err(());
         }
         let device = binding.device_id();
+        // Retry diagnostics only: identify a native snapshot attempt without
+        // granting any Sync or filesystem authority.
+        report::record_current(
+            Stage::SyncSnapshot,
+            Outcome::Started,
+            Cloud::Unknown,
+            Cause::None,
+            0,
+        );
         let snapshot_started = Instant::now();
         let lock = BridgeWorkspaceLock::acquire_or_recover_interrupted(
             &workspace,
@@ -936,6 +945,14 @@ mod windows {
                 || crate::browser_execution::browser_writer_locks_absent(&workspace),
                 thread::sleep,
             )?;
+            // Observation, not a clean-close or cloud-Commit receipt.
+            report::record_current(
+                Stage::LocalUnsynced,
+                Outcome::Observed,
+                Cloud::NotConfirmed,
+                Cause::None,
+                0,
+            );
             // A completed first DRAFT Commit advances the same local marker.
             // Retry outstanding native edits as READY without creating a
             // second local folder or replaying the first DRAFT generation.
@@ -946,6 +963,18 @@ mod windows {
             }
             let outcome =
                 sync_after_native_close(&effective, &binding, &root, &config.control_plane_origin);
+            if outcome.is_err() {
+                // A long-lived retry must not look like an indefinitely silent
+                // operation. Reuse bounded typed diagnostics, never a retry log
+                // that can authorize another R2 PUT or D1 generation.
+                report::record_current(
+                    Stage::CloudSaveAttempt,
+                    Outcome::Unconfirmed,
+                    Cloud::NotConfirmed,
+                    Cause::CloudSaveFailed,
+                    0,
+                );
+            }
             if outcome.is_ok() {
                 let latest = root
                     .open_profile_current(&intent.tenant_id, &intent.profile_id)
