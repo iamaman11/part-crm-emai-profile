@@ -801,8 +801,8 @@ where
             metadata_prelude_hex: encode_lower_hex(metadata_prelude),
             restored_native_sha256: encode_lower_hex(&native_sha256),
         };
-        let body = serde_json::to_vec(&request)
-            .map_err(|_| ShippingControlPlaneError::InvalidResponse)?;
+        let body =
+            serde_json::to_vec(&request).map_err(|_| ShippingControlPlaneError::InvalidResponse)?;
         let response = self
             .transport
             .request(
@@ -1774,28 +1774,14 @@ mod tests {
         let generation = GenerationId::parse("generation_cold_retirement")?;
         let mut normal = ControlPlaneCoordinator::new(SealingMachineHttp::default());
         assert_eq!(
-            normal.admit_cold_current_retirement(
-                &tenant,
-                &profile,
-                &generation,
-                2,
-                &[],
-                [0; 32],
-            ),
+            normal.admit_cold_current_retirement(&tenant, &profile, &generation, 2, &[], [0; 32],),
             Err(ShippingControlPlaneError::InvalidResponse),
             "an active coordinator is never an independent cold recovery proof",
         );
         let mut restore =
             ControlPlaneCoordinator::for_local_current_restore(SealingMachineHttp::default());
         assert_eq!(
-            restore.admit_cold_current_retirement(
-                &tenant,
-                &profile,
-                &generation,
-                2,
-                &[],
-                [0; 32],
-            ),
+            restore.admit_cold_current_retirement(&tenant, &profile, &generation, 2, &[], [0; 32],),
             Err(ShippingControlPlaneError::InvalidResponse),
             "missing native cold evidence must not issue any retirement request",
         );
