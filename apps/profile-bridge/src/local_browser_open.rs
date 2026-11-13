@@ -28,6 +28,10 @@ const CAMOUHOST_LAUNCH_READY_EVENT: &str = "camouhost_stage phase=launch step=re
 const CAMOUHOST_NATIVE_CLOSE_EVENT: &str =
     "camouhost_stage phase=close step=browser_context_closed";
 const IDENTITY_ACK: &[u8] = b"camouhost-identity-persisted\n";
+// Only startup evidence has a deadline. A READY browser holding its native
+// writer lock is a normal user session and must never be timed out by Bridge.
+#[cfg(windows)]
+const NATIVE_STARTUP_PROOF_TIMEOUT: Duration = Duration::from_secs(30);
 
 pub(crate) type ReadyConfirmation = Box<dyn FnOnce() -> bool + Send + 'static>;
 pub(crate) type BeforeLaunch =
@@ -405,7 +409,9 @@ fn await_adapter_or_native_release(
     child: &mut std::process::Child,
     folder: &Path,
     browser_ready: &AtomicBool,
+    startup_proof_timeout: Duration,
 ) -> Result<(std::process::ExitStatus, bool), LocalOpenError> {
+    let proof_started = Instant::now();
     let mut writer_was_observed = false;
     let mut released_since: Option<Instant> = None;
     loop {
@@ -434,8 +440,15 @@ fn await_adapter_or_native_release(
                         return stop_stuck_native_adapter(child);
                     }
                 }
+                Err(_) => return Err(LocalOpenError::BrowserNotClosedCleanly),
                 _ => released_since = None,
             }
+        }
+        // Do not wait forever for a missing READY or an unobserved writer.
+        // The Python/Playwright process is deliberately left untouched: without
+        // native writer proof Rust has no authority to terminate a browser.
+        if !writer_was_observed && proof_started.elapsed() >= startup_proof_timeout {
+            return Err(LocalOpenError::LaunchConfirmation);
         }
         std::thread::sleep(Duration::from_millis(100));
     }
@@ -570,7 +583,12 @@ fn run_python_with_input(
     drop(stdin);
     #[cfg(windows)]
     let (completed, native_adapter_released) = if action == "--local-open" {
-        await_adapter_or_native_release(&mut child, folder, &native_ready_seen)?
+        await_adapter_or_native_release(
+            &mut child,
+            folder,
+            &native_ready_seen,
+            NATIVE_STARTUP_PROOF_TIMEOUT,
+        )?
     } else {
         (
             child
@@ -880,7 +898,12 @@ mod tests {
         });
         let started = Instant::now();
         let (status, adapter_stopped) =
-            super::await_adapter_or_native_release(&mut child, root.path(), &ready)?;
+            super::await_adapter_or_native_release(
+                &mut child,
+                root.path(),
+                &ready,
+                Duration::from_secs(30),
+            )?;
         released.join().expect("native writer release thread");
         assert!(
             adapter_stopped,
@@ -899,13 +922,19 @@ mod tests {
     fn native_adapter_release_never_stops_child_without_complete_writer_proof()
     -> Result<(), Box<dyn std::error::Error>> {
         use std::sync::atomic::AtomicBool;
+        use std::time::Duration;
 
         let root = tempfile::tempdir()?;
         let writer = hold_native_writer_lock(root.path())?;
         let mut child = spawn_native_adapter_fixture(400)?;
         let ready = AtomicBool::new(true);
         let (status, stopped) =
-            super::await_adapter_or_native_release(&mut child, root.path(), &ready)?;
+            super::await_adapter_or_native_release(
+                &mut child,
+                root.path(),
+                &ready,
+                Duration::from_secs(30),
+            )?;
         assert!(
             status.success(),
             "live writer requires natural child completion"
@@ -918,7 +947,12 @@ mod tests {
         let mut child = spawn_native_adapter_fixture(400)?;
         let ready = AtomicBool::new(false);
         let (status, stopped) =
-            super::await_adapter_or_native_release(&mut child, root.path(), &ready)?;
+            super::await_adapter_or_native_release(
+                &mut child,
+                root.path(),
+                &ready,
+                Duration::from_secs(30),
+            )?;
         assert!(status.success());
         assert!(!stopped, "missing READY must not authorize stop");
         drop(writer);
@@ -926,9 +960,102 @@ mod tests {
         let mut child = spawn_native_adapter_fixture(400)?;
         let ready = AtomicBool::new(true);
         let (status, stopped) =
-            super::await_adapter_or_native_release(&mut child, root.path(), &ready)?;
+            super::await_adapter_or_native_release(
+                &mut child,
+                root.path(),
+                &ready,
+                Duration::from_secs(30),
+            )?;
         assert!(status.success());
         assert!(!stopped, "unobserved writer must not authorize stop");
+        Ok(())
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn native_startup_proof_is_bounded_without_terminating_unconfirmed_adapter()
+    -> Result<(), Box<dyn std::error::Error>> {
+        use std::sync::atomic::AtomicBool;
+        use std::time::{Duration, Instant};
+
+        let root = tempfile::tempdir()?;
+        for ready_seen in [false, true] {
+            let mut child = spawn_native_adapter_fixture(10_000)?;
+            let ready = AtomicBool::new(ready_seen);
+            let started = Instant::now();
+            let outcome = super::await_adapter_or_native_release(
+                &mut child,
+                root.path(),
+                &ready,
+                Duration::from_millis(200),
+            );
+            // Failure to prove an admitted writer is never authority to
+            // terminate the Python adapter or any browser it might own.
+            let still_running = child.try_wait()?.is_none();
+            if still_running {
+                child.kill()?;
+            }
+            child.wait()?;
+            assert_eq!(outcome, Err(LocalOpenError::LaunchConfirmation));
+            assert!(still_running, "unknown browser state must not terminate child");
+            assert!(started.elapsed() < Duration::from_secs(3));
+        }
+        Ok(())
+    }
+
+    #[cfg(windows)]
+    #[test]
+    #[ignore = "requires PROFILE_BRIDGE_TEST_PYTHON"]
+    fn windows_python_missing_playwright_close_event_uses_native_release_gate()
+    -> Result<(), Box<dyn std::error::Error>> {
+        use std::fs;
+        use std::path::PathBuf;
+        use std::time::{Duration, Instant};
+
+        let python = std::env::var_os("PROFILE_BRIDGE_TEST_PYTHON")
+            .map(PathBuf::from)
+            .ok_or("PROFILE_BRIDGE_TEST_PYTHON is required")?;
+        let directory = tempfile::tempdir()?;
+        let runtime_root = directory.path().join("runtime");
+        fs::create_dir_all(runtime_root.join("camouhost"))?;
+        fs::write(
+            runtime_root.join(ENTRYPOINT),
+            format!(
+                r#"import sys
+import time
+from pathlib import Path
+root = Path(sys.argv[2])
+lock = root / 'user_data' / 'parent.lock'
+lock.parent.mkdir(parents=True, exist_ok=True)
+with lock.open('ab', buffering=0):
+    sys.stderr.write({:?} + '\n')
+    sys.stderr.flush()
+    time.sleep(1.0)
+# Deliberately emit no Playwright BrowserContext.close event.
+# The driver process remains stuck after the native writer is gone.
+time.sleep(15)
+(root / 'adapter_was_not_stopped').write_text('unsafe')
+"#,
+                CAMOUHOST_LAUNCH_READY_EVENT
+            ),
+        )?;
+        fs::write(runtime_root.join(LOCK), b"test-runtime-lock")?;
+        let folder = directory.path().join("profile");
+        fs::create_dir(&folder)?;
+        let started = Instant::now();
+        assert!(run_python_with_executable(
+            &python,
+            &runtime_root,
+            &folder,
+            "--local-open",
+            None,
+        )?);
+        assert!(started.elapsed() >= Duration::from_secs(2));
+        assert!(started.elapsed() < Duration::from_secs(10));
+        assert!(!folder.join("adapter_was_not_stopped").exists());
+        assert!(crate::browser_execution::browser_writer_locks_absent_at(
+            &folder
+        )?);
         Ok(())
     }
 
