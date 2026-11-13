@@ -205,7 +205,7 @@ describe('ProfilesWorkspace generation refresh (#802 F06)', () => {
   it('automatically reads terminal DELETED without replaying the cloud Delete command', async () => {
     let current: Awaited<ReturnType<typeof getProfile>> = {
       profileId: 'profile_pending', status: 'DELETING', version: 3,
-      linkedClientId: null, canOperate: false, activeGenerationId: null,
+      linkedClientId: null, canOperate: false,
     };
     profileLookup.mockImplementation(async () => ({ ...current! }));
     const cache = new QueryClient({ defaultOptions: { queries: { retry: false } } });
