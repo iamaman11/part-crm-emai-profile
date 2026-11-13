@@ -159,11 +159,11 @@ mod windows {
     use crate::local_profile::{
         DeliveryActivationGuard, MaterializationRoot, PendingSyncDescriptor,
     };
+    use crate::shipping_control_plane::SyncEnrollmentPort;
     use crate::shipping_control_plane::{
         ControlPlaneCoordinator, ControlPlaneEnrollment, SharedControlPlaneCoordinator,
         ShippingControlPlaneError,
     };
-    use crate::shipping_control_plane::SyncEnrollmentPort;
     use crate::shipping_generation_successor_control::publish_closed_streamed_successor;
     use crate::user_diagnostics::report::{self, Cause, Cloud, Outcome, Stage};
     use crate::windows_delivery_handoff::{
