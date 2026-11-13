@@ -22,6 +22,9 @@ use control_plane_contract::generation_reopen_api::{
     BridgeGenerationOpeningMaterialRequest, BridgeGenerationOpeningMaterialResponse,
     BridgeGenerationWorkingProofRequest, GENERATION_DOWNLOAD_CAPABILITY_MAX_EXPIRES_SECONDS,
 };
+use control_plane_contract::profile_generation_api::{
+    BRIDGE_PROFILE_CURRENT_COLD_RETIREMENT_PATH_TEMPLATE, BridgeCurrentColdRetirementRequest,
+};
 use control_plane_contract::profile_launch_api::{
     BRIDGE_PROFILE_COORDINATOR_PATH_TEMPLATE, BRIDGE_PROFILE_LAUNCH_REDEMPTION_PATH,
     BridgeProfileLaunchRedemptionProjection, BridgeProfileLaunchRedemptionRequest,
@@ -760,6 +763,68 @@ impl<T> ControlPlaneCoordinator<T>
 where
     T: MachineHttpPort,
 {
+    /// Admit only the same device's independently cold-restored, byte-equal
+    /// CURRENT. The server re-proves authority and freezes one predecessor;
+    /// its existing scheduled R2 owner performs any eventual exact deletion.
+    pub fn admit_cold_current_retirement(
+        &mut self,
+        tenant_id: &TenantId,
+        profile_id: &ProfileId,
+        current: &GenerationId,
+        version: u64,
+        metadata_prelude: &[u8],
+        native_sha256: [u8; 32],
+    ) -> Result<bool, ShippingControlPlaneError> {
+        if !self.local_current_restore
+            || version == 0
+            || metadata_prelude.is_empty()
+            || metadata_prelude.len() > MAX_GENERATION_METADATA_PRELUDE_BYTES
+        {
+            return Err(ShippingControlPlaneError::InvalidResponse);
+        }
+        let inspected = inspect_generation_metadata_prelude(metadata_prelude)
+            .map_err(|_| ShippingControlPlaneError::InvalidResponse)?;
+        if inspected.prelude_bytes() != metadata_prelude.len()
+            || inspected.metadata().tenant_id() != tenant_id
+            || inspected.metadata().profile_id() != profile_id
+            || inspected.metadata().generation_id() != current
+            || inspected.metadata().object_key()
+                != canonical_generation_object_key(tenant_id, profile_id, current)
+            || encode_lower_hex(&inspected.metadata().plaintext_digest().bytes())
+                != encode_lower_hex(&native_sha256)
+        {
+            return Err(ShippingControlPlaneError::InvalidResponse);
+        }
+        let request = BridgeCurrentColdRetirementRequest {
+            current_generation_id: current.as_str().to_owned(),
+            expected_profile_version: version,
+            metadata_prelude_hex: encode_lower_hex(metadata_prelude),
+            restored_native_sha256: encode_lower_hex(&native_sha256),
+        };
+        let body = serde_json::to_vec(&request)
+            .map_err(|_| ShippingControlPlaneError::InvalidResponse)?;
+        let response = self
+            .transport
+            .request(
+                MachineHttpMethod::PostJson,
+                &generation_reopen_path(
+                    tenant_id,
+                    profile_id,
+                    BRIDGE_PROFILE_CURRENT_COLD_RETIREMENT_PATH_TEMPLATE,
+                ),
+                &next_correlation_id()?,
+                Some(&body),
+            )
+            .map_err(|_| ShippingControlPlaneError::Transport)?;
+        let response = accepted_response(response)?;
+        let result = serde_json::from_slice::<serde_json::Value>(response.body())
+            .map_err(|_| ShippingControlPlaneError::InvalidResponse)?;
+        result
+            .get("admitted")
+            .and_then(serde_json::Value::as_bool)
+            .ok_or(ShippingControlPlaneError::InvalidResponse)
+    }
+
     fn download_reopen_for_purpose(
         &mut self,
         tenant_id: &TenantId,
