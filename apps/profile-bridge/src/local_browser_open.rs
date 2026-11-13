@@ -355,6 +355,67 @@ fn adapter_completed_after_native_close(
     process_success || (action == "--local-open" && close_seen)
 }
 
+
+#[cfg(windows)]
+fn native_adapter_shutdown_allowed(
+    browser_ready: bool,
+    writer_was_observed: bool,
+    no_writer_for: Option<Duration>,
+) -> bool {
+    browser_ready
+        && writer_was_observed
+        && no_writer_for.is_some_and(|elapsed| elapsed >= Duration::from_secs(2))
+}
+
+// Persistent BrowserContext.close may be lost when Firefox has already exited.
+// The existing OS file-lock proof determines whether native bytes are safe;
+// no browser PID, window, or Firefox close command is used. Once the verified
+// READY native writer is gone, stop only our stuck Python adapter child.
+#[cfg(windows)]
+fn await_adapter_or_native_release(
+    child: &mut std::process::Child,
+    folder: &Path,
+    browser_ready: &AtomicBool,
+) -> Result<(std::process::ExitStatus, bool), LocalOpenError> {
+    let mut writer_was_observed = false;
+    let mut released_since: Option<Instant> = None;
+    loop {
+        if let Some(status) = child
+            .try_wait()
+            .map_err(|_| LocalOpenError::RuntimeUnavailable)?
+        {
+            return Ok((status, false));
+        }
+        let ready = browser_ready.load(Ordering::Acquire);
+        if ready {
+            match crate::browser_execution::browser_writer_locks_absent_at(folder) {
+                Ok(false) => {
+                    writer_was_observed = true;
+                    released_since = None;
+                }
+                Ok(true) if writer_was_observed => {
+                    let since = released_since.get_or_insert_with(Instant::now);
+                    if native_adapter_shutdown_allowed(
+                        ready,
+                        writer_was_observed,
+                        Some(since.elapsed()),
+                    ) {
+                        // Firefox already released the Windows writer lock.
+                        // Never terminate or close the browser process here.
+                        let _ = child.kill();
+                        let status = child
+                            .wait()
+                            .map_err(|_| LocalOpenError::RuntimeUnavailable)?;
+                        return Ok((status, true));
+                    }
+                }
+                _ => released_since = None,
+            }
+        }
+        std::thread::sleep(Duration::from_millis(100));
+    }
+}
+
 fn run_python_with_input(
     executable: &Path,
     runtime_root: &Path,
@@ -375,6 +436,8 @@ fn run_python_with_input(
     let (health_result_tx, health_result_rx) = std::sync::mpsc::channel();
     let native_close_seen = Arc::new(AtomicBool::new(false));
     let close_seen_by_reader = Arc::clone(&native_close_seen);
+    let native_ready_seen = Arc::new(AtomicBool::new(false));
+    let ready_seen_by_reader = Arc::clone(&native_ready_seen);
 
     let native_started = Instant::now();
     let mut child = Command::new(executable)
@@ -419,6 +482,7 @@ fn run_python_with_input(
         for line in BufReader::new(stderr).lines().map_while(Result::ok) {
             if line == CAMOUHOST_LAUNCH_READY_EVENT && !native_ready_observed {
                 native_ready_observed = true;
+                ready_seen_by_reader.store(true, Ordering::Release);
                 let duration = u64::try_from(native_started.elapsed().as_millis())
                     .unwrap_or(u64::MAX)
                     .min(86_400_000);
@@ -479,17 +543,38 @@ fn run_python_with_input(
         }
     }
     drop(stdin);
-    let status = child.wait();
-    let _ = diagnostics.join();
-    let completed = status.map_err(|_| LocalOpenError::RuntimeUnavailable)?;
+    #[cfg(windows)]
+    let (completed, native_adapter_released) = if action == "--local-open" {
+        await_adapter_or_native_release(&mut child, folder, &native_ready_seen)?
+    } else {
+        (
+            child
+                .wait()
+                .map_err(|_| LocalOpenError::RuntimeUnavailable)?,
+            false,
+        )
+    };
+    #[cfg(not(windows))]
+    let (completed, native_adapter_released) = (
+        child
+            .wait()
+            .map_err(|_| LocalOpenError::RuntimeUnavailable)?,
+        false,
+    );
+    if !native_adapter_released {
+        let _ = diagnostics.join();
+    }
+    // The stderr reader must not block Open on an abandoned driver pipe
+    // after the existing OS proof has already allowed adapter shutdown.
     if health_required && !matches!(health_result_rx.try_recv(), Ok(true)) {
         return Err(LocalOpenError::LaunchConfirmation);
     }
-    Ok(adapter_completed_after_native_close(
-        action,
-        completed.success(),
-        native_close_seen.load(Ordering::Acquire),
-    ))
+    Ok(native_adapter_released
+        || adapter_completed_after_native_close(
+            action,
+            completed.success(),
+            native_close_seen.load(Ordering::Acquire),
+        ))
 }
 
 fn mark_local_unsynced(folder: &Path) -> Result<(), LocalOpenError> {
@@ -684,6 +769,26 @@ mod tests {
             Err(LocalOpenError::IdentityPreparation)
         );
         Ok(())
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn native_adapter_release_requires_ready_writer_and_stable_absence() {
+        use super::native_adapter_shutdown_allowed;
+        let quiet = Some(Duration::from_secs(3));
+        assert!(!native_adapter_shutdown_allowed(false, true, quiet));
+        assert!(!native_adapter_shutdown_allowed(true, false, quiet));
+        assert!(!native_adapter_shutdown_allowed(
+            true,
+            true,
+            Some(Duration::from_millis(1999)),
+        ));
+        assert!(!native_adapter_shutdown_allowed(true, true, None));
+        assert!(native_adapter_shutdown_allowed(
+            true,
+            true,
+            Some(Duration::from_secs(2)),
+        ));
     }
 
     #[test]

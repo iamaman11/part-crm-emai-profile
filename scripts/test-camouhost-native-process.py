@@ -41,11 +41,12 @@ class FakeBrowser:
 class FakeContext:
     """No page/window/process API: only public Playwright lifecycle events."""
 
-    def __init__(self, closed=False):
+    def __init__(self, closed=False, persistent=True):
         self.closed = closed
         self.handlers = []
         self.close_calls = 0
-        self.browser = FakeBrowser()
+        # Official persistent contexts have browser=None, unlike old fixture.
+        self.browser = None if persistent else FakeBrowser()
 
     def on(self, event, handler):
         assert event == "close"
@@ -145,7 +146,7 @@ async def verify() -> int:
             }
             assert session.context is contexts[-1]
             assert len(contexts[-1].handlers) == 1
-            assert len(contexts[-1].browser.handlers) == 1
+            assert contexts[-1].browser is None
 
             waiting = asyncio.create_task(session.wait_for_browser_close())
             await asyncio.sleep(0)
@@ -177,7 +178,7 @@ async def verify() -> int:
             # report is_closed(), the official Browser.disconnected event is
             # still enough to release the Playwright connection. Rust's
             # native file gate remains the authority for snapshot safety.
-            crashed_context = FakeContext()
+            crashed_context = FakeContext(persistent=False)
             async def crashed_browser(playwright, **kwargs):
                 launches.append((playwright, kwargs))
                 return crashed_context
@@ -195,6 +196,30 @@ async def verify() -> int:
             await crashed.close_after_browser_exit()
             assert crash_manager.exit_calls == 1
             assert crashed_context.close_calls == 0
+
+            # A missing persistent-context close signal is NOT a receipt.
+            # The separate Rust OS lock gate handles this exact native case.
+            missing_close = FakeContext()
+            async def missing_close_browser(playwright, **kwargs):
+                return missing_close
+            camoufox_api.AsyncNewBrowser = missing_close_browser
+            unconfirmed = await module.launch_native_camoufox(
+                workspace=workspace, options=options,
+                admission_granted=True, headless=False,
+            )
+            assert unconfirmed._browser is None
+            waiter = asyncio.create_task(unconfirmed.wait_for_browser_close())
+            await asyncio.sleep(0)
+            assert not waiter.done()
+            waiter.cancel()
+            try:
+                await waiter
+            except asyncio.CancelledError:
+                pass
+            else:
+                raise AssertionError("missing persistent close falsely confirmed")
+            missing_close.user_close()
+            await unconfirmed.close_after_browser_exit()
 
             # If the official launch fails before a context is admitted,
             # only the Playwright driver connection is released.
