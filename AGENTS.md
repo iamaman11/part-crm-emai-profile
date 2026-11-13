@@ -1,5 +1,8 @@
 # Repository Agent Execution Contract
 
+> **Authority correction, 2026-11-10:** Fresh #266 selects the single CURRENT work issue, presently #849 for real Windows 559 Open and VK tab-crash failures. #830/#842/#844 and `ARCHITECTURE_REBASELINE_V3_PLAN.md` are historical. Any old program/stage reference below is historical if it conflicts with #266→#849. Do not infer user-visible success from green CI, staging or installation. The remaining safety, protected-main and exact-head requirements still apply.
+
+
 This file is an execution guardrail, not a roadmap or semantic authority. It applies to the whole repository. More specific nested `AGENTS.md` files may narrow local rules but may not weaken this contract.
 
 ## 1. Fresh state is mandatory

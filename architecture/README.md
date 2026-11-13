@@ -1,5 +1,8 @@
 # Architecture authority map
 
+> **Authority correction:** The former `docs/ARCHITECTURE_REBASELINE_V3_PLAN.md` is historical. Fresh [#266](https://github.com/iamaman11/part-crm-emai-profile/issues/266) selects exactly one active issue, currently [#849](https://github.com/iamaman11/part-crm-emai-profile/issues/849). For the one-CRM Browser Profile ownership model use `docs/ARCHITECTURE.md`, not historical AR descriptions.
+
+
 **Role:** subject navigation plus accepted AR provenance; not current execution authority.
 
 This directory is organized by **system subject**, not by remediation chronology. Use

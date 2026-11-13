@@ -2,7 +2,7 @@
 
 **Статус:** normative architecture boundary  
 **Дата:** 2026-11-09  
-**Канонический план:** [Issue #830](https://github.com/iamaman11/part-crm-emai-profile/issues/830)
+**Текущая физическая приёмка и P0-дефекты:** [Issue #849](https://github.com/iamaman11/part-crm-emai-profile/issues/849), выбранный [указателем #266](https://github.com/iamaman11/part-crm-emai-profile/issues/266). Это **требования**, а не доказательство работоспособности Release Set 559.
 
 ## 1. Единое приложение
 
