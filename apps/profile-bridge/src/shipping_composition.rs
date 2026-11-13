@@ -142,8 +142,8 @@ pub fn run_delivery_command(
 mod windows {
     use super::{ShippingCompositionError, ShippingDeliveryCommand};
     use crate::authoritative_generation::{
-        ensure_authoritative_current, reconcile_closed_draft_with_confirmed_current,
-        reconcile_closed_ready_with_confirmed_current,
+        ensure_authoritative_current, prove_cold_current_restore,
+        reconcile_closed_draft_with_confirmed_current, reconcile_closed_ready_with_confirmed_current,
     };
     use crate::dirty_generation::{GenerationSealingMaterialPort, closed_current_candidate_id};
     use crate::generation_initialization::{
@@ -763,6 +763,78 @@ mod windows {
         }
     }
 
+    /// Non-critical retention admission runs only after the *normal* Sync
+    /// owner has confirmed CURRENT and cleared local dirty/pending evidence.
+    /// It performs the existing independent R2 GET/AEAD/native-byte proof,
+    /// then asks the existing D1 owner to freeze a delayed exact predecessor.
+    /// Its failure cannot turn a committed Save into an error or create a
+    /// competing browser writer, Sync owner, R2 DELETE or persistent retry.
+    fn try_retire_predecessor_after_clean_sync(
+        intent: &crate::generation_initialization::InitialProfileOpen,
+        binding: &WindowsDeviceApplicationBinding,
+        root: &MaterializationRoot,
+        origin: &str,
+    ) {
+        let result = (|| -> Result<(), ()> {
+            let workspace = root
+                .open_profile_current(&intent.tenant_id, &intent.profile_id)
+                .map_err(|_| ())?;
+            if workspace.pending_sync().is_some()
+                || !matches!(
+                    std::fs::symlink_metadata(workspace.path().join(".local-unsynced")),
+                    Err(ref error) if error.kind() == std::io::ErrorKind::NotFound
+                )
+            {
+                return Err(());
+            }
+            let generation = workspace.base_generation_id().ok_or(())?.clone();
+            let version = workspace.profile_version();
+            let application = WindowsDeviceApplication::from_system(
+                origin.to_owned(),
+                binding.clone(),
+            )
+            .map_err(|_| ())?;
+            let mut control =
+                ControlPlaneCoordinator::for_local_current_restore(application.transport());
+            let selected = control
+                .download_capability(&intent.tenant_id, &intent.profile_id)
+                .map_err(|_| ())?;
+            if selected.generation_id() != &generation {
+                return Err(());
+            }
+            let reader = WindowsSignedGenerationObjectGet::from_system().map_err(|_| ())?;
+            let mut downloader = VerifiedGenerationObjectStreamDownloader::new(reader);
+            let (native_digest, metadata_prelude) = prove_cold_current_restore(
+                root,
+                &intent.tenant_id,
+                &intent.profile_id,
+                &generation,
+                version,
+                binding.device_id(),
+                now().map_err(|_| ())?.value(),
+                &mut control,
+                &mut downloader,
+            )
+            .map_err(|_| ())?;
+            control
+                .admit_cold_current_retirement(
+                    &intent.tenant_id,
+                    &intent.profile_id,
+                    &generation,
+                    version,
+                    &metadata_prelude,
+                    native_digest,
+                )
+                .map_err(|_| ())?;
+            Ok(())
+        })();
+        if result.is_err() {
+            // Bounded local evidence only. A missed admission retains old R2
+            // bytes, and is never represented as a Save/CURRENT failure.
+            eprintln!("BRIDGE_COLD_CURRENT_RETIREMENT_DEFERRED");
+        }
+    }
+
     fn wait_for_native_writer_release<E>(
         mut probe: impl FnMut() -> Result<bool, E>,
         mut pause: impl FnMut(Duration),
@@ -780,10 +852,6 @@ mod windows {
             }
         }
     }
-
-    // A successful exact Save does not retire predecessor R2 objects.
-    // Cold Restore remains a separate acceptance test; terminal owner Delete
-    // later removes all encrypted generations together.
 
     pub fn run_terminal_delete(
         intent: &crate::local_profile_delete::TerminalProfileDelete,
@@ -845,9 +913,18 @@ mod windows {
                 Err(ref error) if error.kind() == std::io::ErrorKind::NotFound
             ) && workspace.pending_sync().is_none()
             {
-                // The existing Verify+Commit owner advanced this exact local
-                // marker and cleared dirty/pending evidence. Return at once,
-                // retaining predecessor encrypted R2 generations until Delete.
+                // The confirmed Save is already complete. In the same
+                // one-shot Sync child, independently prove cold CURRENT and
+                // ask D1 to admit optional predecessor retirement. The
+                // existing Worker scheduler alone may later delete old R2.
+                if intent.status == InitialProfileStatus::Ready {
+                    try_retire_predecessor_after_clean_sync(
+                        intent,
+                        &binding,
+                        &root,
+                        &config.control_plane_origin,
+                    );
+                }
                 return Ok(());
             }
             // If Camouhost exited before Playwright could deliver its close
@@ -907,8 +984,8 @@ mod windows {
                 ) && latest.pending_sync().is_none()
                 {
                     // The exact cloud Save and local clean marker are complete.
-                    // Re-enter the clean branch and return without a redundant
-                    // cold Restore GET, a second seal, or predecessor retirement.
+                    // Re-enter the clean branch to attempt independent,
+                    // non-critical retirement admission exactly once.
                     continue;
                 }
             }
