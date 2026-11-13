@@ -579,7 +579,9 @@ mod windows {
                 enrolled.launch_intent_id(),
             )
             .map_err(|error| match error {
-                ShippingControlPlaneError::LaunchLeaseConflict => ClosedReadySyncError::LeaseConflict,
+                ShippingControlPlaneError::LaunchLeaseConflict => {
+                    ClosedReadySyncError::LeaseConflict
+                }
                 _ => ClosedReadySyncError::Unconfirmed,
             })?;
         let heartbeat = RetainedSaveHeartbeat::start(coordinator.clone(), lease.clone());
@@ -733,7 +735,8 @@ mod windows {
             ) {
                 Ok(()) => Ok(()),
                 Err(error) => {
-                    if error == crate::generation_initialization::InitialProfileError::LeaseConflict {
+                    if error == crate::generation_initialization::InitialProfileError::LeaseConflict
+                    {
                         return Err(ShippingCompositionError::SyncLeaseConflict);
                     }
                     // The first exact D1 Commit may have succeeded while its
@@ -746,9 +749,15 @@ mod windows {
                         .expected_version
                         .checked_add(1)
                         .ok_or(ShippingCompositionError::Initialization(error))?;
-                    sync_closed_ready(&proof, binding, root, origin).map_err(|recovery| match recovery {
-                        ClosedReadySyncError::LeaseConflict => ShippingCompositionError::SyncLeaseConflict,
-                        ClosedReadySyncError::Unconfirmed => ShippingCompositionError::Initialization(error),
+                    sync_closed_ready(&proof, binding, root, origin).map_err(|recovery| {
+                        match recovery {
+                            ClosedReadySyncError::LeaseConflict => {
+                                ShippingCompositionError::SyncLeaseConflict
+                            }
+                            ClosedReadySyncError::Unconfirmed => {
+                                ShippingCompositionError::Initialization(error)
+                            }
+                        }
                     })
                 }
             }

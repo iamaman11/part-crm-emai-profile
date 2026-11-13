@@ -105,7 +105,9 @@ impl core::fmt::Display for InitialProfileError {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         f.write_str(match self {
             Self::Authorization => "profile Sync authorization was not confirmed",
-            Self::LeaseConflict => "confirmed Coordinator lease conflict; local unsynced browser data preserved",
+            Self::LeaseConflict => {
+                "confirmed Coordinator lease conflict; local unsynced browser data preserved"
+            }
             Self::RuntimeBundle | Self::Runtime => "installed runtime is unavailable",
             Self::Snapshot => "closed local snapshot could not be verified",
             Self::Encryption => "generation encryption could not be verified",
@@ -1636,13 +1638,19 @@ mod tests {
         let device = DeviceId::parse("device_123")?;
         assert_eq!(
             reauthorize_current_ready_generation(
-                &intent, &actor, &device, &mut Refusal { correlated: true }
+                &intent,
+                &actor,
+                &device,
+                &mut Refusal { correlated: true }
             ),
             Err(InitialProfileError::LeaseConflict)
         );
         assert_eq!(
             reauthorize_current_ready_generation(
-                &intent, &actor, &device, &mut Refusal { correlated: false }
+                &intent,
+                &actor,
+                &device,
+                &mut Refusal { correlated: false }
             ),
             Err(InitialProfileError::Authorization)
         );

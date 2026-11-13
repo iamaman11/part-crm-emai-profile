@@ -344,6 +344,9 @@ impl UserDiagnostic {
                     crate::generation_initialization::InitialProfileError::Authorization => {
                         "BRIDGE_FIRST_OPEN_AUTHORIZATION_FAILED"
                     }
+                    crate::generation_initialization::InitialProfileError::LeaseConflict => {
+                        "BRIDGE_SYNC_COORDINATOR_CONFLICT"
+                    }
                     crate::generation_initialization::InitialProfileError::Snapshot => {
                         "BRIDGE_FIRST_OPEN_SNAPSHOT_FAILED"
                     }
@@ -422,6 +425,7 @@ impl UserDiagnostic {
                     }
                 }
                 ShippingCompositionError::SyncUnconfirmed => "BRIDGE_CLOUD_SYNC_UNCONFIRMED",
+                ShippingCompositionError::SyncLeaseConflict => "BRIDGE_SYNC_COORDINATOR_CONFLICT",
                 ShippingCompositionError::LocalDelete(error) => match error {
                     crate::local_profile_delete::TerminalDeleteError::AuthorizationUnconfirmed => {
                         "BRIDGE_LOCAL_DELETE_CLOUD_UNCONFIRMED"
@@ -892,6 +896,12 @@ impl UserDiagnostic {
             },
             Self::Launch(Launch::SyncUnconfirmed) => {
                 "The browser closed locally and its files are intact, but cloud synchronization is not confirmed. Local pending-sync evidence was retained for a later exact retry."
+            }
+            Self::Launch(Launch::SyncLeaseConflict)
+            | Self::Launch(Launch::Initialization(
+                crate::generation_initialization::InitialProfileError::LeaseConflict,
+            )) => {
+                "The server confirmed a coordinator lease conflict. Cloud Save did not complete. This profile may have an unresolved session on another device; do not repeatedly retry or discard its unsynced files. Return to Profile Operations for explicit recovery."
             }
         }
     }
@@ -1734,6 +1744,20 @@ mod tests {
             assert!(d.message().contains("profile files"));
             assert!(!d.message().contains("reconnecting this computer"));
         }
+    }
+
+    #[test]
+    fn confirmed_coordinator_conflict_is_actionable_and_never_claims_saved() {
+        let diagnostic = UserDiagnostic::Launch(ShippingCompositionError::SyncLeaseConflict);
+        assert_eq!(diagnostic.code(), "BRIDGE_SYNC_COORDINATOR_CONFLICT");
+        assert!(diagnostic.message().contains("lease conflict"));
+        assert!(diagnostic.message().contains("unsynced files"));
+        assert!(!diagnostic.message().contains("Saved"));
+        let initial = UserDiagnostic::Launch(ShippingCompositionError::Initialization(
+            crate::generation_initialization::InitialProfileError::LeaseConflict,
+        ));
+        assert_eq!(initial.code(), diagnostic.code());
+        assert_eq!(initial.message(), diagnostic.message());
     }
 
     #[test]
