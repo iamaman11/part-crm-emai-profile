@@ -373,17 +373,22 @@ export function ProfilesWorkspace({
             </div>
           )}
         </>}
-        {profile && (
+        {profile && <>
           <dl className="projection">
-            <div><dt>ID</dt><dd>{profile.profileId}</dd></div>
             <div><dt>Status</dt><dd>{profile.status}</dd></div>
-            <div><dt>Version</dt><dd>{profile.version}</dd></div>
             <div><dt>Client</dt><dd>{profile.linkedClientId ?? 'Not assigned'}</dd></div>
           </dl>
-        )}
+          <details>
+            <summary>Technical identifiers</summary>
+            <dl className="projection">
+              <div><dt>ID</dt><dd>{profile.profileId}</dd></div>
+              <div><dt>Version</dt><dd>{profile.version}</dd></div>
+            </dl>
+          </details>
+        </>}
       </section>
 
-      <section className="panel">
+      {!selectedProfileId && <section className="panel">
         <span className="eyebrow">New browser profile</span>
         <h2>Create profile</h2>
         <p>Create a profile, then choose Open browser. The application prepares the browser state and saves changes when you close it.</p>
@@ -398,19 +403,7 @@ export function ProfilesWorkspace({
           <button type="submit" disabled={!enabled || create.isPending}>Create</button>
         </form>
         <StatusMessage state={create.error ?? (create.data ? `${create.data.resultCode}: ${create.data.resourceId}` : null)} />
-      </section>
-
-      <section className="panel">
-        <span className="eyebrow">Business relationship projection</span>
-        <h2>Client relationship</h2>
-        <p>
-          The linked Client is read-only here. Attach, detach and atomic reassign are owned by Client Detail,
-          while profile access remains governed only by explicit Profile grants.
-        </p>
-        <dl className="projection">
-          <div><dt>Client</dt><dd>{profile?.linkedClientId ?? 'Not assigned'}</dd></div>
-        </dl>
-      </section>
+      </section>}
 
       <details className="panel full-span"><summary>Administration and diagnostics</summary>
       <section className="panel">
