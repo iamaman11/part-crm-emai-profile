@@ -1292,6 +1292,32 @@ sys.stderr.flush()
     }
 
     #[test]
+    fn open_rejects_live_closed_sync_before_touching_browser_bytes()
+    -> Result<(), Box<dyn std::error::Error>> {
+        use crate::local_profile::ClosedSyncAdmission;
+        use profile_platform_primitives::DeviceId;
+
+        let directory = tempfile::tempdir()?;
+        let root = crate::local_profile::MaterializationRoot::open_or_create(directory.path())?;
+        let intent = intent();
+        let generation = local_generation(&intent)?;
+        let current = open_or_create_workspace(&root, &intent, &generation)?;
+        let _sync = ClosedSyncAdmission::try_acquire(&current)?
+            .ok_or("native Sync admission not acquired for test")?;
+        let device = DeviceId::parse("device_local_sync_open")?;
+        assert_eq!(
+            super::open_with_before_launch(&root, &intent, &device, directory.path(), None),
+            Err(LocalOpenError::OperationInProgress),
+        );
+        assert!(
+            !current.path().join(".local-unsynced").exists(),
+            "an Open refused by active Sync must never dirty native browser bytes"
+        );
+        assert!(!current.path().join("camoufox-config.json").exists());
+        Ok(())
+    }
+
+    #[test]
     fn draft_without_local_copy_creates_one_local_workspace() {
         let directory = tempfile::tempdir().unwrap();
         let root =
