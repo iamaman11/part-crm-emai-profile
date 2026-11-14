@@ -336,7 +336,9 @@ def main() -> int:
         "    pub fn run_delivery_command(", 1
     )[0]
     assert "run_closed_sync_with_admission(" in run_initial
-    assert "if dirty && run_closed_sync(intent).is_ok()" in run_initial
+    assert "if dirty {" in run_initial
+    assert "match run_closed_sync(intent)" in run_initial
+    assert "Err(ShippingCompositionError::SyncVersionConflict)" in run_initial
     # A busy browser never spawns another Sync; stale CURRENT may be
     # reconciled only through the existing exact-Commit proof, never by reset.
     assert "crate::local_browser_open::LocalOpenError::StaleLocalWorkspace" in run_initial
