@@ -419,6 +419,7 @@ impl UserDiagnostic {
                         Local::StaleLocalWorkspace => "BRIDGE_LOCAL_VERSION_MISMATCH",
                         Local::RuntimeUnavailable => "BRIDGE_LOCAL_RUNTIME_UNAVAILABLE",
                         Local::ProfileBusy => "BRIDGE_LOCAL_BROWSER_BUSY",
+                        Local::OperationInProgress => "BRIDGE_LOCAL_OPERATION_BUSY",
                         Local::IdentityPreparation => "BRIDGE_LOCAL_IDENTITY_NOT_READY",
                         Local::BrowserNotClosedCleanly => "BRIDGE_LOCAL_CLOSE_UNVERIFIED",
                         Local::LaunchConfirmation => "BRIDGE_RUNTIME_NOT_READY",
@@ -871,6 +872,9 @@ impl UserDiagnostic {
                     }
                     Local::ProfileBusy => {
                         "This profile is already open, or a previous browser exit needs local recovery. Close the existing Firefox window first."
+                    }
+                    Local::OperationInProgress => {
+                        "This profile already has a native Open, Close or Sync operation in progress. Its local data is preserved; wait for the current operation to finish before opening it again."
                     }
                     Local::IdentityPreparation => {
                         "Local Camoufox fingerprint initialization failed. Existing files were retained; review the local diagnostic."
