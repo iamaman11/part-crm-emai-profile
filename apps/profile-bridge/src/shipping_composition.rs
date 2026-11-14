@@ -712,7 +712,7 @@ mod windows {
                 ClosedReadySyncError::Unconfirmed => ShippingCompositionError::SyncUnconfirmed,
                 ClosedReadySyncError::VersionConflict => {
                     ShippingCompositionError::SyncVersionConflict
-                },
+                }
             })
         } else {
             let application =
@@ -1193,9 +1193,7 @@ mod windows {
 
     #[cfg(test)]
     mod pending_sync_descriptor_tests {
-        use super::{
-            pending_descriptor_matches_current, unmatched_pending_is_terminal_conflict,
-        };
+        use super::{pending_descriptor_matches_current, unmatched_pending_is_terminal_conflict};
         use crate::generation_reopen::GenerationDownloadCapability;
         use crate::local_profile::PendingSyncDescriptor;
         use profile_platform_primitives::GenerationId;
