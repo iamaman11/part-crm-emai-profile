@@ -236,7 +236,7 @@ def main() -> int:
     local_source = (SOURCE.parents[2] / "apps/profile-bridge/src/local_browser_open.rs").read_text(
         encoding="utf-8"
     )
-    local_owner = local_source.split("pub(crate) fn open_with_before_launch(", 1)[1].split("\n}\n", 1)[0]
+    local_owner = local_source.split("fn open_under_profile_admission(", 1)[1].split("\n}\n", 1)[0]
     cold_branch = local_source.split(
         "let config = if folder.join(CONFIG).exists()", 1
     )[1].split("let first_identity = config.is_none()", 1)[0]
