@@ -766,6 +766,24 @@ mod windows {
         }
     }
 
+    /// The same D1 admission is replay-safe for one uncertain HTTP response.
+    /// Never repeat the expensive cold GET or retry a definitive 4xx refusal.
+    fn admit_retirement_with_uncertain_retry(
+        mut admit: impl FnMut() -> Result<bool, ShippingControlPlaneError>,
+        mut pause: impl FnMut(Duration),
+    ) -> Result<bool, ShippingControlPlaneError> {
+        match admit() {
+            Err(
+                ShippingControlPlaneError::Transport
+                | ShippingControlPlaneError::HttpServerUncertain,
+            ) => {
+                pause(Duration::from_millis(250));
+                admit()
+            }
+            result => result,
+        }
+    }
+
     /// Non-critical retention admission runs only after the *normal* Sync
     /// owner has confirmed CURRENT and cleared local dirty/pending evidence.
     /// It performs the existing independent R2 GET/AEAD/native-byte proof,
@@ -811,16 +829,20 @@ mod windows {
                 &mut downloader,
             )
             .map_err(|_| ())?;
-            control
-                .admit_cold_current_retirement(
-                    &intent.tenant_id,
-                    &intent.profile_id,
-                    &generation,
-                    version,
-                    &metadata_prelude,
-                    native_digest,
-                )
-                .map_err(|_| ())?;
+            admit_retirement_with_uncertain_retry(
+                || {
+                    control.admit_cold_current_retirement(
+                        &intent.tenant_id,
+                        &intent.profile_id,
+                        &generation,
+                        version,
+                        &metadata_prelude,
+                        native_digest,
+                    )
+                },
+                thread::sleep,
+            )
+            .map_err(|_| ())?;
             Ok(())
         })();
         if result.is_err() {
@@ -1046,6 +1068,60 @@ mod windows {
                     "BRIDGE_SYNC_INLINE_FALLBACK_PENDING;error={error:?};NEXT_SAFE_STEP=PRESERVE_LOCAL_BYTES"
                 );
             }
+        }
+    }
+
+    #[cfg(test)]
+    mod retirement_replay_tests {
+        use super::{admit_retirement_with_uncertain_retry, ShippingControlPlaneError};
+        use std::time::Duration;
+
+        #[test]
+        fn temporary_transport_failure_replays_only_the_same_admission_once() {
+            let mut outcomes = [
+                Err(ShippingControlPlaneError::Transport),
+                Ok(true),
+            ].into_iter();
+            let mut waits = Vec::new();
+            let result = admit_retirement_with_uncertain_retry(
+                || outcomes.next().expect("one bounded replay"),
+                |delay| waits.push(delay),
+            );
+            assert_eq!(result, Ok(true));
+            assert_eq!(waits, vec![Duration::from_millis(250)]);
+        }
+
+        #[test]
+        fn definitive_denial_or_no_predecessor_never_retries() {
+            for result in [
+                Err(ShippingControlPlaneError::HttpStatus),
+                Ok(false),
+            ] {
+                let mut attempts = 0;
+                let observed = admit_retirement_with_uncertain_retry(
+                    || {
+                        attempts += 1;
+                        result
+                    },
+                    |_| panic!("unexpected replay delay"),
+                );
+                assert_eq!(observed, result);
+                assert_eq!(attempts, 1);
+            }
+        }
+
+        #[test]
+        fn a_second_uncertain_response_never_loops_or_restarts_cold_proof() {
+            let mut attempts = 0;
+            let result = admit_retirement_with_uncertain_retry(
+                || {
+                    attempts += 1;
+                    Err(ShippingControlPlaneError::HttpServerUncertain)
+                },
+                |_| {},
+            );
+            assert_eq!(result, Err(ShippingControlPlaneError::HttpServerUncertain));
+            assert_eq!(attempts, 2);
         }
     }
 
