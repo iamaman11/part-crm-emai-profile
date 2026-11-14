@@ -1312,6 +1312,7 @@ mod windows {
                     error,
                     crate::local_browser_open::LocalOpenError::StaleLocalWorkspace
                         | crate::local_browser_open::LocalOpenError::ProfileBusy
+                        | crate::local_browser_open::LocalOpenError::OperationInProgress
                 ) {
                     start_sync_after_close(intent);
                 }
