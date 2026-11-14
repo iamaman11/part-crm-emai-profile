@@ -158,7 +158,7 @@ mod windows {
         digest_closed_workspace_streaming, seal_closed_workspace_streaming,
     };
     use crate::local_profile::{
-        DeliveryActivationGuard, MaterializationRoot, PendingSyncDescriptor,
+        ClosedSyncAdmission, DeliveryActivationGuard, MaterializationRoot, PendingSyncDescriptor,
     };
     use crate::shipping_control_plane::SyncEnrollmentPort;
     use crate::shipping_control_plane::{
@@ -191,6 +191,7 @@ mod windows {
     const PACKAGED_PYTHON_EXECUTABLE: &str = "python/python.exe";
     const HEARTBEAT_TRANSPORT_RETRY_MS: u64 = 1_000;
     const NATIVE_FILE_RELEASE_TIMEOUT: Duration = Duration::from_secs(120);
+    const MAX_CLOSED_SYNC_ATTEMPTS: u64 = 3;
     const SAVE_RECONNECT_AUTHORITY_RESERVE_MS: u64 = 5_000;
     const SAVE_HEARTBEAT_PERIOD_MS: u64 = 5_000;
 
@@ -401,38 +402,13 @@ mod windows {
                     Err(ClosedReadySyncError::Unconfirmed)
                 };
             }
-            if !pending.is_committed()
-                && workspace
-                    .base_generation_id()
-                    .is_some_and(|base| current.generation_id() == base)
-            {
-                let guard = BridgeWorkspaceLock::acquire_or_recover_interrupted(
-                    &workspace,
-                    binding.device_id(),
-                    now().map_err(|_| ())?.value(),
-                )
-                .map_err(|_| ())?;
-                let active = root
-                    .open_profile_current(&intent.tenant_id, &intent.profile_id)
-                    .map_err(|_| ())?;
-                let cleared = (|| {
-                    if active.pending_sync() != Some(&pending)
-                        || !matches!(browser_writer_locks_absent(&active), Ok(true))
-                    {
-                        return Err(());
-                    }
-                    root.clear_profile_current_pending_sync(&active)
-                        .map_err(|_| ())
-                })();
-                let unlocked = guard.release().map_err(|_| ());
-                cleared?;
-                unlocked?;
-                workspace = root
-                    .open_profile_current(&intent.tenant_id, &intent.profile_id)
-                    .map_err(|_| ())?;
-            } else {
-                return Err(ClosedReadySyncError::Unconfirmed);
-            }
+            // A prepared upload may still finish server-side after the old
+            // child's HTTP response disappears. Observing the old CURRENT
+            // does NOT prove that its in-flight Commit has been cancelled.
+            // Preserve this exact candidate and the original native bytes;
+            // a later readback may reconcile it, but no competing upload or
+            // fresh N+2 is permitted from this unconfirmed state.
+            return Err(ClosedReadySyncError::Unconfirmed);
         }
         let Some(base) = workspace.base_generation_id().cloned() else {
             // First DRAFT -> READY committed in D1, but our HTTP response or
@@ -927,6 +903,20 @@ mod windows {
         }
         let root = MaterializationRoot::open_or_create(&config.materialization_root)
             .map_err(|_| ShippingCompositionError::Configuration)?;
+        let initial = root
+            .open_profile_current(&intent.tenant_id, &intent.profile_id)
+            .map_err(|_| ShippingCompositionError::SyncUnconfirmed)?;
+        // One kernel-held owner covers the WHOLE Sync, including cloud network
+        // gaps. The inner Bridge writer lock still protects native file bytes.
+        // A second Close joins the existing owner without starting cloud work.
+        let _sync_owner = match ClosedSyncAdmission::try_acquire(&initial) {
+            Ok(Some(owner)) => owner,
+            Ok(None) => {
+                eprintln!("BRIDGE_CLOSED_SYNC_ALREADY_OWNED");
+                return Ok(());
+            }
+            Err(_) => return Err(ShippingCompositionError::SyncUnconfirmed),
+        };
         let mut retry_delay_seconds = 2_u64;
         let mut attempt = 0_u64;
         // A clean no-op invocation must not re-download an entire encrypted
@@ -994,9 +984,8 @@ mod windows {
                 return outcome;
             }
             if outcome.is_err() {
-                // A long-lived retry must not look like an indefinitely silent
-                // operation. Reuse bounded typed diagnostics, never a retry log
-                // that can authorize another R2 PUT or D1 generation.
+                // Keep local dirty/pending evidence on every error. Never
+                // convert a terminal mismatch into an endless process loop.
                 report::record_current(
                     Stage::CloudSaveAttempt,
                     Outcome::Unconfirmed,
@@ -1021,13 +1010,16 @@ mod windows {
                     continue;
                 }
             }
-            eprintln!(
-                "BRIDGE_CLOUD_SYNC_RETRY_PENDING attempt={}",
-                attempt.saturating_add(1)
-            );
+            attempt = attempt.saturating_add(1);
+            if attempt >= MAX_CLOSED_SYNC_ATTEMPTS {
+                eprintln!(
+                    "BRIDGE_CLOUD_SYNC_STOPPED;attempts={attempt};NEXT_SAFE_STEP=PRESERVE_LOCAL_BYTES"
+                );
+                return Err(outcome.err().unwrap_or(ShippingCompositionError::SyncUnconfirmed));
+            }
+            eprintln!("BRIDGE_CLOUD_SYNC_RETRY_PENDING attempt={attempt}");
             thread::sleep(Duration::from_secs(retry_delay_seconds));
             retry_delay_seconds = next_sync_retry_delay(retry_delay_seconds);
-            attempt = attempt.saturating_add(1);
         }
     }
 
@@ -1314,7 +1306,11 @@ mod windows {
             Err(error) => {
                 // One error path owns the existing Sync handoff. Stale CRM
                 // intents alone must not publish conflicting local bytes.
-                if error != crate::local_browser_open::LocalOpenError::StaleLocalWorkspace {
+                if !matches!(
+                    error,
+                    crate::local_browser_open::LocalOpenError::StaleLocalWorkspace
+                        | crate::local_browser_open::LocalOpenError::ProfileBusy
+                ) {
                     start_sync_after_close(intent);
                 }
                 Err(ShippingCompositionError::LocalOpen(error))
