@@ -158,9 +158,13 @@ def check_sources(sources: dict[str, str]) -> list[str]:
     if 'workspace.path().join(".local-unsynced")' not in closed:
         failures.append("the existing persistent dirty marker must govern pending cloud Sync")
     if "loop {" not in closed or "next_sync_retry_delay" not in closed:
-        failures.append("the existing closed Sync process must retry without requiring CRM to reopen")
-    if "RETRY_DELAYS_SECONDS" in closed:
-        failures.append("closed Sync must not abandon the existing dirty marker after a finite retry window")
+        failures.append("the existing closed Sync process must retain bounded recovery retries")
+    if "ClosedSyncAdmission::try_acquire(&initial)" not in closed:
+        failures.append("one whole-operation per-profile OS Sync owner is required")
+    if "attempt >= MAX_CLOSED_SYNC_ATTEMPTS" not in closed:
+        failures.append("closed Sync must stop after bounded retries and preserve local evidence")
+    if "BRIDGE_CLOUD_SYNC_STOPPED" not in closed:
+        failures.append("bounded Sync failure must be visible in typed diagnostics")
     for required in ("seal_closed_workspace_streaming(", "publish_closed_streamed_successor(",
                      "sync_closed_local_draft("):
         if required not in shipping:
@@ -208,7 +212,6 @@ def check_sources(sources: dict[str, str]) -> list[str]:
     )
     ready_effects = (
         ("finish_pending_sync_under_writer(root, &active", False),
-        ("root.clear_profile_current_pending_sync(&active)", True),
         ("digest_closed_workspace_streaming(&workspace, &inventory)", True),
         ("seal_closed_workspace_streaming(", True),
         ("root.set_profile_current_pending_sync(&workspace", True),
@@ -217,6 +220,8 @@ def check_sources(sources: dict[str, str]) -> list[str]:
         failures.append("closed DRAFT Sync must use the shared same-device Bridge recovery owner")
     if not guarded_effects(ready, ready_effects):
         failures.append("closed READY Sync must use the shared same-device Bridge recovery owner")
+    if "root.clear_profile_current_pending_sync(&active)" in ready:
+        failures.append("READY Sync must never discard an in-flight pending descriptor based only on old CURRENT")
 
     # The invoked finalizer must also enforce the native gate itself: the
     # READY exact-CURRENT recovery path calls it without a duplicate outer probe.
@@ -310,6 +315,10 @@ def self_test(sources: dict[str, str]) -> list[str]:
          "stale local CURRENT"),
         ("shipping", "wait_for_native_writer_release(", "unsafe_file_assumption(",
          "native file-release proof"),
+        ("shipping", "ClosedSyncAdmission::try_acquire(&initial)", "no_sync_owner()",
+         "one whole-operation per-profile OS Sync owner"),
+        ("shipping", "attempt >= MAX_CLOSED_SYNC_ATTEMPTS", "false",
+         "closed Sync must stop after bounded retries"),
         ("native", 'self.context.on("close"', 'self.context.on("missing"',
          "official native SDK/Playwright integration"),
         ("adapter", "return asyncio.run(run_local_profile(Path(sys.argv[2]), config, first_run))",
