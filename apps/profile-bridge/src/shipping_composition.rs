@@ -1015,7 +1015,9 @@ mod windows {
                 eprintln!(
                     "BRIDGE_CLOUD_SYNC_STOPPED;attempts={attempt};NEXT_SAFE_STEP=PRESERVE_LOCAL_BYTES"
                 );
-                return Err(outcome.err().unwrap_or(ShippingCompositionError::SyncUnconfirmed));
+                return Err(outcome
+                    .err()
+                    .unwrap_or(ShippingCompositionError::SyncUnconfirmed));
             }
             eprintln!("BRIDGE_CLOUD_SYNC_RETRY_PENDING attempt={attempt}");
             thread::sleep(Duration::from_secs(retry_delay_seconds));
