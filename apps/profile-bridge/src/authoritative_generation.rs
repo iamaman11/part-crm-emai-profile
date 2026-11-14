@@ -1039,6 +1039,7 @@ mod tests {
         tenant_id: TenantId,
         profile_id: ProfileId,
         generation_id: GenerationId,
+        #[cfg(windows)]
         source_id: GenerationId,
         key_id: KeyId,
         key_bytes: [u8; 32],
@@ -1128,6 +1129,7 @@ mod tests {
                 tenant_id,
                 profile_id,
                 generation_id,
+                #[cfg(windows)]
                 source_id,
                 key_id,
                 key_bytes,
