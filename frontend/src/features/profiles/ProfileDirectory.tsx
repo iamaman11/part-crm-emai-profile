@@ -1,4 +1,4 @@
-import { useQuery } from '@tanstack/react-query';
+import { useInfiniteQuery } from '@tanstack/react-query';
 import { useState } from 'react';
 import { useTenant } from '../../app/TenantContext';
 import { listProfiles } from './api';
@@ -12,13 +12,15 @@ export function ProfileDirectory({
   onSelect: (profileId: string) => void;
 }) {
   const { tenantId } = useTenant();
-  const query = useQuery({
+  const query = useInfiniteQuery({
     queryKey: ['operator-query', tenantId, 'profiles'],
-    queryFn: ({ signal }) => listProfiles(tenantId, signal),
+    queryFn: ({ signal, pageParam }) => listProfiles(tenantId, signal, pageParam),
+    initialPageParam: null as string | null,
+    getNextPageParam: (lastPage) => lastPage.nextCursor ?? undefined,
     enabled: tenantId.length > 0,
   });
   const [showDeleted, setShowDeleted] = useState(false);
-  const profiles = query.data?.profiles ?? [];
+  const profiles = query.data?.pages.flatMap((page) => page.profiles) ?? [];
   const deletedCount = profiles.filter((profile) => profile.status === 'DELETED').length;
   const visibleProfiles = showDeleted ? profiles : profiles.filter((profile) => profile.status !== 'DELETED');
 
@@ -36,8 +38,8 @@ export function ProfileDirectory({
         </button>
       )}
       <StatusMessage state={query.error ?? (query.isPending ? 'Loading visible profiles…' : null)} />
-      {!query.isPending && !query.error && visibleProfiles.length === 0 && (
-        <p>{profiles.length === 0 ? 'No profiles are visible to the active actor in this tenant.' : 'No active profiles on this page. Show deleted profiles to see archived entries.'}</p>
+      {!query.isPending && query.data && visibleProfiles.length === 0 && (
+        <p>{profiles.length === 0 ? 'No profiles are visible to the active actor in this tenant.' : 'No active profiles loaded. Show deleted profiles or load more.'}</p>
       )}
       {visibleProfiles.length > 0 && (
         <div className="table-scroll">
@@ -67,8 +69,10 @@ export function ProfileDirectory({
           </table>
         </div>
       )}
-      {query.data?.nextCursor && (
-        <p className="muted">More profiles are available on the server.</p>
+      {query.hasNextPage && (
+        <button type="button" disabled={query.isFetchingNextPage} onClick={() => { void query.fetchNextPage(); }}>
+          {query.isFetchingNextPage ? 'Loading more profiles…' : 'Show more profiles'}
+        </button>
       )}
     </section>
   );
