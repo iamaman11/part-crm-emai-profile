@@ -75,6 +75,85 @@ describe('ProfileDirectory tenant bootstrap boundary', () => {
     expect(mockedListProfiles).toHaveBeenCalledTimes(1);
   });
 
+  it('loads an active profile beyond a deleted-only first page using the server cursor', async () => {
+    mockedListProfiles.mockImplementation(async (_tenantId, _signal, cursor) => {
+      if (cursor === 'next_test_page') {
+        return {
+          profiles: [{
+            profileId: 'profile_page_two_ready',
+            status: 'READY',
+            version: 4,
+            linkedClientId: null,
+            activeGenerationId: 'generation_page_two',
+          }],
+          nextCursor: null,
+        };
+      }
+      return {
+        profiles: [{
+          profileId: 'profile_page_one_deleted',
+          status: 'DELETED',
+          version: 3,
+          linkedClientId: null,
+          activeGenerationId: null,
+        }],
+        nextCursor: 'next_test_page',
+      };
+    });
+
+    renderDirectory(async () => ({
+      tenants: [{
+        tenantId: 'tenant_01JAUTH',
+        displayName: 'Authorized organization',
+        actorId: 'actor_01JAUTH',
+        role: 'MEMBER',
+      }],
+    }));
+
+    expect(await screen.findByText('No active profiles loaded. Show deleted profiles or load more.')).toBeTruthy();
+    expect(screen.queryByText('profile_page_one_deleted')).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: 'Show more profiles' }));
+    expect(await screen.findByText('profile_page_two_ready')).toBeTruthy();
+    expect(screen.queryByRole('button', { name: 'Show more profiles' })).toBeNull();
+    expect(mockedListProfiles).toHaveBeenCalledTimes(2);
+    expect(mockedListProfiles.mock.calls[1]?.[2]).toBe('next_test_page');
+
+    fireEvent.click(screen.getByRole('button', { name: 'Show deleted profiles (1)' }));
+    expect(screen.getByText('profile_page_one_deleted')).toBeTruthy();
+    expect(screen.getByText('profile_page_two_ready')).toBeTruthy();
+  });
+
+  it('keeps already loaded profiles visible after a later page fails', async () => {
+    mockedListProfiles.mockImplementation(async (_tenantId, _signal, cursor) => {
+      if (cursor === 'next_test_page') throw new Error('temporary page read failure');
+      return {
+        profiles: [{
+          profileId: 'profile_page_one_ready',
+          status: 'READY',
+          version: 2,
+          linkedClientId: null,
+          activeGenerationId: 'generation_page_one',
+        }],
+        nextCursor: 'next_test_page',
+      };
+    });
+
+    renderDirectory(async () => ({
+      tenants: [{
+        tenantId: 'tenant_01JAUTH',
+        displayName: 'Authorized organization',
+        actorId: 'actor_01JAUTH',
+        role: 'MEMBER',
+      }],
+    }));
+
+    expect(await screen.findByText('profile_page_one_ready')).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: 'Show more profiles' }));
+    await waitFor(() => expect(mockedListProfiles).toHaveBeenCalledTimes(2));
+    expect(screen.getByText('profile_page_one_ready')).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Show more profiles' })).toBeTruthy();
+  });
+
   it('starts the profile request only after exactly one authorized tenant resolves', async () => {
     mockedListProfiles.mockResolvedValue({ profiles: [], nextCursor: null });
 
