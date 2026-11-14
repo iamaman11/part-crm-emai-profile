@@ -1006,7 +1006,7 @@ mod windows {
     /// invocation. No daemon, extra binary or new browser writer is created.
     /// A failed child start falls back to the same Sync inline.
     fn start_sync_after_close(intent: &crate::generation_initialization::InitialProfileOpen) {
-        use std::process::{Command, Stdio};
+        use std::process::Stdio;
         let status = match intent.status {
             InitialProfileStatus::Draft => "DRAFT",
             InitialProfileStatus::Ready => "READY",
@@ -1020,7 +1020,7 @@ mod windows {
             status,
         );
         let result = env::current_exe().and_then(|exe| {
-            Command::new(exe)
+            crate::windows_native::background_command(exe)
                 .arg("--sync-closed")
                 .arg(uri)
                 .stdin(Stdio::null())
