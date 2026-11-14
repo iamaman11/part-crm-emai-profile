@@ -1350,6 +1350,51 @@ sys.stderr.flush()
         Ok(())
     }
 
+    #[cfg(windows)]
+    #[test]
+    fn post_close_sync_callback_cannot_lose_profile_gate()
+    -> Result<(), Box<dyn std::error::Error>> {
+        use crate::local_profile::{ClosedSyncAdmission, MaterializationRoot};
+        use profile_platform_primitives::DeviceId;
+
+        let directory = tempfile::tempdir()?;
+        let root = MaterializationRoot::open_or_create(directory.path())?;
+        let intent = intent();
+        let device = DeviceId::parse("device_local_sync_open")?;
+        let mut callback_ran = false;
+
+        // The fixture has no packaged Python. Browser initialization fails
+        // safely, but the same close/recovery callback still holds the native
+        // gate. Another Open cannot claim this profile in that interval.
+        let result = super::open_with_before_launch_and_after_close(
+            &root,
+            &intent,
+            &device,
+            directory.path(),
+            None,
+            |open_result| {
+                assert_eq!(open_result, Err(LocalOpenError::RuntimeUnavailable));
+                let workspace = root
+                    .open_profile_current(&intent.tenant_id, &intent.profile_id)
+                    .expect("existing local profile");
+                assert!(
+                    ClosedSyncAdmission::try_acquire(&workspace)
+                        .expect("kernel admission")
+                        .is_none(),
+                    "callback must execute before the profile admission is released"
+                );
+                callback_ran = true;
+            },
+        );
+        assert_eq!(result, Err(LocalOpenError::RuntimeUnavailable));
+        assert!(callback_ran);
+        let workspace = root.open_profile_current(&intent.tenant_id, &intent.profile_id)?;
+        let _after = ClosedSyncAdmission::try_acquire(&workspace)?
+            .ok_or("the same profile gate did not release after callback")?;
+        assert!(workspace.path().join(".local-unsynced").exists());
+        Ok(())
+    }
+
     #[test]
     fn draft_without_local_copy_creates_one_local_workspace() {
         let directory = tempfile::tempdir().unwrap();
