@@ -1750,6 +1750,7 @@ mod tests {
         Ok(())
     }
 
+    #[cfg(windows)]
     fn prepare_v11_ready_fixture(
         fixture: &Fixture,
         native_bytes: &[u8],
@@ -1781,6 +1782,7 @@ mod tests {
         Ok(workspace.path().to_path_buf())
     }
 
+    #[cfg(windows)]
     #[test]
     fn lost_ready_commit_v11_to_v12_reconciles_exact_native_bytes_without_replacing_folder()
     -> Result<(), Box<dyn std::error::Error>> {
@@ -1825,6 +1827,7 @@ mod tests {
         Ok(())
     }
 
+    #[cfg(windows)]
     #[test]
     fn lost_ready_commit_v11_to_v12_rejects_changed_bytes_without_local_version_forgery()
     -> Result<(), Box<dyn std::error::Error>> {
