@@ -427,6 +427,7 @@ impl UserDiagnostic {
                 }
                 ShippingCompositionError::SyncUnconfirmed => "BRIDGE_CLOUD_SYNC_UNCONFIRMED",
                 ShippingCompositionError::SyncLeaseConflict => "BRIDGE_SYNC_COORDINATOR_CONFLICT",
+                ShippingCompositionError::SyncVersionConflict => "BRIDGE_SYNC_VERSION_CONFLICT",
                 ShippingCompositionError::LocalDelete(error) => match error {
                     crate::local_profile_delete::TerminalDeleteError::AuthorizationUnconfirmed => {
                         "BRIDGE_LOCAL_DELETE_CLOUD_UNCONFIRMED"
@@ -900,6 +901,9 @@ impl UserDiagnostic {
             },
             Self::Launch(Launch::SyncUnconfirmed) => {
                 "The browser closed locally and its files are intact, but cloud synchronization is not confirmed. Local pending-sync evidence was retained for a later exact retry."
+            }
+            Self::Launch(Launch::SyncVersionConflict) => {
+                "Cloud CURRENT is newer or differs from the exact local Save candidate. The original local profile and unsynced data were preserved. Do not force Restore or rewrite the version marker; explicit verified recovery is required."
             }
             Self::Launch(Launch::SyncLeaseConflict)
             | Self::Launch(Launch::Initialization(
