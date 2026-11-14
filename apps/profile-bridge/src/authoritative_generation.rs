@@ -1750,7 +1750,6 @@ mod tests {
         Ok(())
     }
 
-
     fn prepare_v11_ready_fixture(
         fixture: &Fixture,
         native_bytes: &[u8],
@@ -1762,12 +1761,23 @@ mod tests {
             10,
         )?;
         let workspace =
-            fixture.root.update_profile_current_sync_base(&draft, &fixture.source_id, 11)?;
+            fixture
+                .root
+                .update_profile_current_sync_base(&draft, &fixture.source_id, 11)?;
         fs::create_dir_all(workspace.path().join("user_data/storage"))?;
         fs::write(workspace.path().join("prefs.js"), b"authoritative-prefs")?;
-        fs::write(workspace.path().join("user_data/storage/state.bin"), native_bytes)?;
-        fs::write(workspace.path().join("camoufox-config.json"), &fixture.config_bytes)?;
-        fs::write(workspace.path().join(".local-unsynced"), b"local-unsynced-v2")?;
+        fs::write(
+            workspace.path().join("user_data/storage/state.bin"),
+            native_bytes,
+        )?;
+        fs::write(
+            workspace.path().join("camoufox-config.json"),
+            &fixture.config_bytes,
+        )?;
+        fs::write(
+            workspace.path().join(".local-unsynced"),
+            b"local-unsynced-v2",
+        )?;
         Ok(workspace.path().to_path_buf())
     }
 
@@ -1795,8 +1805,9 @@ mod tests {
             &mut control,
             &mut downloader,
         )?;
-        let recovered =
-            fixture.root.open_profile_current(&fixture.tenant_id, &fixture.profile_id)?;
+        let recovered = fixture
+            .root
+            .open_profile_current(&fixture.tenant_id, &fixture.profile_id)?;
         assert_eq!(recovered.path(), original_path);
         assert_eq!(recovered.profile_version(), 12);
         assert_eq!(recovered.base_generation_id(), Some(&fixture.generation_id));
@@ -1805,7 +1816,10 @@ mod tests {
             fs::read(recovered.path().join("user_data/storage/state.bin"))?,
             b"authoritative-state",
         );
-        assert_eq!(fs::read(recovered.path().join("camoufox-config.json"))?, fixture.config_bytes);
+        assert_eq!(
+            fs::read(recovered.path().join("camoufox-config.json"))?,
+            fixture.config_bytes
+        );
         assert_eq!(downloader.calls, 1);
         fixture.cleanup();
         Ok(())
@@ -1815,10 +1829,8 @@ mod tests {
     fn lost_ready_commit_v11_to_v12_rejects_changed_bytes_without_local_version_forgery()
     -> Result<(), Box<dyn std::error::Error>> {
         let fixture = Fixture::without_browser_identity()?;
-        let original_path = prepare_v11_ready_fixture(
-            &fixture,
-            b"NEW NATIVE EDITS AFTER LOST COMMIT ACK",
-        )?;
+        let original_path =
+            prepare_v11_ready_fixture(&fixture, b"NEW NATIVE EDITS AFTER LOST COMMIT ACK")?;
         let mut control = fixture.control();
         let mut downloader = FakeStreamDownloader {
             container: fixture.container.clone(),
@@ -1840,8 +1852,9 @@ mod tests {
             result,
             Err(AuthoritativeGenerationMaterializationError::IncompleteLocalEvidence)
         );
-        let retained =
-            fixture.root.open_profile_current(&fixture.tenant_id, &fixture.profile_id)?;
+        let retained = fixture
+            .root
+            .open_profile_current(&fixture.tenant_id, &fixture.profile_id)?;
         assert_eq!(retained.path(), original_path);
         assert_eq!(retained.profile_version(), 11);
         assert_eq!(retained.base_generation_id(), Some(&fixture.source_id));
