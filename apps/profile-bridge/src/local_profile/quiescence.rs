@@ -454,7 +454,9 @@ fn map_try_lock_error(error: TryLockError) -> LocalProfileError {
 
 #[cfg(test)]
 mod tests {
-    use super::{BRIDGE_LOCK_FILE, BridgeWorkspaceLock, ClosedSyncAdmission, DeliveryActivationGuard};
+    use super::{
+        BRIDGE_LOCK_FILE, BridgeWorkspaceLock, ClosedSyncAdmission, DeliveryActivationGuard,
+    };
     use crate::local_profile::{LocalProfileError, MaterializationRoot};
     use profile_platform_primitives::{DeviceId, GenerationId, ProfileId, TenantId};
     use std::fs;
@@ -518,19 +520,18 @@ mod tests {
             Err(LocalProfileError::LockBusy)
         ));
         assert!(
-            workspace.inventory()?.entries().iter().all(|entry|
-                !entry.relative_path().contains("sync-admission")
-            ),
+            workspace
+                .inventory()?
+                .entries()
+                .iter()
+                .all(|entry| !entry.relative_path().contains("sync-admission")),
             "OS-only Sync admission cannot be serialized into a profile"
         );
 
         let other_profile = ProfileId::parse("profile_other_sync_owner")?;
         let other_generation = GenerationId::parse("generation_other_sync_owner")?;
-        let independent = root.create_generation(
-            workspace.tenant_id(),
-            &other_profile,
-            &other_generation,
-        )?;
+        let independent =
+            root.create_generation(workspace.tenant_id(), &other_profile, &other_generation)?;
         let other = ClosedSyncAdmission::try_acquire(&independent)?
             .expect("another profile must not be blocked");
         drop(first);
@@ -553,7 +554,8 @@ mod tests {
         let root = MaterializationRoot::open_existing(directory)?;
         let tenant = TenantId::parse(std::env::var("PROFILE_BRIDGE_TEST_SYNC_TENANT")?)?;
         let profile = ProfileId::parse(std::env::var("PROFILE_BRIDGE_TEST_SYNC_PROFILE")?)?;
-        let generation = GenerationId::parse(std::env::var("PROFILE_BRIDGE_TEST_SYNC_GENERATION")?)?;
+        let generation =
+            GenerationId::parse(std::env::var("PROFILE_BRIDGE_TEST_SYNC_GENERATION")?)?;
         let workspace = root.open_generation(&tenant, &profile, &generation)?;
         let _owner = ClosedSyncAdmission::try_acquire(&workspace)?
             .expect("child must own the native Sync admission");
@@ -578,9 +580,18 @@ mod tests {
             .arg("native_closed_sync_admission_child")
             .arg("--nocapture")
             .env("PROFILE_BRIDGE_TEST_SYNC_ROOT", root.path())
-            .env("PROFILE_BRIDGE_TEST_SYNC_TENANT", workspace.tenant_id().as_str())
-            .env("PROFILE_BRIDGE_TEST_SYNC_PROFILE", workspace.profile_id().as_str())
-            .env("PROFILE_BRIDGE_TEST_SYNC_GENERATION", workspace.generation_id().as_str())
+            .env(
+                "PROFILE_BRIDGE_TEST_SYNC_TENANT",
+                workspace.tenant_id().as_str(),
+            )
+            .env(
+                "PROFILE_BRIDGE_TEST_SYNC_PROFILE",
+                workspace.profile_id().as_str(),
+            )
+            .env(
+                "PROFILE_BRIDGE_TEST_SYNC_GENERATION",
+                workspace.generation_id().as_str(),
+            )
             .stdin(Stdio::null())
             .stdout(Stdio::null())
             .stderr(Stdio::null())
