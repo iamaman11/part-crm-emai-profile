@@ -39,7 +39,11 @@ export function ProfileDirectory({
       )}
       <StatusMessage state={query.error ?? (query.isPending ? 'Loading visible profiles…' : null)} />
       {!query.isPending && query.data && visibleProfiles.length === 0 && (
-        <p>{profiles.length === 0 ? 'No profiles are visible to the active actor in this tenant.' : 'No active profiles loaded. Show deleted profiles or load more.'}</p>
+        <p>{profiles.length === 0
+          ? 'No profiles are visible to the active actor in this tenant.'
+          : query.hasNextPage
+            ? 'No active profiles loaded. Show deleted profiles or load more.'
+            : 'No active profiles loaded. Show deleted profiles.'}</p>
       )}
       {visibleProfiles.length > 0 && (
         <div className="table-scroll">
