@@ -891,9 +891,9 @@ mod windows {
     pub fn run_closed_sync(
         intent: &crate::generation_initialization::InitialProfileOpen,
     ) -> Result<(), ShippingCompositionError> {
-        // This same one-shot Bridge process remains alive until the existing
-        // dirty marker is cleared. Backoff is bounded; attempts are not.
-        // No daemon, local retry file, or independent cloud writer is added.
+        // One short-lived process owns explicit closed-profile recovery.
+        // The same bounded Sync code runs inline after normal native Close.
+        // Dirty/pending evidence survives exhausted retries and process death.
         let config = ShippingConfig::from_installation()?;
         let binding =
             WindowsDeviceApplicationBinding::open(&config.device_application_binding_path)
@@ -912,8 +912,10 @@ mod windows {
         let _sync_owner = match ClosedSyncAdmission::try_acquire(&initial) {
             Ok(Some(owner)) => owner,
             Ok(None) => {
+                // No cloud call and, crucially, no Save receipt: another
+                // process owns the operation but has not necessarily finished.
                 eprintln!("BRIDGE_CLOSED_SYNC_ALREADY_OWNED");
-                return Ok(());
+                return Err(ShippingCompositionError::SyncUnconfirmed);
             }
             Err(_) => return Err(ShippingCompositionError::SyncUnconfirmed),
         };
