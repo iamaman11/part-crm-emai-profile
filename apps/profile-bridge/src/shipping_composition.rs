@@ -191,7 +191,6 @@ mod windows {
 
     const NETWORK_POLICY_PATH_ENV: &str = "PROFILE_BRIDGE_NETWORK_POLICY_PATH";
     const PROXY_CONFIG_PATH_ENV: &str = "PROFILE_BRIDGE_PROXY_CONFIG_PATH";
-    const PACKAGED_PYTHON_EXECUTABLE: &str = "python/python.exe";
     const HEARTBEAT_TRANSPORT_RETRY_MS: u64 = 1_000;
     const NATIVE_FILE_RELEASE_TIMEOUT: Duration = Duration::from_secs(120);
     const MAX_CLOSED_SYNC_ATTEMPTS: u64 = 3;
