@@ -3,7 +3,7 @@
 #![forbid(unsafe_code)]
 
 use crate::generation_initialization::{InitialProfileOpen, InitialProfileStatus};
-use crate::local_profile::{BridgeWorkspaceLock, LocalProfileError, MaterializationRoot};
+use crate::local_profile::{BridgeWorkspaceLock, ClosedSyncAdmission, LocalProfileError, MaterializationRoot};
 use crate::user_diagnostics::report::{self, Cause, Cloud, Outcome, Stage};
 use profile_platform_primitives::{DeviceId, GenerationId};
 use sha2::{Digest, Sha256};
@@ -44,6 +44,7 @@ pub enum LocalOpenError {
     StaleLocalWorkspace,
     RuntimeUnavailable,
     ProfileBusy,
+    OperationInProgress,
     IdentityPreparation,
     BrowserNotClosedCleanly,
     LaunchConfirmation,
@@ -56,6 +57,7 @@ impl fmt::Display for LocalOpenError {
             Self::StaleLocalWorkspace => "Local profile version differs from the authorized CRM version; preserve local data and resolve Sync or Restore before opening",
             Self::RuntimeUnavailable => "Installed Camoufox runtime is unavailable",
             Self::ProfileBusy => "This local browser profile is already in use",
+            Self::OperationInProgress => "Another native Open, Close or Sync operation still owns this profile",
             Self::IdentityPreparation => "Local Camoufox identity could not be prepared",
             Self::BrowserNotClosedCleanly => {
                 "Browser close was not verified; local files were kept"
@@ -670,6 +672,15 @@ pub(crate) fn open_with_before_launch(
     let local_started = Instant::now();
     let generation = local_generation(intent)?;
     let workspace = open_or_create_workspace(root, intent, &generation)?;
+    // Keep the same profile-scoped OS gate from browser Open through native
+    // Close. A previous post-close Sync cannot run concurrently with a new
+    // Firefox session and commit a snapshot of changing browser bytes.
+    // The guard drops before the normal post-Close Sync child is spawned.
+    let _operation = match ClosedSyncAdmission::try_acquire(&workspace) {
+        Ok(Some(owner)) => owner,
+        Ok(None) => return Err(LocalOpenError::OperationInProgress),
+        Err(_) => return Err(LocalOpenError::InvalidLocalWorkspace),
+    };
     let epoch = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map_err(|_| LocalOpenError::InvalidLocalWorkspace)?
