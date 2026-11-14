@@ -479,8 +479,8 @@ fn sha256_schema() -> Value {
 mod tests {
     use super::{
         BridgeCurrentColdRetirementResponse, BridgeGenerationLocalUnsyncedRetryDecisionRequest,
-        BridgeGenerationSuccessorObserveRequest,
-        BridgeGenerationSuccessorObserveResponse, BridgeGenerationSuccessorRetryDecisionRequest,
+        BridgeGenerationSuccessorObserveRequest, BridgeGenerationSuccessorObserveResponse,
+        BridgeGenerationSuccessorRetryDecisionRequest,
         BridgeGenerationSuccessorRetryDecisionResponse, BridgeGenerationUploadCapabilityResponse,
         BridgeProfileGenerationSuccessorRequest, ProfileCreateRequest, ProfileGrantRequest,
         ProfileProjectionDto, ProfileStatusDto, RegisterGenerationRequest, openapi_fragment,
@@ -492,16 +492,21 @@ mod tests {
     -> Result<(), Box<dyn std::error::Error>> {
         let response = BridgeCurrentColdRetirementResponse { admitted: true };
         assert_eq!(serde_json::to_value(response)?, json!({"admitted": true}));
-        assert!(!serde_json::from_value::<BridgeCurrentColdRetirementResponse>(
-            json!({"admitted": false}),
-        )?.admitted);
+        assert!(
+            !serde_json::from_value::<BridgeCurrentColdRetirementResponse>(
+                json!({"admitted": false}),
+            )?
+            .admitted
+        );
         for invalid in [
             json!({"admitted": "true"}),
             json!({"admitted": true, "objectKey": "untrusted"}),
             json!({"admitted": true, "deleteToken": "untrusted"}),
             json!({}),
         ] {
-            assert!(serde_json::from_value::<BridgeCurrentColdRetirementResponse>(invalid).is_err());
+            assert!(
+                serde_json::from_value::<BridgeCurrentColdRetirementResponse>(invalid).is_err()
+            );
         }
         Ok(())
     }

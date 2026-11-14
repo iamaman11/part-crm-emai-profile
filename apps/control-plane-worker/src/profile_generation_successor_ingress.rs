@@ -42,12 +42,11 @@ use control_plane_contract::generation_reopen_api::{
 };
 use control_plane_contract::profile_generation_api::{
     BridgeCurrentColdRetirementRequest, BridgeCurrentColdRetirementResponse,
-    BridgeGenerationLocalUnsyncedRetryDecisionRequest,
-    BridgeGenerationSuccessorCommitOutcomeDto, BridgeGenerationSuccessorCommitResponse,
-    BridgeGenerationSuccessorObserveRequest, BridgeGenerationSuccessorObserveResponse,
-    BridgeGenerationSuccessorRetryDecisionRequest, BridgeGenerationSuccessorRetryDecisionResponse,
-    BridgeGenerationSuccessorRetryVerdict, BridgeGenerationUploadCapabilityResponse,
-    BridgeProfileGenerationSuccessorRequest,
+    BridgeGenerationLocalUnsyncedRetryDecisionRequest, BridgeGenerationSuccessorCommitOutcomeDto,
+    BridgeGenerationSuccessorCommitResponse, BridgeGenerationSuccessorObserveRequest,
+    BridgeGenerationSuccessorObserveResponse, BridgeGenerationSuccessorRetryDecisionRequest,
+    BridgeGenerationSuccessorRetryDecisionResponse, BridgeGenerationSuccessorRetryVerdict,
+    BridgeGenerationUploadCapabilityResponse, BridgeProfileGenerationSuccessorRequest,
 };
 use device_domain::DeviceJobTarget;
 use encrypted_generation_domain::{
