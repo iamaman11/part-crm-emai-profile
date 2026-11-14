@@ -917,6 +917,18 @@ mod windows {
             }
             Err(_) => return Err(ShippingCompositionError::SyncUnconfirmed),
         };
+        run_closed_sync_with_admission(intent, &binding, &root, &config.control_plane_origin)
+    }
+
+    // Called only with the profile admission already held by either the normal
+    // browser Open or the explicit closed-recovery CLI. This is ONE Sync engine,
+    // with no lock-release window between Firefox Close and cloud CURRENT.
+    fn run_closed_sync_with_admission(
+        intent: &crate::generation_initialization::InitialProfileOpen,
+        binding: &WindowsDeviceApplicationBinding,
+        root: &MaterializationRoot,
+        origin: &str,
+    ) -> Result<(), ShippingCompositionError> {
         let mut retry_delay_seconds = 2_u64;
         let mut attempt = 0_u64;
         // A clean no-op invocation must not re-download an entire encrypted
@@ -937,13 +949,20 @@ mod windows {
                 // one-shot Sync child, independently prove cold CURRENT and
                 // ask D1 to admit optional predecessor retirement. The
                 // existing Worker scheduler alone may later delete old R2.
-                if saved_in_this_sync && intent.status == InitialProfileStatus::Ready {
-                    try_retire_predecessor_after_clean_sync(
-                        intent,
-                        &binding,
-                        &root,
-                        &config.control_plane_origin,
+                if saved_in_this_sync {
+                    // The CURRENT Save is already confirmed and the native
+                    // marker is clean. Optional R2-retirement proof cannot
+                    // revoke this receipt or hold up its observation.
+                    report::record_current(
+                        Stage::CloudSaveConfirmed,
+                        Outcome::Succeeded,
+                        Cloud::CommittedExact,
+                        Cause::None,
+                        0,
                     );
+                    if intent.status == InitialProfileStatus::Ready {
+                        try_retire_predecessor_after_clean_sync(intent, binding, root, origin);
+                    }
                 }
                 return Ok(());
             }
@@ -972,7 +991,7 @@ mod windows {
                 effective.expected_version = workspace.profile_version();
             }
             let outcome =
-                sync_after_native_close(&effective, &binding, &root, &config.control_plane_origin);
+                sync_after_native_close(&effective, binding, root, origin);
             if matches!(outcome, Err(ShippingCompositionError::SyncLeaseConflict)) {
                 report::record_current(
                     Stage::RecoveryRequired,
@@ -1027,42 +1046,6 @@ mod windows {
 
     fn next_sync_retry_delay(current_seconds: u64) -> u64 {
         current_seconds.saturating_mul(2).min(4)
-    }
-
-    /// The same installed executable handles one ephemeral cloud Sync
-    /// invocation. No daemon, extra binary or new browser writer is created.
-    /// A failed child start falls back to the same Sync inline.
-    fn start_sync_after_close(intent: &crate::generation_initialization::InitialProfileOpen) {
-        use std::process::Stdio;
-        let status = match intent.status {
-            InitialProfileStatus::Draft => "DRAFT",
-            InitialProfileStatus::Ready => "READY",
-        };
-        let uri = format!(
-            "profilebridge://open/v2/{}/{}/{}/{}/{}",
-            intent.tenant_id.as_str(),
-            intent.actor_id.as_str(),
-            intent.profile_id.as_str(),
-            intent.expected_version,
-            status,
-        );
-        let result = env::current_exe().and_then(|exe| {
-            crate::windows_native::background_command(exe)
-                .arg("--sync-closed")
-                .arg(uri)
-                .stdin(Stdio::null())
-                .stdout(Stdio::null())
-                .stderr(Stdio::null())
-                .spawn()
-        });
-        if result.is_err() {
-            eprintln!("BRIDGE_SYNC_NOT_STARTED;FALLBACK=RUN_EXISTING_SYNC_INLINE");
-            if let Err(error) = run_closed_sync(intent) {
-                eprintln!(
-                    "BRIDGE_SYNC_INLINE_FALLBACK_PENDING;error={error:?};NEXT_SAFE_STEP=PRESERVE_LOCAL_BYTES"
-                );
-            }
-        }
     }
 
     #[cfg(test)]
@@ -1256,12 +1239,38 @@ mod windows {
             .map_err(|_| ShippingCompositionError::Configuration)?;
 
         let open_local = || {
-            crate::local_browser_open::open_with_before_launch(
+            crate::local_browser_open::open_with_before_launch_and_after_close(
                 &root,
                 intent,
                 binding.device_id(),
                 delivery.runtime_root(),
                 delivery_health_before_launch(delivery.pending_health_confirmation()),
+                |open_result| {
+                    // The browser's profile admission is still held here.
+                    // The SAME Rust process completes closed Sync before a
+                    // subsequent Open can touch browser bytes. No child launch
+                    // or OS-lock handoff exists in the normal lifecycle.
+                    if !matches!(
+                        open_result,
+                        Err(
+                            crate::local_browser_open::LocalOpenError::StaleLocalWorkspace
+                                | crate::local_browser_open::LocalOpenError::ProfileBusy
+                                | crate::local_browser_open::LocalOpenError::OperationInProgress
+                                | crate::local_browser_open::LocalOpenError::RestoreRequired
+                        )
+                    ) {
+                        if let Err(error) = run_closed_sync_with_admission(
+                            intent,
+                            &binding,
+                            &root,
+                            &config.control_plane_origin,
+                        ) {
+                            eprintln!(
+                                "BRIDGE_CLOUD_SYNC_UNCONFIRMED;error={error:?};NEXT_SAFE_STEP=PRESERVE_LOCAL_BYTES"
+                            );
+                        }
+                    }
+                },
             )
         };
         let result = match open_local() {
@@ -1297,28 +1306,30 @@ mod windows {
                 // Re-enter the same local Open with the same runtime and owners.
                 open_local()
             }
+            Err(crate::local_browser_open::LocalOpenError::StaleLocalWorkspace) => {
+                // Recover a lost cloud Commit acknowledgement only on a DIRTY
+                // existing local copy. Normal local Open remains network-free.
+                // The existing closed Sync proves exact CURRENT/native bytes
+                // and advances the local marker; never force a cloud version.
+                let dirty = root
+                    .open_profile_current(&intent.tenant_id, &intent.profile_id)
+                    .map(|workspace| {
+                        workspace.pending_sync().is_some()
+                            || std::fs::symlink_metadata(
+                                workspace.path().join(".local-unsynced"),
+                            )
+                            .is_ok()
+                    })
+                    .unwrap_or(false);
+                if dirty && run_closed_sync(intent).is_ok() {
+                    open_local()
+                } else {
+                    Err(crate::local_browser_open::LocalOpenError::StaleLocalWorkspace)
+                }
+            }
             result => result,
         };
-
-        match result {
-            Ok(()) => {
-                start_sync_after_close(intent);
-                Ok(())
-            }
-            Err(error) => {
-                // One error path owns the existing Sync handoff. Stale CRM
-                // intents alone must not publish conflicting local bytes.
-                if !matches!(
-                    error,
-                    crate::local_browser_open::LocalOpenError::StaleLocalWorkspace
-                        | crate::local_browser_open::LocalOpenError::ProfileBusy
-                        | crate::local_browser_open::LocalOpenError::OperationInProgress
-                ) {
-                    start_sync_after_close(intent);
-                }
-                Err(ShippingCompositionError::LocalOpen(error))
-            }
-        }
+        result.map_err(ShippingCompositionError::LocalOpen)
     }
 
     pub fn run_delivery_command(
