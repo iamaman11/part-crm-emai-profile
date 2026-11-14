@@ -8,6 +8,7 @@ const ROOT_MARKER: &str = ".profile-platform-root";
 const BRIDGE_LOCK_FILE: &str = ".profile-platform.lock";
 const GENERATION_DEPTH_FROM_ROOT: usize = 3;
 
+#[cfg(any(windows, test))]
 /// One kernel-only Sync admission for a specific tenant/profile, held from the
 /// first closed-snapshot decision through cloud CURRENT acknowledgement.
 /// It is NOT browser ownership, a persisted Save receipt or a second Sync engine.
@@ -18,6 +19,7 @@ pub(crate) struct ClosedSyncAdmission {
     _profile_sync: File,
 }
 
+#[cfg(any(windows, test))]
 impl ClosedSyncAdmission {
     /// A second close of the SAME profile joins the already-running owner
     /// by doing no cloud work. Different profiles have independent locks.
@@ -265,6 +267,7 @@ fn open_generation_admission(workspace: &GenerationWorkspace) -> Result<File, Lo
     open_admission_marker(workspace.path().join(".profile-platform.writer-admission"))
 }
 
+#[cfg(any(windows, test))]
 fn open_sync_admission(workspace: &GenerationWorkspace) -> Result<File, LocalProfileError> {
     // The marker is beside CURRENT, outside its native browser inventory and
     // encrypted snapshot. It cannot be mistaken for a saved generation.
@@ -510,7 +513,7 @@ mod tests {
     -> Result<(), Box<dyn std::error::Error>> {
         let (_test_root, root, workspace, _device) = fixture("single-sync-owner")?;
         let first = ClosedSyncAdmission::try_acquire(&workspace)?
-            .expect("the first Sync owns this profile");
+            .ok_or("first Sync did not acquire admission")?;
         assert!(
             ClosedSyncAdmission::try_acquire(&workspace)?.is_none(),
             "a second Sync must not perform any cloud or local writes"
@@ -533,10 +536,10 @@ mod tests {
         let independent =
             root.create_generation(workspace.tenant_id(), &other_profile, &other_generation)?;
         let other = ClosedSyncAdmission::try_acquire(&independent)?
-            .expect("another profile must not be blocked");
+            .ok_or("independent profile was incorrectly blocked")?;
         drop(first);
         let again = ClosedSyncAdmission::try_acquire(&workspace)?
-            .expect("kernel releases the Sync admission after owner exit");
+            .ok_or("Sync admission did not release after owner exit")?;
         drop(again);
         drop(other);
         assert!(DeliveryActivationGuard::acquire(&root)?.confirms_quiescence());
@@ -558,7 +561,7 @@ mod tests {
             GenerationId::parse(std::env::var("PROFILE_BRIDGE_TEST_SYNC_GENERATION")?)?;
         let workspace = root.open_generation(&tenant, &profile, &generation)?;
         let _owner = ClosedSyncAdmission::try_acquire(&workspace)?
-            .expect("child must own the native Sync admission");
+            .ok_or("native child could not acquire the Sync admission")?;
         std::thread::sleep(std::time::Duration::from_secs(12));
         Ok(())
     }
@@ -624,7 +627,7 @@ mod tests {
         child.wait()?;
 
         let _recovered = ClosedSyncAdmission::try_acquire(&workspace)?
-            .expect("kernel must release Sync admission when process dies");
+            .ok_or("kernel failed to release Sync admission after child kill")?;
         assert_eq!(fs::read(&wal)?, b"original-unsynced-browser-wal");
         Ok(())
     }
