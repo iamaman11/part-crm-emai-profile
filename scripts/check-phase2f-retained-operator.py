@@ -143,14 +143,14 @@ def check_sources(sources: dict[str, str]) -> list[str]:
             failures.append(f"shipping Bridge CLI lost single native Open/Sync dispatch: {required}")
 
     initial = function_body(shipping, "pub fn run_initial(")
-    local_open = initial.find("crate::local_browser_open::open_with_before_launch(")
-    sync_handoff = initial.find("start_sync_after_close(intent);")
-    if local_open < 0 or sync_handoff < local_open:
-        failures.append("normal native Open must hand off to the same post-close Sync")
-    if "Err(ShippingCompositionError::LocalOpen(error))" not in initial:
+    local_open = initial.find("crate::local_browser_open::open_with_before_launch_and_after_close(")
+    sync_handoff = initial.find("run_closed_sync_with_admission(", local_open)
+    if local_open < 0 or sync_handoff < local_open or "start_sync_after_close(" in initial:
+        failures.append("normal native Open must retain same-process gate through post-close Sync")
+    if "result.map_err(ShippingCompositionError::LocalOpen)" not in initial:
         failures.append("abnormal adapter exit must retain the same fail-closed Sync handoff")
 
-    closed = function_body(shipping, "pub fn run_closed_sync(")
+    closed = function_body(shipping, "fn run_closed_sync_with_admission(")
     file_gate = closed.find("wait_for_native_writer_release(")
     save = closed.find("sync_after_native_close(")
     if file_gate < 0 or save < file_gate:
@@ -159,8 +159,10 @@ def check_sources(sources: dict[str, str]) -> list[str]:
         failures.append("the existing persistent dirty marker must govern pending cloud Sync")
     if "loop {" not in closed or "next_sync_retry_delay" not in closed:
         failures.append("the existing closed Sync process must retain bounded recovery retries")
-    if "ClosedSyncAdmission::try_acquire(&initial)" not in closed:
+    if "ClosedSyncAdmission::try_acquire(&initial)" not in function_body(shipping, "pub fn run_closed_sync("):
         failures.append("one whole-operation per-profile OS Sync owner is required")
+    if "run_closed_sync_with_admission(intent, &binding, &root, &config.control_plane_origin)" not in shipping:
+        failures.append("native closed Sync and Open must share the same Sync implementation")
     if "attempt >= MAX_CLOSED_SYNC_ATTEMPTS" not in closed:
         failures.append("closed Sync must stop after bounded retries and preserve local evidence")
     if "BRIDGE_CLOUD_SYNC_STOPPED" not in closed:
@@ -170,7 +172,10 @@ def check_sources(sources: dict[str, str]) -> list[str]:
         if required not in shipping:
             failures.append(f"single existing snapshot/cloud Save owner missing: {required}")
 
-    opened = function_body(local, "pub(crate) fn open_with_before_launch(")
+    opened = function_body(local, "fn open_under_profile_admission(")
+    session = function_body(local, "pub(crate) fn open_with_before_launch_and_after_close(")
+    if "ClosedSyncAdmission::try_acquire(&workspace)" not in session or "after_close(result)" not in session:
+        failures.append("local browser operation must retain OS admission through post-close Sync callback")
     marker = opened.find("mark_local_unsynced(workspace.path())?;")
     launch = opened.find("run_python(", marker)
     launch_call = opened[launch : launch + 256] if launch >= 0 else ""
