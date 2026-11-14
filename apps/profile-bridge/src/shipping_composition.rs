@@ -897,6 +897,10 @@ mod windows {
             .map_err(|_| ShippingCompositionError::Configuration)?;
         let mut retry_delay_seconds = 2_u64;
         let mut attempt = 0_u64;
+        // A clean no-op invocation must not re-download an entire encrypted
+        // CURRENT merely to retry optional retirement. Only this invocation's
+        // verified Save may authorize the independent cold proof.
+        let mut saved_in_this_sync = false;
         loop {
             let workspace = root
                 .open_profile_current(&intent.tenant_id, &intent.profile_id)
@@ -911,7 +915,7 @@ mod windows {
                 // one-shot Sync child, independently prove cold CURRENT and
                 // ask D1 to admit optional predecessor retirement. The
                 // existing Worker scheduler alone may later delete old R2.
-                if intent.status == InitialProfileStatus::Ready {
+                if saved_in_this_sync && intent.status == InitialProfileStatus::Ready {
                     try_retire_predecessor_after_clean_sync(
                         intent,
                         &binding,
@@ -980,6 +984,7 @@ mod windows {
                     // The exact cloud Save and local clean marker are complete.
                     // Re-enter the clean branch to attempt independent,
                     // non-critical retirement admission exactly once.
+                    saved_in_this_sync = true;
                     continue;
                 }
             }
