@@ -346,6 +346,18 @@ mod windows {
             && current.container_bytes() == pending.container_bytes()
     }
 
+    /// An unmatched pending descriptor is only retryable while a read shows
+    /// the PREVIOUS CURRENT. An exact candidate with conflicting metadata,
+    /// or any other confirmed successor, requires explicit recovery.
+    fn unmatched_pending_is_terminal_conflict(
+        pending: &PendingSyncDescriptor,
+        current: &crate::generation_reopen::GenerationDownloadCapability,
+        base: Option<&profile_platform_primitives::GenerationId>,
+    ) -> bool {
+        current.generation_id() == pending.candidate_generation_id()
+            || base.is_some_and(|base| current.generation_id() != base)
+    }
+
     #[derive(Clone, Copy, Debug, Eq, PartialEq)]
     enum ClosedReadySyncError {
         Unconfirmed,
@@ -410,11 +422,11 @@ mod windows {
             // is still committing: leave pending intact for exact replay.
             // A different confirmed generation or a descriptor mismatch on
             // the same candidate is instead terminal, not a network retry.
-            if current.generation_id() == pending.candidate_generation_id()
-                || workspace
-                    .base_generation_id()
-                    .is_some_and(|base| current.generation_id() != base)
-            {
+            if unmatched_pending_is_terminal_conflict(
+                &pending,
+                &current,
+                workspace.base_generation_id(),
+            ) {
                 return Err(ClosedReadySyncError::VersionConflict);
             }
             return Err(ClosedReadySyncError::Unconfirmed);
@@ -1181,7 +1193,9 @@ mod windows {
 
     #[cfg(test)]
     mod pending_sync_descriptor_tests {
-        use super::pending_descriptor_matches_current;
+        use super::{
+            pending_descriptor_matches_current, unmatched_pending_is_terminal_conflict,
+        };
         use crate::generation_reopen::GenerationDownloadCapability;
         use crate::local_profile::PendingSyncDescriptor;
         use profile_platform_primitives::GenerationId;
@@ -1230,6 +1244,39 @@ mod windows {
                 60,
             );
             assert!(!pending_descriptor_matches_current(&pending, &wrong_size));
+
+            let base = GenerationId::parse("generation_previous_confirmed")?;
+            let old_current = GenerationDownloadCapability::new(
+                base.clone(),
+                "tenant/profile/previous.bpgc".to_owned(),
+                [0x44; 32],
+                [0x55; 32],
+                4_096,
+                "https://example.invalid/signed".to_owned(),
+                60,
+            );
+            assert!(
+                !unmatched_pending_is_terminal_conflict(&pending, &old_current, Some(&base)),
+                "an old CURRENT read cannot cancel an in-flight candidate"
+            );
+            assert!(
+                unmatched_pending_is_terminal_conflict(&pending, &wrong_digest, Some(&base)),
+                "the same committed candidate with mismatched digest is terminal"
+            );
+            let foreign = GenerationId::parse("generation_other_confirmed")?;
+            let newer_current = GenerationDownloadCapability::new(
+                foreign,
+                "tenant/profile/other.bpgc".to_owned(),
+                [0x66; 32],
+                [0x77; 32],
+                4_096,
+                "https://example.invalid/signed".to_owned(),
+                60,
+            );
+            assert!(
+                unmatched_pending_is_terminal_conflict(&pending, &newer_current, Some(&base)),
+                "another confirmed CURRENT must not be replayed as the local candidate"
+            );
             Ok(())
         }
     }
