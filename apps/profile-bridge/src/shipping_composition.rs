@@ -992,8 +992,7 @@ mod windows {
                 effective.status = InitialProfileStatus::Ready;
                 effective.expected_version = workspace.profile_version();
             }
-            let outcome =
-                sync_after_native_close(&effective, binding, root, origin);
+            let outcome = sync_after_native_close(&effective, binding, root, origin);
             if matches!(outcome, Err(ShippingCompositionError::SyncLeaseConflict)) {
                 report::record_current(
                     Stage::RecoveryRequired,
@@ -1317,10 +1316,8 @@ mod windows {
                     .open_profile_current(&intent.tenant_id, &intent.profile_id)
                     .map(|workspace| {
                         workspace.pending_sync().is_some()
-                            || std::fs::symlink_metadata(
-                                workspace.path().join(".local-unsynced"),
-                            )
-                            .is_ok()
+                            || std::fs::symlink_metadata(workspace.path().join(".local-unsynced"))
+                                .is_ok()
                     })
                     .unwrap_or(false);
                 if dirty && run_closed_sync(intent).is_ok() {
