@@ -190,6 +190,7 @@ mod windows {
     const PROXY_CONFIG_PATH_ENV: &str = "PROFILE_BRIDGE_PROXY_CONFIG_PATH";
     const PACKAGED_PYTHON_EXECUTABLE: &str = "python/python.exe";
     const HEARTBEAT_TRANSPORT_RETRY_MS: u64 = 1_000;
+    const NATIVE_FILE_RELEASE_TIMEOUT: Duration = Duration::from_secs(120);
     const SAVE_RECONNECT_AUTHORITY_RESERVE_MS: u64 = 5_000;
     const SAVE_HEARTBEAT_PERIOD_MS: u64 = 5_000;
 
@@ -832,14 +833,23 @@ mod windows {
     fn wait_for_native_writer_release<E>(
         mut probe: impl FnMut() -> Result<bool, E>,
         mut pause: impl FnMut(Duration),
+        timeout: Duration,
     ) -> Result<(), ShippingCompositionError> {
+        let started = Instant::now();
         let mut delay_seconds = 1_u64;
         loop {
             match probe() {
                 Ok(true) => return Ok(()),
                 Ok(false) => {
+                    let remaining = timeout.saturating_sub(started.elapsed());
+                    if remaining.is_zero() {
+                        // Native files remain with Firefox; the existing local
+                        // dirty/pending evidence stays intact for later Sync.
+                        eprintln!("BRIDGE_SYNC_NATIVE_FILE_RELEASE_UNCONFIRMED");
+                        return Err(ShippingCompositionError::SyncUnconfirmed);
+                    }
                     eprintln!("BRIDGE_SYNC_WAITING_FOR_NATIVE_FILE_RELEASE");
-                    pause(Duration::from_secs(delay_seconds));
+                    pause(Duration::from_secs(delay_seconds).min(remaining));
                     delay_seconds = delay_seconds.saturating_mul(2).min(15);
                 }
                 Err(_) => return Err(ShippingCompositionError::SyncUnconfirmed),
@@ -931,6 +941,7 @@ mod windows {
             wait_for_native_writer_release(
                 || crate::browser_execution::browser_writer_locks_absent(&workspace),
                 thread::sleep,
+                NATIVE_FILE_RELEASE_TIMEOUT,
             )?;
             // Observation, not a clean-close or cloud-Commit receipt.
             report::record_current(
@@ -1050,9 +1061,30 @@ mod windows {
             wait_for_native_writer_release(
                 || probes.next().expect("three native lock probes"),
                 |delay| pauses.push(delay),
+                Duration::from_secs(120),
             )
             .expect("released native file lock");
             assert_eq!(pauses, vec![Duration::from_secs(1), Duration::from_secs(2)]);
+        }
+
+        #[test]
+        fn native_writer_that_never_releases_times_out_without_retrying_save() {
+            let mut probes = 0;
+            let mut pauses = Vec::new();
+            let result = wait_for_native_writer_release(
+                || {
+                    probes += 1;
+                    Ok::<bool, ()>(false)
+                },
+                |delay| pauses.push(delay),
+                Duration::ZERO,
+            );
+            assert!(matches!(
+                result,
+                Err(ShippingCompositionError::SyncUnconfirmed)
+            ));
+            assert_eq!(probes, 1);
+            assert!(pauses.is_empty());
         }
 
         #[test]
@@ -1061,6 +1093,7 @@ mod windows {
             let result = wait_for_native_writer_release(
                 || Err("native file state unavailable"),
                 |delay| pauses.push(delay),
+                Duration::from_secs(120),
             );
             assert!(matches!(
                 result,
