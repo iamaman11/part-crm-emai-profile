@@ -75,6 +75,34 @@ describe('ProfileDirectory tenant bootstrap boundary', () => {
     expect(mockedListProfiles).toHaveBeenCalledTimes(1);
   });
 
+  it('does not offer another page when all loaded profiles are deleted and there is no next cursor', async () => {
+    mockedListProfiles.mockResolvedValue({
+      profiles: [{
+        profileId: 'profile_only_deleted',
+        status: 'DELETED',
+        version: 3,
+        linkedClientId: null,
+        activeGenerationId: null,
+      }],
+      nextCursor: null,
+    });
+
+    renderDirectory(async () => ({
+      tenants: [{
+        tenantId: 'tenant_01JAUTH',
+        displayName: 'Authorized organization',
+        actorId: 'actor_01JAUTH',
+        role: 'TENANT_OWNER',
+      }],
+    }));
+
+    expect(await screen.findByText('No active profiles loaded. Show deleted profiles.')).toBeTruthy();
+    expect(screen.queryByText(/or load more/)).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Show more profiles' })).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: 'Show deleted profiles (1)' }));
+    expect(screen.getByText('profile_only_deleted')).toBeTruthy();
+  });
+
   it('loads an active profile beyond a deleted-only first page using the server cursor', async () => {
     mockedListProfiles.mockImplementation(async (_tenantId, _signal, cursor) => {
       if (cursor === 'next_test_page') {
