@@ -43,6 +43,14 @@ pub struct BridgeCurrentColdRetirementRequest {
     pub restored_native_sha256: String,
 }
 
+/// Only D1 can admit the exact delayed retirement. A false response does
+/// not authorize an R2 effect or change an already committed browser Save.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct BridgeCurrentColdRetirementResponse {
+    pub admitted: bool,
+}
+
 /// Machine-authenticated, read-only exact successor reconciliation. No
 /// credential, lease/fencing token, signed URL or optimistic write version is
 /// supplied by the client. Server compares the existing D1 commit journal

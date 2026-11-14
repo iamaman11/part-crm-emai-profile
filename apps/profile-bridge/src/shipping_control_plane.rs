@@ -24,6 +24,7 @@ use control_plane_contract::generation_reopen_api::{
 };
 use control_plane_contract::profile_generation_api::{
     BRIDGE_PROFILE_CURRENT_COLD_RETIREMENT_PATH_TEMPLATE, BridgeCurrentColdRetirementRequest,
+    BridgeCurrentColdRetirementResponse,
 };
 use control_plane_contract::profile_launch_api::{
     BRIDGE_PROFILE_COORDINATOR_PATH_TEMPLATE, BRIDGE_PROFILE_LAUNCH_REDEMPTION_PATH,
@@ -817,12 +818,11 @@ where
             )
             .map_err(|_| ShippingControlPlaneError::Transport)?;
         let response = accepted_response(response)?;
-        let result = serde_json::from_slice::<serde_json::Value>(response.body())
-            .map_err(|_| ShippingControlPlaneError::InvalidResponse)?;
-        result
-            .get("admitted")
-            .and_then(serde_json::Value::as_bool)
-            .ok_or(ShippingControlPlaneError::InvalidResponse)
+        let result = serde_json::from_slice::<BridgeCurrentColdRetirementResponse>(
+            response.body(),
+        )
+        .map_err(|_| ShippingControlPlaneError::InvalidResponse)?;
+        Ok(result.admitted)
     }
 
     fn download_reopen_for_purpose(
