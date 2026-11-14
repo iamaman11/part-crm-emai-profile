@@ -43,6 +43,14 @@ pub struct BridgeCurrentColdRetirementRequest {
     pub restored_native_sha256: String,
 }
 
+/// Only D1 can admit the exact delayed retirement. A false response does
+/// not authorize an R2 effect or change an already committed browser Save.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct BridgeCurrentColdRetirementResponse {
+    pub admitted: bool,
+}
+
 /// Machine-authenticated, read-only exact successor reconciliation. No
 /// credential, lease/fencing token, signed URL or optimistic write version is
 /// supplied by the client. Server compares the existing D1 commit journal
@@ -470,13 +478,38 @@ fn sha256_schema() -> Value {
 #[cfg(test)]
 mod tests {
     use super::{
-        BridgeGenerationLocalUnsyncedRetryDecisionRequest, BridgeGenerationSuccessorObserveRequest,
-        BridgeGenerationSuccessorObserveResponse, BridgeGenerationSuccessorRetryDecisionRequest,
+        BridgeCurrentColdRetirementResponse, BridgeGenerationLocalUnsyncedRetryDecisionRequest,
+        BridgeGenerationSuccessorObserveRequest, BridgeGenerationSuccessorObserveResponse,
+        BridgeGenerationSuccessorRetryDecisionRequest,
         BridgeGenerationSuccessorRetryDecisionResponse, BridgeGenerationUploadCapabilityResponse,
         BridgeProfileGenerationSuccessorRequest, ProfileCreateRequest, ProfileGrantRequest,
         ProfileProjectionDto, ProfileStatusDto, RegisterGenerationRequest, openapi_fragment,
     };
     use serde_json::{Value, json};
+
+    #[test]
+    fn cold_retirement_response_is_typed_and_never_returns_delete_capabilities()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let response = BridgeCurrentColdRetirementResponse { admitted: true };
+        assert_eq!(serde_json::to_value(response)?, json!({"admitted": true}));
+        assert!(
+            !serde_json::from_value::<BridgeCurrentColdRetirementResponse>(
+                json!({"admitted": false}),
+            )?
+            .admitted
+        );
+        for invalid in [
+            json!({"admitted": "true"}),
+            json!({"admitted": true, "objectKey": "untrusted"}),
+            json!({"admitted": true, "deleteToken": "untrusted"}),
+            json!({}),
+        ] {
+            assert!(
+                serde_json::from_value::<BridgeCurrentColdRetirementResponse>(invalid).is_err()
+            );
+        }
+        Ok(())
+    }
 
     #[test]
     fn profile_mutations_are_strict_and_reject_legacy_request_digest() {

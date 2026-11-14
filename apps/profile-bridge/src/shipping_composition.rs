@@ -142,7 +142,8 @@ pub fn run_delivery_command(
 mod windows {
     use super::{ShippingCompositionError, ShippingDeliveryCommand};
     use crate::authoritative_generation::{
-        ensure_authoritative_current, reconcile_closed_draft_with_confirmed_current,
+        ensure_authoritative_current, prove_cold_current_restore,
+        reconcile_closed_draft_with_confirmed_current,
         reconcile_closed_ready_with_confirmed_current,
     };
     use crate::dirty_generation::{GenerationSealingMaterialPort, closed_current_candidate_id};
@@ -189,6 +190,7 @@ mod windows {
     const PROXY_CONFIG_PATH_ENV: &str = "PROFILE_BRIDGE_PROXY_CONFIG_PATH";
     const PACKAGED_PYTHON_EXECUTABLE: &str = "python/python.exe";
     const HEARTBEAT_TRANSPORT_RETRY_MS: u64 = 1_000;
+    const NATIVE_FILE_RELEASE_TIMEOUT: Duration = Duration::from_secs(120);
     const SAVE_RECONNECT_AUTHORITY_RESERVE_MS: u64 = 5_000;
     const SAVE_HEARTBEAT_PERIOD_MS: u64 = 5_000;
 
@@ -512,10 +514,13 @@ mod windows {
         // A lost READY N+1 Commit reply cannot authorize a fresh N+2.
         // Read exact server-selected CURRENT first; a newer candidate must
         // match the ORIGINAL closed local bytes before the local marker moves.
-        let reader_app = WindowsDeviceApplication::from_system(origin.to_owned(), binding.clone())
+        // Use one device-bound application session for CURRENT readback and
+        // the later authoritative Sync calls. Every request still receives
+        // its own signed proof and the server rechecks D1/Coordinator state.
+        let application = WindowsDeviceApplication::from_system(origin.to_owned(), binding.clone())
             .map_err(|_| ())?;
         let mut read_only =
-            ControlPlaneCoordinator::for_local_current_restore(reader_app.transport());
+            ControlPlaneCoordinator::for_local_current_restore(application.transport());
         let current = read_only
             .download_capability(&intent.tenant_id, &intent.profile_id)
             .map_err(|_| ())?;
@@ -540,8 +545,6 @@ mod windows {
             return Err(ClosedReadySyncError::Unconfirmed);
         }
 
-        let application = WindowsDeviceApplication::from_system(origin.to_owned(), binding.clone())
-            .map_err(|_| ())?;
         let mut transport = application.transport();
         let actor = profile_platform_primitives::ActorContext::new(
             profile_platform_primitives::TenantScope::new(intent.tenant_id.clone()),
@@ -763,27 +766,118 @@ mod windows {
         }
     }
 
+    /// The same D1 admission is replay-safe for one uncertain HTTP response.
+    /// Never repeat the expensive cold GET or retry a definitive 4xx refusal.
+    fn admit_retirement_with_uncertain_retry(
+        mut admit: impl FnMut() -> Result<bool, ShippingControlPlaneError>,
+        mut pause: impl FnMut(Duration),
+    ) -> Result<bool, ShippingControlPlaneError> {
+        match admit() {
+            Err(
+                ShippingControlPlaneError::Transport
+                | ShippingControlPlaneError::HttpServerUncertain,
+            ) => {
+                pause(Duration::from_millis(250));
+                admit()
+            }
+            result => result,
+        }
+    }
+
+    /// Non-critical retention admission runs only after the *normal* Sync
+    /// owner has confirmed CURRENT and cleared local dirty/pending evidence.
+    /// It performs the existing independent R2 GET/AEAD/native-byte proof,
+    /// then asks the existing D1 owner to freeze a delayed exact predecessor.
+    /// Its failure cannot turn a committed Save into an error or create a
+    /// competing browser writer, Sync owner, R2 DELETE or persistent retry.
+    fn try_retire_predecessor_after_clean_sync(
+        intent: &crate::generation_initialization::InitialProfileOpen,
+        binding: &WindowsDeviceApplicationBinding,
+        root: &MaterializationRoot,
+        origin: &str,
+    ) {
+        let result = (|| -> Result<(), ()> {
+            let workspace = root
+                .open_profile_current(&intent.tenant_id, &intent.profile_id)
+                .map_err(|_| ())?;
+            if workspace.pending_sync().is_some()
+                || !matches!(
+                    std::fs::symlink_metadata(workspace.path().join(".local-unsynced")),
+                    Err(ref error) if error.kind() == std::io::ErrorKind::NotFound
+                )
+            {
+                return Err(());
+            }
+            let generation = workspace.base_generation_id().ok_or(())?.clone();
+            let version = workspace.profile_version();
+            let application =
+                WindowsDeviceApplication::from_system(origin.to_owned(), binding.clone())
+                    .map_err(|_| ())?;
+            let mut control =
+                ControlPlaneCoordinator::for_local_current_restore(application.transport());
+            let reader = WindowsSignedGenerationObjectGet::from_system().map_err(|_| ())?;
+            let mut downloader = VerifiedGenerationObjectStreamDownloader::new(reader);
+            let (native_digest, metadata_prelude) = prove_cold_current_restore(
+                root,
+                &intent.tenant_id,
+                &intent.profile_id,
+                &generation,
+                version,
+                binding.device_id(),
+                now().map_err(|_| ())?.value(),
+                &mut control,
+                &mut downloader,
+            )
+            .map_err(|_| ())?;
+            admit_retirement_with_uncertain_retry(
+                || {
+                    control.admit_cold_current_retirement(
+                        &intent.tenant_id,
+                        &intent.profile_id,
+                        &generation,
+                        version,
+                        &metadata_prelude,
+                        native_digest,
+                    )
+                },
+                thread::sleep,
+            )
+            .map_err(|_| ())?;
+            Ok(())
+        })();
+        if result.is_err() {
+            // Bounded local evidence only. A missed admission retains old R2
+            // bytes, and is never represented as a Save/CURRENT failure.
+            eprintln!("BRIDGE_COLD_CURRENT_RETIREMENT_DEFERRED");
+        }
+    }
+
     fn wait_for_native_writer_release<E>(
         mut probe: impl FnMut() -> Result<bool, E>,
         mut pause: impl FnMut(Duration),
+        timeout: Duration,
     ) -> Result<(), ShippingCompositionError> {
+        let started = Instant::now();
         let mut delay_seconds = 1_u64;
         loop {
             match probe() {
                 Ok(true) => return Ok(()),
                 Ok(false) => {
+                    let remaining = timeout.saturating_sub(started.elapsed());
+                    if remaining.is_zero() {
+                        // Native files remain with Firefox; the existing local
+                        // dirty/pending evidence stays intact for later Sync.
+                        eprintln!("BRIDGE_SYNC_NATIVE_FILE_RELEASE_UNCONFIRMED");
+                        return Err(ShippingCompositionError::SyncUnconfirmed);
+                    }
                     eprintln!("BRIDGE_SYNC_WAITING_FOR_NATIVE_FILE_RELEASE");
-                    pause(Duration::from_secs(delay_seconds));
+                    pause(Duration::from_secs(delay_seconds).min(remaining));
                     delay_seconds = delay_seconds.saturating_mul(2).min(15);
                 }
                 Err(_) => return Err(ShippingCompositionError::SyncUnconfirmed),
             }
         }
     }
-
-    // A successful exact Save does not retire predecessor R2 objects.
-    // Cold Restore remains a separate acceptance test; terminal owner Delete
-    // later removes all encrypted generations together.
 
     pub fn run_terminal_delete(
         intent: &crate::local_profile_delete::TerminalProfileDelete,
@@ -835,6 +929,10 @@ mod windows {
             .map_err(|_| ShippingCompositionError::Configuration)?;
         let mut retry_delay_seconds = 2_u64;
         let mut attempt = 0_u64;
+        // A clean no-op invocation must not re-download an entire encrypted
+        // CURRENT merely to retry optional retirement. Only this invocation's
+        // verified Save may authorize the independent cold proof.
+        let mut saved_in_this_sync = false;
         loop {
             let workspace = root
                 .open_profile_current(&intent.tenant_id, &intent.profile_id)
@@ -845,9 +943,18 @@ mod windows {
                 Err(ref error) if error.kind() == std::io::ErrorKind::NotFound
             ) && workspace.pending_sync().is_none()
             {
-                // The existing Verify+Commit owner advanced this exact local
-                // marker and cleared dirty/pending evidence. Return at once,
-                // retaining predecessor encrypted R2 generations until Delete.
+                // The confirmed Save is already complete. In the same
+                // one-shot Sync child, independently prove cold CURRENT and
+                // ask D1 to admit optional predecessor retirement. The
+                // existing Worker scheduler alone may later delete old R2.
+                if saved_in_this_sync && intent.status == InitialProfileStatus::Ready {
+                    try_retire_predecessor_after_clean_sync(
+                        intent,
+                        &binding,
+                        &root,
+                        &config.control_plane_origin,
+                    );
+                }
                 return Ok(());
             }
             // If Camouhost exited before Playwright could deliver its close
@@ -856,6 +963,7 @@ mod windows {
             wait_for_native_writer_release(
                 || crate::browser_execution::browser_writer_locks_absent(&workspace),
                 thread::sleep,
+                NATIVE_FILE_RELEASE_TIMEOUT,
             )?;
             // Observation, not a clean-close or cloud-Commit receipt.
             report::record_current(
@@ -907,8 +1015,9 @@ mod windows {
                 ) && latest.pending_sync().is_none()
                 {
                     // The exact cloud Save and local clean marker are complete.
-                    // Re-enter the clean branch and return without a redundant
-                    // cold Restore GET, a second seal, or predecessor retirement.
+                    // Re-enter the clean branch to attempt independent,
+                    // non-critical retirement admission exactly once.
+                    saved_in_this_sync = true;
                     continue;
                 }
             }
@@ -930,7 +1039,7 @@ mod windows {
     /// invocation. No daemon, extra binary or new browser writer is created.
     /// A failed child start falls back to the same Sync inline.
     fn start_sync_after_close(intent: &crate::generation_initialization::InitialProfileOpen) {
-        use std::process::{Command, Stdio};
+        use std::process::Stdio;
         let status = match intent.status {
             InitialProfileStatus::Draft => "DRAFT",
             InitialProfileStatus::Ready => "READY",
@@ -944,7 +1053,7 @@ mod windows {
             status,
         );
         let result = env::current_exe().and_then(|exe| {
-            Command::new(exe)
+            crate::windows_native::background_command(exe)
                 .arg("--sync-closed")
                 .arg(uri)
                 .stdin(Stdio::null())
@@ -963,6 +1072,54 @@ mod windows {
     }
 
     #[cfg(test)]
+    mod retirement_replay_tests {
+        use super::{ShippingControlPlaneError, admit_retirement_with_uncertain_retry};
+        use std::time::Duration;
+
+        #[test]
+        fn temporary_transport_failure_replays_only_the_same_admission_once() {
+            let mut outcomes = [Err(ShippingControlPlaneError::Transport), Ok(true)].into_iter();
+            let mut waits = Vec::new();
+            let result = admit_retirement_with_uncertain_retry(
+                || outcomes.next().expect("one bounded replay"),
+                |delay| waits.push(delay),
+            );
+            assert_eq!(result, Ok(true));
+            assert_eq!(waits, vec![Duration::from_millis(250)]);
+        }
+
+        #[test]
+        fn definitive_denial_or_no_predecessor_never_retries() {
+            for result in [Err(ShippingControlPlaneError::HttpStatus), Ok(false)] {
+                let mut attempts = 0;
+                let observed = admit_retirement_with_uncertain_retry(
+                    || {
+                        attempts += 1;
+                        result
+                    },
+                    |_| panic!("unexpected replay delay"),
+                );
+                assert_eq!(observed, result);
+                assert_eq!(attempts, 1);
+            }
+        }
+
+        #[test]
+        fn a_second_uncertain_response_never_loops_or_restarts_cold_proof() {
+            let mut attempts = 0;
+            let result = admit_retirement_with_uncertain_retry(
+                || {
+                    attempts += 1;
+                    Err(ShippingControlPlaneError::HttpServerUncertain)
+                },
+                |_| {},
+            );
+            assert_eq!(result, Err(ShippingControlPlaneError::HttpServerUncertain));
+            assert_eq!(attempts, 2);
+        }
+    }
+
+    #[cfg(test)]
     mod native_writer_wait_tests {
         use super::{ShippingCompositionError, wait_for_native_writer_release};
         use std::time::Duration;
@@ -974,9 +1131,30 @@ mod windows {
             wait_for_native_writer_release(
                 || probes.next().expect("three native lock probes"),
                 |delay| pauses.push(delay),
+                Duration::from_secs(120),
             )
             .expect("released native file lock");
             assert_eq!(pauses, vec![Duration::from_secs(1), Duration::from_secs(2)]);
+        }
+
+        #[test]
+        fn native_writer_that_never_releases_times_out_without_retrying_save() {
+            let mut probes = 0;
+            let mut pauses = Vec::new();
+            let result = wait_for_native_writer_release(
+                || {
+                    probes += 1;
+                    Ok::<bool, ()>(false)
+                },
+                |delay| pauses.push(delay),
+                Duration::ZERO,
+            );
+            assert!(matches!(
+                result,
+                Err(ShippingCompositionError::SyncUnconfirmed)
+            ));
+            assert_eq!(probes, 1);
+            assert!(pauses.is_empty());
         }
 
         #[test]
@@ -985,6 +1163,7 @@ mod windows {
             let result = wait_for_native_writer_release(
                 || Err("native file state unavailable"),
                 |delay| pauses.push(delay),
+                Duration::from_secs(120),
             );
             assert!(matches!(
                 result,

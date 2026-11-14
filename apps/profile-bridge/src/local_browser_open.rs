@@ -11,7 +11,7 @@ use std::fmt;
 use std::fs::{self, OpenOptions};
 use std::io::{BufRead, BufReader, Read, Write};
 use std::path::Path;
-use std::process::{Command, Stdio};
+use std::process::Stdio;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
@@ -478,7 +478,7 @@ fn run_python_with_input(
     let ready_seen_by_reader = Arc::clone(&native_ready_seen);
 
     let native_started = Instant::now();
-    let mut child = Command::new(executable)
+    let mut child = crate::windows_native::background_command(executable)
         .arg("-B")
         .arg(runtime_root.join(ENTRYPOINT))
         .arg(action)

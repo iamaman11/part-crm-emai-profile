@@ -41,12 +41,12 @@ use control_plane_contract::generation_reopen_api::{
     GENERATION_DOWNLOAD_CAPABILITY_MAX_EXPIRES_SECONDS,
 };
 use control_plane_contract::profile_generation_api::{
-    BridgeCurrentColdRetirementRequest, BridgeGenerationLocalUnsyncedRetryDecisionRequest,
-    BridgeGenerationSuccessorCommitOutcomeDto, BridgeGenerationSuccessorCommitResponse,
-    BridgeGenerationSuccessorObserveRequest, BridgeGenerationSuccessorObserveResponse,
-    BridgeGenerationSuccessorRetryDecisionRequest, BridgeGenerationSuccessorRetryDecisionResponse,
-    BridgeGenerationSuccessorRetryVerdict, BridgeGenerationUploadCapabilityResponse,
-    BridgeProfileGenerationSuccessorRequest,
+    BridgeCurrentColdRetirementRequest, BridgeCurrentColdRetirementResponse,
+    BridgeGenerationLocalUnsyncedRetryDecisionRequest, BridgeGenerationSuccessorCommitOutcomeDto,
+    BridgeGenerationSuccessorCommitResponse, BridgeGenerationSuccessorObserveRequest,
+    BridgeGenerationSuccessorObserveResponse, BridgeGenerationSuccessorRetryDecisionRequest,
+    BridgeGenerationSuccessorRetryDecisionResponse, BridgeGenerationSuccessorRetryVerdict,
+    BridgeGenerationUploadCapabilityResponse, BridgeProfileGenerationSuccessorRequest,
 };
 use device_domain::DeviceJobTarget;
 use encrypted_generation_domain::{
@@ -891,7 +891,7 @@ async fn dispatch_cold_current_retirement(
         .await
     {
         Ok(Some(value)) => value,
-        Ok(None) => return machine_json(&serde_json::json!({"admitted": false})),
+        Ok(None) => return machine_json(&BridgeCurrentColdRetirementResponse { admitted: false }),
         Err(error) => return object_verify_failure(correlation, error.class()),
     };
     let verifier = generation_object_verifier(env)?;
@@ -922,7 +922,7 @@ async fn dispatch_cold_current_retirement(
         // on an uncertain D1 transaction.
         return version_conflict(correlation);
     }
-    machine_json(&serde_json::json!({"admitted": true}))
+    machine_json(&BridgeCurrentColdRetirementResponse { admitted: true })
 }
 
 /// Some(None) is read-only CURRENT restoration. Every other generation
