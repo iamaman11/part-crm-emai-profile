@@ -513,10 +513,13 @@ mod windows {
         // A lost READY N+1 Commit reply cannot authorize a fresh N+2.
         // Read exact server-selected CURRENT first; a newer candidate must
         // match the ORIGINAL closed local bytes before the local marker moves.
-        let reader_app = WindowsDeviceApplication::from_system(origin.to_owned(), binding.clone())
+        // Use one device-bound application session for CURRENT readback and
+        // the later authoritative Sync calls. Every request still receives
+        // its own signed proof and the server rechecks D1/Coordinator state.
+        let application = WindowsDeviceApplication::from_system(origin.to_owned(), binding.clone())
             .map_err(|_| ())?;
         let mut read_only =
-            ControlPlaneCoordinator::for_local_current_restore(reader_app.transport());
+            ControlPlaneCoordinator::for_local_current_restore(application.transport());
         let current = read_only
             .download_capability(&intent.tenant_id, &intent.profile_id)
             .map_err(|_| ())?;
@@ -541,8 +544,6 @@ mod windows {
             return Err(ClosedReadySyncError::Unconfirmed);
         }
 
-        let application = WindowsDeviceApplication::from_system(origin.to_owned(), binding.clone())
-            .map_err(|_| ())?;
         let mut transport = application.transport();
         let actor = profile_platform_primitives::ActorContext::new(
             profile_platform_primitives::TenantScope::new(intent.tenant_id.clone()),
