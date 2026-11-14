@@ -49,6 +49,9 @@ describe('ProfilesWorkspace generation refresh (#802 F06)', () => {
 
     const open = await screen.findByRole('button', { name: 'Open browser' }) as HTMLButtonElement;
     await waitFor(() => expect(open.disabled).toBe(false));
+    // Detail stays focused on the selected browser, not a second creation form.
+    expect(screen.queryByRole('heading', { name: 'Create profile' })).toBeNull();
+    expect(screen.getByText('Technical identifiers')).toBeTruthy();
     expect(localOpen).not.toHaveBeenCalled();
 
     fireEvent.click(open);
