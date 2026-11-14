@@ -671,18 +671,51 @@ pub(crate) fn open_with_before_launch(
     runtime_root: &Path,
     before_launch: Option<BeforeLaunch>,
 ) -> Result<(), LocalOpenError> {
+    open_with_before_launch_and_after_close(
+        root, intent, device, runtime_root, before_launch, |_| {},
+    )
+}
+
+/// Retain the SAME native admission while the caller finishes the post-Close
+/// Sync. No OS lock handoff, second Sync process or browser manager is needed.
+/// This callback must not report a Save receipt until D1 confirms CURRENT.
+pub(crate) fn open_with_before_launch_and_after_close(
+    root: &MaterializationRoot,
+    intent: &InitialProfileOpen,
+    device: &DeviceId,
+    runtime_root: &Path,
+    before_launch: Option<BeforeLaunch>,
+    after_close: impl FnOnce(Result<(), LocalOpenError>),
+) -> Result<(), LocalOpenError> {
     let local_started = Instant::now();
     let generation = local_generation(intent)?;
     let workspace = open_or_create_workspace(root, intent, &generation)?;
     // Keep the same profile-scoped OS gate from browser Open through native
     // Close. A previous post-close Sync cannot run concurrently with a new
     // Firefox session and commit a snapshot of changing browser bytes.
-    // The guard drops before the normal post-Close Sync child is spawned.
+    // Hold this guard through the inline post-Close Sync callback. A new
+    // Open cannot win between Firefox releasing its files and cloud Commit.
     let _operation = match ClosedSyncAdmission::try_acquire(&workspace) {
         Ok(Some(owner)) => owner,
         Ok(None) => return Err(LocalOpenError::OperationInProgress),
         Err(_) => return Err(LocalOpenError::InvalidLocalWorkspace),
     };
+    let result = open_under_profile_admission(
+        root, intent, device, runtime_root, before_launch, workspace, local_started,
+    );
+    after_close(result);
+    result
+}
+
+fn open_under_profile_admission(
+    root: &MaterializationRoot,
+    intent: &InitialProfileOpen,
+    device: &DeviceId,
+    runtime_root: &Path,
+    before_launch: Option<BeforeLaunch>,
+    workspace: crate::local_profile::GenerationWorkspace,
+    local_started: Instant,
+) -> Result<(), LocalOpenError> {
     let epoch = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map_err(|_| LocalOpenError::InvalidLocalWorkspace)?
