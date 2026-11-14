@@ -1073,15 +1073,12 @@ mod windows {
 
     #[cfg(test)]
     mod retirement_replay_tests {
-        use super::{admit_retirement_with_uncertain_retry, ShippingControlPlaneError};
+        use super::{ShippingControlPlaneError, admit_retirement_with_uncertain_retry};
         use std::time::Duration;
 
         #[test]
         fn temporary_transport_failure_replays_only_the_same_admission_once() {
-            let mut outcomes = [
-                Err(ShippingControlPlaneError::Transport),
-                Ok(true),
-            ].into_iter();
+            let mut outcomes = [Err(ShippingControlPlaneError::Transport), Ok(true)].into_iter();
             let mut waits = Vec::new();
             let result = admit_retirement_with_uncertain_retry(
                 || outcomes.next().expect("one bounded replay"),
@@ -1093,10 +1090,7 @@ mod windows {
 
         #[test]
         fn definitive_denial_or_no_predecessor_never_retries() {
-            for result in [
-                Err(ShippingControlPlaneError::HttpStatus),
-                Ok(false),
-            ] {
+            for result in [Err(ShippingControlPlaneError::HttpStatus), Ok(false)] {
                 let mut attempts = 0;
                 let observed = admit_retirement_with_uncertain_retry(
                     || {
