@@ -365,7 +365,7 @@ mod windows {
         use crate::local_profile::BridgeWorkspaceLock;
         use std::fs;
 
-        let mut workspace = root
+        let workspace = root
             .open_profile_current(&intent.tenant_id, &intent.profile_id)
             .map_err(|_| ())?;
         if let Some(pending) = workspace.pending_sync().cloned() {
@@ -1024,7 +1024,7 @@ mod windows {
     }
 
     fn next_sync_retry_delay(current_seconds: u64) -> u64 {
-        current_seconds.saturating_mul(2).min(300)
+        current_seconds.saturating_mul(2).min(4)
     }
 
     /// The same installed executable handles one ephemeral cloud Sync
@@ -1444,18 +1444,14 @@ mod windows {
 
     #[cfg(test)]
     mod closed_sync_retry_tests {
-        use super::next_sync_retry_delay;
+        use super::{MAX_CLOSED_SYNC_ATTEMPTS, next_sync_retry_delay};
 
         #[test]
-        fn closed_sync_retry_backoff_is_capped_without_limiting_attempts() {
-            let mut delay = 2_u64;
-            let mut observed = Vec::new();
-            for _ in 0..10 {
-                observed.push(delay);
-                delay = next_sync_retry_delay(delay);
-            }
-            assert_eq!(observed, vec![2, 4, 8, 16, 32, 64, 128, 256, 300, 300]);
-            assert_eq!(next_sync_retry_delay(300), 300);
+        fn closed_sync_stops_after_three_attempts_without_long_lived_retry_process() {
+            assert_eq!(MAX_CLOSED_SYNC_ATTEMPTS, 3);
+            // Only two pauses are possible before the owner exits.
+            assert_eq!(next_sync_retry_delay(2), 4);
+            assert_eq!(next_sync_retry_delay(4), 4);
         }
     }
 }
