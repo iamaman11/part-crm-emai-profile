@@ -542,6 +542,82 @@ mod tests {
         Ok(())
     }
 
+    /// The production Windows kernel must release an admission held by a
+    /// killed child; no stale PID marker or manual lock cleanup is involved.
+    #[cfg(windows)]
+    #[test]
+    fn native_closed_sync_admission_child() -> Result<(), Box<dyn std::error::Error>> {
+        let Some(directory) = std::env::var_os("PROFILE_BRIDGE_TEST_SYNC_ROOT") else {
+            return Ok(());
+        };
+        let root = MaterializationRoot::open_existing(directory)?;
+        let tenant = TenantId::parse(std::env::var("PROFILE_BRIDGE_TEST_SYNC_TENANT")?)?;
+        let profile = ProfileId::parse(std::env::var("PROFILE_BRIDGE_TEST_SYNC_PROFILE")?)?;
+        let generation = GenerationId::parse(std::env::var("PROFILE_BRIDGE_TEST_SYNC_GENERATION")?)?;
+        let workspace = root.open_generation(&tenant, &profile, &generation)?;
+        let _owner = ClosedSyncAdmission::try_acquire(&workspace)?
+            .expect("child must own the native Sync admission");
+        std::thread::sleep(std::time::Duration::from_secs(12));
+        Ok(())
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn native_closed_sync_admission_is_recovered_after_killing_owner_process()
+    -> Result<(), Box<dyn std::error::Error>> {
+        use std::process::{Command, Stdio};
+        use std::time::Duration;
+
+        let (_test_root, root, workspace, _device) = fixture("crashed-sync-owner")?;
+        let data = workspace.path().join("user_data");
+        fs::create_dir(&data)?;
+        let wal = data.join("cookies.sqlite-wal");
+        fs::write(&wal, b"original-unsynced-browser-wal")?;
+
+        let mut child = Command::new(std::env::current_exe()?)
+            .arg("native_closed_sync_admission_child")
+            .arg("--nocapture")
+            .env("PROFILE_BRIDGE_TEST_SYNC_ROOT", root.path())
+            .env("PROFILE_BRIDGE_TEST_SYNC_TENANT", workspace.tenant_id().as_str())
+            .env("PROFILE_BRIDGE_TEST_SYNC_PROFILE", workspace.profile_id().as_str())
+            .env("PROFILE_BRIDGE_TEST_SYNC_GENERATION", workspace.generation_id().as_str())
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()?;
+
+        let mut child_owns_sync = false;
+        for _ in 0..120 {
+            match ClosedSyncAdmission::try_acquire(&workspace)? {
+                None => {
+                    child_owns_sync = true;
+                    break;
+                }
+                Some(owner) => drop(owner),
+            }
+            if child.try_wait()?.is_some() {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(25));
+        }
+        if !child_owns_sync {
+            let _ = child.kill();
+            let _ = child.wait();
+            panic!("native child never acquired the profile-scoped Sync lock");
+        }
+        assert!(matches!(
+            DeliveryActivationGuard::acquire(&root),
+            Err(LocalProfileError::LockBusy)
+        ));
+        child.kill()?;
+        child.wait()?;
+
+        let _recovered = ClosedSyncAdmission::try_acquire(&workspace)?
+            .expect("kernel must release Sync admission when process dies");
+        assert_eq!(fs::read(&wal)?, b"original-unsynced-browser-wal");
+        Ok(())
+    }
+
     #[test]
     fn active_writer_blocks_activation_until_writer_releases()
     -> Result<(), Box<dyn std::error::Error>> {
