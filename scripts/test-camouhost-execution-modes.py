@@ -330,14 +330,15 @@ def main() -> int:
     assert "ManagedCamouhostProcess" not in composition
     assert "ManagedCamouhostIpc" not in composition
     assert "pub fn run_claim(" not in composition
-    assert "local_browser_open::open_with_before_launch" in composition
-    assert "start_sync_after_close(intent)" in composition
+    assert "local_browser_open::open_with_before_launch_and_after_close" in composition
+    assert "start_sync_after_close(" not in composition
     run_initial = composition.split("    pub fn run_initial(", 1)[1].split(
         "    pub fn run_delivery_command(", 1
     )[0]
-    assert run_initial.count("start_sync_after_close(intent)") == 2
-    # A busy browser must not spawn another cloud Sync child; a stale local
-    # generation must never be opened or implicitly reconciled.
+    assert "run_closed_sync_with_admission(" in run_initial
+    assert "if dirty && run_closed_sync(intent).is_ok()" in run_initial
+    # A busy browser never spawns another Sync; stale CURRENT may be
+    # reconciled only through the existing exact-Commit proof, never by reset.
     assert "crate::local_browser_open::LocalOpenError::StaleLocalWorkspace" in run_initial
     assert "crate::local_browser_open::LocalOpenError::ProfileBusy" in run_initial
     assert "if !matches!(" in run_initial
