@@ -818,10 +818,8 @@ where
             )
             .map_err(|_| ShippingControlPlaneError::Transport)?;
         let response = accepted_response(response)?;
-        let result = serde_json::from_slice::<BridgeCurrentColdRetirementResponse>(
-            response.body(),
-        )
-        .map_err(|_| ShippingControlPlaneError::InvalidResponse)?;
+        let result = serde_json::from_slice::<BridgeCurrentColdRetirementResponse>(response.body())
+            .map_err(|_| ShippingControlPlaneError::InvalidResponse)?;
         Ok(result.admitted)
     }
 
