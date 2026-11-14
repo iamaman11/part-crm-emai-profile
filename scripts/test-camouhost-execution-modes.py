@@ -336,9 +336,12 @@ def main() -> int:
         "    pub fn run_delivery_command(", 1
     )[0]
     assert run_initial.count("start_sync_after_close(intent)") == 2
-    assert "if error != crate::local_browser_open::LocalOpenError::StaleLocalWorkspace {" in run_initial
+    # A busy browser must not spawn another cloud Sync child; a stale local
+    # generation must never be opened or implicitly reconciled.
+    assert "crate::local_browser_open::LocalOpenError::StaleLocalWorkspace" in run_initial
+    assert "crate::local_browser_open::LocalOpenError::ProfileBusy" in run_initial
+    assert "if !matches!(" in run_initial
     assert "DeliveryHealth" not in run_initial
-    assert "if error != crate::local_browser_open::LocalOpenError::StaleLocalWorkspace {" in run_initial
     app = (SOURCE.parents[2] / "apps/profile-bridge/src/main.rs").read_text(
         encoding="utf-8"
     )
