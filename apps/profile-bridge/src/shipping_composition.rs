@@ -25,6 +25,8 @@ pub enum ShippingCompositionError {
     RestoreUnavailable,
     SyncUnconfirmed,
     SyncLeaseConflict,
+    /// Server CURRENT is a different committed candidate; dirty bytes are preserved.
+    SyncVersionConflict,
     LocalDelete(crate::local_profile_delete::TerminalDeleteError),
     #[cfg(windows)]
     DeliveryRuntime(crate::windows_delivery_runtime::WindowsDeliveryRuntimeError),
@@ -61,6 +63,7 @@ impl core::fmt::Display for ShippingCompositionError {
             }
             Self::SyncUnconfirmed => "Native Close succeeded; cloud Sync not confirmed",
             Self::SyncLeaseConflict => "Coordinator lease conflict: original local unsynced data preserved; explicit recovery required",
+            Self::SyncVersionConflict => "Cloud CURRENT differs from the saved local candidate; preserve original local data for explicit recovery",
             Self::LocalDelete(error) => return core::fmt::Display::fmt(error, formatter),
             #[cfg(windows)]
             Self::DeliveryRuntime(error) => return core::fmt::Display::fmt(error, formatter),
@@ -347,6 +350,7 @@ mod windows {
     enum ClosedReadySyncError {
         Unconfirmed,
         LeaseConflict,
+        VersionConflict,
     }
 
     impl From<()> for ClosedReadySyncError {
@@ -402,12 +406,17 @@ mod windows {
                     Err(ClosedReadySyncError::Unconfirmed)
                 };
             }
-            // A prepared upload may still finish server-side after the old
-            // child's HTTP response disappears. Observing the old CURRENT
-            // does NOT prove that its in-flight Commit has been cancelled.
-            // Preserve this exact candidate and the original native bytes;
-            // a later readback may reconcile it, but no competing upload or
-            // fresh N+2 is permitted from this unconfirmed state.
+            // Old CURRENT may be a stale read while the original candidate
+            // is still committing: leave pending intact for exact replay.
+            // A different confirmed generation or a descriptor mismatch on
+            // the same candidate is instead terminal, not a network retry.
+            if current.generation_id() == pending.candidate_generation_id()
+                || workspace
+                    .base_generation_id()
+                    .is_some_and(|base| current.generation_id() != base)
+            {
+                return Err(ClosedReadySyncError::VersionConflict);
+            }
             return Err(ClosedReadySyncError::Unconfirmed);
         }
         let Some(base) = workspace.base_generation_id().cloned() else {
@@ -430,7 +439,7 @@ mod windows {
                 .download_capability(&intent.tenant_id, &intent.profile_id)
                 .map_err(|_| ())?;
             if confirmed.generation_id() != workspace.generation_id() {
-                return Err(ClosedReadySyncError::Unconfirmed);
+                return Err(ClosedReadySyncError::VersionConflict);
             }
             let reader = WindowsSignedGenerationObjectGet::from_system().map_err(|_| ())?;
             let mut downloader = VerifiedGenerationObjectStreamDownloader::new(reader);
@@ -518,7 +527,7 @@ mod windows {
             .map_err(|_| ClosedReadySyncError::Unconfirmed);
         }
         if current.generation_id() != &base {
-            return Err(ClosedReadySyncError::Unconfirmed);
+            return Err(ClosedReadySyncError::VersionConflict);
         }
 
         let mut transport = application.transport();
@@ -689,6 +698,9 @@ mod windows {
             sync_closed_ready(intent, binding, root, origin).map_err(|error| match error {
                 ClosedReadySyncError::LeaseConflict => ShippingCompositionError::SyncLeaseConflict,
                 ClosedReadySyncError::Unconfirmed => ShippingCompositionError::SyncUnconfirmed,
+                ClosedReadySyncError::VersionConflict => {
+                    ShippingCompositionError::SyncVersionConflict
+                },
             })
         } else {
             let application =
@@ -734,6 +746,9 @@ mod windows {
                             }
                             ClosedReadySyncError::Unconfirmed => {
                                 ShippingCompositionError::Initialization(error)
+                            }
+                            ClosedReadySyncError::VersionConflict => {
+                                ShippingCompositionError::SyncVersionConflict
                             }
                         }
                     })
@@ -999,6 +1014,19 @@ mod windows {
                     Outcome::Unconfirmed,
                     Cloud::NotConfirmed,
                     Cause::CoordinatorLeaseConflict,
+                    0,
+                );
+                return outcome;
+            }
+            if matches!(outcome, Err(ShippingCompositionError::SyncVersionConflict)) {
+                // CURRENT has a confirmed *different* generation. No retry
+                // can authorize adopting it or rewriting the dirty local copy.
+                eprintln!("BRIDGE_SYNC_VERSION_CONFLICT;NEXT_SAFE_STEP=PRESERVE_LOCAL_BYTES");
+                report::record_current(
+                    Stage::RecoveryRequired,
+                    Outcome::Unconfirmed,
+                    Cloud::NotConfirmed,
+                    Cause::CloudSaveFailed,
                     0,
                 );
                 return outcome;
@@ -1320,8 +1348,16 @@ mod windows {
                                 .is_ok()
                     })
                     .unwrap_or(false);
-                if dirty && run_closed_sync(intent).is_ok() {
-                    open_local()
+                if dirty {
+                    match run_closed_sync(intent) {
+                        Ok(()) => open_local(),
+                        Err(ShippingCompositionError::SyncVersionConflict) => {
+                            return Err(ShippingCompositionError::SyncVersionConflict);
+                        }
+                        Err(_) => {
+                            Err(crate::local_browser_open::LocalOpenError::StaleLocalWorkspace)
+                        }
+                    }
                 } else {
                     Err(crate::local_browser_open::LocalOpenError::StaleLocalWorkspace)
                 }
