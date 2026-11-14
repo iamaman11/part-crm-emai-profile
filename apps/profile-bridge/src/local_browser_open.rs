@@ -3,7 +3,9 @@
 #![forbid(unsafe_code)]
 
 use crate::generation_initialization::{InitialProfileOpen, InitialProfileStatus};
-use crate::local_profile::{BridgeWorkspaceLock, ClosedSyncAdmission, LocalProfileError, MaterializationRoot};
+use crate::local_profile::{
+    BridgeWorkspaceLock, ClosedSyncAdmission, LocalProfileError, MaterializationRoot,
+};
 use crate::user_diagnostics::report::{self, Cause, Cloud, Outcome, Stage};
 use profile_platform_primitives::{DeviceId, GenerationId};
 use sha2::{Digest, Sha256};
