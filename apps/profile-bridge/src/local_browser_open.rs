@@ -672,7 +672,12 @@ pub(crate) fn open_with_before_launch(
     before_launch: Option<BeforeLaunch>,
 ) -> Result<(), LocalOpenError> {
     open_with_before_launch_and_after_close(
-        root, intent, device, runtime_root, before_launch, |_| {},
+        root,
+        intent,
+        device,
+        runtime_root,
+        before_launch,
+        |_| {},
     )
 }
 
@@ -701,7 +706,13 @@ pub(crate) fn open_with_before_launch_and_after_close(
         Err(_) => return Err(LocalOpenError::InvalidLocalWorkspace),
     };
     let result = open_under_profile_admission(
-        root, intent, device, runtime_root, before_launch, workspace, local_started,
+        root,
+        intent,
+        device,
+        runtime_root,
+        before_launch,
+        workspace,
+        local_started,
     );
     after_close(result);
     result
@@ -1352,8 +1363,8 @@ sys.stderr.flush()
 
     #[cfg(windows)]
     #[test]
-    fn post_close_sync_callback_cannot_lose_profile_gate()
-    -> Result<(), Box<dyn std::error::Error>> {
+    fn post_close_sync_callback_cannot_lose_profile_gate() -> Result<(), Box<dyn std::error::Error>>
+    {
         use crate::local_profile::{ClosedSyncAdmission, MaterializationRoot};
         use profile_platform_primitives::DeviceId;
 
