@@ -25,6 +25,8 @@ pub enum ShippingCompositionError {
     RestoreUnavailable,
     SyncUnconfirmed,
     SyncLeaseConflict,
+    /// Server CURRENT is a different committed candidate; dirty bytes are preserved.
+    SyncVersionConflict,
     LocalDelete(crate::local_profile_delete::TerminalDeleteError),
     #[cfg(windows)]
     DeliveryRuntime(crate::windows_delivery_runtime::WindowsDeliveryRuntimeError),
@@ -61,6 +63,7 @@ impl core::fmt::Display for ShippingCompositionError {
             }
             Self::SyncUnconfirmed => "Native Close succeeded; cloud Sync not confirmed",
             Self::SyncLeaseConflict => "Coordinator lease conflict: original local unsynced data preserved; explicit recovery required",
+            Self::SyncVersionConflict => "Cloud CURRENT differs from the saved local candidate; preserve original local data for explicit recovery",
             Self::LocalDelete(error) => return core::fmt::Display::fmt(error, formatter),
             #[cfg(windows)]
             Self::DeliveryRuntime(error) => return core::fmt::Display::fmt(error, formatter),
@@ -158,7 +161,7 @@ mod windows {
         digest_closed_workspace_streaming, seal_closed_workspace_streaming,
     };
     use crate::local_profile::{
-        DeliveryActivationGuard, MaterializationRoot, PendingSyncDescriptor,
+        ClosedSyncAdmission, DeliveryActivationGuard, MaterializationRoot, PendingSyncDescriptor,
     };
     use crate::shipping_control_plane::SyncEnrollmentPort;
     use crate::shipping_control_plane::{
@@ -188,9 +191,9 @@ mod windows {
 
     const NETWORK_POLICY_PATH_ENV: &str = "PROFILE_BRIDGE_NETWORK_POLICY_PATH";
     const PROXY_CONFIG_PATH_ENV: &str = "PROFILE_BRIDGE_PROXY_CONFIG_PATH";
-    const PACKAGED_PYTHON_EXECUTABLE: &str = "python/python.exe";
     const HEARTBEAT_TRANSPORT_RETRY_MS: u64 = 1_000;
     const NATIVE_FILE_RELEASE_TIMEOUT: Duration = Duration::from_secs(120);
+    const MAX_CLOSED_SYNC_ATTEMPTS: u64 = 3;
     const SAVE_RECONNECT_AUTHORITY_RESERVE_MS: u64 = 5_000;
     const SAVE_HEARTBEAT_PERIOD_MS: u64 = 5_000;
 
@@ -342,10 +345,23 @@ mod windows {
             && current.container_bytes() == pending.container_bytes()
     }
 
+    /// An unmatched pending descriptor is only retryable while a read shows
+    /// the PREVIOUS CURRENT. An exact candidate with conflicting metadata,
+    /// or any other confirmed successor, requires explicit recovery.
+    fn unmatched_pending_is_terminal_conflict(
+        pending: &PendingSyncDescriptor,
+        current: &crate::generation_reopen::GenerationDownloadCapability,
+        base: Option<&profile_platform_primitives::GenerationId>,
+    ) -> bool {
+        current.generation_id() == pending.candidate_generation_id()
+            || base.is_some_and(|base| current.generation_id() != base)
+    }
+
     #[derive(Clone, Copy, Debug, Eq, PartialEq)]
     enum ClosedReadySyncError {
         Unconfirmed,
         LeaseConflict,
+        VersionConflict,
     }
 
     impl From<()> for ClosedReadySyncError {
@@ -364,7 +380,7 @@ mod windows {
         use crate::local_profile::BridgeWorkspaceLock;
         use std::fs;
 
-        let mut workspace = root
+        let workspace = root
             .open_profile_current(&intent.tenant_id, &intent.profile_id)
             .map_err(|_| ())?;
         if let Some(pending) = workspace.pending_sync().cloned() {
@@ -401,38 +417,18 @@ mod windows {
                     Err(ClosedReadySyncError::Unconfirmed)
                 };
             }
-            if !pending.is_committed()
-                && workspace
-                    .base_generation_id()
-                    .is_some_and(|base| current.generation_id() == base)
-            {
-                let guard = BridgeWorkspaceLock::acquire_or_recover_interrupted(
-                    &workspace,
-                    binding.device_id(),
-                    now().map_err(|_| ())?.value(),
-                )
-                .map_err(|_| ())?;
-                let active = root
-                    .open_profile_current(&intent.tenant_id, &intent.profile_id)
-                    .map_err(|_| ())?;
-                let cleared = (|| {
-                    if active.pending_sync() != Some(&pending)
-                        || !matches!(browser_writer_locks_absent(&active), Ok(true))
-                    {
-                        return Err(());
-                    }
-                    root.clear_profile_current_pending_sync(&active)
-                        .map_err(|_| ())
-                })();
-                let unlocked = guard.release().map_err(|_| ());
-                cleared?;
-                unlocked?;
-                workspace = root
-                    .open_profile_current(&intent.tenant_id, &intent.profile_id)
-                    .map_err(|_| ())?;
-            } else {
-                return Err(ClosedReadySyncError::Unconfirmed);
+            // Old CURRENT may be a stale read while the original candidate
+            // is still committing: leave pending intact for exact replay.
+            // A different confirmed generation or a descriptor mismatch on
+            // the same candidate is instead terminal, not a network retry.
+            if unmatched_pending_is_terminal_conflict(
+                &pending,
+                &current,
+                workspace.base_generation_id(),
+            ) {
+                return Err(ClosedReadySyncError::VersionConflict);
             }
+            return Err(ClosedReadySyncError::Unconfirmed);
         }
         let Some(base) = workspace.base_generation_id().cloned() else {
             // First DRAFT -> READY committed in D1, but our HTTP response or
@@ -454,7 +450,7 @@ mod windows {
                 .download_capability(&intent.tenant_id, &intent.profile_id)
                 .map_err(|_| ())?;
             if confirmed.generation_id() != workspace.generation_id() {
-                return Err(ClosedReadySyncError::Unconfirmed);
+                return Err(ClosedReadySyncError::VersionConflict);
             }
             let reader = WindowsSignedGenerationObjectGet::from_system().map_err(|_| ())?;
             let mut downloader = VerifiedGenerationObjectStreamDownloader::new(reader);
@@ -542,7 +538,7 @@ mod windows {
             .map_err(|_| ClosedReadySyncError::Unconfirmed);
         }
         if current.generation_id() != &base {
-            return Err(ClosedReadySyncError::Unconfirmed);
+            return Err(ClosedReadySyncError::VersionConflict);
         }
 
         let mut transport = application.transport();
@@ -713,6 +709,9 @@ mod windows {
             sync_closed_ready(intent, binding, root, origin).map_err(|error| match error {
                 ClosedReadySyncError::LeaseConflict => ShippingCompositionError::SyncLeaseConflict,
                 ClosedReadySyncError::Unconfirmed => ShippingCompositionError::SyncUnconfirmed,
+                ClosedReadySyncError::VersionConflict => {
+                    ShippingCompositionError::SyncVersionConflict
+                }
             })
         } else {
             let application =
@@ -758,6 +757,9 @@ mod windows {
                             }
                             ClosedReadySyncError::Unconfirmed => {
                                 ShippingCompositionError::Initialization(error)
+                            }
+                            ClosedReadySyncError::VersionConflict => {
+                                ShippingCompositionError::SyncVersionConflict
                             }
                         }
                     })
@@ -915,9 +917,9 @@ mod windows {
     pub fn run_closed_sync(
         intent: &crate::generation_initialization::InitialProfileOpen,
     ) -> Result<(), ShippingCompositionError> {
-        // This same one-shot Bridge process remains alive until the existing
-        // dirty marker is cleared. Backoff is bounded; attempts are not.
-        // No daemon, local retry file, or independent cloud writer is added.
+        // One short-lived process owns explicit closed-profile recovery.
+        // The same bounded Sync code runs inline after normal native Close.
+        // Dirty/pending evidence survives exhausted retries and process death.
         let config = ShippingConfig::from_installation()?;
         let binding =
             WindowsDeviceApplicationBinding::open(&config.device_application_binding_path)
@@ -927,6 +929,34 @@ mod windows {
         }
         let root = MaterializationRoot::open_or_create(&config.materialization_root)
             .map_err(|_| ShippingCompositionError::Configuration)?;
+        let initial = root
+            .open_profile_current(&intent.tenant_id, &intent.profile_id)
+            .map_err(|_| ShippingCompositionError::SyncUnconfirmed)?;
+        // One kernel-held owner covers the WHOLE Sync, including cloud network
+        // gaps. The inner Bridge writer lock still protects native file bytes.
+        // A second Close joins the existing owner without starting cloud work.
+        let _sync_owner = match ClosedSyncAdmission::try_acquire(&initial) {
+            Ok(Some(owner)) => owner,
+            Ok(None) => {
+                // No cloud call and, crucially, no Save receipt: another
+                // process owns the operation but has not necessarily finished.
+                eprintln!("BRIDGE_CLOSED_SYNC_ALREADY_OWNED");
+                return Err(ShippingCompositionError::SyncUnconfirmed);
+            }
+            Err(_) => return Err(ShippingCompositionError::SyncUnconfirmed),
+        };
+        run_closed_sync_with_admission(intent, &binding, &root, &config.control_plane_origin)
+    }
+
+    // Called only with the profile admission already held by either the normal
+    // browser Open or the explicit closed-recovery CLI. This is ONE Sync engine,
+    // with no lock-release window between Firefox Close and cloud CURRENT.
+    fn run_closed_sync_with_admission(
+        intent: &crate::generation_initialization::InitialProfileOpen,
+        binding: &WindowsDeviceApplicationBinding,
+        root: &MaterializationRoot,
+        origin: &str,
+    ) -> Result<(), ShippingCompositionError> {
         let mut retry_delay_seconds = 2_u64;
         let mut attempt = 0_u64;
         // A clean no-op invocation must not re-download an entire encrypted
@@ -947,13 +977,20 @@ mod windows {
                 // one-shot Sync child, independently prove cold CURRENT and
                 // ask D1 to admit optional predecessor retirement. The
                 // existing Worker scheduler alone may later delete old R2.
-                if saved_in_this_sync && intent.status == InitialProfileStatus::Ready {
-                    try_retire_predecessor_after_clean_sync(
-                        intent,
-                        &binding,
-                        &root,
-                        &config.control_plane_origin,
+                if saved_in_this_sync {
+                    // The CURRENT Save is already confirmed and the native
+                    // marker is clean. Optional R2-retirement proof cannot
+                    // revoke this receipt or hold up its observation.
+                    report::record_current(
+                        Stage::CloudSaveConfirmed,
+                        Outcome::Succeeded,
+                        Cloud::CommittedExact,
+                        Cause::None,
+                        0,
                     );
+                    if intent.status == InitialProfileStatus::Ready {
+                        try_retire_predecessor_after_clean_sync(intent, binding, root, origin);
+                    }
                 }
                 return Ok(());
             }
@@ -981,8 +1018,7 @@ mod windows {
                 effective.status = InitialProfileStatus::Ready;
                 effective.expected_version = workspace.profile_version();
             }
-            let outcome =
-                sync_after_native_close(&effective, &binding, &root, &config.control_plane_origin);
+            let outcome = sync_after_native_close(&effective, binding, root, origin);
             if matches!(outcome, Err(ShippingCompositionError::SyncLeaseConflict)) {
                 report::record_current(
                     Stage::RecoveryRequired,
@@ -993,10 +1029,22 @@ mod windows {
                 );
                 return outcome;
             }
+            if matches!(outcome, Err(ShippingCompositionError::SyncVersionConflict)) {
+                // CURRENT has a confirmed *different* generation. No retry
+                // can authorize adopting it or rewriting the dirty local copy.
+                eprintln!("BRIDGE_SYNC_VERSION_CONFLICT;NEXT_SAFE_STEP=PRESERVE_LOCAL_BYTES");
+                report::record_current(
+                    Stage::RecoveryRequired,
+                    Outcome::Unconfirmed,
+                    Cloud::NotConfirmed,
+                    Cause::CloudSaveFailed,
+                    0,
+                );
+                return outcome;
+            }
             if outcome.is_err() {
-                // A long-lived retry must not look like an indefinitely silent
-                // operation. Reuse bounded typed diagnostics, never a retry log
-                // that can authorize another R2 PUT or D1 generation.
+                // Keep local dirty/pending evidence on every error. Never
+                // convert a terminal mismatch into an endless process loop.
                 report::record_current(
                     Stage::CloudSaveAttempt,
                     Outcome::Unconfirmed,
@@ -1021,54 +1069,23 @@ mod windows {
                     continue;
                 }
             }
-            eprintln!(
-                "BRIDGE_CLOUD_SYNC_RETRY_PENDING attempt={}",
-                attempt.saturating_add(1)
-            );
+            attempt = attempt.saturating_add(1);
+            if attempt >= MAX_CLOSED_SYNC_ATTEMPTS {
+                eprintln!(
+                    "BRIDGE_CLOUD_SYNC_STOPPED;attempts={attempt};NEXT_SAFE_STEP=PRESERVE_LOCAL_BYTES"
+                );
+                return Err(outcome
+                    .err()
+                    .unwrap_or(ShippingCompositionError::SyncUnconfirmed));
+            }
+            eprintln!("BRIDGE_CLOUD_SYNC_RETRY_PENDING attempt={attempt}");
             thread::sleep(Duration::from_secs(retry_delay_seconds));
             retry_delay_seconds = next_sync_retry_delay(retry_delay_seconds);
-            attempt = attempt.saturating_add(1);
         }
     }
 
     fn next_sync_retry_delay(current_seconds: u64) -> u64 {
-        current_seconds.saturating_mul(2).min(300)
-    }
-
-    /// The same installed executable handles one ephemeral cloud Sync
-    /// invocation. No daemon, extra binary or new browser writer is created.
-    /// A failed child start falls back to the same Sync inline.
-    fn start_sync_after_close(intent: &crate::generation_initialization::InitialProfileOpen) {
-        use std::process::Stdio;
-        let status = match intent.status {
-            InitialProfileStatus::Draft => "DRAFT",
-            InitialProfileStatus::Ready => "READY",
-        };
-        let uri = format!(
-            "profilebridge://open/v2/{}/{}/{}/{}/{}",
-            intent.tenant_id.as_str(),
-            intent.actor_id.as_str(),
-            intent.profile_id.as_str(),
-            intent.expected_version,
-            status,
-        );
-        let result = env::current_exe().and_then(|exe| {
-            crate::windows_native::background_command(exe)
-                .arg("--sync-closed")
-                .arg(uri)
-                .stdin(Stdio::null())
-                .stdout(Stdio::null())
-                .stderr(Stdio::null())
-                .spawn()
-        });
-        if result.is_err() {
-            eprintln!("BRIDGE_SYNC_NOT_STARTED;FALLBACK=RUN_EXISTING_SYNC_INLINE");
-            if let Err(error) = run_closed_sync(intent) {
-                eprintln!(
-                    "BRIDGE_SYNC_INLINE_FALLBACK_PENDING;error={error:?};NEXT_SAFE_STEP=PRESERVE_LOCAL_BYTES"
-                );
-            }
-        }
+        current_seconds.saturating_mul(2).min(4)
     }
 
     #[cfg(test)]
@@ -1175,7 +1192,7 @@ mod windows {
 
     #[cfg(test)]
     mod pending_sync_descriptor_tests {
-        use super::pending_descriptor_matches_current;
+        use super::{pending_descriptor_matches_current, unmatched_pending_is_terminal_conflict};
         use crate::generation_reopen::GenerationDownloadCapability;
         use crate::local_profile::PendingSyncDescriptor;
         use profile_platform_primitives::GenerationId;
@@ -1224,6 +1241,39 @@ mod windows {
                 60,
             );
             assert!(!pending_descriptor_matches_current(&pending, &wrong_size));
+
+            let base = GenerationId::parse("generation_previous_confirmed")?;
+            let old_current = GenerationDownloadCapability::new(
+                base.clone(),
+                "tenant/profile/previous.bpgc".to_owned(),
+                [0x44; 32],
+                [0x55; 32],
+                4_096,
+                "https://example.invalid/signed".to_owned(),
+                60,
+            );
+            assert!(
+                !unmatched_pending_is_terminal_conflict(&pending, &old_current, Some(&base)),
+                "an old CURRENT read cannot cancel an in-flight candidate"
+            );
+            assert!(
+                unmatched_pending_is_terminal_conflict(&pending, &wrong_digest, Some(&base)),
+                "the same committed candidate with mismatched digest is terminal"
+            );
+            let foreign = GenerationId::parse("generation_other_confirmed")?;
+            let newer_current = GenerationDownloadCapability::new(
+                foreign,
+                "tenant/profile/other.bpgc".to_owned(),
+                [0x66; 32],
+                [0x77; 32],
+                4_096,
+                "https://example.invalid/signed".to_owned(),
+                60,
+            );
+            assert!(
+                unmatched_pending_is_terminal_conflict(&pending, &newer_current, Some(&base)),
+                "another confirmed CURRENT must not be replayed as the local candidate"
+            );
             Ok(())
         }
     }
@@ -1262,12 +1312,38 @@ mod windows {
             .map_err(|_| ShippingCompositionError::Configuration)?;
 
         let open_local = || {
-            crate::local_browser_open::open_with_before_launch(
+            crate::local_browser_open::open_with_before_launch_and_after_close(
                 &root,
                 intent,
                 binding.device_id(),
                 delivery.runtime_root(),
                 delivery_health_before_launch(delivery.pending_health_confirmation()),
+                |open_result| {
+                    // The browser's profile admission is still held here.
+                    // The SAME Rust process completes closed Sync before a
+                    // subsequent Open can touch browser bytes. No child launch
+                    // or OS-lock handoff exists in the normal lifecycle.
+                    if !matches!(
+                        open_result,
+                        Err(
+                            crate::local_browser_open::LocalOpenError::StaleLocalWorkspace
+                                | crate::local_browser_open::LocalOpenError::ProfileBusy
+                                | crate::local_browser_open::LocalOpenError::OperationInProgress
+                                | crate::local_browser_open::LocalOpenError::RestoreRequired
+                        )
+                    ) {
+                        if let Err(error) = run_closed_sync_with_admission(
+                            intent,
+                            &binding,
+                            &root,
+                            &config.control_plane_origin,
+                        ) {
+                            eprintln!(
+                                "BRIDGE_CLOUD_SYNC_UNCONFIRMED;error={error:?};NEXT_SAFE_STEP=PRESERVE_LOCAL_BYTES"
+                            );
+                        }
+                    }
+                },
             )
         };
         let result = match open_local() {
@@ -1303,23 +1379,36 @@ mod windows {
                 // Re-enter the same local Open with the same runtime and owners.
                 open_local()
             }
+            Err(crate::local_browser_open::LocalOpenError::StaleLocalWorkspace) => {
+                // Recover a lost cloud Commit acknowledgement only on a DIRTY
+                // existing local copy. Normal local Open remains network-free.
+                // The existing closed Sync proves exact CURRENT/native bytes
+                // and advances the local marker; never force a cloud version.
+                let dirty = root
+                    .open_profile_current(&intent.tenant_id, &intent.profile_id)
+                    .map(|workspace| {
+                        workspace.pending_sync().is_some()
+                            || std::fs::symlink_metadata(workspace.path().join(".local-unsynced"))
+                                .is_ok()
+                    })
+                    .unwrap_or(false);
+                if dirty {
+                    match run_closed_sync(intent) {
+                        Ok(()) => open_local(),
+                        Err(ShippingCompositionError::SyncVersionConflict) => {
+                            return Err(ShippingCompositionError::SyncVersionConflict);
+                        }
+                        Err(_) => {
+                            Err(crate::local_browser_open::LocalOpenError::StaleLocalWorkspace)
+                        }
+                    }
+                } else {
+                    Err(crate::local_browser_open::LocalOpenError::StaleLocalWorkspace)
+                }
+            }
             result => result,
         };
-
-        match result {
-            Ok(()) => {
-                start_sync_after_close(intent);
-                Ok(())
-            }
-            Err(error) => {
-                // One error path owns the existing Sync handoff. Stale CRM
-                // intents alone must not publish conflicting local bytes.
-                if error != crate::local_browser_open::LocalOpenError::StaleLocalWorkspace {
-                    start_sync_after_close(intent);
-                }
-                Err(ShippingCompositionError::LocalOpen(error))
-            }
-        }
+        result.map_err(ShippingCompositionError::LocalOpen)
     }
 
     pub fn run_delivery_command(
@@ -1448,18 +1537,14 @@ mod windows {
 
     #[cfg(test)]
     mod closed_sync_retry_tests {
-        use super::next_sync_retry_delay;
+        use super::{MAX_CLOSED_SYNC_ATTEMPTS, next_sync_retry_delay};
 
         #[test]
-        fn closed_sync_retry_backoff_is_capped_without_limiting_attempts() {
-            let mut delay = 2_u64;
-            let mut observed = Vec::new();
-            for _ in 0..10 {
-                observed.push(delay);
-                delay = next_sync_retry_delay(delay);
-            }
-            assert_eq!(observed, vec![2, 4, 8, 16, 32, 64, 128, 256, 300, 300]);
-            assert_eq!(next_sync_retry_delay(300), 300);
+        fn closed_sync_stops_after_three_attempts_without_long_lived_retry_process() {
+            assert_eq!(MAX_CLOSED_SYNC_ATTEMPTS, 3);
+            // Only two pauses are possible before the owner exits.
+            assert_eq!(next_sync_retry_delay(2), 4);
+            assert_eq!(next_sync_retry_delay(4), 4);
         }
     }
 }

@@ -236,7 +236,7 @@ def main() -> int:
     local_source = (SOURCE.parents[2] / "apps/profile-bridge/src/local_browser_open.rs").read_text(
         encoding="utf-8"
     )
-    local_owner = local_source.split("pub(crate) fn open_with_before_launch(", 1)[1].split("\n}\n", 1)[0]
+    local_owner = local_source.split("fn open_under_profile_admission(", 1)[1].split("\n}\n", 1)[0]
     cold_branch = local_source.split(
         "let config = if folder.join(CONFIG).exists()", 1
     )[1].split("let first_identity = config.is_none()", 1)[0]
@@ -330,15 +330,21 @@ def main() -> int:
     assert "ManagedCamouhostProcess" not in composition
     assert "ManagedCamouhostIpc" not in composition
     assert "pub fn run_claim(" not in composition
-    assert "local_browser_open::open_with_before_launch" in composition
-    assert "start_sync_after_close(intent)" in composition
+    assert "local_browser_open::open_with_before_launch_and_after_close" in composition
+    assert "start_sync_after_close(" not in composition
     run_initial = composition.split("    pub fn run_initial(", 1)[1].split(
         "    pub fn run_delivery_command(", 1
     )[0]
-    assert run_initial.count("start_sync_after_close(intent)") == 2
-    assert "if error != crate::local_browser_open::LocalOpenError::StaleLocalWorkspace {" in run_initial
+    assert "run_closed_sync_with_admission(" in run_initial
+    assert "if dirty {" in run_initial
+    assert "match run_closed_sync(intent)" in run_initial
+    assert "Err(ShippingCompositionError::SyncVersionConflict)" in run_initial
+    # A busy browser never spawns another Sync; stale CURRENT may be
+    # reconciled only through the existing exact-Commit proof, never by reset.
+    assert "crate::local_browser_open::LocalOpenError::StaleLocalWorkspace" in run_initial
+    assert "crate::local_browser_open::LocalOpenError::ProfileBusy" in run_initial
+    assert "if !matches!(" in run_initial
     assert "DeliveryHealth" not in run_initial
-    assert "if error != crate::local_browser_open::LocalOpenError::StaleLocalWorkspace {" in run_initial
     app = (SOURCE.parents[2] / "apps/profile-bridge/src/main.rs").read_text(
         encoding="utf-8"
     )

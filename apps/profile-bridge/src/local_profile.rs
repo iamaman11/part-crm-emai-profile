@@ -13,6 +13,8 @@ pub use lifecycle::{
     ForgottenWindowAction, ForgottenWindowPolicy, LocalGenerationRecord, LocalGenerationState,
     QuotaPlan, QuotaPolicy, SupportBundleSummary,
 };
+#[cfg(windows)]
+pub(crate) use quiescence::ClosedSyncAdmission;
 pub use quiescence::{BridgeWorkspaceLock, DeliveryActivationGuard};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

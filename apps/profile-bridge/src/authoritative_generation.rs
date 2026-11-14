@@ -1039,6 +1039,8 @@ mod tests {
         tenant_id: TenantId,
         profile_id: ProfileId,
         generation_id: GenerationId,
+        #[cfg(windows)]
+        source_id: GenerationId,
         key_id: KeyId,
         key_bytes: [u8; 32],
         container: Vec<u8>,
@@ -1110,7 +1112,7 @@ mod tests {
                     tenant_id.clone(),
                     profile_id.clone(),
                     generation_id.clone(),
-                    Some(source_id),
+                    Some(source_id.clone()),
                 ),
                 key_id.clone(),
                 NoncePrefix::new([0x71; 16]),
@@ -1127,6 +1129,8 @@ mod tests {
                 tenant_id,
                 profile_id,
                 generation_id,
+                #[cfg(windows)]
+                source_id,
                 key_id,
                 key_bytes,
                 container,
@@ -1744,6 +1748,130 @@ mod tests {
             .open_profile_current(&fixture.tenant_id, &fixture.profile_id)?;
         assert_eq!(confirmed.profile_version(), 2);
         assert_eq!(confirmed.base_generation_id(), Some(&fixture.generation_id));
+        fixture.cleanup();
+        Ok(())
+    }
+
+    #[cfg(windows)]
+    fn prepare_v11_ready_fixture(
+        fixture: &Fixture,
+        native_bytes: &[u8],
+    ) -> Result<std::path::PathBuf, Box<dyn std::error::Error>> {
+        let draft = fixture.root.create_profile_current(
+            &fixture.tenant_id,
+            &fixture.profile_id,
+            &fixture.source_id,
+            10,
+        )?;
+        let workspace =
+            fixture
+                .root
+                .update_profile_current_sync_base(&draft, &fixture.source_id, 11)?;
+        fs::create_dir_all(workspace.path().join("user_data/storage"))?;
+        fs::write(workspace.path().join("prefs.js"), b"authoritative-prefs")?;
+        fs::write(
+            workspace.path().join("user_data/storage/state.bin"),
+            native_bytes,
+        )?;
+        fs::write(
+            workspace.path().join("camoufox-config.json"),
+            &fixture.config_bytes,
+        )?;
+        fs::write(
+            workspace.path().join(".local-unsynced"),
+            b"local-unsynced-v2",
+        )?;
+        Ok(workspace.path().to_path_buf())
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn lost_ready_commit_v11_to_v12_reconciles_exact_native_bytes_without_replacing_folder()
+    -> Result<(), Box<dyn std::error::Error>> {
+        // Already committed CURRENT v12 with missing local ACK/pending marker:
+        // only byte-equal authenticated cloud CURRENT may advance local v11.
+        let fixture = Fixture::without_browser_identity()?;
+        let original_path = prepare_v11_ready_fixture(&fixture, b"authoritative-state")?;
+        let mut control = fixture.control();
+        let mut downloader = FakeStreamDownloader {
+            container: fixture.container.clone(),
+            calls: 0,
+        };
+        super::reconcile_closed_ready_with_confirmed_current(
+            &fixture.root,
+            &fixture.tenant_id,
+            &fixture.profile_id,
+            &fixture.generation_id,
+            &fixture.source_id,
+            12,
+            &DeviceId::parse("device_ready_confirmed")?,
+            12,
+            &mut control,
+            &mut downloader,
+        )?;
+        let recovered = fixture
+            .root
+            .open_profile_current(&fixture.tenant_id, &fixture.profile_id)?;
+        assert_eq!(recovered.path(), original_path);
+        assert_eq!(recovered.profile_version(), 12);
+        assert_eq!(recovered.base_generation_id(), Some(&fixture.generation_id));
+        assert!(!recovered.path().join(".local-unsynced").exists());
+        assert_eq!(
+            fs::read(recovered.path().join("user_data/storage/state.bin"))?,
+            b"authoritative-state",
+        );
+        assert_eq!(
+            fs::read(recovered.path().join("camoufox-config.json"))?,
+            fixture.config_bytes
+        );
+        assert_eq!(downloader.calls, 1);
+        fixture.cleanup();
+        Ok(())
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn lost_ready_commit_v11_to_v12_rejects_changed_bytes_without_local_version_forgery()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let fixture = Fixture::without_browser_identity()?;
+        let original_path =
+            prepare_v11_ready_fixture(&fixture, b"NEW NATIVE EDITS AFTER LOST COMMIT ACK")?;
+        let mut control = fixture.control();
+        let mut downloader = FakeStreamDownloader {
+            container: fixture.container.clone(),
+            calls: 0,
+        };
+        let result = super::reconcile_closed_ready_with_confirmed_current(
+            &fixture.root,
+            &fixture.tenant_id,
+            &fixture.profile_id,
+            &fixture.generation_id,
+            &fixture.source_id,
+            12,
+            &DeviceId::parse("device_ready_changed")?,
+            12,
+            &mut control,
+            &mut downloader,
+        );
+        assert_eq!(
+            result,
+            Err(AuthoritativeGenerationMaterializationError::IncompleteLocalEvidence)
+        );
+        let retained = fixture
+            .root
+            .open_profile_current(&fixture.tenant_id, &fixture.profile_id)?;
+        assert_eq!(retained.path(), original_path);
+        assert_eq!(retained.profile_version(), 11);
+        assert_eq!(retained.base_generation_id(), Some(&fixture.source_id));
+        assert_eq!(
+            fs::read(retained.path().join("user_data/storage/state.bin"))?,
+            b"NEW NATIVE EDITS AFTER LOST COMMIT ACK",
+        );
+        assert_eq!(
+            fs::read(retained.path().join(".local-unsynced"))?,
+            b"local-unsynced-v2",
+        );
+        assert_eq!(downloader.calls, 1);
         fixture.cleanup();
         Ok(())
     }

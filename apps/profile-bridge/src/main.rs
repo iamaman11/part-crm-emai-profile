@@ -182,15 +182,9 @@ where
             (Err(_), _) => Outcome::Failed,
         };
         observe(outcome, cause, elapsed);
-        if result.is_ok() && stage == Stage::CloudSaveAttempt {
-            report::record_current(
-                Stage::CloudSaveConfirmed,
-                Outcome::Succeeded,
-                Cloud::CommittedExact,
-                Cause::None,
-                elapsed,
-            );
-        }
+        // The single Save owner records CloudSaveConfirmed only after exact
+        // CURRENT and the clean native marker are proven. A no-op or a second
+        // closed-Sync invocation must not fabricate a successful Save receipt.
         if result.is_ok()
             && stage == Stage::InstallPrepare
             && let Some(root) = &installation_root

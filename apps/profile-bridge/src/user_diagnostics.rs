@@ -419,6 +419,7 @@ impl UserDiagnostic {
                         Local::StaleLocalWorkspace => "BRIDGE_LOCAL_VERSION_MISMATCH",
                         Local::RuntimeUnavailable => "BRIDGE_LOCAL_RUNTIME_UNAVAILABLE",
                         Local::ProfileBusy => "BRIDGE_LOCAL_BROWSER_BUSY",
+                        Local::OperationInProgress => "BRIDGE_LOCAL_OPERATION_BUSY",
                         Local::IdentityPreparation => "BRIDGE_LOCAL_IDENTITY_NOT_READY",
                         Local::BrowserNotClosedCleanly => "BRIDGE_LOCAL_CLOSE_UNVERIFIED",
                         Local::LaunchConfirmation => "BRIDGE_RUNTIME_NOT_READY",
@@ -426,6 +427,7 @@ impl UserDiagnostic {
                 }
                 ShippingCompositionError::SyncUnconfirmed => "BRIDGE_CLOUD_SYNC_UNCONFIRMED",
                 ShippingCompositionError::SyncLeaseConflict => "BRIDGE_SYNC_COORDINATOR_CONFLICT",
+                ShippingCompositionError::SyncVersionConflict => "BRIDGE_SYNC_VERSION_CONFLICT",
                 ShippingCompositionError::LocalDelete(error) => match error {
                     crate::local_profile_delete::TerminalDeleteError::AuthorizationUnconfirmed => {
                         "BRIDGE_LOCAL_DELETE_CLOUD_UNCONFIRMED"
@@ -872,6 +874,9 @@ impl UserDiagnostic {
                     Local::ProfileBusy => {
                         "This profile is already open, or a previous browser exit needs local recovery. Close the existing Firefox window first."
                     }
+                    Local::OperationInProgress => {
+                        "This profile already has a native Open, Close or Sync operation in progress. Its local data is preserved; wait for the current operation to finish before opening it again."
+                    }
                     Local::IdentityPreparation => {
                         "Local Camoufox fingerprint initialization failed. Existing files were retained; review the local diagnostic."
                     }
@@ -896,6 +901,9 @@ impl UserDiagnostic {
             },
             Self::Launch(Launch::SyncUnconfirmed) => {
                 "The browser closed locally and its files are intact, but cloud synchronization is not confirmed. Local pending-sync evidence was retained for a later exact retry."
+            }
+            Self::Launch(Launch::SyncVersionConflict) => {
+                "Cloud CURRENT is newer or differs from the exact local Save candidate. The original local profile and unsynced data were preserved. Do not force Restore or rewrite the version marker; explicit verified recovery is required."
             }
             Self::Launch(Launch::SyncLeaseConflict)
             | Self::Launch(Launch::Initialization(
