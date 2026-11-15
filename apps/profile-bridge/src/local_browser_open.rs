@@ -835,8 +835,8 @@ fn open_under_profile_admission(
     .confirms_closed_profile()
     {
         // Adapter failure is not proof that the browser released its files.
-        // The caller starts the existing Sync recovery; its Rust file gate
-        // must still block snapshot while Firefox owns the profile.
+        // The existing explicit closed-recovery owner may later reconcile
+        // these bytes, but cannot snapshot while Firefox owns the profile.
         return Err(LocalOpenError::BrowserNotClosedCleanly);
     }
     // Firefox may release its last Windows parent.lock handle just after the
@@ -1180,10 +1180,16 @@ mod tests {
             }
             std::thread::sleep(Duration::from_millis(25));
         }
-        assert!(late_writer_observed, "child did not acquire the real native lock");
+        assert!(
+            late_writer_observed,
+            "child did not acquire the real native lock"
+        );
         let (status, terminated) = owner.join().expect("native owner thread")?;
         assert!(status.success(), "late Firefox writer must exit naturally");
-        assert!(!terminated, "the Bridge must not terminate an unknown browser");
+        assert!(
+            !terminated,
+            "the Bridge must not terminate an unknown browser"
+        );
         assert!(crate::browser_execution::browser_writer_locks_absent_at(
             workspace.path()
         )?);
@@ -1233,13 +1239,7 @@ time.sleep(15)
         fs::create_dir(&folder)?;
         let started = Instant::now();
         assert_eq!(
-            run_python_with_executable(
-                &python,
-                &runtime_root,
-                &folder,
-                "--local-open",
-                None,
-            )?,
+            run_python_with_executable(&python, &runtime_root, &folder, "--local-open", None,)?
             super::NativeBrowserCompletion::NativeWriterReleased
         );
         assert!(started.elapsed() >= Duration::from_secs(2));
