@@ -867,7 +867,7 @@ impl UserDiagnostic {
                         "This READY profile has no local copy. Restore its single confirmed cloud CURRENT before opening. No empty workspace was created and no local data was changed."
                     }
                     Local::StaleLocalWorkspace => {
-                        "The local profile changed while Open was being admitted. No browser files were replaced; retry Open after the current local operation finishes."
+                        "The physical local profile path changed while Open was being admitted. No browser files were replaced; verify the selected profile and retry."
                     }
                     Local::RuntimeUnavailable => {
                         "Installed Camoufox cannot be started. Check local installation health. The browser profile was not deleted."
