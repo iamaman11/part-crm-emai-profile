@@ -1228,7 +1228,7 @@ mod tests {
         fs::create_dir_all(runtime_root.join("camouhost"))?;
         fs::write(
             runtime_root.join(ENTRYPOINT),
-            b"import sys\\nsys.exit(0)\\n",
+            b"import sys\nsys.exit(0)\n",
         )?;
         let folder = directory.path().join("profile");
         fs::create_dir(&folder)?;
