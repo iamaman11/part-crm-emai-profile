@@ -1639,33 +1639,6 @@ mod windows {
                 // Re-enter the same local Open with the same runtime and owners.
                 open_local()
             }
-            Err(crate::local_browser_open::LocalOpenError::StaleLocalWorkspace) => {
-                // Recover a lost cloud Commit acknowledgement only on a DIRTY
-                // existing local copy. Normal local Open remains network-free.
-                // The existing closed Sync proves exact CURRENT/native bytes
-                // and advances the local marker; never force a cloud version.
-                let dirty = root
-                    .open_profile_current(&intent.tenant_id, &intent.profile_id)
-                    .map(|workspace| {
-                        workspace.pending_sync().is_some()
-                            || std::fs::symlink_metadata(workspace.path().join(".local-unsynced"))
-                                .is_ok()
-                    })
-                    .unwrap_or(false);
-                if dirty {
-                    match run_closed_sync(intent) {
-                        Ok(()) => open_local(),
-                        Err(ShippingCompositionError::SyncVersionConflict) => {
-                            return Err(ShippingCompositionError::SyncVersionConflict);
-                        }
-                        Err(_) => {
-                            Err(crate::local_browser_open::LocalOpenError::StaleLocalWorkspace)
-                        }
-                    }
-                } else {
-                    Err(crate::local_browser_open::LocalOpenError::StaleLocalWorkspace)
-                }
-            }
             result => result,
         };
         result.map_err(ShippingCompositionError::LocalOpen)
