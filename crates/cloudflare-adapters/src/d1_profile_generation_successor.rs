@@ -491,7 +491,7 @@ impl ProfileGenerationSuccessorObservationPort for D1ProfileGenerationSuccessorC
         profile_id: &ProfileId,
         base_generation_id: &GenerationId,
         object: &GenerationObjectDescriptor,
-    ) -> Result<bool, ProfileGenerationSuccessorCommitError> {
+    ) -> Result<Option<u64>, ProfileGenerationSuccessorCommitError> {
         if object.profile_id() != profile_id
             || object.generation_id() == base_generation_id
             || object.object_key()
