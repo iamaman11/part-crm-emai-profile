@@ -1267,18 +1267,25 @@ mod tests {
             let mut child = spawn_native_adapter_fixture(600)?;
             let ready = AtomicBool::new(ready_seen);
             let started = Instant::now();
-            let (status, stopped) = super::await_adapter_or_native_release(
+            let outcome = super::await_adapter_or_native_release(
                 &mut child,
                 root.path(),
                 &ready,
                 Duration::from_millis(50),
-            )?;
-            assert!(status.success(), "the child must finish naturally");
-            assert!(!stopped, "uncertainty cannot authorize process termination");
-            assert!(
-                started.elapsed() >= Duration::from_millis(450),
-                "the native owner must not return at the diagnostic deadline"
             );
+            assert_eq!(outcome, Err(LocalOpenError::LaunchConfirmation));
+            assert!(
+                started.elapsed() < Duration::from_millis(450),
+                "the foreground owner must return after bounded launch uncertainty"
+            );
+            assert!(
+                child.try_wait()?.is_none(),
+                "unconfirmed startup must not force-terminate the adapter"
+            );
+            // This isolated fixture has no inherited shipping gate; explicitly
+            // clean up only its own test process after the assertion.
+            child.kill()?;
+            child.wait()?;
         }
         Ok(())
     }
@@ -1306,6 +1313,9 @@ mod tests {
                 .expect("kernel admission")
                 .expect("exclusive native profile owner");
             admitted_tx.send(()).expect("admitted signal");
+            let native_child_guard =
+                crate::local_profile::native_child_launch_guard_stdout(owner_workspace.path())
+                    .expect("inherited Windows launch admission");
             let mut child = Command::new(std::env::current_exe().expect("test executable"))
                 .arg("native_adapter_child_fixture")
                 .env(
@@ -1313,27 +1323,27 @@ mod tests {
                     owner_workspace.path(),
                 )
                 .stdin(Stdio::null())
-                .stdout(Stdio::null())
+                .stdout(native_child_guard)
                 .stderr(Stdio::null())
                 .spawn()
                 .expect("real Windows child");
             let ready = AtomicBool::new(false);
-            super::await_adapter_or_native_release(
+            let outcome = super::await_adapter_or_native_release(
                 &mut child,
                 owner_workspace.path(),
                 &ready,
                 Duration::from_millis(50),
-            )
+            );
+            // Rust deliberately releases the profile admission on timeout.
+            // The child, not this parent thread, retains kernel ownership.
+            (outcome, child)
         });
         admitted_rx.recv_timeout(Duration::from_secs(5))?;
-        std::thread::sleep(Duration::from_millis(100));
-        assert!(
-            crate::browser_execution::browser_writer_locks_absent_at(workspace.path())?,
-            "Firefox has not yet acquired its writer; negative OS proof alone is insufficient"
-        );
+        let (outcome, mut child) = owner.join().expect("native owner thread");
+        assert_eq!(outcome, Err(LocalOpenError::LaunchConfirmation));
         assert!(
             ClosedSyncAdmission::try_acquire(&workspace)?.is_none(),
-            "the original profile owner must survive the startup diagnostic deadline"
+            "child-inherited OS guard must exclude Open/Sync after Rust returns"
         );
         let deadline = Instant::now() + Duration::from_secs(5);
         let mut late_writer_observed = false;
@@ -1352,11 +1362,9 @@ mod tests {
             late_writer_observed,
             "child did not acquire the real native lock"
         );
-        let (status, terminated) = owner.join().expect("native owner thread")?;
-        assert!(status.success(), "late Firefox writer must exit naturally");
         assert!(
-            !terminated,
-            "the Bridge must not terminate an unknown browser"
+            child.wait()?.success(),
+            "late Firefox writer must exit naturally without Bridge termination"
         );
         assert!(crate::browser_execution::browser_writer_locks_absent_at(
             workspace.path()
