@@ -880,9 +880,8 @@ mod windows {
                         .expected_version
                         .checked_add(1)
                         .ok_or(ShippingCompositionError::Initialization(error))?;
-                    sync_closed_ready_with_rebase(&proof, binding, root, origin, false)
-                        .map_err(|recovery| {
-                        match recovery {
+                    sync_closed_ready_with_rebase(&proof, binding, root, origin, false).map_err(
+                        |recovery| match recovery {
                             ClosedReadySyncError::LeaseConflict => {
                                 ShippingCompositionError::SyncLeaseConflict
                             }
@@ -892,8 +891,8 @@ mod windows {
                             ClosedReadySyncError::VersionConflict => {
                                 ShippingCompositionError::SyncVersionConflict
                             }
-                        }
-                    })
+                        },
+                    )
                 }
             }
         }
@@ -1328,8 +1327,7 @@ mod windows {
         use profile_platform_primitives::{DeviceId, GenerationId, ProfileId, TenantId};
         use std::fs;
 
-        fn fixture(
-        ) -> Result<
+        fn fixture() -> Result<
             (
                 tempfile::TempDir,
                 MaterializationRoot,
@@ -1373,15 +1371,7 @@ mod windows {
             let inventory = workspace.inventory()?;
             assert_eq!(
                 rebase_local_current_after_exact_successor(
-                    &root,
-                    &tenant,
-                    &profile,
-                    &device,
-                    &base,
-                    11,
-                    &successor,
-                    12,
-                    &inventory,
+                    &root, &tenant, &profile, &device, &base, 11, &successor, 12, &inventory,
                 ),
                 Ok(())
             );
@@ -1409,15 +1399,7 @@ mod windows {
             let inventory = workspace.inventory()?;
             assert_eq!(
                 rebase_local_current_after_exact_successor(
-                    &root,
-                    &tenant,
-                    &profile,
-                    &device,
-                    &base,
-                    10,
-                    &successor,
-                    11,
-                    &inventory,
+                    &root, &tenant, &profile, &device, &base, 10, &successor, 11, &inventory,
                 ),
                 Err(ClosedReadySyncError::VersionConflict)
             );
