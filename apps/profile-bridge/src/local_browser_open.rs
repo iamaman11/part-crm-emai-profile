@@ -49,6 +49,7 @@ pub enum LocalOpenError {
     ProfileBusy,
     OperationInProgress,
     IdentityPreparation,
+    BrowserLaunchFailed,
     BrowserNotClosedCleanly,
     LaunchConfirmation,
 }
@@ -57,11 +58,12 @@ impl fmt::Display for LocalOpenError {
         f.write_str(match self {
             Self::InvalidLocalWorkspace => "Local browser folder is unavailable",
             Self::RestoreRequired => "This READY profile has no local copy. Restore the confirmed current version before opening",
-            Self::StaleLocalWorkspace => "Local profile version differs from the authorized CRM version; preserve local data and resolve Sync or Restore before opening",
+            Self::StaleLocalWorkspace => "Local profile identity changed during Open admission; retry without replacing its data",
             Self::RuntimeUnavailable => "Installed Camoufox runtime is unavailable",
             Self::ProfileBusy => "This local browser profile is already in use",
             Self::OperationInProgress => "Another native Open, Close or Sync operation still owns this profile",
             Self::IdentityPreparation => "Local Camoufox identity could not be prepared",
+            Self::BrowserLaunchFailed => "Local Camoufox did not start; the existing profile was kept",
             Self::BrowserNotClosedCleanly => {
                 "Browser close was not verified; local files were kept"
             }
@@ -71,19 +73,21 @@ impl fmt::Display for LocalOpenError {
 }
 impl std::error::Error for LocalOpenError {}
 
-// A native process may finish without proving a controlled browser Close.
-// Only SDK completion or an observed READY Firefox writer that has released
-// its OS handle can admit the normal post-Close Sync.
+// Startup failure and Close failure are different states. A launch failure
+// is terminal only after Rust independently proves that no Firefox writer
+// owns the local folder. A live/unknown writer remains admitted and unconfirmed.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum NativeBrowserCompletion {
     SdkClosed,
     NativeWriterReleased,
-    Unconfirmed,
+    LaunchFailed,
+    LaunchUnconfirmed,
+    CloseUnconfirmed,
 }
 
 impl NativeBrowserCompletion {
     const fn confirms_closed_profile(self) -> bool {
-        !matches!(self, Self::Unconfirmed)
+        matches!(self, Self::SdkClosed | Self::NativeWriterReleased)
     }
 }
 
@@ -103,28 +107,12 @@ fn local_generation(intent: &InitialProfileOpen) -> Result<GenerationId, LocalOp
 
 fn admit_existing_workspace(
     current: crate::local_profile::GenerationWorkspace,
-    intent: &InitialProfileOpen,
+    _intent: &InitialProfileOpen,
 ) -> Result<crate::local_profile::GenerationWorkspace, LocalOpenError> {
-    // The installed local marker is the sole Open state owner. A successful
-    // post-close Sync may already have advanced D1 CURRENT and this marker
-    // while the CRM tab still displays the old version. Such a previously
-    // admitted local copy must remain reopenable without another Worker call.
-    //
-    // Never open a local folder *behind* the known server projection, and
-    // never reinterpret an uncommitted DRAFT as a READY profile.
-    let local_version = current.profile_version();
-    let matches_state = match intent.status {
-        InitialProfileStatus::Draft if current.base_generation_id().is_none() => {
-            local_version == intent.expected_version
-        }
-        InitialProfileStatus::Draft => local_version > intent.expected_version,
-        InitialProfileStatus::Ready => {
-            current.base_generation_id().is_some() && local_version >= intent.expected_version
-        }
-    };
-    if !matches_state {
-        return Err(LocalOpenError::StaleLocalWorkspace);
-    }
+    // Existing local CURRENT is the source of truth for ordinary Open. The
+    // CRM projection may be stale or newer after an interrupted Sync; that is
+    // a Save/recovery concern, never a reason to block or replace local bytes.
+    // The workspace marker and filesystem validation have already succeeded.
     Ok(current)
 }
 
@@ -134,17 +122,15 @@ fn recheck_workspace_after_writer_admission(
     intent: &InitialProfileOpen,
 ) -> Result<crate::local_profile::GenerationWorkspace, LocalOpenError> {
     // Read the *current* marker while holding the exclusive workspace lock.
-    // Sync may have advanced CURRENT between the first fast lookup and admission.
+    // Reuse that local CURRENT directly; ordinary Open must not run cloud Sync
+    // or compare its version with the CRM projection.
     let current = root
         .open_profile_current(&intent.tenant_id, &intent.profile_id)
         .map_err(|_| LocalOpenError::InvalidLocalWorkspace)?;
-    // A Sync may have advanced the marker after our preliminary read.
-    // Even if the original CRM version is old, never accept a *race* during
-    // writer admission: Open must retry against one stable local snapshot.
-    if current.path() != observed.path()
-        || current.profile_version() != observed.profile_version()
-        || current.base_generation_id() != observed.base_generation_id()
-    {
+    // The marker may legitimately advance after the preliminary lookup and
+    // before this process acquires the OS admission. Reuse the freshly opened
+    // local CURRENT; only a changed physical profile path is an identity error.
+    if current.path() != observed.path() {
         return Err(LocalOpenError::StaleLocalWorkspace);
     }
     admit_existing_workspace(current, intent)
@@ -378,6 +364,34 @@ fn adapter_completed_after_native_close(
     close_seen: bool,
 ) -> bool {
     process_success || (action == "--local-open" && close_seen)
+}
+
+fn classify_native_browser_completion(
+    action: &str,
+    browser_ready: bool,
+    process_success: bool,
+    native_close_seen: bool,
+    native_writer_released: bool,
+    native_writer_absent: Option<bool>,
+) -> NativeBrowserCompletion {
+    if native_writer_released {
+        return NativeBrowserCompletion::NativeWriterReleased;
+    }
+    if browser_ready {
+        return if adapter_completed_after_native_close(action, process_success, native_close_seen) {
+            NativeBrowserCompletion::SdkClosed
+        } else {
+            NativeBrowserCompletion::CloseUnconfirmed
+        };
+    }
+    if action == "--local-open" {
+        return if native_writer_absent == Some(true) {
+            NativeBrowserCompletion::LaunchFailed
+        } else {
+            NativeBrowserCompletion::LaunchUnconfirmed
+        };
+    }
+    NativeBrowserCompletion::CloseUnconfirmed
 }
 
 #[cfg(windows)]
@@ -684,19 +698,23 @@ fn run_python_with_input(
     if health_required && !matches!(health_result_rx.try_recv(), Ok(true)) {
         return Err(LocalOpenError::LaunchConfirmation);
     }
-    Ok(if native_adapter_released {
-        NativeBrowserCompletion::NativeWriterReleased
-    } else if native_ready_seen.load(Ordering::Acquire)
-        && adapter_completed_after_native_close(
-            action,
-            completed.success(),
-            native_close_seen.load(Ordering::Acquire),
-        )
-    {
-        NativeBrowserCompletion::SdkClosed
+    let browser_ready = native_ready_seen.load(Ordering::Acquire);
+    let native_writer_absent = if action == "--local-open" && !browser_ready {
+        Some(matches!(
+            crate::browser_execution::browser_writer_locks_absent_at(folder),
+            Ok(true)
+        ))
     } else {
-        NativeBrowserCompletion::Unconfirmed
-    })
+        None
+    };
+    Ok(classify_native_browser_completion(
+        action,
+        browser_ready,
+        completed.success(),
+        native_close_seen.load(Ordering::Acquire),
+        native_adapter_released,
+        native_writer_absent,
+    ))
 }
 
 fn mark_local_unsynced(folder: &Path) -> Result<(), LocalOpenError> {
@@ -838,7 +856,19 @@ fn open_under_profile_admission(
     }
     // One Python process draws a new official identity only for an empty
     // profile; existing saved SDK options go directly to native Camoufox.
-    mark_local_unsynced(workspace.path())?;
+    // Persist dirty evidence before Camouhost can launch Firefox. A failed
+    // launch keeps this marker; only the existing verified Sync may retire it.
+    if let Err(error) = mark_local_unsynced(workspace.path()) {
+        if matches!(
+            crate::browser_execution::browser_writer_locks_absent(&workspace),
+            Ok(true)
+        ) {
+            writer
+                .release()
+                .map_err(|_| LocalOpenError::InvalidLocalWorkspace)?;
+        }
+        return Err(error);
+    }
     let local_ms = u64::try_from(local_started.elapsed().as_millis())
         .unwrap_or(u64::MAX)
         .min(86_400_000);
@@ -849,18 +879,51 @@ fn open_under_profile_admission(
         Cause::None,
         local_ms,
     );
-    if !run_python(
+    let completion = match run_python(
         runtime_root,
         workspace.path(),
         "--local-open",
         before_launch,
-    )?
-    .confirms_closed_profile()
-    {
-        // Adapter failure is not proof that the browser released its files.
-        // The existing explicit closed-recovery owner may later reconcile
-        // these bytes, but cannot snapshot while Firefox owns the profile.
-        return Err(LocalOpenError::BrowserNotClosedCleanly);
+    ) {
+        Ok(completion) => completion,
+        Err(error) => {
+            // Pre-launch failures must not strand the durable Bridge writer.
+            // Release it only after the same independent native-lock proof
+            // used by the successful Close path; unknown/live writers retain it.
+            if matches!(
+                crate::browser_execution::browser_writer_locks_absent(&workspace),
+                Ok(true)
+            ) {
+                writer
+                    .release()
+                    .map_err(|_| LocalOpenError::InvalidLocalWorkspace)?;
+            }
+            return Err(error);
+        }
+    };
+    match completion {
+        NativeBrowserCompletion::LaunchFailed => {
+            // The child exited before BrowserReady. Release the Bridge writer
+            // only after a second independent native-lock absence observation.
+            if !matches!(
+                crate::browser_execution::browser_writer_locks_absent(&workspace),
+                Ok(true)
+            ) {
+                return Err(LocalOpenError::LaunchConfirmation);
+            }
+            writer
+                .release()
+                .map_err(|_| LocalOpenError::InvalidLocalWorkspace)?;
+            return Err(LocalOpenError::BrowserLaunchFailed);
+        }
+        NativeBrowserCompletion::LaunchUnconfirmed => {
+            // Keep the durable writer admission: Firefox may still own bytes.
+            return Err(LocalOpenError::LaunchConfirmation);
+        }
+        NativeBrowserCompletion::CloseUnconfirmed => {
+            return Err(LocalOpenError::BrowserNotClosedCleanly);
+        }
+        NativeBrowserCompletion::SdkClosed | NativeBrowserCompletion::NativeWriterReleased => {}
     }
     // Firefox may release its last Windows parent.lock handle just after the
     // official Playwright close event. Read the SAME OS proof a few more times
@@ -903,6 +966,50 @@ mod tests {
             expected_version: 1,
             status: InitialProfileStatus::Draft,
         }
+    }
+
+    #[test]
+    fn launch_and_close_failures_are_distinct_native_states() {
+        use super::{NativeBrowserCompletion as Completion, classify_native_browser_completion};
+
+        assert_eq!(
+            classify_native_browser_completion(
+                "--local-open",
+                false,
+                true,
+                false,
+                false,
+                Some(true)
+            ),
+            Completion::LaunchFailed
+        );
+        assert_eq!(
+            classify_native_browser_completion(
+                "--local-open",
+                false,
+                false,
+                false,
+                false,
+                Some(false)
+            ),
+            Completion::LaunchUnconfirmed
+        );
+        assert_eq!(
+            classify_native_browser_completion("--local-open", false, false, false, false, None),
+            Completion::LaunchUnconfirmed
+        );
+        assert_eq!(
+            classify_native_browser_completion("--local-open", true, false, false, false, None),
+            Completion::CloseUnconfirmed
+        );
+        assert_eq!(
+            classify_native_browser_completion("--local-open", true, true, false, false, None),
+            Completion::SdkClosed
+        );
+        assert_eq!(
+            classify_native_browser_completion("--local-open", true, false, false, true, None),
+            Completion::NativeWriterReleased
+        );
     }
 
     #[test]
@@ -1391,10 +1498,11 @@ mod tests {
         fs::write(runtime_root.join(ENTRYPOINT), b"import sys\nsys.exit(0)\n")?;
         let folder = directory.path().join("profile");
         fs::create_dir(&folder)?;
+        fs::create_dir(folder.join("user_data"))?;
         assert_eq!(
             run_python_with_executable(&python, &runtime_root, &folder, "--local-open", None)?,
-            super::NativeBrowserCompletion::Unconfirmed,
-            "process exit zero cannot be a Close witness without official SDK Ready"
+            super::NativeBrowserCompletion::LaunchFailed,
+            "process exit before BrowserReady is a launch failure, not a Close failure"
         );
         Ok(())
     }
@@ -1782,68 +1890,55 @@ sys.stderr.flush()
         let draft = intent();
         let generation = local_generation(&draft).unwrap();
         let first = open_or_create_workspace(&root, &draft, &generation).unwrap();
-        root.update_profile_current_sync_base(&first, &generation, 2)
+        root.update_profile_current_sync_base(&first, &generation, 11)
             .unwrap();
-        // The browser was closed and Sync finished, but the web tab still
-        // displays DRAFT v1. Do not require an extra cloud launch query.
+        std::fs::write(first.path().join(".local-unsynced"), b"local-unsynced-v2").unwrap();
+        // Local v11 is a dirty working copy while the CRM projection has
+        // advanced to v12. Open must use the local marker without cloud I/O.
         let advanced = open_or_create_workspace(&root, &draft, &generation).unwrap();
-        assert_eq!(advanced.profile_version(), 2);
+        assert_eq!(advanced.profile_version(), 11);
         assert_eq!(advanced.base_generation_id(), Some(&generation));
         assert_eq!(advanced.path(), first.path());
 
         let mut cached_ready = draft.clone();
         cached_ready.status = InitialProfileStatus::Ready;
-        cached_ready.expected_version = 1;
+        cached_ready.expected_version = 12;
         assert_eq!(
             recheck_workspace_after_writer_admission(&root, &advanced, &cached_ready)
                 .unwrap()
                 .path(),
             first.path()
         );
-        // If the CRM projection is *newer* than local CURRENT, opening
-        // cannot silently select old bytes instead of requiring Restore.
-        cached_ready.expected_version = 3;
-        assert!(matches!(
-            open_or_create_workspace(&root, &cached_ready, &generation),
-            Err(LocalOpenError::StaleLocalWorkspace)
-        ));
+        // A newer CRM projection does not block an existing local copy.
+        // Local Open stays offline and never replaces the local working folder.
+        let reopened = open_or_create_workspace(&root, &cached_ready, &generation).unwrap();
+        assert_eq!(reopened.profile_version(), 11);
+        assert_eq!(reopened.path(), first.path());
+        assert_eq!(
+            std::fs::read(reopened.path().join(".local-unsynced")).unwrap(),
+            b"local-unsynced-v2"
+        );
     }
 
     #[test]
-    fn readback_under_writer_lock_rejects_cloud_base_advanced_after_first_lookup() {
+    fn recheck_uses_the_latest_local_marker_after_a_completed_sync() {
         let directory = tempfile::tempdir().unwrap();
         let root =
             crate::local_profile::MaterializationRoot::open_or_create(directory.path()).unwrap();
         let draft = intent();
         let generation = local_generation(&draft).unwrap();
         let observed = open_or_create_workspace(&root, &draft, &generation).unwrap();
-        // Simulate a completed Sync between preliminary lookup and OS admission,
-        // using the existing atomic generation marker update.
+        // Simulate a completed Sync between preliminary lookup and OS admission.
         root.update_profile_current_sync_base(&observed, &generation, 2)
             .unwrap();
-        assert!(matches!(
-            recheck_workspace_after_writer_admission(&root, &observed, &draft),
-            Err(LocalOpenError::StaleLocalWorkspace)
-        ));
-        let mut ready = draft.clone();
-        ready.status = InitialProfileStatus::Ready;
-        ready.expected_version = 2;
-        // After a concurrent Sync, a new Open must begin with a new exact
-        // local-marker observation. Reusing the pre-Sync marker is not valid
-        // even when the caller refreshed the cloud version separately.
-        let refreshed = root
-            .open_profile_current(&draft.tenant_id, &draft.profile_id)
-            .unwrap();
-        assert_eq!(
-            recheck_workspace_after_writer_admission(&root, &refreshed, &ready)
-                .unwrap()
-                .profile_version(),
-            2
-        );
+        let current = recheck_workspace_after_writer_admission(&root, &observed, &draft).unwrap();
+        assert_eq!(current.path(), observed.path());
+        assert_eq!(current.profile_version(), 2);
+        assert_eq!(current.base_generation_id(), Some(&generation));
     }
 
     #[test]
-    fn stale_launch_cannot_open_or_replace_an_existing_local_workspace() {
+    fn existing_local_workspace_opens_despite_stale_projection_and_keeps_dirty_bytes() {
         let directory = tempfile::tempdir().unwrap();
         let root =
             crate::local_profile::MaterializationRoot::open_or_create(directory.path()).unwrap();
@@ -1858,26 +1953,22 @@ sys.stderr.flush()
         let mut advanced = draft.clone();
         advanced.status = InitialProfileStatus::Ready;
         advanced.expected_version = 2;
-        assert!(matches!(
-            open_or_create_workspace(&root, &advanced, &generation),
-            Err(LocalOpenError::StaleLocalWorkspace)
-        ));
+        // The UI projection may say READY v2 while the local DRAFT is still
+        // v1 and has unsynced browser data. Open must reuse, not reject/reset it.
+        let opened = open_or_create_workspace(&root, &advanced, &generation).unwrap();
+        assert_eq!(opened.path(), workspace.path());
+        assert_eq!(opened.profile_version(), draft.expected_version);
         assert_eq!(
             std::fs::read(workspace.path().join(".local-unsynced")).unwrap(),
             b"local-unsynced-v2"
         );
-        // A stale READY status may not admit an uncommitted local DRAFT either.
-        advanced.expected_version = draft.expected_version;
-        assert!(matches!(
-            open_or_create_workspace(&root, &advanced, &generation),
-            Err(LocalOpenError::StaleLocalWorkspace)
-        ));
-        // The original DRAFT remains the same local folder; no cloud is needed.
+        // Even a newer version projection cannot replace the same local folder.
+        advanced.expected_version = 99;
+        let opened_again = open_or_create_workspace(&root, &advanced, &generation).unwrap();
+        assert_eq!(opened_again.path(), workspace.path());
         assert_eq!(
-            open_or_create_workspace(&root, &draft, &generation)
-                .unwrap()
-                .path(),
-            workspace.path()
+            std::fs::read(workspace.path().join(".local-unsynced")).unwrap(),
+            b"local-unsynced-v2"
         );
     }
 }

@@ -491,7 +491,7 @@ impl ProfileGenerationSuccessorObservationPort for D1ProfileGenerationSuccessorC
         profile_id: &ProfileId,
         base_generation_id: &GenerationId,
         object: &GenerationObjectDescriptor,
-    ) -> Result<bool, ProfileGenerationSuccessorCommitError> {
+    ) -> Result<Option<u64>, ProfileGenerationSuccessorCommitError> {
         if object.profile_id() != profile_id
             || object.generation_id() == base_generation_id
             || object.object_key()
@@ -515,9 +515,9 @@ impl ProfileGenerationSuccessorObservationPort for D1ProfileGenerationSuccessorC
             )
             .await?
         else {
-            return Ok(false);
+            return Ok(None);
         };
-        Ok(observed_successor_is_exact(
+        Ok(observed_successor_profile_version(
             &row,
             actor,
             device_id,
@@ -621,6 +621,26 @@ fn observed_successor_is_exact(
         && row.container_digest == object.container_digest()
         && i64_matches_u64(row.container_bytes, object.container_bytes())
         && committed_state_is_exact(row)
+}
+
+fn observed_successor_profile_version(
+    row: &SuccessorRow,
+    actor: &ActorContext,
+    device_id: &DeviceId,
+    profile_id: &ProfileId,
+    base_generation_id: &GenerationId,
+    object: &GenerationObjectDescriptor,
+) -> Option<u64> {
+    observed_successor_is_exact(
+        row,
+        actor,
+        device_id,
+        profile_id,
+        base_generation_id,
+        object,
+    )
+    .then(|| non_negative_u64(row.expected_profile_version))
+    .flatten()
 }
 
 #[derive(Deserialize)]
@@ -847,7 +867,10 @@ const fn dependency_failure() -> ProfileGenerationSuccessorCommitError {
 
 #[cfg(test)]
 mod tests {
-    use super::{SuccessorRow, is_sha256_hex, observed_successor_is_exact, validate_request};
+    use super::{
+        SuccessorRow, is_sha256_hex, observed_successor_is_exact,
+        observed_successor_profile_version, validate_request,
+    };
     use application_ports::generation_objects::GenerationObjectDescriptor;
     use application_ports::profile_generation_successor::{
         ProfileGenerationCommitWitness, ProfileGenerationSuccessorCommitRequest,
@@ -955,6 +978,10 @@ mod tests {
         assert!(observed_successor_is_exact(
             &row, &actor, &device, &profile, &base, &object,
         ));
+        assert_eq!(
+            observed_successor_profile_version(&row, &actor, &device, &profile, &base, &object),
+            Some(7)
+        );
         assert!(!observed_successor_is_exact(
             &row,
             &actor,
@@ -963,6 +990,17 @@ mod tests {
             &base,
             &object,
         ));
+        assert_eq!(
+            observed_successor_profile_version(
+                &row,
+                &actor,
+                &DeviceId::parse("device_foreign_observer_01")?,
+                &profile,
+                &base,
+                &object,
+            ),
+            None
+        );
         let foreign = ActorContext::new(
             TenantScope::new(tenant),
             ActorId::parse("actor_foreign_observer_01")?,
@@ -985,6 +1023,13 @@ mod tests {
         assert!(!observed_successor_is_exact(
             &row, &actor, &device, &profile, &base, &object,
         ));
+        row.generation_status = Some("VERIFIED".to_owned());
+        row.expected_profile_version = 6;
+        assert_eq!(
+            observed_successor_profile_version(&row, &actor, &device, &profile, &base, &object),
+            None,
+            "the active Profile version must be exactly expected+1"
+        );
         Ok(())
     }
 

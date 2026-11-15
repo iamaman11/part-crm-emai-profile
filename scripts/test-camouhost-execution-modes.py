@@ -259,8 +259,12 @@ def main() -> int:
     assert "persist_sdk_identity(folder, &line)?" in local_source
     assert "write_all(IDENTITY_ACK)" in local_source
     assert "camouhost-identity-persisted" in SOURCE.read_text(encoding="utf-8")
-    local_open_after_dirty = local_owner.split("mark_local_unsynced(workspace.path())?;", 1)[1]
-    assert 'run_python(' in local_open_after_dirty
+    dirty_marker = local_owner.find("mark_local_unsynced(workspace.path())")
+    native_launch = local_owner.find("run_python(", dirty_marker)
+    assert dirty_marker >= 0 and native_launch > dirty_marker, (
+        "durable local dirty evidence must precede native browser launch"
+    )
+    local_open_after_dirty = local_owner[dirty_marker:]
     assert '"--local-open"' in local_open_after_dirty
     assert 'before_launch' in local_open_after_dirty
     assert ".local-unsynced" in local_source
@@ -348,20 +352,21 @@ def main() -> int:
     run_initial = composition.split("    pub fn run_initial(", 1)[1].split(
         "    pub fn run_delivery_command(", 1
     )[0]
+    # Existing local CURRENT is always opened locally. The only cloud
+    # boundary before Open is RestoreRequired for a missing local workspace.
     assert "run_closed_sync_with_admission(" in run_initial
-    assert "if dirty {" in run_initial
-    assert "match run_closed_sync(intent)" in run_initial
-    assert "Err(ShippingCompositionError::SyncVersionConflict)" in run_initial
+    assert "RestoreRequired" in run_initial
+    assert "ensure_authoritative_current" in run_initial
+    assert "run_closed_sync(intent)" not in run_initial
+    assert "if dirty {" not in run_initial
+    assert "crate::local_browser_open::LocalOpenError::StaleLocalWorkspace" not in run_initial
     # Automatic cloud Save needs a positively confirmed native close;
     # no failed launch, uncertain adapter, or busy profile can spawn Sync.
-    # Stale CURRENT can still be recovered using the existing exact proof.
     assert "if native_close_admits_automatic_sync(&open_result)" in run_initial
     native_close_admission = composition.split(
         "fn native_close_admits_automatic_sync(", 1
     )[1].split("    #[cfg(test)]", 1)[0]
     assert "result.is_ok()" in native_close_admission
-    assert "crate::local_browser_open::LocalOpenError::StaleLocalWorkspace" in run_initial
-    assert "match run_closed_sync(intent)" in run_initial
     assert "DeliveryHealth" not in run_initial
     app = (SOURCE.parents[2] / "apps/profile-bridge/src/main.rs").read_text(
         encoding="utf-8"

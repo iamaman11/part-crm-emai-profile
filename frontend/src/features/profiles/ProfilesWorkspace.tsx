@@ -319,7 +319,7 @@ export function ProfilesWorkspace({
     <div className="workspace-grid">
       <section className="panel">
         <span className="eyebrow">Browser profile</span>
-        <h2>Profile</h2>
+        <h2>{profile?.profileId ?? selectedProfileId ?? 'Profile'}</h2>
         <details><summary>Find a profile by identifier</summary>
         <form
           className="stack-form"

@@ -66,12 +66,15 @@ pub struct BridgeGenerationSuccessorObserveRequest {
     pub container_bytes: u64,
 }
 
-/// `activeExact` proves only a D1 commit already completed. It never proves
-/// browser usability nor grants permission to finalize local state.
+/// `activeExact` proves only a D1 commit already completed. When true,
+/// `expectedProfileVersion` is the predecessor version stored in that exact
+/// D1 command. Neither field proves browser usability or grants write authority.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct BridgeGenerationSuccessorObserveResponse {
     pub active_exact: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub expected_profile_version: Option<u64>,
 }
 
 /// A fresh writer may ask for one exact unapplied-attempt verdict. This is
@@ -663,7 +666,14 @@ mod tests {
         }
         assert!(
             serde_json::from_value::<BridgeGenerationSuccessorObserveResponse>(json!({
-                "activeExact": true
+                "activeExact": true,
+                "expectedProfileVersion": 7
+            }))
+            .is_ok()
+        );
+        assert!(
+            serde_json::from_value::<BridgeGenerationSuccessorObserveResponse>(json!({
+                "activeExact": false
             }))
             .is_ok()
         );

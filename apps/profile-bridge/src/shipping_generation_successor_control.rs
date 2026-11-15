@@ -9,6 +9,8 @@ use crate::dirty_generation::PreparedDirtyGeneration;
 #[cfg(any(windows, test))]
 use crate::dirty_generation::recover_local_unsynced_native_clone;
 #[cfg(any(windows, test))]
+use crate::generation_reopen::GenerationDownloadCapability;
+#[cfg(any(windows, test))]
 use crate::generation_snapshot::{GenerationSnapshotError, WorkspaceSnapshotReader};
 #[cfg(any(windows, test))]
 use crate::local_profile::{
@@ -460,7 +462,7 @@ where
     Ok(())
 }
 
-#[cfg(windows)]
+#[cfg(any(windows, test))]
 fn lower_hex_stream(input: &[u8; 32]) -> String {
     input.iter().map(|byte| format!("{byte:02x}")).collect()
 }
@@ -1514,15 +1516,45 @@ fn observe_verified_streamed_attempt<T: MachineHttpPort>(
     observe_exact_descriptor(tenant_id, profile_id, &request, transport)
 }
 
-/// One existing D1 ACTIVE_EXACT query. Both inspectors must prove the
-/// ciphertext/local inventory *before* this read-only request is constructed.
+/// Prove that the server-selected CURRENT is the exact direct successor of
+/// this local base on the currently authenticated actor/device. The returned
+/// version is a D1 fact, not a client-supplied write authority.
 #[cfg(any(windows, test))]
-fn observe_exact_descriptor<T: MachineHttpPort>(
+pub(crate) fn observe_current_successor_profile_version<T: MachineHttpPort>(
+    tenant_id: &TenantId,
+    profile_id: &ProfileId,
+    base_generation_id: &GenerationId,
+    current: &GenerationDownloadCapability,
+    transport: &mut T,
+) -> Result<Option<u64>, ShippingControlPlaneError> {
+    let metadata_digest = current.metadata_digest();
+    let container_digest = current.container_digest();
+    let request = BridgeGenerationSuccessorObserveRequest {
+        base_generation_id: base_generation_id.as_str().to_owned(),
+        generation_id: current.generation_id().as_str().to_owned(),
+        object_key: current.object_key().to_owned(),
+        metadata_digest: lower_hex_stream(&metadata_digest),
+        container_digest: lower_hex_stream(&container_digest),
+        container_bytes: current.container_bytes(),
+    };
+    let observed = observe_exact_descriptor_response(tenant_id, profile_id, &request, transport)?;
+    match (observed.active_exact, observed.expected_profile_version) {
+        (true, Some(version)) if version > 0 => Ok(Some(version)),
+        (false, None) => Ok(None),
+        _ => Err(ShippingControlPlaneError::InvalidResponse),
+    }
+}
+
+/// One exact D1 observation. The endpoint checks the current actor/device,
+/// direct base->successor journal, immutable object descriptor and VERIFIED
+/// active CURRENT pointer. It never grants upload or commit authority.
+#[cfg(any(windows, test))]
+fn observe_exact_descriptor_response<T: MachineHttpPort>(
     tenant_id: &TenantId,
     profile_id: &ProfileId,
     request: &BridgeGenerationSuccessorObserveRequest,
     transport: &mut T,
-) -> Result<bool, ShippingControlPlaneError> {
+) -> Result<BridgeGenerationSuccessorObserveResponse, ShippingControlPlaneError> {
     let response = post_json::<T, core::convert::Infallible, _>(
         transport,
         &successor_path(
@@ -1539,9 +1571,18 @@ fn observe_exact_descriptor<T: MachineHttpPort>(
     if response.len() > MAX_OBSERVE_RESPONSE_BYTES {
         return Err(ShippingControlPlaneError::InvalidResponse);
     }
-    let result = serde_json::from_slice::<BridgeGenerationSuccessorObserveResponse>(&response)
-        .map_err(|_| ShippingControlPlaneError::InvalidResponse)?;
-    Ok(result.active_exact)
+    serde_json::from_slice::<BridgeGenerationSuccessorObserveResponse>(&response)
+        .map_err(|_| ShippingControlPlaneError::InvalidResponse)
+}
+
+#[cfg(any(windows, test))]
+fn observe_exact_descriptor<T: MachineHttpPort>(
+    tenant_id: &TenantId,
+    profile_id: &ProfileId,
+    request: &BridgeGenerationSuccessorObserveRequest,
+    transport: &mut T,
+) -> Result<bool, ShippingControlPlaneError> {
+    Ok(observe_exact_descriptor_response(tenant_id, profile_id, request, transport)?.active_exact)
 }
 
 #[cfg(any(test, feature = "synthetic-test-bin"))]
@@ -1793,6 +1834,84 @@ mod tests {
         ] {
             assert_eq!(first_seal_recovery_failure(source), expected);
         }
+    }
+
+    #[test]
+    fn current_successor_observation_returns_only_the_d1_verified_base_version()
+    -> Result<(), Box<dyn std::error::Error>> {
+        use super::observe_current_successor_profile_version;
+        use crate::generation_reopen::GenerationDownloadCapability;
+
+        let tenant = TenantId::parse("tenant_current_observe_01")?;
+        let profile = ProfileId::parse("profile_current_observe_01")?;
+        let base = GenerationId::parse("generation_current_observe_base")?;
+        let successor = GenerationId::parse("generation_current_observe_next")?;
+        let current = GenerationDownloadCapability::new(
+            successor.clone(),
+            format!(
+                "tenants/{}/profiles/{}/generations/{}.bpgc",
+                tenant.as_str(),
+                profile.as_str(),
+                successor.as_str(),
+            ),
+            [0x11; 32],
+            [0x22; 32],
+            4_096,
+            "https://objects.example.invalid/signed-read-only".to_owned(),
+            60,
+        );
+        let mut exact = Transport {
+            responses: VecDeque::from([MachineHttpResponse::new(
+                200,
+                br#"{"activeExact":true,"expectedProfileVersion":11}"#.to_vec(),
+            )]),
+            paths: Vec::new(),
+        };
+        assert_eq!(
+            observe_current_successor_profile_version(
+                &tenant, &profile, &base, &current, &mut exact,
+            )?,
+            Some(11)
+        );
+        assert_eq!(exact.paths.len(), 1);
+        assert!(exact.paths[0].ends_with("/generation-successor/observe"));
+
+        let mut foreign_or_stale = Transport {
+            responses: VecDeque::from([MachineHttpResponse::new(
+                200,
+                br#"{"activeExact":false}"#.to_vec(),
+            )]),
+            paths: Vec::new(),
+        };
+        assert_eq!(
+            observe_current_successor_profile_version(
+                &tenant,
+                &profile,
+                &base,
+                &current,
+                &mut foreign_or_stale,
+            )?,
+            None
+        );
+
+        let mut malformed = Transport {
+            responses: VecDeque::from([MachineHttpResponse::new(
+                200,
+                br#"{"activeExact":true}"#.to_vec(),
+            )]),
+            paths: Vec::new(),
+        };
+        assert_eq!(
+            observe_current_successor_profile_version(
+                &tenant,
+                &profile,
+                &base,
+                &current,
+                &mut malformed,
+            ),
+            Err(ShippingControlPlaneError::InvalidResponse)
+        );
+        Ok(())
     }
 
     #[test]

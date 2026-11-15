@@ -578,15 +578,18 @@ async fn dispatch_successor_observation(
         body.container_bytes,
     );
     let observer = profile_generation_successor_observer(env)?;
-    let active_exact = match observer
+    let expected_profile_version = match observer
         .exact_successor_is_committed_active(actor, device_id, profile_id, &base, &object)
         .await
     {
         Ok(value) => value,
         Err(error) => return successor_failure(actor.correlation_id().as_str(), error.class()),
     };
-    let mut response =
-        Response::from_json(&BridgeGenerationSuccessorObserveResponse { active_exact })?;
+    let active_exact = expected_profile_version.is_some();
+    let mut response = Response::from_json(&BridgeGenerationSuccessorObserveResponse {
+        active_exact,
+        expected_profile_version,
+    })?;
     response.headers_mut().set("cache-control", "no-store")?;
     response.headers_mut().set("pragma", "no-cache")?;
     Ok(response)

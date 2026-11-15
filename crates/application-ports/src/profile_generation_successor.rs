@@ -347,7 +347,9 @@ pub trait ProfileGenerationSuccessorRetryDecisionPort {
 /// The caller authenticates the *current* actor/device and checks current
 /// Profile Operate permissions before asking the D1 journal if this immutable
 /// descriptor was already committed and is still the active VERIFIED pointer.
-/// An expired original fencing token is neither requested nor resurrected.
+/// A positive result returns the D1-stored predecessor Profile version so the
+/// Bridge can compare it with its local marker. An expired original fencing
+/// token is neither requested nor resurrected.
 pub trait ProfileGenerationSuccessorObservationPort {
     fn exact_successor_is_committed_active(
         &self,
@@ -356,5 +358,5 @@ pub trait ProfileGenerationSuccessorObservationPort {
         profile_id: &ProfileId,
         base_generation_id: &GenerationId,
         object: &GenerationObjectDescriptor,
-    ) -> impl Future<Output = Result<bool, ProfileGenerationSuccessorCommitError>>;
+    ) -> impl Future<Output = Result<Option<u64>, ProfileGenerationSuccessorCommitError>>;
 }
