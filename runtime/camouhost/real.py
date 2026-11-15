@@ -983,7 +983,12 @@ def report_runtime_failure(phase: str, error: BaseException) -> None:
     if phase not in {"startup", "launch", "browser_visible", "navigation", "close", "cleanup"}:
         phase = "unknown"
     category = runtime_failure_category(error)
-    print(f"camouhost_failure phase={phase} category={category}", file=sys.stderr, flush=True)
+    try:
+        print(f"camouhost_failure phase={phase} category={category}", file=sys.stderr, flush=True)
+    except BrokenPipeError:
+        # A crashed parent may have closed its diagnostic reader. Never turn
+        # that into a browser-close command or an SDK lifecycle exception.
+        pass
 
 
 def report_runtime_stage(phase: str, step: str) -> None:
@@ -1001,7 +1006,12 @@ def report_runtime_stage(phase: str, step: str) -> None:
         ("close", "playwright_driver_released"),
     }
     if (phase, step) in allowed:
-        print(f"camouhost_stage phase={phase} step={step}", file=sys.stderr, flush=True)
+        try:
+            print(f"camouhost_stage phase={phase} step={step}", file=sys.stderr, flush=True)
+        except BrokenPipeError:
+            # The inherited Windows launch guard still excludes a new owner
+            # if Rust died; losing a log reader cannot close a live browser.
+            pass
 
 
 
@@ -1611,10 +1621,12 @@ def main() -> int:
             report_runtime_failure("startup", error)
             return 4
         # User-native stdout is an inherited Windows OS launch-admission
-        # handle. Keep fd 1 open but route all runtime output to the existing
-        # redacted stderr event pipe; no page/fingerprint data reaches the file.
-        with contextlib.redirect_stdout(sys.stderr):
-            return asyncio.run(run_local_profile(Path(sys.argv[2]), config, first_run))
+        # handle. Keep fd 1 open, but send arbitrary SDK stdout to the OS
+        # null sink; only fixed app milestones use the diagnostic stderr pipe.
+        # If Rust dies, a broken log pipe must not interrupt the native SDK.
+        with open(os.devnull, "w", encoding="utf-8") as sink:
+            with contextlib.redirect_stdout(sink):
+                return asyncio.run(run_local_profile(Path(sys.argv[2]), config, first_run))
     if len(sys.argv) != 1:
         print("unsupported Camouhost invocation", file=sys.stderr)
         return 2
