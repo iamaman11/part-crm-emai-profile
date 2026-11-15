@@ -407,7 +407,9 @@ mod windows {
         let guard = BridgeWorkspaceLock::acquire_or_recover_interrupted(
             &workspace,
             device,
-            now().map_err(|_| ClosedReadySyncError::Unconfirmed)?.value(),
+            now()
+                .map_err(|_| ClosedReadySyncError::Unconfirmed)?
+                .value(),
         )
         .map_err(|_| ClosedReadySyncError::Unconfirmed)?;
         let result = (|| {
@@ -424,7 +426,9 @@ mod windows {
                 || fs::read(active.path().join(".local-unsynced"))
                     .map_err(|_| ClosedReadySyncError::Unconfirmed)?
                     != b"local-unsynced-v2"
-                || active.inventory().map_err(|_| ClosedReadySyncError::Unconfirmed)?
+                || active
+                    .inventory()
+                    .map_err(|_| ClosedReadySyncError::Unconfirmed)?
                     != *original_inventory
                 || !matches!(browser_writer_locks_absent(&active), Ok(true))
             {
@@ -436,7 +440,9 @@ mod windows {
             if rebased.base_generation_id() != Some(successor)
                 || rebased.profile_version() != next_profile_version
                 || rebased.pending_sync().is_some()
-                || rebased.inventory().map_err(|_| ClosedReadySyncError::Unconfirmed)?
+                || rebased
+                    .inventory()
+                    .map_err(|_| ClosedReadySyncError::Unconfirmed)?
                     != *original_inventory
                 || fs::read(rebased.path().join(".local-unsynced"))
                     .map_err(|_| ClosedReadySyncError::Unconfirmed)?
@@ -661,13 +667,7 @@ mod windows {
             let mut rebased_intent = intent.clone();
             rebased_intent.status = InitialProfileStatus::Ready;
             rebased_intent.expected_version = next_version;
-            return sync_closed_ready_with_rebase(
-                &rebased_intent,
-                binding,
-                root,
-                origin,
-                false,
-            );
+            return sync_closed_ready_with_rebase(&rebased_intent, binding, root, origin, false);
         }
 
         let mut transport = application.transport();
@@ -835,12 +835,15 @@ mod windows {
         origin: &str,
     ) -> Result<(), ShippingCompositionError> {
         if intent.status == InitialProfileStatus::Ready {
-            sync_closed_ready_with_rebase(intent, binding, root, origin, true)
-                .map_err(|error| match error {
-                ClosedReadySyncError::LeaseConflict => ShippingCompositionError::SyncLeaseConflict,
-                ClosedReadySyncError::Unconfirmed => ShippingCompositionError::SyncUnconfirmed,
-                ClosedReadySyncError::VersionConflict => {
-                    ShippingCompositionError::SyncVersionConflict
+            sync_closed_ready_with_rebase(intent, binding, root, origin, true).map_err(|error| {
+                match error {
+                    ClosedReadySyncError::LeaseConflict => {
+                        ShippingCompositionError::SyncLeaseConflict
+                    }
+                    ClosedReadySyncError::Unconfirmed => ShippingCompositionError::SyncUnconfirmed,
+                    ClosedReadySyncError::VersionConflict => {
+                        ShippingCompositionError::SyncVersionConflict
+                    }
                 }
             })
         } else {
