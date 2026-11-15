@@ -58,7 +58,7 @@ impl fmt::Display for LocalOpenError {
         f.write_str(match self {
             Self::InvalidLocalWorkspace => "Local browser folder is unavailable",
             Self::RestoreRequired => "This READY profile has no local copy. Restore the confirmed current version before opening",
-            Self::StaleLocalWorkspace => "Local profile changed during Open admission; retry without replacing its data",
+            Self::StaleLocalWorkspace => "Local profile identity changed during Open admission; retry without replacing its data",
             Self::RuntimeUnavailable => "Installed Camoufox runtime is unavailable",
             Self::ProfileBusy => "This local browser profile is already in use",
             Self::OperationInProgress => "Another native Open, Close or Sync operation still owns this profile",
