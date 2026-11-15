@@ -176,7 +176,7 @@ def check_sources(sources: dict[str, str]) -> list[str]:
     session = function_body(local, "pub(crate) fn open_with_before_launch_and_after_close(")
     if "ClosedSyncAdmission::try_acquire(&workspace)" not in session or "after_close(result)" not in session:
         failures.append("local browser operation must retain OS admission through post-close Sync callback")
-    marker = opened.find("mark_local_unsynced(workspace.path())?;")
+    marker = opened.find("mark_local_unsynced(workspace.path())")
     launch = opened.find("run_python(", marker)
     launch_call = opened[launch : launch + 256] if launch >= 0 else ""
     if (
@@ -207,7 +207,7 @@ def check_sources(sources: dict[str, str]) -> list[str]:
         failures.append("native Open must verify the existing Firefox file-access gate")
 
     draft = function_body(generation, "pub fn sync_closed_local_draft<")
-    ready = function_body(shipping, "fn sync_closed_ready(")
+    ready = function_body(shipping, "fn sync_closed_ready_with_rebase(")
     draft_effects = (
         ("root.clear_profile_current_pending_sync(&current)", True),
         ("digest_closed_workspace_streaming(&workspace, &inventory)", True),
@@ -227,6 +227,27 @@ def check_sources(sources: dict[str, str]) -> list[str]:
         failures.append("closed READY Sync must use the shared same-device Bridge recovery owner")
     if "root.clear_profile_current_pending_sync(&active)" in ready:
         failures.append("READY Sync must never discard an in-flight pending descriptor based only on old CURRENT")
+    if (
+        "observe_current_successor_profile_version(" not in ready
+        or "allow_same_device_rebase" not in ready
+        or "return sync_closed_ready_with_rebase(" not in ready
+    ):
+        failures.append("closed READY Sync must prove one exact same-device successor before local rebase")
+    rebase = function_body(shipping, "fn rebase_local_current_after_exact_successor(")
+    if not guarded_effects(
+        rebase,
+        (("root.update_profile_current_sync_base(", True),),
+    ):
+        failures.append("same-device successor rebase must change only the marker under the native writer gate")
+    for required in (
+        "expected_profile_version.checked_add(1)",
+        "workspace.base_generation_id() != Some(base)",
+        "active.base_generation_id() != Some(base)",
+        '".local-unsynced"',
+        "original_inventory",
+    ):
+        if required not in rebase:
+            failures.append(f"same-device successor rebase lost its exact local preservation check: {required}")
 
     # The invoked finalizer must also enforce the native gate itself: the
     # READY exact-CURRENT recovery path calls it without a duplicate outer probe.
@@ -258,19 +279,24 @@ def check_sources(sources: dict[str, str]) -> list[str]:
     ):
         failures.append("confirmed-current DRAFT/READY reconciliation must use the shared Bridge recovery owner")
 
-    # Cached CRM version may lag a newly committed local CURRENT, but a
-    # local folder behind the known cloud version must never be launched.
-    # The second marker read under the OS lock must match the first exactly,
-    # so no concurrent Sync transition can be admitted mid-Open.
+    # Ordinary Open always reuses a validated local CURRENT. The CRM status
+    # and version are a projection for Sync/Restore, not a gate on local bytes.
+    # A concurrent local marker transition during OS admission still fails closed.
+    admit = function_body(local, "fn admit_existing_workspace(")
+    if (
+        not admit
+        or "Ok(current)" not in admit
+        or "intent.expected_version" in admit
+        or "intent.status" in admit
+    ):
+        failures.append("ordinary local Open must not depend on cloud version projection")
+    recheck = function_body(local, "fn recheck_workspace_after_writer_admission(")
     for required in (
-        "local_version == intent.expected_version",
-        "local_version > intent.expected_version",
-        "local_version >= intent.expected_version",
         "current.profile_version() != observed.profile_version()",
         "current.base_generation_id() != observed.base_generation_id()",
     ):
-        if required not in local:
-            failures.append(f"stale local CURRENT must fail closed before browser launch: {required}")
+        if required not in recheck:
+            failures.append(f"local marker race must fail closed during Open admission: {required}")
 
     for required in ('from playwright.async_api import async_playwright',
                      'from camoufox.async_api import AsyncNewBrowser',
@@ -305,8 +331,10 @@ def read(root: Path) -> dict[str, str]:
 def self_test(sources: dict[str, str]) -> list[str]:
     failures: list[str] = []
     mutations = (
-        ("local", "mark_local_unsynced(workspace.path())?;", "mark_removed();",
+        ("local", "mark_local_unsynced(workspace.path())", "mark_removed();",
          "durable local dirty evidence"),
+        ("local", "Ok(current)\n}", "Err(LocalOpenError::StaleLocalWorkspace)\n}",
+         "ordinary local Open must not depend on cloud version projection"),
         ("local", "BridgeWorkspaceLock::acquire_or_recover_interrupted(&workspace",
          "BridgeWorkspaceLock::acquire(&workspace",
          "native Open must hold the existing per-profile OS admission through the shared recovery owner"),
@@ -314,8 +342,8 @@ def self_test(sources: dict[str, str]) -> list[str]:
          "native Open must hold the existing per-profile OS admission through the shared recovery owner"),
         ("locks", "Self::recover_interrupted_launch(workspace, device_id, epoch)", "Ok(())",
          "native Open must hold the existing per-profile OS admission through the shared recovery owner"),
-        ("local", "local_version >= intent.expected_version", "true",
-         "stale local CURRENT"),
+        ("local", "current.profile_version() != observed.profile_version()", "false",
+         "local marker race"),
         ("local", "current.profile_version() != observed.profile_version()", "false",
          "stale local CURRENT"),
         ("shipping", "wait_for_native_writer_release(", "unsafe_file_assumption(",
@@ -342,7 +370,7 @@ def self_test(sources: dict[str, str]) -> list[str]:
     for owner, marker, expected in (
         ("generation", "pub fn sync_closed_local_draft<",
          "closed DRAFT Sync must use the shared same-device Bridge recovery owner"),
-        ("shipping", "fn sync_closed_ready(",
+        ("shipping", "fn sync_closed_ready_with_rebase(",
          "closed READY Sync must use the shared same-device Bridge recovery owner"),
         ("authoritative", "fn ensure_authoritative_generation_to<",
          "confirmed-current DRAFT/READY reconciliation must use the shared Bridge recovery owner"),
@@ -356,7 +384,7 @@ def self_test(sources: dict[str, str]) -> list[str]:
         ("generation", "pub fn sync_closed_local_draft<",
          "browser_writer_locks_absent(&workspace)",
          "closed DRAFT Sync must use the shared same-device Bridge recovery owner"),
-        ("shipping", "fn sync_closed_ready(",
+        ("shipping", "fn sync_closed_ready_with_rebase(",
          "browser_writer_locks_absent(&workspace)",
          "closed READY Sync must use the shared same-device Bridge recovery owner"),
         ("generation", "pub(crate) fn finish_pending_sync_under_writer(",
