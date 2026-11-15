@@ -1016,6 +1016,13 @@ mod tests {
         assert!(!observed_successor_is_exact(
             &row, &actor, &device, &profile, &base, &object,
         ));
+        row.generation_status = Some("VERIFIED".to_owned());
+        row.expected_profile_version = 6;
+        assert_eq!(
+            observed_successor_profile_version(&row, &actor, &device, &profile, &base, &object),
+            None,
+            "the active Profile version must be exactly expected+1"
+        );
         Ok(())
     }
 
