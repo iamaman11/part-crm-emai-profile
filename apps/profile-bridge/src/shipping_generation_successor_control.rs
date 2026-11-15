@@ -9,9 +9,9 @@ use crate::dirty_generation::PreparedDirtyGeneration;
 #[cfg(any(windows, test))]
 use crate::dirty_generation::recover_local_unsynced_native_clone;
 #[cfg(any(windows, test))]
-use crate::generation_snapshot::{GenerationSnapshotError, WorkspaceSnapshotReader};
-#[cfg(any(windows, test))]
 use crate::generation_reopen::GenerationDownloadCapability;
+#[cfg(any(windows, test))]
+use crate::generation_snapshot::{GenerationSnapshotError, WorkspaceSnapshotReader};
 #[cfg(any(windows, test))]
 use crate::local_profile::{
     BridgeWorkspaceLock, LocalGenerationRecord, LocalProfileError, MaterializationRoot,
@@ -1869,11 +1869,7 @@ mod tests {
         };
         assert_eq!(
             observe_current_successor_profile_version(
-                &tenant,
-                &profile,
-                &base,
-                &current,
-                &mut exact,
+                &tenant, &profile, &base, &current, &mut exact,
             )?,
             Some(11)
         );
