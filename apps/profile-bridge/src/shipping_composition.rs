@@ -168,7 +168,9 @@ mod windows {
         ControlPlaneCoordinator, ControlPlaneEnrollment, SharedControlPlaneCoordinator,
         ShippingControlPlaneError,
     };
-    use crate::shipping_generation_successor_control::publish_closed_streamed_successor;
+    use crate::shipping_generation_successor_control::{
+        observe_current_successor_profile_version, publish_closed_streamed_successor,
+    };
     use crate::user_diagnostics::report::{self, Cause, Cloud, Outcome, Stage};
     use crate::windows_delivery_handoff::{
         DeliveryHandoffCoordinator, DeliveryHandoffRestartDisposition,
@@ -370,11 +372,94 @@ mod windows {
         }
     }
 
-    fn sync_closed_ready(
+    fn rebase_local_current_after_exact_successor(
+        root: &MaterializationRoot,
+        tenant_id: &profile_platform_primitives::TenantId,
+        profile_id: &profile_platform_primitives::ProfileId,
+        device: &profile_platform_primitives::DeviceId,
+        base: &profile_platform_primitives::GenerationId,
+        expected_profile_version: u64,
+        successor: &profile_platform_primitives::GenerationId,
+        next_profile_version: u64,
+        original_inventory: &crate::local_profile::GenerationInventory,
+    ) -> Result<(), ClosedReadySyncError> {
+        use crate::browser_execution::browser_writer_locks_absent;
+        use crate::local_profile::BridgeWorkspaceLock;
+        use std::fs;
+
+        let workspace = root
+            .open_profile_current(tenant_id, profile_id)
+            .map_err(|_| ClosedReadySyncError::Unconfirmed)?;
+        if expected_profile_version == 0
+            || expected_profile_version.checked_add(1) != Some(next_profile_version)
+            || workspace.base_generation_id() != Some(base)
+            || workspace.profile_version() != expected_profile_version
+            || workspace.pending_sync().is_some()
+            || fs::read(workspace.path().join(".local-unsynced")).map_err(|_| ClosedReadySyncError::Unconfirmed)?
+                != b"local-unsynced-v2"
+            || workspace.inventory().map_err(|_| ClosedReadySyncError::Unconfirmed)?
+                != *original_inventory
+            || !matches!(browser_writer_locks_absent(&workspace), Ok(true))
+        {
+            return Err(ClosedReadySyncError::VersionConflict);
+        }
+
+        let guard = BridgeWorkspaceLock::acquire_or_recover_interrupted(
+            &workspace,
+            device,
+            now().map_err(|_| ClosedReadySyncError::Unconfirmed)?.value(),
+        )
+        .map_err(|_| ClosedReadySyncError::Unconfirmed)?;
+        let result = (|| {
+            // Re-read every local precondition while the existing exclusive
+            // native workspace admission is held. Only the marker may change.
+            let active = root
+                .open_profile_current(tenant_id, profile_id)
+                .map_err(|_| ClosedReadySyncError::Unconfirmed)?;
+            if active.path() != workspace.path()
+                || active.generation_id() != workspace.generation_id()
+                || active.base_generation_id() != Some(base)
+                || active.profile_version() != expected_profile_version
+                || active.pending_sync().is_some()
+                || fs::read(active.path().join(".local-unsynced"))
+                    .map_err(|_| ClosedReadySyncError::Unconfirmed)?
+                    != b"local-unsynced-v2"
+                || active.inventory().map_err(|_| ClosedReadySyncError::Unconfirmed)?
+                    != *original_inventory
+                || !matches!(browser_writer_locks_absent(&active), Ok(true))
+            {
+                return Err(ClosedReadySyncError::VersionConflict);
+            }
+            let rebased = root
+                .update_profile_current_sync_base(&active, successor, next_profile_version)
+                .map_err(|_| ClosedReadySyncError::Unconfirmed)?;
+            if rebased.base_generation_id() != Some(successor)
+                || rebased.profile_version() != next_profile_version
+                || rebased.pending_sync().is_some()
+                || rebased.inventory().map_err(|_| ClosedReadySyncError::Unconfirmed)?
+                    != *original_inventory
+                || fs::read(rebased.path().join(".local-unsynced"))
+                    .map_err(|_| ClosedReadySyncError::Unconfirmed)?
+                    != b"local-unsynced-v2"
+            {
+                return Err(ClosedReadySyncError::Unconfirmed);
+            }
+            Ok(())
+        })();
+        let released = guard
+            .release()
+            .map_err(|_| ClosedReadySyncError::Unconfirmed);
+        result?;
+        released?;
+        Ok(())
+    }
+
+    fn sync_closed_ready_with_rebase(
         intent: &crate::generation_initialization::InitialProfileOpen,
         binding: &WindowsDeviceApplicationBinding,
         root: &MaterializationRoot,
         origin: &str,
+        allow_same_device_rebase: bool,
     ) -> Result<(), ClosedReadySyncError> {
         use crate::browser_execution::browser_writer_locks_absent;
         use crate::local_profile::BridgeWorkspaceLock;
@@ -538,7 +623,51 @@ mod windows {
             .map_err(|_| ClosedReadySyncError::Unconfirmed);
         }
         if current.generation_id() != &base {
-            return Err(ClosedReadySyncError::VersionConflict);
+            if !allow_same_device_rebase {
+                return Err(ClosedReadySyncError::VersionConflict);
+            }
+            // The only recoverable newer CURRENT is the exact direct
+            // INTERACTIVE_LAUNCH successor committed by this actor/device
+            // from this local base at this exact local profile version.
+            let mut observation_transport = application.transport();
+            let expected_base_version = observe_current_successor_profile_version(
+                &intent.tenant_id,
+                &intent.profile_id,
+                &base,
+                &current,
+                &mut observation_transport,
+            )
+            .map_err(|_| ClosedReadySyncError::Unconfirmed)?
+            .ok_or(ClosedReadySyncError::VersionConflict)?;
+            if expected_base_version != workspace.profile_version() {
+                return Err(ClosedReadySyncError::VersionConflict);
+            }
+            let next_version = expected_base_version
+                .checked_add(1)
+                .ok_or(ClosedReadySyncError::VersionConflict)?;
+            rebase_local_current_after_exact_successor(
+                root,
+                &intent.tenant_id,
+                &intent.profile_id,
+                device,
+                &base,
+                expected_base_version,
+                current.generation_id(),
+                next_version,
+                &original_inventory,
+            )?;
+            // Re-enter the SAME Sync owner once, now based on the exact
+            // verified CURRENT. All browser bytes and LOCAL_UNSYNCED remain.
+            let mut rebased_intent = intent.clone();
+            rebased_intent.status = InitialProfileStatus::Ready;
+            rebased_intent.expected_version = next_version;
+            return sync_closed_ready_with_rebase(
+                &rebased_intent,
+                binding,
+                root,
+                origin,
+                false,
+            );
         }
 
         let mut transport = application.transport();
@@ -706,7 +835,8 @@ mod windows {
         origin: &str,
     ) -> Result<(), ShippingCompositionError> {
         if intent.status == InitialProfileStatus::Ready {
-            sync_closed_ready(intent, binding, root, origin).map_err(|error| match error {
+            sync_closed_ready_with_rebase(intent, binding, root, origin, true)
+                .map_err(|error| match error {
                 ClosedReadySyncError::LeaseConflict => ShippingCompositionError::SyncLeaseConflict,
                 ClosedReadySyncError::Unconfirmed => ShippingCompositionError::SyncUnconfirmed,
                 ClosedReadySyncError::VersionConflict => {
@@ -750,7 +880,8 @@ mod windows {
                         .expected_version
                         .checked_add(1)
                         .ok_or(ShippingCompositionError::Initialization(error))?;
-                    sync_closed_ready(&proof, binding, root, origin).map_err(|recovery| {
+                    sync_closed_ready_with_rebase(&proof, binding, root, origin, false)
+                        .map_err(|recovery| {
                         match recovery {
                             ClosedReadySyncError::LeaseConflict => {
                                 ShippingCompositionError::SyncLeaseConflict
