@@ -873,12 +873,28 @@ fn open_under_profile_admission(
         Cause::None,
         local_ms,
     );
-    let completion = run_python(
+    let completion = match run_python(
         runtime_root,
         workspace.path(),
         "--local-open",
         before_launch,
-    )?;
+    ) {
+        Ok(completion) => completion,
+        Err(error) => {
+            // Pre-launch failures must not strand the durable Bridge writer.
+            // Release it only after the same independent native-lock proof
+            // used by the successful Close path; unknown/live writers retain it.
+            if matches!(
+                crate::browser_execution::browser_writer_locks_absent(&workspace),
+                Ok(true)
+            ) {
+                writer
+                    .release()
+                    .map_err(|_| LocalOpenError::InvalidLocalWorkspace)?;
+            }
+            return Err(error);
+        }
+    };
     match completion {
         NativeBrowserCompletion::LaunchFailed => {
             // The child exited before BrowserReady. Release the Bridge writer
