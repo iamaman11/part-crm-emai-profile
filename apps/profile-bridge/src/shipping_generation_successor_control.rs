@@ -1837,6 +1837,88 @@ mod tests {
     }
 
     #[test]
+    fn current_successor_observation_returns_only_the_d1_verified_base_version()
+    -> Result<(), Box<dyn std::error::Error>> {
+        use super::observe_current_successor_profile_version;
+        use crate::generation_reopen::GenerationDownloadCapability;
+
+        let tenant = TenantId::parse("tenant_current_observe_01")?;
+        let profile = ProfileId::parse("profile_current_observe_01")?;
+        let base = GenerationId::parse("generation_current_observe_base")?;
+        let successor = GenerationId::parse("generation_current_observe_next")?;
+        let current = GenerationDownloadCapability::new(
+            successor.clone(),
+            format!(
+                "tenants/{}/profiles/{}/generations/{}.bpgc",
+                tenant.as_str(),
+                profile.as_str(),
+                successor.as_str(),
+            ),
+            [0x11; 32],
+            [0x22; 32],
+            4_096,
+            "https://objects.example.invalid/signed-read-only".to_owned(),
+            60,
+        );
+        let mut exact = Transport {
+            responses: VecDeque::from([MachineHttpResponse::new(
+                200,
+                br#"{"activeExact":true,"expectedProfileVersion":11}"#.to_vec(),
+            )]),
+            paths: Vec::new(),
+        };
+        assert_eq!(
+            observe_current_successor_profile_version(
+                &tenant,
+                &profile,
+                &base,
+                &current,
+                &mut exact,
+            )?,
+            Some(11)
+        );
+        assert_eq!(exact.paths.len(), 1);
+        assert!(exact.paths[0].ends_with("/generation-successor/observe"));
+
+        let mut foreign_or_stale = Transport {
+            responses: VecDeque::from([MachineHttpResponse::new(
+                200,
+                br#"{"activeExact":false}"#.to_vec(),
+            )]),
+            paths: Vec::new(),
+        };
+        assert_eq!(
+            observe_current_successor_profile_version(
+                &tenant,
+                &profile,
+                &base,
+                &current,
+                &mut foreign_or_stale,
+            )?,
+            None
+        );
+
+        let mut malformed = Transport {
+            responses: VecDeque::from([MachineHttpResponse::new(
+                200,
+                br#"{"activeExact":true}"#.to_vec(),
+            )]),
+            paths: Vec::new(),
+        };
+        assert_eq!(
+            observe_current_successor_profile_version(
+                &tenant,
+                &profile,
+                &base,
+                &current,
+                &mut malformed,
+            ),
+            Err(ShippingControlPlaneError::InvalidResponse)
+        );
+        Ok(())
+    }
+
+    #[test]
     fn save_http_diagnostics_never_include_tenant_profile_or_untrusted_route() {
         use super::save_control_operation;
         let base = "/bridge/v1/tenants/private_tenant/profiles/private_profile";
