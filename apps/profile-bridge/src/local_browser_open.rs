@@ -1239,7 +1239,7 @@ time.sleep(15)
         fs::create_dir(&folder)?;
         let started = Instant::now();
         assert_eq!(
-            run_python_with_executable(&python, &runtime_root, &folder, "--local-open", None,)?
+            run_python_with_executable(&python, &runtime_root, &folder, "--local-open", None,)?,
             super::NativeBrowserCompletion::NativeWriterReleased
         );
         assert!(started.elapsed() >= Duration::from_secs(2));
@@ -1368,13 +1368,16 @@ sys.stderr.flush()
                 Box::new(move || started.confirm_after_runtime_ready().is_ok());
             Ok(Some(ready))
         });
-        assert!(run_python_with_executable(
-            &python,
-            &runtime_root,
-            &folder,
-            "--local-open",
-            Some(before_launch),
-        )?);
+        assert!(
+            run_python_with_executable(
+                &python,
+                &runtime_root,
+                &folder,
+                "--local-open",
+                Some(before_launch),
+            )?
+            .confirms_closed_profile()
+        );
         assert!(
             crate::windows_delivery_runtime::tests::active_health_confirmed_for_test(&state_root,)?
         );
