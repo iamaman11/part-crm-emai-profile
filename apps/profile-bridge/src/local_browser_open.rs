@@ -380,11 +380,7 @@ fn classify_native_browser_completion(
         return NativeBrowserCompletion::NativeWriterReleased;
     }
     if browser_ready {
-        return if adapter_completed_after_native_close(
-            action,
-            process_success,
-            native_close_seen,
-        ) {
+        return if adapter_completed_after_native_close(action, process_success, native_close_seen) {
             NativeBrowserCompletion::SdkClosed
         } else {
             NativeBrowserCompletion::CloseUnconfirmed
@@ -977,11 +973,25 @@ mod tests {
         use super::{NativeBrowserCompletion as Completion, classify_native_browser_completion};
 
         assert_eq!(
-            classify_native_browser_completion("--local-open", false, true, false, false, Some(true)),
+            classify_native_browser_completion(
+                "--local-open",
+                false,
+                true,
+                false,
+                false,
+                Some(true)
+            ),
             Completion::LaunchFailed
         );
         assert_eq!(
-            classify_native_browser_completion("--local-open", false, false, false, false, Some(false)),
+            classify_native_browser_completion(
+                "--local-open",
+                false,
+                false,
+                false,
+                false,
+                Some(false)
+            ),
             Completion::LaunchUnconfirmed
         );
         assert_eq!(
@@ -1882,11 +1892,7 @@ sys.stderr.flush()
         let first = open_or_create_workspace(&root, &draft, &generation).unwrap();
         root.update_profile_current_sync_base(&first, &generation, 11)
             .unwrap();
-        std::fs::write(
-            first.path().join(".local-unsynced"),
-            b"local-unsynced-v2",
-        )
-        .unwrap();
+        std::fs::write(first.path().join(".local-unsynced"), b"local-unsynced-v2").unwrap();
         // Local v11 is a dirty working copy while the CRM projection has
         // advanced to v12. Open must use the local marker without cloud I/O.
         let advanced = open_or_create_workspace(&root, &draft, &generation).unwrap();
