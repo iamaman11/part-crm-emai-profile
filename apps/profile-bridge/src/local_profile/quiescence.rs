@@ -376,10 +376,15 @@ pub(crate) fn native_child_launch_guard_stdout(
 
 #[cfg(windows)]
 fn native_launch_admission_absent(workspace_path: &Path) -> Result<bool, LocalProfileError> {
-    use std::os::windows::fs::MetadataExt;
     let profile = workspace_path
         .parent()
         .ok_or(LocalProfileError::UnsafeRelativePath)?;
+    native_launch_admission_absent_in_profile(profile)
+}
+
+#[cfg(windows)]
+fn native_launch_admission_absent_in_profile(profile: &Path) -> Result<bool, LocalProfileError> {
+    use std::os::windows::fs::MetadataExt;
     let path = profile.join(NATIVE_LAUNCH_ADMISSION);
     match fs::symlink_metadata(&path) {
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(true),
@@ -419,7 +424,7 @@ fn bridge_writer_lock_present(root: &Path, depth: usize) -> Result<bool, LocalPr
     // before Firefox acquired parent.lock. Installer/Delete cannot enter.
     #[cfg(windows)]
     if depth + 1 == GENERATION_DEPTH_FROM_ROOT {
-        if !native_launch_admission_absent(&root.join("_generation_placeholder"))? {
+        if !native_launch_admission_absent_in_profile(root)? {
             return Ok(true);
         }
     }
