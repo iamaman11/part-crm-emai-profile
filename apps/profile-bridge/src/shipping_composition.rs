@@ -1381,8 +1381,9 @@ mod windows {
                 &successor,
                 12,
                 &inventory,
-            )
-            .map_err(|_| "exact local rebase should succeed")?;
+            ),
+            Ok(())
+        );
             let updated = root.open_profile_current(&tenant, &profile)?;
             assert_eq!(updated.generation_id(), &successor);
             assert_eq!(updated.base_generation_id(), Some(&successor));
