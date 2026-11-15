@@ -259,8 +259,12 @@ def main() -> int:
     assert "persist_sdk_identity(folder, &line)?" in local_source
     assert "write_all(IDENTITY_ACK)" in local_source
     assert "camouhost-identity-persisted" in SOURCE.read_text(encoding="utf-8")
-    local_open_after_dirty = local_owner.split("mark_local_unsynced(workspace.path())?;", 1)[1]
-    assert 'run_python(' in local_open_after_dirty
+    dirty_marker = local_owner.find("mark_local_unsynced(workspace.path())")
+    native_launch = local_owner.find("run_python(", dirty_marker)
+    assert dirty_marker >= 0 and native_launch > dirty_marker, (
+        "durable local dirty evidence must precede native browser launch"
+    )
+    local_open_after_dirty = local_owner[dirty_marker:]
     assert '"--local-open"' in local_open_after_dirty
     assert 'before_launch' in local_open_after_dirty
     assert ".local-unsynced" in local_source
