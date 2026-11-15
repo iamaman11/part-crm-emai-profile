@@ -955,6 +955,15 @@ mod tests {
             let delay_ms: u64 = delay_ms.parse().expect("test child delay");
             std::thread::sleep(std::time::Duration::from_millis(delay_ms));
         }
+        if let Some(root) = std::env::var_os("PROFILE_BRIDGE_TEST_CHILD_LATE_WRITER_ROOT") {
+            // A separate native Windows process acquires the real Firefox
+            // parent.lock AFTER the initial startup-proof diagnostic deadline.
+            std::thread::sleep(std::time::Duration::from_millis(250));
+            let writer = hold_native_writer_lock(std::path::Path::new(&root))
+                .expect("late native Firefox writer must acquire the OS handle");
+            std::thread::sleep(std::time::Duration::from_millis(800));
+            drop(writer);
+        }
     }
 
     #[cfg(windows)]
@@ -1080,36 +1089,106 @@ mod tests {
 
     #[cfg(windows)]
     #[test]
-    fn native_startup_proof_is_bounded_without_terminating_unconfirmed_adapter()
+    fn startup_diagnostic_deadline_never_detaches_an_unconfirmed_adapter()
     -> Result<(), Box<dyn std::error::Error>> {
         use std::sync::atomic::AtomicBool;
         use std::time::{Duration, Instant};
 
         let root = tempfile::tempdir()?;
         for ready_seen in [false, true] {
-            let mut child = spawn_native_adapter_fixture(10_000)?;
+            let mut child = spawn_native_adapter_fixture(600)?;
             let ready = AtomicBool::new(ready_seen);
             let started = Instant::now();
-            let outcome = super::await_adapter_or_native_release(
+            let (status, stopped) = super::await_adapter_or_native_release(
                 &mut child,
                 root.path(),
                 &ready,
-                Duration::from_millis(200),
-            );
-            // Failure to prove an admitted writer is never authority to
-            // terminate the Python adapter or any browser it might own.
-            let still_running = child.try_wait()?.is_none();
-            if still_running {
-                child.kill()?;
-            }
-            child.wait()?;
-            assert_eq!(outcome, Err(LocalOpenError::LaunchConfirmation));
+                Duration::from_millis(50),
+            )?;
+            assert!(status.success(), "the child must finish naturally");
+            assert!(!stopped, "uncertainty cannot authorize process termination");
             assert!(
-                still_running,
-                "unknown browser state must not terminate child"
+                started.elapsed() >= Duration::from_millis(450),
+                "the native owner must not return at the diagnostic deadline"
             );
-            assert!(started.elapsed() < Duration::from_secs(3));
         }
+        Ok(())
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn late_firefox_writer_cannot_start_after_native_profile_admission_is_released()
+    -> Result<(), Box<dyn std::error::Error>> {
+        use crate::local_profile::{ClosedSyncAdmission, MaterializationRoot};
+        use std::process::{Command, Stdio};
+        use std::sync::atomic::AtomicBool;
+        use std::sync::mpsc;
+        use std::time::{Duration, Instant};
+
+        let directory = tempfile::tempdir()?;
+        let root = MaterializationRoot::open_or_create(directory.path())?;
+        let intent = intent();
+        let workspace = open_or_create_workspace(&root, &intent, &local_generation(&intent)?)?;
+        let owner_workspace = workspace.clone();
+        let (admitted_tx, admitted_rx) = mpsc::channel();
+        let owner = std::thread::spawn(move || {
+            // This is the same kernel admission held across ordinary Open and
+            // its post-Close callback in the shipping path.
+            let _admission = ClosedSyncAdmission::try_acquire(&owner_workspace)
+                .expect("kernel admission")
+                .expect("exclusive native profile owner");
+            admitted_tx.send(()).expect("admitted signal");
+            let mut child = Command::new(std::env::current_exe().expect("test executable"))
+                .arg("native_adapter_child_fixture")
+                .env(
+                    "PROFILE_BRIDGE_TEST_CHILD_LATE_WRITER_ROOT",
+                    owner_workspace.path(),
+                )
+                .stdin(Stdio::null())
+                .stdout(Stdio::null())
+                .stderr(Stdio::null())
+                .spawn()
+                .expect("real Windows child");
+            let ready = AtomicBool::new(false);
+            super::await_adapter_or_native_release(
+                &mut child,
+                owner_workspace.path(),
+                &ready,
+                Duration::from_millis(50),
+            )
+        });
+        admitted_rx.recv_timeout(Duration::from_secs(5))?;
+        std::thread::sleep(Duration::from_millis(100));
+        assert!(
+            crate::browser_execution::browser_writer_locks_absent_at(workspace.path())?,
+            "Firefox has not yet acquired its writer; negative OS proof alone is insufficient"
+        );
+        assert!(
+            ClosedSyncAdmission::try_acquire(&workspace)?.is_none(),
+            "the original profile owner must survive the startup diagnostic deadline"
+        );
+        let deadline = Instant::now() + Duration::from_secs(5);
+        let mut late_writer_observed = false;
+        while Instant::now() < deadline {
+            if !crate::browser_execution::browser_writer_locks_absent_at(workspace.path())? {
+                late_writer_observed = true;
+                assert!(
+                    ClosedSyncAdmission::try_acquire(&workspace)?.is_none(),
+                    "a late Firefox writer must never race a second Open or Sync"
+                );
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(25));
+        }
+        assert!(late_writer_observed, "child did not acquire the real native lock");
+        let (status, terminated) = owner.join().expect("native owner thread")?;
+        assert!(status.success(), "late Firefox writer must exit naturally");
+        assert!(!terminated, "the Bridge must not terminate an unknown browser");
+        assert!(crate::browser_execution::browser_writer_locks_absent_at(
+            workspace.path()
+        )?);
+        let _next = ClosedSyncAdmission::try_acquire(&workspace)?
+            .ok_or("owner did not release after child exit")?;
         Ok(())
     }
 
