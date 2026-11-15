@@ -233,6 +233,19 @@ def check_sources(sources: dict[str, str]) -> list[str]:
         or "return sync_closed_ready_with_rebase(" not in ready
     ):
         failures.append("closed READY Sync must prove one exact same-device successor before local rebase")
+    candidate_recovery = ready.find("if current.generation_id() == &candidate")
+    crm_projection_gate = ready.find("if workspace.profile_version() != intent.expected_version")
+    version_owner = function_body(shipping, "fn confirmed_successor_profile_version(")
+    if (
+        candidate_recovery < 0
+        or crm_projection_gate < candidate_recovery
+        or ready.count("confirmed_successor_profile_version(") < 2
+        or "expected_base != local_profile_version" not in version_owner
+        or ".checked_add(1)" not in version_owner
+    ):
+        failures.append(
+            "READY exact-successor recovery must use the D1 predecessor version before the CRM projection gate"
+        )
     rebase = function_body(shipping, "fn rebase_local_current_after_exact_successor(")
     if not guarded_effects(
         rebase,
@@ -358,6 +371,10 @@ def self_test(sources: dict[str, str]) -> list[str]:
          "one whole-operation per-profile OS Sync owner"),
         ("shipping", "attempt >= MAX_CLOSED_SYNC_ATTEMPTS", "false",
          "closed Sync must stop after bounded retries"),
+        ("shipping",
+         "confirmed_successor_profile_version(\n                workspace.profile_version(),\n                expected_base_version,\n            )?",
+         "intent.expected_version.checked_add(1).ok_or(())?",
+         "READY exact-successor recovery must use the D1 predecessor version before the CRM projection gate"),
         ("native", 'self.context.on("close"', 'self.context.on("missing"',
          "official native SDK/Playwright integration"),
         ("adapter", "return asyncio.run(run_local_profile(Path(sys.argv[2]), config, first_run))",
