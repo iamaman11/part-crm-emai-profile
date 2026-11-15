@@ -139,6 +139,19 @@ def verify_embedded_python_path_configuration():
 
 def main() -> int:
     runtime = load_runtime()
+    # A lost Rust diagnostic reader must never interrupt Camoufox's own SDK
+    # close lifecycle while the inherited native child guard remains active.
+    class ClosedDiagnosticPipe:
+        def write(self, _value):
+            raise BrokenPipeError("parent diagnostic reader exited")
+
+        def flush(self):
+            raise BrokenPipeError("parent diagnostic reader exited")
+
+    with patch.object(runtime.sys, "stderr", ClosedDiagnosticPipe()):
+        runtime.report_runtime_stage("launch", "ready")
+        runtime.report_runtime_stage("close", "browser_context_closed")
+        runtime.report_runtime_failure("launch", RuntimeError("synthetic"))
     verify_embedded_python_path_configuration()
     verify_upstream_camoufox_config_is_final(runtime)
     verify_windows_browser_sdk_executable_path(runtime)
@@ -339,11 +352,16 @@ def main() -> int:
     assert "if dirty {" in run_initial
     assert "match run_closed_sync(intent)" in run_initial
     assert "Err(ShippingCompositionError::SyncVersionConflict)" in run_initial
-    # A busy browser never spawns another Sync; stale CURRENT may be
-    # reconciled only through the existing exact-Commit proof, never by reset.
+    # Automatic cloud Save needs a positively confirmed native close;
+    # no failed launch, uncertain adapter, or busy profile can spawn Sync.
+    # Stale CURRENT can still be recovered using the existing exact proof.
+    assert "if native_close_admits_automatic_sync(&open_result)" in run_initial
+    native_close_admission = composition.split(
+        "fn native_close_admits_automatic_sync(", 1
+    )[1].split("    #[cfg(test)]", 1)[0]
+    assert "result.is_ok()" in native_close_admission
     assert "crate::local_browser_open::LocalOpenError::StaleLocalWorkspace" in run_initial
-    assert "crate::local_browser_open::LocalOpenError::ProfileBusy" in run_initial
-    assert "if !matches!(" in run_initial
+    assert "match run_closed_sync(intent)" in run_initial
     assert "DeliveryHealth" not in run_initial
     app = (SOURCE.parents[2] / "apps/profile-bridge/src/main.rs").read_text(
         encoding="utf-8"

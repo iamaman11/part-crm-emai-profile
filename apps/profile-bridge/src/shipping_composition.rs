@@ -1291,6 +1291,41 @@ mod windows {
         })
     }
 
+    // Only a proven native Close admits automatic Sync. A failed launch,
+    // unconfirmed SDK shutdown, or unproven writer leaves .local-unsynced
+    // intact for the existing explicit closed-recovery owner instead.
+    fn native_close_admits_automatic_sync(
+        result: &Result<(), crate::local_browser_open::LocalOpenError>,
+    ) -> bool {
+        result.is_ok()
+    }
+
+    #[cfg(test)]
+    mod native_close_proof_tests {
+        use super::native_close_admits_automatic_sync;
+        use crate::local_browser_open::LocalOpenError;
+
+        #[test]
+        fn only_proven_native_close_enters_automatic_cloud_sync() {
+            assert!(native_close_admits_automatic_sync(&Ok(())));
+            for error in [
+                LocalOpenError::RuntimeUnavailable,
+                LocalOpenError::IdentityPreparation,
+                LocalOpenError::LaunchConfirmation,
+                LocalOpenError::BrowserNotClosedCleanly,
+                LocalOpenError::ProfileBusy,
+                LocalOpenError::OperationInProgress,
+                LocalOpenError::StaleLocalWorkspace,
+                LocalOpenError::RestoreRequired,
+            ] {
+                assert!(
+                    !native_close_admits_automatic_sync(&Err(error)),
+                    "{error:?} must preserve local bytes for explicit recovery"
+                );
+            }
+        }
+    }
+
     pub fn run_initial(
         intent: &crate::generation_initialization::InitialProfileOpen,
     ) -> Result<(), ShippingCompositionError> {
@@ -1323,15 +1358,7 @@ mod windows {
                     // The SAME Rust process completes closed Sync before a
                     // subsequent Open can touch browser bytes. No child launch
                     // or OS-lock handoff exists in the normal lifecycle.
-                    if !matches!(
-                        open_result,
-                        Err(
-                            crate::local_browser_open::LocalOpenError::StaleLocalWorkspace
-                                | crate::local_browser_open::LocalOpenError::ProfileBusy
-                                | crate::local_browser_open::LocalOpenError::OperationInProgress
-                                | crate::local_browser_open::LocalOpenError::RestoreRequired
-                        )
-                    ) {
+                    if native_close_admits_automatic_sync(&open_result) {
                         if let Err(error) = run_closed_sync_with_admission(
                             intent,
                             &binding,

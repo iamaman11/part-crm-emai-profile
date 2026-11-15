@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
 """Supported real Camouhost adapter for generation-scoped Camoufox execution.
 
-Stdout is reserved for the versioned Bridge IPC protocol. Runtime/library diagnostics
-are redirected to stderr and never include profile payload, fingerprint config, proxy
-credentials, or entropy material.
+Automation-mode stdout is reserved for the versioned Bridge IPC protocol.
+User-native stdout instead carries the inherited Windows OS launch-admission
+handle and is never used for profile bytes. Only bounded first-run identity IPC
+and redacted runtime milestones travel through the parent-owned stderr pipe.
 """
 
 from __future__ import annotations
@@ -983,7 +984,12 @@ def report_runtime_failure(phase: str, error: BaseException) -> None:
     if phase not in {"startup", "launch", "browser_visible", "navigation", "close", "cleanup"}:
         phase = "unknown"
     category = runtime_failure_category(error)
-    print(f"camouhost_failure phase={phase} category={category}", file=sys.stderr, flush=True)
+    try:
+        print(f"camouhost_failure phase={phase} category={category}", file=sys.stderr, flush=True)
+    except BrokenPipeError:
+        # A crashed parent may have closed its diagnostic reader. Never turn
+        # that into a browser-close command or an SDK lifecycle exception.
+        pass
 
 
 def report_runtime_stage(phase: str, step: str) -> None:
@@ -1001,7 +1007,12 @@ def report_runtime_stage(phase: str, step: str) -> None:
         ("close", "playwright_driver_released"),
     }
     if (phase, step) in allowed:
-        print(f"camouhost_stage phase={phase} step={step}", file=sys.stderr, flush=True)
+        try:
+            print(f"camouhost_stage phase={phase} step={step}", file=sys.stderr, flush=True)
+        except BrokenPipeError:
+            # The inherited Windows launch guard still excludes a new owner
+            # if Rust died; losing a log reader cannot close a live browser.
+            pass
 
 
 
@@ -1540,7 +1551,12 @@ async def run_local_profile(root: Path, config: dict[str, Any] | None, first_run
             # now in this same Python process, before Playwright starts.
             with contextlib.redirect_stdout(sys.stderr):
                 generated = materialize_candidate_identity(root)
-            print(json.dumps(generated, separators=(",", ":"), sort_keys=True), flush=True)
+            print(
+                "camouhost_identity "
+                + json.dumps(generated, separators=(",", ":"), sort_keys=True),
+                file=sys.stderr,
+                flush=True,
+            )
             acknowledgement = sys.stdin.readline(64)
             if acknowledgement != "camouhost-identity-persisted\n":
                 raise RuntimeContractError("ProfileBridge did not persist the Camoufox identity")
@@ -1605,7 +1621,13 @@ def main() -> int:
         except Exception as error:
             report_runtime_failure("startup", error)
             return 4
-        return asyncio.run(run_local_profile(Path(sys.argv[2]), config, first_run))
+        # User-native stdout is an inherited Windows OS launch-admission
+        # handle. Keep fd 1 open, but send arbitrary SDK stdout to the OS
+        # null sink; only fixed app milestones use the diagnostic stderr pipe.
+        # If Rust dies, a broken log pipe must not interrupt the native SDK.
+        with open(os.devnull, "w", encoding="utf-8") as sink:
+            with contextlib.redirect_stdout(sink):
+                return asyncio.run(run_local_profile(Path(sys.argv[2]), config, first_run))
     if len(sys.argv) != 1:
         print("unsupported Camouhost invocation", file=sys.stderr)
         return 2

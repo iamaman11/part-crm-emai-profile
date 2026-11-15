@@ -338,40 +338,38 @@ repository-test identities are not promoted into cryptographic authority merely 
 Bridge control files are excluded from logical browser inventory. Browser-owned lock files remain part
 of browser state.
 
-## 8. Local Generation State Machine
+## 8. Shipping Windows native state contract
 
-The local record uses explicit states:
+The shipping Windows path composes existing owners, without a second global FSM:
 
-```text
-MATERIALIZED_CLEAN
-  -> IN_USE
-  -> DIRTY_LOCAL
-  -> SYNCED_EVICTABLE
-  -> EVICTED
+- Camoufox / official Playwright alone launches and closes Firefox; Ready and Close events are SDK evidence.
+- ProfileBridge owns the local OS admission, native dirty bytes, and the inline closed Sync.
+- D1 alone selects exact VERIFIED CURRENT; neither Python exit nor a clean local file handle is a cloud Save receipt.
 
-IN_USE
-  -> RECOVERY_REQUIRED
-  -> MATERIALIZED_CLEAN | QUARANTINED
-```
+Observed progression:
 
-Opening requires exact distributed/local ownership and a successful preflight. A graceful browser close
-is witnessed by the released native lock plus the current-session
-`sessionstore-final-state-write-complete` checkpoint and produces `DIRTY_LOCAL`, not a cloud-clean or
-evictable state. Lock release alone or a missing/invalid checkpoint is an unclean exit and produces
-`RECOVERY_REQUIRED`.
+    LOCAL_CLEAN / DIRTY_RECOVERABLE
+      -> STARTING (Rust OS admission + inherited Windows child launch guard)
+      -> BROWSER_READY (official Playwright event)
+      -> BROWSER_CLOSED (SDK observation and native Firefox writer release)
+      -> DIRTY_CLOSED (original .local-unsynced marker)
+      -> SYNCING (same Rust owner; exact encrypted successor)
+      -> CURRENT_CONFIRMED (D1 receipt and durable clean marker)
 
-A controlled dirty close retains the local writer lock and coordinator ownership until the immutable
-successor is uploaded, exactly verified and authoritatively committed, or until an explicit recovery
-outcome is recorded. The confirmed-save/reopen semantics are owned by the subsequent save/reopen
-application transaction, not by launch admission itself.
+Uncertain startup or Close yields RECOVERY_REQUIRED, preserves local dirty files, and does not trigger automatic cloud Sync. The startup deadline bounds foreground observation without terminating a user browser.
+
+The spawned Python owns a Win32 FILE_SHARE_NONE handle for the OS-only .profile-platform.launch-admission file outside browser snapshots. This kernel guard survives an OS-killed Rust parent while the child remains alive. A new Open, closed Sync, Restore, installer activation or local Delete cannot proceed solely because Firefox parent.lock is temporarily absent. The guard disappears when its last native handle closes; no PID-based state manager or new cloud authority is introduced.
+
+A Save becomes confirmed only after the existing exact D1 CURRENT proof and durable local marker update. Failed or ambiguous Save retains its original native bytes and pending descriptor for the same existing recovery path.
 
 ## 9. Local crash recovery and clone-only destructive repair
 
 An interrupted Firefox writer does not automatically mean its local working profile is
-corrupt. Before any repair or replacement, preserve its original bytes and prove the
-native writer lock is released; use the current-session CrashMonitor checkpoint to
-classify clean close versus unclean/unknown exit. Do not use browser PID/process-tree
-supervision or force termination as the ordinary proof. Current device/user/tenant
+corrupt. Before any repair or replacement, preserve the original bytes and prove both
+native Firefox writer release and absence of any inherited Python launch guard.
+Official Playwright Close evidence plus the native file handle determine the
+confirmed path. A temporarily absent parent.lock during delayed startup is not
+proof of quiescence; do not use browser PID or force termination as the normal proof. Current device/user/tenant
 rights must be valid, there must be no competing writer or unhandled remote successor,
 and the pinned runtime must safely attempt Firefox's normal SQLite/WAL/session recovery
 on the same working directory.
