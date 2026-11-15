@@ -858,6 +858,8 @@ fn open_under_profile_admission(
     }
     // One Python process draws a new official identity only for an empty
     // profile; existing saved SDK options go directly to native Camoufox.
+    // Persist dirty evidence before Camouhost can launch Firefox. A failed
+    // launch keeps this marker; only the existing verified Sync may retire it.
     if let Err(error) = mark_local_unsynced(workspace.path()) {
         if matches!(
             crate::browser_execution::browser_writer_locks_absent(&workspace),
