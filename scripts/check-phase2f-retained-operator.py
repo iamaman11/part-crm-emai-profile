@@ -292,11 +292,19 @@ def check_sources(sources: dict[str, str]) -> list[str]:
         failures.append("ordinary local Open must not depend on cloud version projection")
     recheck = function_body(local, "fn recheck_workspace_after_writer_admission(")
     for required in (
-        "current.profile_version() != observed.profile_version()",
-        "current.base_generation_id() != observed.base_generation_id()",
+        "root.open_profile_current(&intent.tenant_id, &intent.profile_id)",
+        "current.path() != observed.path()",
     ):
         if required not in recheck:
-            failures.append(f"local marker race must fail closed during Open admission: {required}")
+            failures.append(f"local Open must re-read the same physical workspace under admission: {required}")
+    if (
+        "current.profile_version() != observed.profile_version()" in recheck
+        or "current.base_generation_id() != observed.base_generation_id()" in recheck
+    ):
+        failures.append("local Open must accept the latest valid local marker without a pre-Open cloud Sync")
+    initial = function_body(shipping, "pub fn run_initial(")
+    if "run_closed_sync(intent)" in initial or "StaleLocalWorkspace" in initial:
+        failures.append("ordinary local Open must not trigger a pre-launch cloud Sync")
 
     for required in ('from playwright.async_api import async_playwright',
                      'from camoufox.async_api import AsyncNewBrowser',
@@ -342,8 +350,8 @@ def self_test(sources: dict[str, str]) -> list[str]:
          "native Open must hold the existing per-profile OS admission through the shared recovery owner"),
         ("locks", "Self::recover_interrupted_launch(workspace, device_id, epoch)", "Ok(())",
          "native Open must hold the existing per-profile OS admission through the shared recovery owner"),
-        ("local", "current.profile_version() != observed.profile_version()", "false",
-         "local marker race"),
+        ("local", "current.path() != observed.path()", "false",
+         "local Open must re-read the same physical workspace under admission"),
         ("shipping", "wait_for_native_writer_release(", "unsafe_file_assumption(",
          "native file-release proof"),
         ("shipping", "ClosedSyncAdmission::try_acquire(&initial)", "no_sync_owner()",
