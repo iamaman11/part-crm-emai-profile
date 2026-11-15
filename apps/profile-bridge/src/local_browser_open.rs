@@ -1115,6 +1115,111 @@ mod tests {
         Ok(())
     }
 
+    // Physical OS-kill test: native Rust Bridge owns a child's inherited
+    // share-deny handle, then is forcibly terminated BEFORE Firefox acquires
+    // its parent.lock. The grandchild must still block Open/Sync/Restore.
+    #[cfg(windows)]
+    #[test]
+    fn native_launch_parent_crash_fixture() {
+        let Some(root) = std::env::var_os("PROFILE_BRIDGE_TEST_NATIVE_PARENT_CRASH_ROOT") else {
+            return;
+        };
+        use std::process::{Command, Stdio};
+        let path = std::path::Path::new(&root);
+        let launch_guard = crate::local_profile::native_child_launch_guard_stdout(path)
+            .expect("acquire native share-deny guard");
+        let _child = Command::new(std::env::current_exe().expect("test executable"))
+            .arg("native_adapter_child_fixture")
+            .env("PROFILE_BRIDGE_TEST_CHILD_SLEEP_MS", "6000")
+            .stdin(Stdio::null())
+            .stdout(launch_guard)
+            .stderr(Stdio::null())
+            .spawn()
+            .expect("launch isolated Python stand-in holding inherited OS guard");
+        std::fs::write(
+            path.parent().expect("profile folder").join(".native-parent-ready"),
+            b"child_launched",
+        )
+        .expect("published parent fixture readiness");
+        std::thread::sleep(std::time::Duration::from_secs(15));
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn os_kill_bridge_parent_keeps_native_child_launch_gate_until_child_exits()
+    -> Result<(), Box<dyn std::error::Error>> {
+        use crate::local_profile::{
+            BridgeWorkspaceLock, ClosedSyncAdmission, DeliveryActivationGuard, MaterializationRoot,
+        };
+        use profile_platform_primitives::DeviceId;
+        use std::fs;
+        use std::process::{Command, Stdio};
+        use std::time::{Duration, Instant};
+
+        let directory = tempfile::tempdir()?;
+        let root = MaterializationRoot::open_or_create(directory.path())?;
+        let intent = intent();
+        let workspace = open_or_create_workspace(&root, &intent, &local_generation(&intent)?)?;
+        let handshake = workspace
+            .path()
+            .parent()
+            .ok_or("profile parent directory")?
+            .join(".native-parent-ready");
+
+        let mut owner = Command::new(std::env::current_exe()?)
+            .arg("native_launch_parent_crash_fixture")
+            .env("PROFILE_BRIDGE_TEST_NATIVE_PARENT_CRASH_ROOT", workspace.path())
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()?;
+        let started = Instant::now();
+        while !handshake.exists() && started.elapsed() < Duration::from_secs(6) {
+            std::thread::sleep(Duration::from_millis(25));
+        }
+        if !handshake.exists() {
+            let _ = owner.kill();
+            let _ = owner.wait();
+            return Err("native test child failed to inherit its OS guard".into());
+        }
+        // Actual TerminateProcess via std::process::Child::kill, not an
+        // in-process simulated drop or mocked file-lock predicate.
+        owner.kill()?;
+        owner.wait()?;
+        assert!(
+            crate::browser_execution::browser_writer_locks_absent_at(workspace.path())?,
+            "Firefox writer is not yet present; the inherited guard is decisive"
+        );
+        assert!(
+            ClosedSyncAdmission::try_acquire(&workspace)?.is_none(),
+            "Rust parent is dead but native child must still exclude new Open/Sync"
+        );
+        let device = DeviceId::parse("device_native_os_kill")?;
+        assert!(matches!(
+            BridgeWorkspaceLock::acquire_or_recover_interrupted(&workspace, &device, 1),
+            Err(crate::local_profile::LocalProfileError::LockBusy)
+        ));
+        assert!(
+            DeliveryActivationGuard::acquire(&root).is_err(),
+            "installer or local Delete cannot bypass a live orphan launch"
+        );
+
+        // The kernel share-deny handle vanishes when the child exits; neither
+        // PID polling nor a new persistent state machine is used to recover.
+        let deadline = Instant::now() + Duration::from_secs(12);
+        let _recovered = loop {
+            if let Some(admission) = ClosedSyncAdmission::try_acquire(&workspace)? {
+                break admission;
+            }
+            if Instant::now() >= deadline {
+                return Err("OS gate did not release when the native child exited".into());
+            }
+            std::thread::sleep(Duration::from_millis(50));
+        };
+        fs::remove_file(handshake)?;
+        Ok(())
+    }
+
     #[cfg(windows)]
     #[test]
     fn startup_diagnostic_deadline_never_detaches_an_unconfirmed_adapter()
