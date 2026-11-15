@@ -862,7 +862,17 @@ fn open_under_profile_admission(
     }
     // One Python process draws a new official identity only for an empty
     // profile; existing saved SDK options go directly to native Camoufox.
-    mark_local_unsynced(workspace.path())?;
+    if let Err(error) = mark_local_unsynced(workspace.path()) {
+        if matches!(
+            crate::browser_execution::browser_writer_locks_absent(&workspace),
+            Ok(true)
+        ) {
+            writer
+                .release()
+                .map_err(|_| LocalOpenError::InvalidLocalWorkspace)?;
+        }
+        return Err(error);
+    }
     let local_ms = u64::try_from(local_started.elapsed().as_millis())
         .unwrap_or(u64::MAX)
         .min(86_400_000);
