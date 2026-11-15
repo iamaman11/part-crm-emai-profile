@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
 """Supported real Camouhost adapter for generation-scoped Camoufox execution.
 
-Stdout is reserved for the versioned Bridge IPC protocol. Runtime/library diagnostics
-are redirected to stderr and never include profile payload, fingerprint config, proxy
-credentials, or entropy material.
+Automation-mode stdout is reserved for the versioned Bridge IPC protocol.
+User-native stdout instead carries the inherited Windows OS launch-admission
+handle and is never used for profile bytes. Only bounded first-run identity IPC
+and redacted runtime milestones travel through the parent-owned stderr pipe.
 """
 
 from __future__ import annotations
