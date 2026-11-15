@@ -410,6 +410,9 @@ fn native_launch_admission_absent_in_profile(profile: &Path) -> Result<bool, Loc
     let path = profile.join(NATIVE_LAUNCH_ADMISSION);
     match fs::symlink_metadata(&path) {
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(true),
+        // Even metadata may fail while FILE_SHARE_NONE is held: that is
+        // blocked, not proof that the child has exited.
+        Err(error) if matches!(error.raw_os_error(), Some(5 | 32 | 33)) => Ok(false),
         Err(error) => Err(error.into()),
         Ok(metadata)
             if metadata.file_type().is_symlink() || metadata.file_attributes() & 0x0400 != 0 =>
