@@ -194,8 +194,9 @@ impl MaterializationRoot {
         GenerationWorkspace::open(path, tenant_id, profile_id, &generation_id)
     }
 
-    /// Advance the local cloud base only after a verified Worker Sync receipt.
-    /// Browser bytes and the physical CURRENT path are unchanged.
+    /// Advance the local cloud base only after a verified Worker Sync receipt
+    /// or exact D1 successor observation. Browser bytes and the physical CURRENT
+    /// path are unchanged; LOCAL_UNSYNCED remains owned by the existing Sync.
     pub fn update_profile_current_sync_base(
         &self,
         workspace: &GenerationWorkspace,
