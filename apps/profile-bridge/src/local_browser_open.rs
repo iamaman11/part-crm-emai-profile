@@ -27,6 +27,7 @@ const MAX_CONFIG_BYTES: u64 = 1024 * 1024;
 const LOCAL_UNSYNCED: &str = ".local-unsynced";
 const LOCAL_UNSYNCED_CONTENT: &[u8] = b"local-unsynced-v2";
 const CAMOUHOST_LAUNCH_READY_EVENT: &str = "camouhost_stage phase=launch step=ready";
+const CAMOUHOST_IDENTITY_EVENT_PREFIX: &str = "camouhost_identity ";
 const CAMOUHOST_NATIVE_CLOSE_EVENT: &str =
     "camouhost_stage phase=close step=browser_context_closed";
 const IDENTITY_ACK: &[u8] = b"camouhost-identity-persisted\n";
@@ -477,10 +478,10 @@ fn await_adapter_or_native_release(
                 _ => released_since = None,
             }
         }
-        // A startup delay is observable, but must NEVER unlock the profile:
-        // the same Python process may acquire parent.lock after this instant.
-        // Retain the native admission until child exit or the proven
-        // READY -> writer-observed -> stable writer-release transition.
+        // The child inherited its OWN Windows share-deny launch admission at
+        // CreateProcess. It survives parent death and prevents another
+        // Open/Sync/Restore. Only with this independent OS witness can the
+        // foreground request return promptly while startup remains uncertain.
         if !writer_was_observed
             && !startup_uncertainty_reported
             && proof_started.elapsed() >= startup_proof_timeout
@@ -501,6 +502,7 @@ fn await_adapter_or_native_release(
                     .min(86_400_000),
             );
             startup_uncertainty_reported = true;
+            return Err(LocalOpenError::LaunchConfirmation);
         }
         std::thread::sleep(Duration::from_millis(100));
     }
@@ -524,6 +526,9 @@ fn run_python_with_input(
         .flatten();
     let health_required = health_confirmation.is_some();
     let (health_result_tx, health_result_rx) = std::sync::mpsc::channel();
+    // First DRAFT identity uses the same bounded diagnostic pipe, not
+    // stdout: stdout is an inherited kernel-only launch gate on Windows.
+    let (identity_tx, identity_rx) = std::sync::mpsc::sync_channel(1);
     let native_close_seen = Arc::new(AtomicBool::new(false));
     let close_seen_by_reader = Arc::clone(&native_close_seen);
     let native_ready_seen = Arc::new(AtomicBool::new(false));
@@ -544,10 +549,16 @@ fn run_python_with_input(
         } else {
             Stdio::null()
         })
-        .stdout(if generate_identity {
-            Stdio::piped()
-        } else {
-            Stdio::null()
+        .stdout({
+            #[cfg(windows)]
+            {
+                crate::local_profile::native_child_launch_guard_stdout(folder)
+                    .map_err(|_| LocalOpenError::RuntimeUnavailable)?
+            }
+            #[cfg(not(windows))]
+            {
+                Stdio::null()
+            }
         })
         .stderr(Stdio::piped())
         .spawn()
@@ -579,7 +590,21 @@ fn run_python_with_input(
     };
     let diagnostics = std::thread::spawn(move || {
         let mut native_ready_observed = false;
+        let mut first_identity_sender = Some(identity_tx);
         for line in BufReader::new(stderr).lines().map_while(Result::ok) {
+            if generate_identity {
+                if let Some(payload) = line.strip_prefix(CAMOUHOST_IDENTITY_EVENT_PREFIX) {
+                    if let Some(sender) = first_identity_sender.take() {
+                        // Enforce the old stdout IPC size bound on stderr.
+                        if payload.len() <= (MAX_CONFIG_BYTES * 8) as usize {
+                            let mut message = payload.as_bytes().to_vec();
+                            message.push(b'\n');
+                            let _ = sender.send(message);
+                        }
+                    }
+                    continue;
+                }
+            }
             if line == CAMOUHOST_LAUNCH_READY_EVENT && !native_ready_observed {
                 native_ready_observed = true;
                 ready_seen_by_reader.store(true, Ordering::Release);
@@ -615,18 +640,9 @@ fn run_python_with_input(
         // One bounded SDK result, persisted by the Rust file owner before
         // Camoufox begins launching. Fail closed on a partial IPC exchange.
         let persisted = (|| -> Result<(), LocalOpenError> {
-            let output = child
-                .stdout
-                .take()
-                .ok_or(LocalOpenError::IdentityPreparation)?;
-            let mut stream = BufReader::new(output).take(MAX_CONFIG_BYTES * 8);
-            let mut line = Vec::new();
-            stream
-                .read_until(b'\n', &mut line)
+            let line = identity_rx
+                .recv_timeout(Duration::from_secs(120))
                 .map_err(|_| LocalOpenError::IdentityPreparation)?;
-            if !line.ends_with(b"\n") {
-                return Err(LocalOpenError::IdentityPreparation);
-            }
             persist_sdk_identity(folder, &line)?;
             stdin
                 .as_mut()
@@ -636,10 +652,8 @@ fn run_python_with_input(
         })();
         if let Err(error) = persisted {
             drop(stdin);
-            // The first-run ACK must precede launch, but a failed partial
-            // write is still not permission to kill a possible SDK owner.
-            let _ = child.wait();
-            let _ = diagnostics.join();
+            // The independent inherited Windows gate survives this error.
+            // Without our exact ACK, this Camouhost never reaches SDK launch.
             return Err(error);
         }
     }
