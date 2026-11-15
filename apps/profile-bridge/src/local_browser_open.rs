@@ -126,13 +126,10 @@ fn recheck_workspace_after_writer_admission(
     let current = root
         .open_profile_current(&intent.tenant_id, &intent.profile_id)
         .map_err(|_| LocalOpenError::InvalidLocalWorkspace)?;
-    // A Sync may have advanced the marker after our preliminary read.
-    // Even if the original CRM version is old, never accept a *race* during
-    // writer admission: Open must retry against one stable local snapshot.
-    if current.path() != observed.path()
-        || current.profile_version() != observed.profile_version()
-        || current.base_generation_id() != observed.base_generation_id()
-    {
+    // The marker may legitimately advance after the preliminary lookup and
+    // before this process acquires the OS admission. Reuse the freshly opened
+    // local CURRENT; only a changed physical profile path is an identity error.
+    if current.path() != observed.path() {
         return Err(LocalOpenError::StaleLocalWorkspace);
     }
     admit_existing_workspace(current, intent)
@@ -1923,36 +1920,20 @@ sys.stderr.flush()
     }
 
     #[test]
-    fn readback_under_writer_lock_rejects_cloud_base_advanced_after_first_lookup() {
+    fn recheck_uses_the_latest_local_marker_after_a_completed_sync() {
         let directory = tempfile::tempdir().unwrap();
         let root =
             crate::local_profile::MaterializationRoot::open_or_create(directory.path()).unwrap();
         let draft = intent();
         let generation = local_generation(&draft).unwrap();
         let observed = open_or_create_workspace(&root, &draft, &generation).unwrap();
-        // Simulate a completed Sync between preliminary lookup and OS admission,
-        // using the existing atomic generation marker update.
+        // Simulate a completed Sync between preliminary lookup and OS admission.
         root.update_profile_current_sync_base(&observed, &generation, 2)
             .unwrap();
-        assert!(matches!(
-            recheck_workspace_after_writer_admission(&root, &observed, &draft),
-            Err(LocalOpenError::StaleLocalWorkspace)
-        ));
-        let mut ready = draft.clone();
-        ready.status = InitialProfileStatus::Ready;
-        ready.expected_version = 2;
-        // After a concurrent Sync, a new Open must begin with a new exact
-        // local-marker observation. Reusing the pre-Sync marker is not valid
-        // even when the caller refreshed the cloud version separately.
-        let refreshed = root
-            .open_profile_current(&draft.tenant_id, &draft.profile_id)
-            .unwrap();
-        assert_eq!(
-            recheck_workspace_after_writer_admission(&root, &refreshed, &ready)
-                .unwrap()
-                .profile_version(),
-            2
-        );
+        let current = recheck_workspace_after_writer_admission(&root, &observed, &draft).unwrap();
+        assert_eq!(current.path(), observed.path());
+        assert_eq!(current.profile_version(), 2);
+        assert_eq!(current.base_generation_id(), Some(&generation));
     }
 
     #[test]
