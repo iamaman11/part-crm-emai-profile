@@ -40,10 +40,20 @@ impl ClosedSyncAdmission {
         root.try_lock_shared().map_err(map_try_lock_error)?;
         let profile_sync = open_sync_admission(workspace)?;
         match profile_sync.try_lock() {
-            Ok(()) => Ok(Some(Self {
-                _root: root,
-                _profile_sync: profile_sync,
-            })),
+            Ok(()) => {
+                // Recheck UNDER the exclusive per-profile admission: the old
+                // Rust owner might have died after our optimistic first
+                // observation, leaving its child with the inherited file
+                // handle. This is the crash-to-Sync admission boundary.
+                #[cfg(windows)]
+                if !native_launch_admission_absent(workspace.path())? {
+                    return Ok(None);
+                }
+                Ok(Some(Self {
+                    _root: root,
+                    _profile_sync: profile_sync,
+                }))
+            },
             Err(TryLockError::WouldBlock) => Ok(None),
             Err(TryLockError::Error(error)) => Err(error.into()),
         }
@@ -86,6 +96,13 @@ impl BridgeWorkspaceLock {
 
         let generation = open_generation_admission(workspace)?;
         generation.try_lock().map_err(map_try_lock_error)?;
+        // The first optimistic launch check can race a dying Rust owner.
+        // Revalidate the child handle after acquiring OS exclusivity, before
+        // modifying any durable .profile-platform.lock marker.
+        #[cfg(windows)]
+        if !native_launch_admission_absent(workspace.path())? {
+            return Err(LocalProfileError::LockBusy);
+        }
         let inner = filesystem::BridgeWorkspaceLock::acquire(workspace, device_id, epoch)?;
         Ok(Self {
             inner,
@@ -153,6 +170,10 @@ impl BridgeWorkspaceLock {
         }
         let generation = open_generation_admission(workspace)?;
         generation.try_lock().map_err(map_try_lock_error)?;
+        #[cfg(windows)]
+        if !native_launch_admission_absent(workspace.path())? {
+            return Err(LocalProfileError::LockBusy);
+        }
 
         // A stale Windows parent.lock file is permitted only when the actual
         // native handle has exited. A live or ambiguous Firefox writer blocks.
@@ -364,7 +385,7 @@ pub(crate) fn native_child_launch_guard_stdout(
     }
     // CreateProcess duplicates this standard-output handle atomically into
     // Python. Rust termination cannot make its last OS handle disappear.
-    // Python redirects sys.stdout to the existing diagnostic stderr pipe.
+    // Python keeps this OS handle open and redirects normal stdout to null.
     let handle = OpenOptions::new()
         .read(true)
         .write(true)
