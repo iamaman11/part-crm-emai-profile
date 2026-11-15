@@ -1579,6 +1579,8 @@ mod windows {
         let root = MaterializationRoot::open_or_create(&config.materialization_root)
             .map_err(|_| ShippingCompositionError::Configuration)?;
 
+        // Cloud Save is admitted only by the post-Close callback below.
+        // Ordinary local Open never runs Sync before Camouhost launch.
         let open_local = || {
             crate::local_browser_open::open_with_before_launch_and_after_close(
                 &root,
