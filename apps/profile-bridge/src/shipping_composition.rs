@@ -1439,6 +1439,7 @@ mod windows {
                     Ok(()),
                 );
                 let updated = root.open_profile_current(&tenant, &profile)?;
+                assert_eq!(updated.generation_id(), &successor);
                 assert_eq!(updated.base_generation_id(), Some(&successor));
                 assert_eq!(updated.profile_version(), 12);
                 assert_eq!(updated.inventory()?, inventory);
