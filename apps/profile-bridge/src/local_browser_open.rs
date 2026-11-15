@@ -438,7 +438,6 @@ fn await_adapter_or_native_release(
     let proof_started = Instant::now();
     let mut writer_was_observed = false;
     let mut released_since: Option<Instant> = None;
-    let mut startup_uncertainty_reported = false;
     loop {
         // An OS query failure is not evidence that this child exited: wait
         // using the same owned process handle instead of detaching a launcher.
@@ -483,7 +482,6 @@ fn await_adapter_or_native_release(
         // Open/Sync/Restore. Only with this independent OS witness can the
         // foreground request return promptly while startup remains uncertain.
         if (!ready || !writer_was_observed)
-            && !startup_uncertainty_reported
             && proof_started.elapsed() >= startup_proof_timeout
         {
             eprintln!(
@@ -501,7 +499,6 @@ fn await_adapter_or_native_release(
                     .unwrap_or(u64::MAX)
                     .min(86_400_000),
             );
-            startup_uncertainty_reported = true;
             return Err(LocalOpenError::LaunchConfirmation);
         }
         std::thread::sleep(Duration::from_millis(100));
