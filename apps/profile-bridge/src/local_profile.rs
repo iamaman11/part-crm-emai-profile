@@ -14,7 +14,7 @@ pub use lifecycle::{
     QuotaPlan, QuotaPolicy, SupportBundleSummary,
 };
 #[cfg(windows)]
-pub(crate) use quiescence::ClosedSyncAdmission;
+pub(crate) use quiescence::{ClosedSyncAdmission, native_child_launch_guard_stdout};
 pub use quiescence::{BridgeWorkspaceLock, DeliveryActivationGuard};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
