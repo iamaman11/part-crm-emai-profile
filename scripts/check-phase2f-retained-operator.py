@@ -236,7 +236,7 @@ def check_sources(sources: dict[str, str]) -> list[str]:
     rebase = function_body(shipping, "fn rebase_local_current_after_exact_successor(")
     if not guarded_effects(
         rebase,
-        (("root.update_profile_current_sync_base(", True),),
+        ((".update_profile_current_sync_base(", True),),
     ):
         failures.append("same-device successor rebase must change only the marker under the native writer gate")
     for required in (
