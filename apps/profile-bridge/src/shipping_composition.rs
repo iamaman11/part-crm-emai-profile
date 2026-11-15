@@ -1371,19 +1371,20 @@ mod windows {
             let (_directory, root, tenant, profile, device, base, successor, workspace) =
                 fixture()?;
             let inventory = workspace.inventory()?;
-            rebase_local_current_after_exact_successor(
-                &root,
-                &tenant,
-                &profile,
-                &device,
-                &base,
-                11,
-                &successor,
-                12,
-                &inventory,
-            ),
-            Ok(())
-        );
+            assert_eq!(
+                rebase_local_current_after_exact_successor(
+                    &root,
+                    &tenant,
+                    &profile,
+                    &device,
+                    &base,
+                    11,
+                    &successor,
+                    12,
+                    &inventory,
+                ),
+                Ok(())
+            );
             let updated = root.open_profile_current(&tenant, &profile)?;
             assert_eq!(updated.generation_id(), &successor);
             assert_eq!(updated.base_generation_id(), Some(&successor));
