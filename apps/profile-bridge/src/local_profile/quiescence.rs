@@ -7,6 +7,9 @@ use std::path::{Path, PathBuf};
 const ROOT_MARKER: &str = ".profile-platform-root";
 const BRIDGE_LOCK_FILE: &str = ".profile-platform.lock";
 const GENERATION_DEPTH_FROM_ROOT: usize = 3;
+// OS-only native child launch admission; outside browser bytes and snapshots.
+#[cfg(windows)]
+const NATIVE_LAUNCH_ADMISSION: &str = ".profile-platform.launch-admission";
 
 #[cfg(any(windows, test))]
 /// One kernel-only Sync admission for a specific tenant/profile, held from the
@@ -26,6 +29,13 @@ impl ClosedSyncAdmission {
     pub(crate) fn try_acquire(
         workspace: &GenerationWorkspace,
     ) -> Result<Option<Self>, LocalProfileError> {
+        // A previous Bridge may have crashed while its spawned Python is
+        // still able to launch Firefox. The child inherited a Win32
+        // FILE_SHARE_NONE handle, which survives its Rust parent.
+        #[cfg(windows)]
+        if !native_launch_admission_absent(workspace.path())? {
+            return Ok(None);
+        }
         let root = open_root_marker(workspace_root(workspace)?)?;
         root.try_lock_shared().map_err(map_try_lock_error)?;
         let profile_sync = open_sync_admission(workspace)?;
@@ -57,6 +67,10 @@ impl BridgeWorkspaceLock {
         epoch: u64,
     ) -> Result<Self, LocalProfileError> {
         let root = workspace_root(workspace)?;
+        #[cfg(windows)]
+        if !native_launch_admission_absent(workspace.path())? {
+            return Err(LocalProfileError::LockBusy);
+        }
         let admission = open_root_marker(root)?;
         admission.try_lock_shared().map_err(map_try_lock_error)?;
 
@@ -115,6 +129,10 @@ impl BridgeWorkspaceLock {
         fresh_epoch: u64,
     ) -> Result<Self, LocalProfileError> {
         let root = workspace_root(workspace)?;
+        #[cfg(windows)]
+        if !native_launch_admission_absent(workspace.path())? {
+            return Err(LocalProfileError::LockBusy);
+        }
         // The admission file can be left behind by a failed new-version
         // acquire while an old Bridge543 ROOT-only writer still owns v1.
         // Only the current v2 marker proves generation-scoped ownership.
@@ -320,6 +338,66 @@ fn open_admission_marker(marker: PathBuf) -> Result<File, LocalProfileError> {
         .map_err(LocalProfileError::from)
 }
 
+
+#[cfg(windows)]
+pub(crate) fn native_child_launch_guard_stdout(
+    workspace_path: &Path,
+) -> Result<std::process::Stdio, LocalProfileError> {
+    use std::os::windows::fs::{MetadataExt, OpenOptionsExt};
+    let profile = workspace_path
+        .parent()
+        .ok_or(LocalProfileError::UnsafeRelativePath)?;
+    let path = profile.join(NATIVE_LAUNCH_ADMISSION);
+    // Fail closed on links/reparse points; this file is never a cloud state
+    // or a saved generation. The OS's deny-sharing decision is the witness.
+    match fs::symlink_metadata(&path) {
+        Ok(metadata) if metadata.file_type().is_symlink() || metadata.file_attributes() & 0x0400 != 0 => {
+            return Err(LocalProfileError::SymbolicLinkRejected);
+        }
+        Ok(metadata) if !metadata.is_file() => {
+            return Err(LocalProfileError::SpecialFileRejected);
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+        Err(error) => return Err(error.into()),
+        Ok(_) => {}
+    }
+    // CreateProcess duplicates this standard-output handle atomically into
+    // Python. Rust termination cannot make its last OS handle disappear.
+    // Python redirects sys.stdout to the existing diagnostic stderr pipe.
+    let handle = OpenOptions::new()
+        .read(true)
+        .write(true)
+        .create(true)
+        .share_mode(0)
+        .open(path)
+        .map_err(LocalProfileError::from)?;
+    Ok(std::process::Stdio::from(handle))
+}
+
+#[cfg(windows)]
+fn native_launch_admission_absent(workspace_path: &Path) -> Result<bool, LocalProfileError> {
+    use std::os::windows::fs::MetadataExt;
+    let profile = workspace_path
+        .parent()
+        .ok_or(LocalProfileError::UnsafeRelativePath)?;
+    let path = profile.join(NATIVE_LAUNCH_ADMISSION);
+    match fs::symlink_metadata(&path) {
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(true),
+        Err(error) => Err(error.into()),
+        Ok(metadata) if metadata.file_type().is_symlink() || metadata.file_attributes() & 0x0400 != 0 => {
+            Err(LocalProfileError::SymbolicLinkRejected)
+        }
+        Ok(metadata) if !metadata.is_file() => Err(LocalProfileError::SpecialFileRejected),
+        Ok(_) => match OpenOptions::new().read(true).open(path) {
+            Ok(_) => Ok(true),
+            // ERROR_SHARING_VIOLATION, ERROR_LOCK_VIOLATION, ACCESS_DENIED:
+            // unknown live ownership never authorizes a new writer.
+            Err(error) if matches!(error.raw_os_error(), Some(5 | 32 | 33)) => Ok(false),
+            Err(error) => Err(error.into()),
+        },
+    }
+}
+
 fn open_root_marker(root: &Path) -> Result<File, LocalProfileError> {
     let marker = root.join(ROOT_MARKER);
     let metadata = fs::symlink_metadata(&marker)?;
@@ -337,6 +415,14 @@ fn open_root_marker(root: &Path) -> Result<File, LocalProfileError> {
 }
 
 fn bridge_writer_lock_present(root: &Path, depth: usize) -> Result<bool, LocalProfileError> {
+    // Native child holds the OS share-deny handle even if Bridge was killed
+    // before Firefox acquired parent.lock. Installer/Delete cannot enter.
+    #[cfg(windows)]
+    if depth + 1 == GENERATION_DEPTH_FROM_ROOT {
+        if !native_launch_admission_absent(&root.join("_generation_placeholder"))? {
+            return Ok(true);
+        }
+    }
     if depth == GENERATION_DEPTH_FROM_ROOT {
         #[cfg(windows)]
         {
