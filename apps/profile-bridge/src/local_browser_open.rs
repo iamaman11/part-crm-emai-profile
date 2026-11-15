@@ -1137,7 +1137,9 @@ mod tests {
             .spawn()
             .expect("launch isolated Python stand-in holding inherited OS guard");
         std::fs::write(
-            path.parent().expect("profile folder").join(".native-parent-ready"),
+            path.parent()
+                .expect("profile folder")
+                .join(".native-parent-ready"),
             b"child_launched",
         )
         .expect("published parent fixture readiness");
@@ -1168,7 +1170,10 @@ mod tests {
 
         let mut owner = Command::new(std::env::current_exe()?)
             .arg("native_launch_parent_crash_fixture")
-            .env("PROFILE_BRIDGE_TEST_NATIVE_PARENT_CRASH_ROOT", workspace.path())
+            .env(
+                "PROFILE_BRIDGE_TEST_NATIVE_PARENT_CRASH_ROOT",
+                workspace.path(),
+            )
             .stdin(Stdio::null())
             .stdout(Stdio::null())
             .stderr(Stdio::null())
