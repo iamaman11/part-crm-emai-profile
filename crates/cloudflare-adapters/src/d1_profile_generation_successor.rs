@@ -631,9 +631,16 @@ fn observed_successor_profile_version(
     base_generation_id: &GenerationId,
     object: &GenerationObjectDescriptor,
 ) -> Option<u64> {
-    observed_successor_is_exact(row, actor, device_id, profile_id, base_generation_id, object)
-        .then(|| non_negative_u64(row.expected_profile_version))
-        .flatten()
+    observed_successor_is_exact(
+        row,
+        actor,
+        device_id,
+        profile_id,
+        base_generation_id,
+        object,
+    )
+    .then(|| non_negative_u64(row.expected_profile_version))
+    .flatten()
 }
 
 #[derive(Deserialize)]
