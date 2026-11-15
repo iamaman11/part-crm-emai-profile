@@ -139,6 +139,19 @@ def verify_embedded_python_path_configuration():
 
 def main() -> int:
     runtime = load_runtime()
+    # A lost Rust diagnostic reader must never interrupt Camoufox's own SDK
+    # close lifecycle while the inherited native child guard remains active.
+    class ClosedDiagnosticPipe:
+        def write(self, _value):
+            raise BrokenPipeError("parent diagnostic reader exited")
+
+        def flush(self):
+            raise BrokenPipeError("parent diagnostic reader exited")
+
+    with patch.object(runtime.sys, "stderr", ClosedDiagnosticPipe()):
+        runtime.report_runtime_stage("launch", "ready")
+        runtime.report_runtime_stage("close", "browser_context_closed")
+        runtime.report_runtime_failure("launch", RuntimeError("synthetic"))
     verify_embedded_python_path_configuration()
     verify_upstream_camoufox_config_is_final(runtime)
     verify_windows_browser_sdk_executable_path(runtime)
