@@ -377,10 +377,9 @@ mod windows {
     /// successor after local finalization was interrupted.
     fn confirmed_successor_profile_version(
         local_profile_version: u64,
-        expected_base_profile_version: Option<u64>,
+        expected_base_profile_version: u64,
     ) -> Result<u64, ClosedReadySyncError> {
-        let expected_base =
-            expected_base_profile_version.ok_or(ClosedReadySyncError::VersionConflict)?;
+        let expected_base = expected_base_profile_version;
         if expected_base != local_profile_version {
             return Err(ClosedReadySyncError::VersionConflict);
         }
@@ -642,7 +641,8 @@ mod windows {
                 &current,
                 &mut observation_transport,
             )
-            .map_err(|_| ClosedReadySyncError::Unconfirmed)?;
+            .map_err(|_| ClosedReadySyncError::Unconfirmed)?
+            .ok_or(ClosedReadySyncError::VersionConflict)?;
             let next_version = confirmed_successor_profile_version(
                 workspace.profile_version(),
                 expected_base_version,
@@ -678,7 +678,8 @@ mod windows {
                 &current,
                 &mut observation_transport,
             )
-            .map_err(|_| ClosedReadySyncError::Unconfirmed)?;
+            .map_err(|_| ClosedReadySyncError::Unconfirmed)?
+            .ok_or(ClosedReadySyncError::VersionConflict)?;
             let next_version = confirmed_successor_profile_version(
                 workspace.profile_version(),
                 expected_base_version,
@@ -1411,17 +1412,13 @@ mod windows {
 
         #[test]
         fn exact_successor_uses_the_d1_predecessor_version_not_the_crm_projection() {
-            assert_eq!(confirmed_successor_profile_version(11, Some(11)), Ok(12),);
+            assert_eq!(confirmed_successor_profile_version(11, 11), Ok(12),);
             assert_eq!(
-                confirmed_successor_profile_version(11, Some(10)),
+                confirmed_successor_profile_version(11, 10),
                 Err(ClosedReadySyncError::VersionConflict),
             );
             assert_eq!(
-                confirmed_successor_profile_version(11, None),
-                Err(ClosedReadySyncError::VersionConflict),
-            );
-            assert_eq!(
-                confirmed_successor_profile_version(u64::MAX, Some(u64::MAX)),
+                confirmed_successor_profile_version(u64::MAX, u64::MAX),
                 Err(ClosedReadySyncError::VersionConflict),
             );
         }
