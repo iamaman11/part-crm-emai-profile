@@ -167,10 +167,10 @@ describe('ProfilesWorkspace generation refresh (#802 F06)', () => {
     await waitFor(() => expect(activation).toHaveBeenCalledTimes(1));
 
     view.rerender(provider('profile_new'));
-    await screen.findByText('profile_new');
+    await screen.findByRole('heading', { name: 'profile_new' });
     finishOld({ resultCode: 'SUCCEEDED', resourceId: 'profile_old' } as Awaited<ReturnType<typeof changeGenerationActivation>>);
     await waitFor(() => expect((screen.getByRole('button', { name: 'Open browser' }) as HTMLButtonElement).disabled).toBe(false));
-    expect(screen.queryByText('profile_old')).toBeNull();
+    expect(screen.queryByRole('heading', { name: 'profile_old' })).toBeNull();
     expect(screen.queryByText('SUCCEEDED: profile_old')).toBeNull();
     expect(activation).toHaveBeenCalledTimes(1);
     expect(generationLookup).toHaveBeenCalledTimes(2); // Initial lookup + original readback, never new generation.
@@ -198,7 +198,7 @@ describe('ProfilesWorkspace generation refresh (#802 F06)', () => {
         </TenantProvider>
       </QueryClientProvider>,
     );
-    await screen.findByText('profile_disposable');
+    await screen.findByRole('heading', { name: 'profile_disposable' });
     fireEvent.click(screen.getByRole('button', { name: 'Delete profile' }));
     fireEvent.click(screen.getByRole('button', { name: 'Confirm Delete profile' }));
     await screen.findByText(/Deletion is pending; the server resumes automatically/i);
@@ -274,7 +274,7 @@ describe('ProfilesWorkspace generation refresh (#802 F06)', () => {
         </TenantProvider>
       </QueryClientProvider>,
     );
-    await screen.findByText('profile_same');
+    await screen.findByRole('heading', { name: 'profile_same' });
     fireEvent.click(screen.getByRole('button', { name: 'Refresh status' }));
     await waitFor(() => expect(profileLookup).toHaveBeenCalledTimes(2));
     fireEvent.click(screen.getByRole('button', { name: 'Delete profile' }));
@@ -302,7 +302,7 @@ describe('ProfilesWorkspace generation refresh (#802 F06)', () => {
         </TenantProvider>
       </QueryClientProvider>,
     );
-    await screen.findByText('profile_deleted');
+    await screen.findByRole('heading', { name: 'profile_deleted' });
     const open = screen.getByRole('button', { name: 'Open browser' }) as HTMLButtonElement;
     expect(open.disabled).toBe(true);
     expect(screen.getByText('This profile was deleted and cannot be opened.')).toBeTruthy();
@@ -326,7 +326,7 @@ describe('ProfilesWorkspace generation refresh (#802 F06)', () => {
         </TenantProvider>
       </QueryClientProvider>,
     );
-    await screen.findByText('profile_viewer');
+    await screen.findByRole('heading', { name: 'profile_viewer' });
     const open = screen.getByRole('button', { name: 'Open browser' }) as HTMLButtonElement;
     expect(open.disabled).toBe(true);
     expect(screen.getByText('This account has no operator permission for this profile.')).toBeTruthy();
@@ -358,15 +358,15 @@ describe('ProfilesWorkspace generation refresh (#802 F06)', () => {
     const view = render(provider('profile_old'));
     await waitFor(() => expect(profileLookup).toHaveBeenCalledWith('tenant_test', 'profile_old'));
     view.rerender(provider('profile_new'));
-    await screen.findByText('profile_new');
+    await screen.findByRole('heading', { name: 'profile_new' });
     await act(async () => {
       resolveOld({
         profileId: 'profile_old', status: 'SUSPENDED', version: 18, linkedClientId: null, canOperate: true,
       } as Awaited<ReturnType<typeof getProfile>>);
       await oldRead;
     });
-    expect(screen.queryByText('profile_old')).toBeNull();
-    expect(screen.getByText('profile_new')).toBeTruthy();
+    expect(screen.queryByRole('heading', { name: 'profile_old' })).toBeNull();
+    expect(screen.getByRole('heading', { name: 'profile_new' })).toBeTruthy();
     // The already loaded, scoped profile projection is enough for local Open.
     // There is no second launch-intent network dependency.
     await waitFor(() => expect((screen.getByRole('button', { name: 'Open browser' }) as HTMLButtonElement).disabled).toBe(false));
@@ -406,7 +406,7 @@ describe('ProfilesWorkspace generation refresh (#802 F06)', () => {
     await waitFor(() => expect(coordinatorLookup).toHaveBeenCalledWith('tenant_test', 'profile_old'));
 
     view.rerender(provider('profile_new'));
-    await screen.findByText('profile_new');
+    await screen.findByRole('heading', { name: 'profile_new' });
     await act(async () => {
       resolveGeneration({
         generationId: 'generation_old', status: 'VERIFIED', version: 3, verificationReference: null,
@@ -418,7 +418,7 @@ describe('ProfilesWorkspace generation refresh (#802 F06)', () => {
     });
     expect(screen.queryByRole('button', { name: 'deactivate generation' })).toBeNull();
     expect(screen.queryByText('Active session')).toBeNull();
-    expect(screen.getByText('profile_new')).toBeTruthy();
+    expect(screen.getByRole('heading', { name: 'profile_new' })).toBeTruthy();
     expect((screen.getByRole('button', { name: 'Open browser' }) as HTMLButtonElement).disabled).toBe(false);
   });
 
@@ -440,7 +440,7 @@ describe('ProfilesWorkspace generation refresh (#802 F06)', () => {
         </TenantProvider>
       </QueryClientProvider>,
     );
-    await screen.findByText('profile_external_save');
+    await screen.findByRole('heading', { name: 'profile_external_save' });
     await waitFor(() => expect(profileLookup).toHaveBeenCalledTimes(1));
     version = 8; // Bridge committed outside the tab; this is a server readback.
     fireEvent.focus(window);
