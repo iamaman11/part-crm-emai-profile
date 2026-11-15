@@ -292,7 +292,7 @@ def check_sources(sources: dict[str, str]) -> list[str]:
         failures.append("ordinary local Open must not depend on cloud version projection")
     recheck = function_body(local, "fn recheck_workspace_after_writer_admission(")
     for required in (
-        "root.open_profile_current(&intent.tenant_id, &intent.profile_id)",
+        "open_profile_current(&intent.tenant_id, &intent.profile_id)",
         "current.path() != observed.path()",
     ):
         if required not in recheck:
