@@ -416,11 +416,12 @@ impl UserDiagnostic {
                     match error {
                         Local::InvalidLocalWorkspace => "BRIDGE_LOCAL_FOLDER_UNAVAILABLE",
                         Local::RestoreRequired => "BRIDGE_LOCAL_RESTORE_REQUIRED",
-                        Local::StaleLocalWorkspace => "BRIDGE_LOCAL_VERSION_MISMATCH",
+                        Local::StaleLocalWorkspace => "BRIDGE_LOCAL_WORKSPACE_CHANGED",
                         Local::RuntimeUnavailable => "BRIDGE_LOCAL_RUNTIME_UNAVAILABLE",
                         Local::ProfileBusy => "BRIDGE_LOCAL_BROWSER_BUSY",
                         Local::OperationInProgress => "BRIDGE_LOCAL_OPERATION_BUSY",
                         Local::IdentityPreparation => "BRIDGE_LOCAL_IDENTITY_NOT_READY",
+                        Local::BrowserLaunchFailed => "BRIDGE_RUNTIME_LAUNCH_FAILED",
                         Local::BrowserNotClosedCleanly => "BRIDGE_LOCAL_CLOSE_UNVERIFIED",
                         Local::LaunchConfirmation => "BRIDGE_RUNTIME_NOT_READY",
                     }
@@ -866,7 +867,7 @@ impl UserDiagnostic {
                         "This READY profile has no local copy. Restore its single confirmed cloud CURRENT before opening. No empty workspace was created and no local data was changed."
                     }
                     Local::StaleLocalWorkspace => {
-                        "The authorized CRM version does not match the existing local profile. Do not overwrite the local folder or discard unsynchronized data; resolve its pending Sync or use the confirmed-current Restore procedure."
+                        "The local profile changed while Open was being admitted. No browser files were replaced; retry Open after the current local operation finishes."
                     }
                     Local::RuntimeUnavailable => {
                         "Installed Camoufox cannot be started. Check local installation health. The browser profile was not deleted."
@@ -879,6 +880,9 @@ impl UserDiagnostic {
                     }
                     Local::IdentityPreparation => {
                         "Local Camoufox fingerprint initialization failed. Existing files were retained; review the local diagnostic."
+                    }
+                    Local::BrowserLaunchFailed => {
+                        "Camoufox exited before the browser became ready. Windows confirmed that no native browser writer owns this profile; the existing local files were kept and Open can be retried."
                     }
                     Local::BrowserNotClosedCleanly => {
                         "The native Firefox close could not be confirmed. Local browser data was preserved. Cloud Sync may still be pending; check the latest Save status before reopening."
