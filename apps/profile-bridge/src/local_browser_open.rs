@@ -482,7 +482,7 @@ fn await_adapter_or_native_release(
         // CreateProcess. It survives parent death and prevents another
         // Open/Sync/Restore. Only with this independent OS witness can the
         // foreground request return promptly while startup remains uncertain.
-        if !writer_was_observed
+        if (!ready || !writer_was_observed)
             && !startup_uncertainty_reported
             && proof_started.elapsed() >= startup_proof_timeout
         {
