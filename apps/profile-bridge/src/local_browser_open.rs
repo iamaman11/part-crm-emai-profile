@@ -481,9 +481,7 @@ fn await_adapter_or_native_release(
         // CreateProcess. It survives parent death and prevents another
         // Open/Sync/Restore. Only with this independent OS witness can the
         // foreground request return promptly while startup remains uncertain.
-        if (!ready || !writer_was_observed)
-            && proof_started.elapsed() >= startup_proof_timeout
-        {
+        if (!ready || !writer_was_observed) && proof_started.elapsed() >= startup_proof_timeout {
             eprintln!(
                 "BRIDGE_LOCAL_STARTUP_UNCONFIRMED;NEXT_SAFE_STEP=RETAIN_NATIVE_PROFILE_OWNER"
             );
