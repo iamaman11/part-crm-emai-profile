@@ -198,7 +198,7 @@ describe('ProfilesWorkspace generation refresh (#802 F06)', () => {
         </TenantProvider>
       </QueryClientProvider>,
     );
-    await screen.findByRole('heading', { name: 'profile_disposable' });
+    await screen.findByRole('button', { name: 'Delete profile' });
     fireEvent.click(screen.getByRole('button', { name: 'Delete profile' }));
     fireEvent.click(screen.getByRole('button', { name: 'Confirm Delete profile' }));
     await screen.findByText(/Deletion is pending; the server resumes automatically/i);
@@ -274,7 +274,7 @@ describe('ProfilesWorkspace generation refresh (#802 F06)', () => {
         </TenantProvider>
       </QueryClientProvider>,
     );
-    await screen.findByRole('heading', { name: 'profile_same' });
+    await screen.findByRole('button', { name: 'Refresh status' });
     fireEvent.click(screen.getByRole('button', { name: 'Refresh status' }));
     await waitFor(() => expect(profileLookup).toHaveBeenCalledTimes(2));
     fireEvent.click(screen.getByRole('button', { name: 'Delete profile' }));
@@ -302,7 +302,7 @@ describe('ProfilesWorkspace generation refresh (#802 F06)', () => {
         </TenantProvider>
       </QueryClientProvider>,
     );
-    await screen.findByRole('heading', { name: 'profile_deleted' });
+    await screen.findByText('This profile was deleted and cannot be opened.');
     const open = screen.getByRole('button', { name: 'Open browser' }) as HTMLButtonElement;
     expect(open.disabled).toBe(true);
     expect(screen.getByText('This profile was deleted and cannot be opened.')).toBeTruthy();
@@ -326,7 +326,7 @@ describe('ProfilesWorkspace generation refresh (#802 F06)', () => {
         </TenantProvider>
       </QueryClientProvider>,
     );
-    await screen.findByRole('heading', { name: 'profile_viewer' });
+    await screen.findByText('This account has no operator permission for this profile.');
     const open = screen.getByRole('button', { name: 'Open browser' }) as HTMLButtonElement;
     expect(open.disabled).toBe(true);
     expect(screen.getByText('This account has no operator permission for this profile.')).toBeTruthy();
