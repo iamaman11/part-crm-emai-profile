@@ -30,8 +30,8 @@ const CAMOUHOST_LAUNCH_READY_EVENT: &str = "camouhost_stage phase=launch step=re
 const CAMOUHOST_NATIVE_CLOSE_EVENT: &str =
     "camouhost_stage phase=close step=browser_context_closed";
 const IDENTITY_ACK: &[u8] = b"camouhost-identity-persisted\n";
-// Only startup evidence has a deadline. A READY browser holding its native
-// writer lock is a normal user session and must never be timed out by Bridge.
+// Startup timeout is a diagnostic deadline, never permission to release the
+// native profile admission while Python may still launch Firefox.
 #[cfg(windows)]
 const NATIVE_STARTUP_PROOF_TIMEOUT: Duration = Duration::from_secs(30);
 
@@ -69,6 +69,22 @@ impl fmt::Display for LocalOpenError {
     }
 }
 impl std::error::Error for LocalOpenError {}
+
+// A native process may finish without proving a controlled browser Close.
+// Only SDK completion or an observed READY Firefox writer that has released
+// its OS handle can admit the normal post-Close Sync.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum NativeBrowserCompletion {
+    SdkClosed,
+    NativeWriterReleased,
+    Unconfirmed,
+}
+
+impl NativeBrowserCompletion {
+    const fn confirms_closed_profile(self) -> bool {
+        !matches!(self, Self::Unconfirmed)
+    }
+}
 
 /// Exactly one deterministic local working folder per tenant/profile. The
 /// cloud object version cannot change its local pathname, and historical
@@ -186,7 +202,7 @@ fn run_python(
     folder: &Path,
     action: &str,
     before_launch: Option<BeforeLaunch>,
-) -> Result<bool, LocalOpenError> {
+) -> Result<NativeBrowserCompletion, LocalOpenError> {
     // Never invoke a user-selected executable, shell or remote path.
     for relative in [PYTHON, ENTRYPOINT, LOCK] {
         let file = runtime_root.join(relative);
@@ -340,7 +356,7 @@ fn run_python_with_executable(
     folder: &Path,
     action: &str,
     before_launch: Option<BeforeLaunch>,
-) -> Result<bool, LocalOpenError> {
+) -> Result<NativeBrowserCompletion, LocalOpenError> {
     run_python_with_input(
         executable,
         runtime_root,
@@ -399,7 +415,10 @@ fn stop_stuck_native_adapter(
             .map_err(|_| LocalOpenError::RuntimeUnavailable)?
         {
             Some(status) => Ok((status, false)),
-            None => Err(LocalOpenError::RuntimeUnavailable),
+            None => child
+                .wait()
+                .map(|status| (status, false))
+                .map_err(|_| LocalOpenError::RuntimeUnavailable),
         },
     }
 }
@@ -418,11 +437,19 @@ fn await_adapter_or_native_release(
     let proof_started = Instant::now();
     let mut writer_was_observed = false;
     let mut released_since: Option<Instant> = None;
+    let mut startup_uncertainty_reported = false;
     loop {
-        if let Some(status) = child
-            .try_wait()
-            .map_err(|_| LocalOpenError::RuntimeUnavailable)?
-        {
+        // An OS query failure is not evidence that this child exited: wait
+        // using the same owned process handle instead of detaching a launcher.
+        let state = match child.try_wait() {
+            Ok(state) => state,
+            Err(_) => Some(
+                child
+                    .wait()
+                    .map_err(|_| LocalOpenError::RuntimeUnavailable)?,
+            ),
+        };
+        if let Some(status) = state {
             return Ok((status, false));
         }
         let ready = browser_ready.load(Ordering::Acquire);
@@ -444,15 +471,24 @@ fn await_adapter_or_native_release(
                         return stop_stuck_native_adapter(child);
                     }
                 }
-                Err(_) => return Err(LocalOpenError::BrowserNotClosedCleanly),
+                // An unreadable lock cannot certify native release. Continue
+                // owning the profile while Python might still launch Firefox.
+                Err(_) => released_since = None,
                 _ => released_since = None,
             }
         }
-        // Do not wait forever for a missing READY or an unobserved writer.
-        // The Python/Playwright process is deliberately left untouched: without
-        // native writer proof Rust has no authority to terminate a browser.
-        if !writer_was_observed && proof_started.elapsed() >= startup_proof_timeout {
-            return Err(LocalOpenError::LaunchConfirmation);
+        // A startup delay is observable, but must NEVER unlock the profile:
+        // the same Python process may acquire parent.lock after this instant.
+        // Retain the native admission until child exit or the proven
+        // READY -> writer-observed -> stable writer-release transition.
+        if !writer_was_observed
+            && !startup_uncertainty_reported
+            && proof_started.elapsed() >= startup_proof_timeout
+        {
+            eprintln!(
+                "BRIDGE_LOCAL_STARTUP_UNCONFIRMED;NEXT_SAFE_STEP=RETAIN_NATIVE_PROFILE_OWNER"
+            );
+            startup_uncertainty_reported = true;
         }
         std::thread::sleep(Duration::from_millis(100));
     }
@@ -466,7 +502,7 @@ fn run_python_with_input(
     before_launch: Option<BeforeLaunch>,
     stdin_payload: Option<&[u8]>,
     generate_identity: bool,
-) -> Result<bool, LocalOpenError> {
+) -> Result<NativeBrowserCompletion, LocalOpenError> {
     // Delivery health is supplied by the composition owner as a one-shot
     // callback. Local Open knows only when the native runtime is launched and
     // when the official Playwright Ready event arrives.
@@ -510,15 +546,25 @@ fn run_python_with_input(
             .as_mut()
             .is_some_and(|stream| stream.write_all(payload).is_ok());
         if !written {
-            let _ = child.kill();
-            let _ = child.wait();
+            // A partial request might already have reached the launcher.
+            // Do not detach or kill an adapter that could own a live browser.
+            drop(stdin);
+            child
+                .wait()
+                .map_err(|_| LocalOpenError::RuntimeUnavailable)?;
             return Err(LocalOpenError::RuntimeUnavailable);
         }
     }
-    let stderr = child
-        .stderr
-        .take()
-        .ok_or(LocalOpenError::RuntimeUnavailable)?;
+    let stderr = match child.stderr.take() {
+        Some(stderr) => stderr,
+        None => {
+            drop(stdin);
+            child
+                .wait()
+                .map_err(|_| LocalOpenError::RuntimeUnavailable)?;
+            return Err(LocalOpenError::RuntimeUnavailable);
+        }
+    };
     let diagnostics = std::thread::spawn(move || {
         let mut native_ready_observed = false;
         for line in BufReader::new(stderr).lines().map_while(Result::ok) {
@@ -578,7 +624,8 @@ fn run_python_with_input(
         })();
         if let Err(error) = persisted {
             drop(stdin);
-            let _ = child.kill();
+            // The first-run ACK must precede launch, but a failed partial
+            // write is still not permission to kill a possible SDK owner.
             let _ = child.wait();
             let _ = diagnostics.join();
             return Err(error);
@@ -616,12 +663,17 @@ fn run_python_with_input(
     if health_required && !matches!(health_result_rx.try_recv(), Ok(true)) {
         return Err(LocalOpenError::LaunchConfirmation);
     }
-    Ok(native_adapter_released
-        || adapter_completed_after_native_close(
-            action,
-            completed.success(),
-            native_close_seen.load(Ordering::Acquire),
-        ))
+    Ok(if native_adapter_released {
+        NativeBrowserCompletion::NativeWriterReleased
+    } else if adapter_completed_after_native_close(
+        action,
+        completed.success(),
+        native_close_seen.load(Ordering::Acquire),
+    ) {
+        NativeBrowserCompletion::SdkClosed
+    } else {
+        NativeBrowserCompletion::Unconfirmed
+    })
 }
 
 fn mark_local_unsynced(folder: &Path) -> Result<(), LocalOpenError> {
@@ -779,7 +831,9 @@ fn open_under_profile_admission(
         workspace.path(),
         "--local-open",
         before_launch,
-    )? {
+    )?
+    .confirms_closed_profile()
+    {
         // Adapter failure is not proof that the browser released its files.
         // The caller starts the existing Sync recovery; its Rust file gate
         // must still block snapshot while Firefox owns the profile.
@@ -1099,13 +1153,16 @@ time.sleep(15)
         let folder = directory.path().join("profile");
         fs::create_dir(&folder)?;
         let started = Instant::now();
-        assert!(run_python_with_executable(
-            &python,
-            &runtime_root,
-            &folder,
-            "--local-open",
-            None,
-        )?);
+        assert_eq!(
+            run_python_with_executable(
+                &python,
+                &runtime_root,
+                &folder,
+                "--local-open",
+                None,
+            )?,
+            super::NativeBrowserCompletion::NativeWriterReleased
+        );
         assert!(started.elapsed() >= Duration::from_secs(2));
         assert!(started.elapsed() < Duration::from_secs(10));
         assert!(!folder.join("adapter_was_not_stopped").exists());
