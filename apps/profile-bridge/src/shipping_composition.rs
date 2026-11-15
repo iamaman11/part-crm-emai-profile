@@ -379,8 +379,8 @@ mod windows {
         local_profile_version: u64,
         expected_base_profile_version: Option<u64>,
     ) -> Result<u64, ClosedReadySyncError> {
-        let expected_base = expected_base_profile_version
-            .ok_or(ClosedReadySyncError::VersionConflict)?;
+        let expected_base =
+            expected_base_profile_version.ok_or(ClosedReadySyncError::VersionConflict)?;
         if expected_base != local_profile_version {
             return Err(ClosedReadySyncError::VersionConflict);
         }
@@ -1371,7 +1371,9 @@ mod windows {
         use profile_platform_primitives::{DeviceId, GenerationId, ProfileId, TenantId};
         use std::fs;
 
-        fn fixture(profile_name: &str) -> Result<
+        fn fixture(
+            profile_name: &str,
+        ) -> Result<
             (
                 tempfile::TempDir,
                 MaterializationRoot,
@@ -1409,10 +1411,7 @@ mod windows {
 
         #[test]
         fn exact_successor_uses_the_d1_predecessor_version_not_the_crm_projection() {
-            assert_eq!(
-                confirmed_successor_profile_version(11, Some(11)),
-                Ok(12),
-            );
+            assert_eq!(confirmed_successor_profile_version(11, Some(11)), Ok(12),);
             assert_eq!(
                 confirmed_successor_profile_version(11, Some(10)),
                 Err(ClosedReadySyncError::VersionConflict),
