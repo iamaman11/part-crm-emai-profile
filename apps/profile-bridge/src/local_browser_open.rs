@@ -122,7 +122,8 @@ fn recheck_workspace_after_writer_admission(
     intent: &InitialProfileOpen,
 ) -> Result<crate::local_profile::GenerationWorkspace, LocalOpenError> {
     // Read the *current* marker while holding the exclusive workspace lock.
-    // Sync may have advanced CURRENT between the first fast lookup and admission.
+    // Reuse that local CURRENT directly; ordinary Open must not run cloud Sync
+    // or compare its version with the CRM projection.
     let current = root
         .open_profile_current(&intent.tenant_id, &intent.profile_id)
         .map_err(|_| LocalOpenError::InvalidLocalWorkspace)?;
