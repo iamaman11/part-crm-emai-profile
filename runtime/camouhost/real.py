@@ -1540,7 +1540,12 @@ async def run_local_profile(root: Path, config: dict[str, Any] | None, first_run
             # now in this same Python process, before Playwright starts.
             with contextlib.redirect_stdout(sys.stderr):
                 generated = materialize_candidate_identity(root)
-            print(json.dumps(generated, separators=(",", ":"), sort_keys=True), flush=True)
+            print(
+                "camouhost_identity "
+                + json.dumps(generated, separators=(",", ":"), sort_keys=True),
+                file=sys.stderr,
+                flush=True,
+            )
             acknowledgement = sys.stdin.readline(64)
             if acknowledgement != "camouhost-identity-persisted\n":
                 raise RuntimeContractError("ProfileBridge did not persist the Camoufox identity")
@@ -1605,7 +1610,11 @@ def main() -> int:
         except Exception as error:
             report_runtime_failure("startup", error)
             return 4
-        return asyncio.run(run_local_profile(Path(sys.argv[2]), config, first_run))
+        # User-native stdout is an inherited Windows OS launch-admission
+        # handle. Keep fd 1 open but route all runtime output to the existing
+        # redacted stderr event pipe; no page/fingerprint data reaches the file.
+        with contextlib.redirect_stdout(sys.stderr):
+            return asyncio.run(run_local_profile(Path(sys.argv[2]), config, first_run))
     if len(sys.argv) != 1:
         print("unsupported Camouhost invocation", file=sys.stderr)
         return 2
