@@ -1606,6 +1606,8 @@ mod windows {
                 },
             )
         };
+        // Existing local CURRENT is opened locally. Only a missing READY
+        // workspace may cross the cloud Restore boundary; never Sync before Open.
         let result = match open_local() {
             Err(crate::local_browser_open::LocalOpenError::RestoreRequired) => {
                 // Only a missing READY local folder crosses the cloud boundary.
