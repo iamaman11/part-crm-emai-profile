@@ -1555,6 +1555,7 @@ mod windows {
             for error in [
                 LocalOpenError::RuntimeUnavailable,
                 LocalOpenError::IdentityPreparation,
+                LocalOpenError::BrowserLaunchFailed,
                 LocalOpenError::LaunchConfirmation,
                 LocalOpenError::BrowserNotClosedCleanly,
                 LocalOpenError::ProfileBusy,
