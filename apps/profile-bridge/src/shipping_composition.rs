@@ -379,11 +379,10 @@ mod windows {
         local_profile_version: u64,
         expected_base_profile_version: u64,
     ) -> Result<u64, ClosedReadySyncError> {
-        let expected_base = expected_base_profile_version;
-        if expected_base != local_profile_version {
+        if expected_base_profile_version != local_profile_version {
             return Err(ClosedReadySyncError::VersionConflict);
         }
-        expected_base
+        expected_base_profile_version
             .checked_add(1)
             .ok_or(ClosedReadySyncError::VersionConflict)
     }
@@ -1433,9 +1432,12 @@ mod windows {
                 let (_directory, root, tenant, profile, device, base, successor, workspace) =
                     fixture(profile_name)?;
                 let inventory = workspace.inventory()?;
-                rebase_local_current_after_exact_successor(
-                    &root, &tenant, &profile, &device, &base, 11, &successor, 12, &inventory,
-                )?;
+                assert_eq!(
+                    rebase_local_current_after_exact_successor(
+                        &root, &tenant, &profile, &device, &base, 11, &successor, 12, &inventory,
+                    ),
+                    Ok(()),
+                );
                 let updated = root.open_profile_current(&tenant, &profile)?;
                 assert_eq!(updated.base_generation_id(), Some(&successor));
                 assert_eq!(updated.profile_version(), 12);
