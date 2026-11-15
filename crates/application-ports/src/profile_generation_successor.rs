@@ -356,5 +356,5 @@ pub trait ProfileGenerationSuccessorObservationPort {
         profile_id: &ProfileId,
         base_generation_id: &GenerationId,
         object: &GenerationObjectDescriptor,
-    ) -> impl Future<Output = Result<bool, ProfileGenerationSuccessorCommitError>>;
+    ) -> impl Future<Output = Result<Option<u64>, ProfileGenerationSuccessorCommitError>>;
 }
