@@ -240,7 +240,7 @@ def check_sources(sources: dict[str, str]) -> list[str]:
         candidate_recovery < 0
         or crm_projection_gate < candidate_recovery
         or ready.count("confirmed_successor_profile_version(") < 2
-        or "expected_base != local_profile_version" not in version_owner
+        or "expected_base_profile_version != local_profile_version" not in version_owner
         or ".checked_add(1)" not in version_owner
     ):
         failures.append(
