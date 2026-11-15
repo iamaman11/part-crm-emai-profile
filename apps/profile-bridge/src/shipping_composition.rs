@@ -372,6 +372,23 @@ mod windows {
         }
     }
 
+    /// The D1 successor journal records the exact predecessor version.
+    /// The CRM projection is not authoritative for recovering a committed
+    /// successor after local finalization was interrupted.
+    fn confirmed_successor_profile_version(
+        local_profile_version: u64,
+        expected_base_profile_version: Option<u64>,
+    ) -> Result<u64, ClosedReadySyncError> {
+        let expected_base = expected_base_profile_version
+            .ok_or(ClosedReadySyncError::VersionConflict)?;
+        if expected_base != local_profile_version {
+            return Err(ClosedReadySyncError::VersionConflict);
+        }
+        expected_base
+            .checked_add(1)
+            .ok_or(ClosedReadySyncError::VersionConflict)
+    }
+
     fn rebase_local_current_after_exact_successor(
         root: &MaterializationRoot,
         tenant_id: &profile_platform_primitives::TenantId,
@@ -561,9 +578,8 @@ mod windows {
             )
             .map_err(|_| ClosedReadySyncError::Unconfirmed);
         };
-        if workspace.profile_version() != intent.expected_version
-            || fs::read(workspace.path().join(".local-unsynced")).map_err(|_| ())?
-                != b"local-unsynced-v2"
+        if fs::read(workspace.path().join(".local-unsynced")).map_err(|_| ())?
+            != b"local-unsynced-v2"
         {
             return Err(ClosedReadySyncError::Unconfirmed);
         }
@@ -601,9 +617,10 @@ mod windows {
             closed_current_candidate_id(&intent.tenant_id, &intent.profile_id, &base, digest)
                 .map_err(|_| ())?;
 
-        // A lost READY N+1 Commit reply cannot authorize a fresh N+2.
-        // Read exact server-selected CURRENT first; a newer candidate must
-        // match the ORIGINAL closed local bytes before the local marker moves.
+        // Derive the candidate from the original local base and closed bytes.
+        // An exact candidate is reconciled only after same-device D1 proof and
+        // a full native-byte comparison. A different direct same-device
+        // successor permits only a marker rebase before Syncing preserved bytes.
         // Use one device-bound application session for CURRENT readback and
         // the later authoritative Sync calls. Every request still receives
         // its own signed proof and the server rechecks D1/Coordinator state.
@@ -615,6 +632,21 @@ mod windows {
             .download_capability(&intent.tenant_id, &intent.profile_id)
             .map_err(|_| ())?;
         if current.generation_id() == &candidate {
+            // Even an exact local candidate is finalized only when the
+            // current actor/device owns the exact direct D1 successor.
+            let mut observation_transport = application.transport();
+            let expected_base_version = observe_current_successor_profile_version(
+                &intent.tenant_id,
+                &intent.profile_id,
+                &base,
+                &current,
+                &mut observation_transport,
+            )
+            .map_err(|_| ClosedReadySyncError::Unconfirmed)?;
+            let next_version = confirmed_successor_profile_version(
+                workspace.profile_version(),
+                expected_base_version,
+            )?;
             let reader = WindowsSignedGenerationObjectGet::from_system().map_err(|_| ())?;
             let mut downloader = VerifiedGenerationObjectStreamDownloader::new(reader);
             return reconcile_closed_ready_with_confirmed_current(
@@ -623,7 +655,7 @@ mod windows {
                 &intent.profile_id,
                 &candidate,
                 &base,
-                intent.expected_version.checked_add(1).ok_or(())?,
+                next_version,
                 binding.device_id(),
                 now().map_err(|_| ())?.value(),
                 &mut read_only,
@@ -646,14 +678,11 @@ mod windows {
                 &current,
                 &mut observation_transport,
             )
-            .map_err(|_| ClosedReadySyncError::Unconfirmed)?
-            .ok_or(ClosedReadySyncError::VersionConflict)?;
-            if expected_base_version != workspace.profile_version() {
-                return Err(ClosedReadySyncError::VersionConflict);
-            }
-            let next_version = expected_base_version
-                .checked_add(1)
-                .ok_or(ClosedReadySyncError::VersionConflict)?;
+            .map_err(|_| ClosedReadySyncError::Unconfirmed)?;
+            let next_version = confirmed_successor_profile_version(
+                workspace.profile_version(),
+                expected_base_version,
+            )?;
             rebase_local_current_after_exact_successor(
                 root,
                 &intent.tenant_id,
@@ -671,6 +700,12 @@ mod windows {
             rebased_intent.status = InitialProfileStatus::Ready;
             rebased_intent.expected_version = next_version;
             return sync_closed_ready_with_rebase(&rebased_intent, binding, root, origin, false);
+        }
+        // If CURRENT is still our original base, no exact successor exists
+        // to reconcile. Only then may the current CRM projection's version
+        // admit a new Sync attempt.
+        if workspace.profile_version() != intent.expected_version {
+            return Err(ClosedReadySyncError::Unconfirmed);
         }
 
         let mut transport = application.transport();
@@ -1328,12 +1363,15 @@ mod windows {
 
     #[cfg(test)]
     mod local_successor_rebase_tests {
-        use super::{ClosedReadySyncError, rebase_local_current_after_exact_successor};
+        use super::{
+            ClosedReadySyncError, confirmed_successor_profile_version,
+            rebase_local_current_after_exact_successor,
+        };
         use crate::local_profile::MaterializationRoot;
         use profile_platform_primitives::{DeviceId, GenerationId, ProfileId, TenantId};
         use std::fs;
 
-        fn fixture() -> Result<
+        fn fixture(profile_name: &str) -> Result<
             (
                 tempfile::TempDir,
                 MaterializationRoot,
@@ -1349,7 +1387,7 @@ mod windows {
             let directory = tempfile::tempdir()?;
             let root = MaterializationRoot::open_or_create(directory.path())?;
             let tenant = TenantId::parse("tenant_local_rebase_01")?;
-            let profile = ProfileId::parse("profile_local_rebase_01")?;
+            let profile = ProfileId::parse(profile_name)?;
             let device = DeviceId::parse("device_local_rebase_01")?;
             let base = GenerationId::parse("generation_local_rebase_base")?;
             let successor = GenerationId::parse("generation_local_rebase_next")?;
@@ -1370,10 +1408,59 @@ mod windows {
         }
 
         #[test]
+        fn exact_successor_uses_the_d1_predecessor_version_not_the_crm_projection() {
+            assert_eq!(
+                confirmed_successor_profile_version(11, Some(11)),
+                Ok(12),
+            );
+            assert_eq!(
+                confirmed_successor_profile_version(11, Some(10)),
+                Err(ClosedReadySyncError::VersionConflict),
+            );
+            assert_eq!(
+                confirmed_successor_profile_version(11, None),
+                Err(ClosedReadySyncError::VersionConflict),
+            );
+            assert_eq!(
+                confirmed_successor_profile_version(u64::MAX, Some(u64::MAX)),
+                Err(ClosedReadySyncError::VersionConflict),
+            );
+        }
+
+        #[test]
+        fn marker_only_rebase_is_profile_agnostic() -> Result<(), Box<dyn std::error::Error>> {
+            for profile_name in [
+                "profile_local_rebase_alpha",
+                "profile_local_rebase_beta",
+                "profile_local_rebase_gamma",
+            ] {
+                let (_directory, root, tenant, profile, device, base, successor, workspace) =
+                    fixture(profile_name)?;
+                let inventory = workspace.inventory()?;
+                rebase_local_current_after_exact_successor(
+                    &root, &tenant, &profile, &device, &base, 11, &successor, 12, &inventory,
+                )?;
+                let updated = root.open_profile_current(&tenant, &profile)?;
+                assert_eq!(updated.base_generation_id(), Some(&successor));
+                assert_eq!(updated.profile_version(), 12);
+                assert_eq!(updated.inventory()?, inventory);
+                assert_eq!(
+                    fs::read(updated.path().join("user_data").join("prefs.js"))?,
+                    b"local browser preferences"
+                );
+                assert_eq!(
+                    fs::read(updated.path().join(".local-unsynced"))?,
+                    b"local-unsynced-v2"
+                );
+            }
+            Ok(())
+        }
+
+        #[test]
         fn exact_same_device_successor_rebases_marker_only_and_keeps_local_bytes()
         -> Result<(), Box<dyn std::error::Error>> {
             let (_directory, root, tenant, profile, device, base, successor, workspace) =
-                fixture()?;
+                fixture("profile_local_rebase_01")?;
             let inventory = workspace.inventory()?;
             assert_eq!(
                 rebase_local_current_after_exact_successor(
@@ -1401,7 +1488,7 @@ mod windows {
         fn mismatched_local_version_refuses_rebase_without_mutating_any_marker_or_bytes()
         -> Result<(), Box<dyn std::error::Error>> {
             let (_directory, root, tenant, profile, device, base, successor, workspace) =
-                fixture()?;
+                fixture("profile_local_rebase_01")?;
             let inventory = workspace.inventory()?;
             assert_eq!(
                 rebase_local_current_after_exact_successor(
