@@ -58,7 +58,7 @@ impl fmt::Display for LocalOpenError {
         f.write_str(match self {
             Self::InvalidLocalWorkspace => "Local browser folder is unavailable",
             Self::RestoreRequired => "This READY profile has no local copy. Restore the confirmed current version before opening",
-            Self::StaleLocalWorkspace => "Local profile version differs from the authorized CRM version; preserve local data and resolve Sync or Restore before opening",
+            Self::StaleLocalWorkspace => "Local profile changed during Open admission; retry without replacing its data",
             Self::RuntimeUnavailable => "Installed Camoufox runtime is unavailable",
             Self::ProfileBusy => "This local browser profile is already in use",
             Self::OperationInProgress => "Another native Open, Close or Sync operation still owns this profile",
@@ -947,6 +947,36 @@ mod tests {
     }
 
     #[test]
+    fn launch_and_close_failures_are_distinct_native_states() {
+        use super::{NativeBrowserCompletion as Completion, classify_native_browser_completion};
+
+        assert_eq!(
+            classify_native_browser_completion("--local-open", false, true, false, false, Some(true)),
+            Completion::LaunchFailed
+        );
+        assert_eq!(
+            classify_native_browser_completion("--local-open", false, false, false, false, Some(false)),
+            Completion::LaunchUnconfirmed
+        );
+        assert_eq!(
+            classify_native_browser_completion("--local-open", false, false, false, false, None),
+            Completion::LaunchUnconfirmed
+        );
+        assert_eq!(
+            classify_native_browser_completion("--local-open", true, false, false, false, None),
+            Completion::CloseUnconfirmed
+        );
+        assert_eq!(
+            classify_native_browser_completion("--local-open", true, true, false, false, None),
+            Completion::SdkClosed
+        );
+        assert_eq!(
+            classify_native_browser_completion("--local-open", true, false, false, true, None),
+            Completion::NativeWriterReleased
+        );
+    }
+
+    #[test]
     fn rust_owns_user_data_creation_and_profile_config_read()
     -> Result<(), Box<dyn std::error::Error>> {
         use std::fs;
@@ -1824,18 +1854,23 @@ sys.stderr.flush()
         let draft = intent();
         let generation = local_generation(&draft).unwrap();
         let first = open_or_create_workspace(&root, &draft, &generation).unwrap();
-        root.update_profile_current_sync_base(&first, &generation, 2)
+        root.update_profile_current_sync_base(&first, &generation, 11)
             .unwrap();
-        // The browser was closed and Sync finished, but the web tab still
-        // displays DRAFT v1. Do not require an extra cloud launch query.
+        std::fs::write(
+            first.path().join(".local-unsynced"),
+            b"local-unsynced-v2",
+        )
+        .unwrap();
+        // Local v11 is a dirty working copy while the CRM projection has
+        // advanced to v12. Open must use the local marker without cloud I/O.
         let advanced = open_or_create_workspace(&root, &draft, &generation).unwrap();
-        assert_eq!(advanced.profile_version(), 2);
+        assert_eq!(advanced.profile_version(), 11);
         assert_eq!(advanced.base_generation_id(), Some(&generation));
         assert_eq!(advanced.path(), first.path());
 
         let mut cached_ready = draft.clone();
         cached_ready.status = InitialProfileStatus::Ready;
-        cached_ready.expected_version = 1;
+        cached_ready.expected_version = 12;
         assert_eq!(
             recheck_workspace_after_writer_admission(&root, &advanced, &cached_ready)
                 .unwrap()
@@ -1844,10 +1879,13 @@ sys.stderr.flush()
         );
         // A newer CRM projection does not block an existing local copy.
         // Local Open stays offline and never replaces the local working folder.
-        cached_ready.expected_version = 3;
         let reopened = open_or_create_workspace(&root, &cached_ready, &generation).unwrap();
-        assert_eq!(reopened.profile_version(), 2);
+        assert_eq!(reopened.profile_version(), 11);
         assert_eq!(reopened.path(), first.path());
+        assert_eq!(
+            std::fs::read(reopened.path().join(".local-unsynced")).unwrap(),
+            b"local-unsynced-v2"
+        );
     }
 
     #[test]
