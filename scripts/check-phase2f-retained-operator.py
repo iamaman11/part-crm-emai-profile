@@ -344,8 +344,6 @@ def self_test(sources: dict[str, str]) -> list[str]:
          "native Open must hold the existing per-profile OS admission through the shared recovery owner"),
         ("local", "current.profile_version() != observed.profile_version()", "false",
          "local marker race"),
-        ("local", "current.profile_version() != observed.profile_version()", "false",
-         "stale local CURRENT"),
         ("shipping", "wait_for_native_writer_release(", "unsafe_file_assumption(",
          "native file-release proof"),
         ("shipping", "ClosedSyncAdmission::try_acquire(&initial)", "no_sync_owner()",
