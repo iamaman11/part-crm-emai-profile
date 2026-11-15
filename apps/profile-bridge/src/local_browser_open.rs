@@ -488,6 +488,18 @@ fn await_adapter_or_native_release(
             eprintln!(
                 "BRIDGE_LOCAL_STARTUP_UNCONFIRMED;NEXT_SAFE_STEP=RETAIN_NATIVE_PROFILE_OWNER"
             );
+            // Report a pending, not a failed, native startup. This is
+            // observable diagnostics only: it cannot release either OS lock
+            // or authorize a cloud Save while the adapter may still launch.
+            report::record_current(
+                Stage::CamouhostLaunch,
+                Outcome::Unconfirmed,
+                Cloud::Unknown,
+                Cause::RuntimeTimeout,
+                u64::try_from(proof_started.elapsed().as_millis())
+                    .unwrap_or(u64::MAX)
+                    .min(86_400_000),
+            );
             startup_uncertainty_reported = true;
         }
         std::thread::sleep(Duration::from_millis(100));
