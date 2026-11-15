@@ -1227,6 +1227,41 @@ mod tests {
 
     #[cfg(windows)]
     #[test]
+    fn lost_sdk_ready_after_native_writer_observation_is_bounded()
+    -> Result<(), Box<dyn std::error::Error>> {
+        use std::sync::atomic::AtomicBool;
+        use std::time::{Duration, Instant};
+
+        let directory = tempfile::tempdir()?;
+        let writer = hold_native_writer_lock(directory.path())?;
+        let mut child = spawn_native_adapter_fixture(1500)?;
+        let ready = AtomicBool::new(false);
+        let started = Instant::now();
+        let outcome = super::await_adapter_or_native_release(
+            &mut child,
+            directory.path(),
+            &ready,
+            Duration::from_millis(50),
+        );
+        assert_eq!(outcome, Err(LocalOpenError::LaunchConfirmation));
+        assert!(
+            started.elapsed() < Duration::from_secs(1),
+            "the missing SDK Ready must not wait for an active native writer forever"
+        );
+        assert!(
+            child.try_wait()?.is_none(),
+            "missing Ready cannot authorize killing an active browser"
+        );
+        // The synthetic child does not inherit the shipping Windows
+        // share-deny gate; terminate only this deliberately isolated fixture.
+        child.kill()?;
+        child.wait()?;
+        drop(writer);
+        Ok(())
+    }
+
+    #[cfg(windows)]
+    #[test]
     fn startup_diagnostic_deadline_never_detaches_an_unconfirmed_adapter()
     -> Result<(), Box<dyn std::error::Error>> {
         use std::sync::atomic::AtomicBool;
