@@ -888,7 +888,7 @@ impl UserDiagnostic {
                         "The native Firefox close could not be confirmed. Local browser data was preserved. Cloud Sync may still be pending; check the latest Save status before reopening."
                     }
                     Local::LaunchConfirmation => {
-                        "The installed browser runtime did not confirm its Playwright-ready event. The activation was not marked healthy; keep local profile files and use the existing delivery recovery path."
+                        "The browser did not confirm its Playwright-ready event. Its native writer may still be active, so the profile remains protected. Keep local files and retry only after the runtime has stopped."
                     }
                 }
             }
