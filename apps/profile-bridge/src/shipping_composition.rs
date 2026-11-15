@@ -395,9 +395,12 @@ mod windows {
             || workspace.base_generation_id() != Some(base)
             || workspace.profile_version() != expected_profile_version
             || workspace.pending_sync().is_some()
-            || fs::read(workspace.path().join(".local-unsynced")).map_err(|_| ClosedReadySyncError::Unconfirmed)?
+            || fs::read(workspace.path().join(".local-unsynced"))
+                .map_err(|_| ClosedReadySyncError::Unconfirmed)?
                 != b"local-unsynced-v2"
-            || workspace.inventory().map_err(|_| ClosedReadySyncError::Unconfirmed)?
+            || workspace
+                .inventory()
+                .map_err(|_| ClosedReadySyncError::Unconfirmed)?
                 != *original_inventory
             || !matches!(browser_writer_locks_absent(&workspace), Ok(true))
         {
