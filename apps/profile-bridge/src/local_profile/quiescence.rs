@@ -53,7 +53,7 @@ impl ClosedSyncAdmission {
                     _root: root,
                     _profile_sync: profile_sync,
                 }))
-            },
+            }
             Err(TryLockError::WouldBlock) => Ok(None),
             Err(TryLockError::Error(error)) => Err(error.into()),
         }
