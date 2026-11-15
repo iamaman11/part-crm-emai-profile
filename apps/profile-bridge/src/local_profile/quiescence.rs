@@ -338,7 +338,6 @@ fn open_admission_marker(marker: PathBuf) -> Result<File, LocalProfileError> {
         .map_err(LocalProfileError::from)
 }
 
-
 #[cfg(windows)]
 pub(crate) fn native_child_launch_guard_stdout(
     workspace_path: &Path,
@@ -351,7 +350,9 @@ pub(crate) fn native_child_launch_guard_stdout(
     // Fail closed on links/reparse points; this file is never a cloud state
     // or a saved generation. The OS's deny-sharing decision is the witness.
     match fs::symlink_metadata(&path) {
-        Ok(metadata) if metadata.file_type().is_symlink() || metadata.file_attributes() & 0x0400 != 0 => {
+        Ok(metadata)
+            if metadata.file_type().is_symlink() || metadata.file_attributes() & 0x0400 != 0 =>
+        {
             return Err(LocalProfileError::SymbolicLinkRejected);
         }
         Ok(metadata) if !metadata.is_file() => {
@@ -389,7 +390,9 @@ fn native_launch_admission_absent_in_profile(profile: &Path) -> Result<bool, Loc
     match fs::symlink_metadata(&path) {
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(true),
         Err(error) => Err(error.into()),
-        Ok(metadata) if metadata.file_type().is_symlink() || metadata.file_attributes() & 0x0400 != 0 => {
+        Ok(metadata)
+            if metadata.file_type().is_symlink() || metadata.file_attributes() & 0x0400 != 0 =>
+        {
             Err(LocalProfileError::SymbolicLinkRejected)
         }
         Ok(metadata) if !metadata.is_file() => Err(LocalProfileError::SpecialFileRejected),
