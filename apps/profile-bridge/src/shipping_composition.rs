@@ -1322,6 +1322,117 @@ mod windows {
     }
 
     #[cfg(test)]
+    mod local_successor_rebase_tests {
+        use super::{ClosedReadySyncError, rebase_local_current_after_exact_successor};
+        use crate::local_profile::MaterializationRoot;
+        use profile_platform_primitives::{DeviceId, GenerationId, ProfileId, TenantId};
+        use std::fs;
+
+        fn fixture(
+        ) -> Result<
+            (
+                tempfile::TempDir,
+                MaterializationRoot,
+                TenantId,
+                ProfileId,
+                DeviceId,
+                GenerationId,
+                GenerationId,
+                crate::local_profile::GenerationWorkspace,
+            ),
+            Box<dyn std::error::Error>,
+        > {
+            let directory = tempfile::tempdir()?;
+            let root = MaterializationRoot::open_or_create(directory.path())?;
+            let tenant = TenantId::parse("tenant_local_rebase_01")?;
+            let profile = ProfileId::parse("profile_local_rebase_01")?;
+            let device = DeviceId::parse("device_local_rebase_01")?;
+            let base = GenerationId::parse("generation_local_rebase_base")?;
+            let successor = GenerationId::parse("generation_local_rebase_next")?;
+            let draft = root.create_profile_current(&tenant, &profile, &base, 1)?;
+            let workspace = root.update_profile_current_sync_base(&draft, &base, 11)?;
+            fs::create_dir_all(workspace.path().join("user_data"))?;
+            fs::write(
+                workspace.path().join("user_data").join("prefs.js"),
+                b"local browser preferences",
+            )?;
+            fs::write(
+                workspace.path().join(".local-unsynced"),
+                b"local-unsynced-v2",
+            )?;
+            Ok((
+                directory, root, tenant, profile, device, base, successor, workspace,
+            ))
+        }
+
+        #[test]
+        fn exact_same_device_successor_rebases_marker_only_and_keeps_local_bytes()
+        -> Result<(), Box<dyn std::error::Error>> {
+            let (_directory, root, tenant, profile, device, base, successor, workspace) =
+                fixture()?;
+            let inventory = workspace.inventory()?;
+            rebase_local_current_after_exact_successor(
+                &root,
+                &tenant,
+                &profile,
+                &device,
+                &base,
+                11,
+                &successor,
+                12,
+                &inventory,
+            )
+            .map_err(|_| "exact local rebase should succeed")?;
+            let updated = root.open_profile_current(&tenant, &profile)?;
+            assert_eq!(updated.generation_id(), &successor);
+            assert_eq!(updated.base_generation_id(), Some(&successor));
+            assert_eq!(updated.profile_version(), 12);
+            assert_eq!(updated.inventory()?, inventory);
+            assert_eq!(
+                fs::read(updated.path().join("user_data").join("prefs.js"))?,
+                b"local browser preferences"
+            );
+            assert_eq!(
+                fs::read(updated.path().join(".local-unsynced"))?,
+                b"local-unsynced-v2"
+            );
+            Ok(())
+        }
+
+        #[test]
+        fn mismatched_local_version_refuses_rebase_without_mutating_any_marker_or_bytes()
+        -> Result<(), Box<dyn std::error::Error>> {
+            let (_directory, root, tenant, profile, device, base, successor, workspace) =
+                fixture()?;
+            let inventory = workspace.inventory()?;
+            assert_eq!(
+                rebase_local_current_after_exact_successor(
+                    &root,
+                    &tenant,
+                    &profile,
+                    &device,
+                    &base,
+                    10,
+                    &successor,
+                    11,
+                    &inventory,
+                ),
+                Err(ClosedReadySyncError::VersionConflict)
+            );
+            let unchanged = root.open_profile_current(&tenant, &profile)?;
+            assert_eq!(unchanged.generation_id(), &base);
+            assert_eq!(unchanged.base_generation_id(), Some(&base));
+            assert_eq!(unchanged.profile_version(), 11);
+            assert_eq!(unchanged.inventory()?, inventory);
+            assert_eq!(
+                fs::read(unchanged.path().join(".local-unsynced"))?,
+                b"local-unsynced-v2"
+            );
+            Ok(())
+        }
+    }
+
+    #[cfg(test)]
     mod pending_sync_descriptor_tests {
         use super::{pending_descriptor_matches_current, unmatched_pending_is_terminal_conflict};
         use crate::generation_reopen::GenerationDownloadCapability;
