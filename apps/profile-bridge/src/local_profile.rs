@@ -13,9 +13,9 @@ pub use lifecycle::{
     ForgottenWindowAction, ForgottenWindowPolicy, LocalGenerationRecord, LocalGenerationState,
     QuotaPlan, QuotaPolicy, SupportBundleSummary,
 };
+pub use quiescence::{BridgeWorkspaceLock, DeliveryActivationGuard};
 #[cfg(windows)]
 pub(crate) use quiescence::{ClosedSyncAdmission, native_child_launch_guard_stdout};
-pub use quiescence::{BridgeWorkspaceLock, DeliveryActivationGuard};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum LocalProfileError {
