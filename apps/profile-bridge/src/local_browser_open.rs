@@ -677,11 +677,13 @@ fn run_python_with_input(
     }
     Ok(if native_adapter_released {
         NativeBrowserCompletion::NativeWriterReleased
-    } else if adapter_completed_after_native_close(
-        action,
-        completed.success(),
-        native_close_seen.load(Ordering::Acquire),
-    ) {
+    } else if native_ready_seen.load(Ordering::Acquire)
+        && adapter_completed_after_native_close(
+            action,
+            completed.success(),
+            native_close_seen.load(Ordering::Acquire),
+        )
+    {
         NativeBrowserCompletion::SdkClosed
     } else {
         NativeBrowserCompletion::Unconfirmed
@@ -1207,6 +1209,34 @@ mod tests {
         )?);
         let _next = ClosedSyncAdmission::try_acquire(&workspace)?
             .ok_or("owner did not release after child exit")?;
+        Ok(())
+    }
+
+    #[cfg(windows)]
+    #[test]
+    #[ignore = "requires PROFILE_BRIDGE_TEST_PYTHON"]
+    fn successful_python_exit_without_sdk_ready_never_confirms_close()
+    -> Result<(), Box<dyn std::error::Error>> {
+        use std::fs;
+        use std::path::PathBuf;
+
+        let python = std::env::var_os("PROFILE_BRIDGE_TEST_PYTHON")
+            .map(PathBuf::from)
+            .ok_or("PROFILE_BRIDGE_TEST_PYTHON is required")?;
+        let directory = tempfile::tempdir()?;
+        let runtime_root = directory.path().join("runtime");
+        fs::create_dir_all(runtime_root.join("camouhost"))?;
+        fs::write(
+            runtime_root.join(ENTRYPOINT),
+            b"import sys\\nsys.exit(0)\\n",
+        )?;
+        let folder = directory.path().join("profile");
+        fs::create_dir(&folder)?;
+        assert_eq!(
+            run_python_with_executable(&python, &runtime_root, &folder, "--local-open", None)?,
+            super::NativeBrowserCompletion::Unconfirmed,
+            "process exit zero cannot be a Close witness without official SDK Ready"
+        );
         Ok(())
     }
 
