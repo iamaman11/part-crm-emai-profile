@@ -515,9 +515,9 @@ impl ProfileGenerationSuccessorObservationPort for D1ProfileGenerationSuccessorC
             )
             .await?
         else {
-            return Ok(false);
+            return Ok(None);
         };
-        Ok(observed_successor_is_exact(
+        Ok(observed_successor_profile_version(
             &row,
             actor,
             device_id,
@@ -621,6 +621,19 @@ fn observed_successor_is_exact(
         && row.container_digest == object.container_digest()
         && i64_matches_u64(row.container_bytes, object.container_bytes())
         && committed_state_is_exact(row)
+}
+
+fn observed_successor_profile_version(
+    row: &SuccessorRow,
+    actor: &ActorContext,
+    device_id: &DeviceId,
+    profile_id: &ProfileId,
+    base_generation_id: &GenerationId,
+    object: &GenerationObjectDescriptor,
+) -> Option<u64> {
+    observed_successor_is_exact(row, actor, device_id, profile_id, base_generation_id, object)
+        .then(|| non_negative_u64(row.expected_profile_version))
+        .flatten()
 }
 
 #[derive(Deserialize)]
@@ -955,6 +968,10 @@ mod tests {
         assert!(observed_successor_is_exact(
             &row, &actor, &device, &profile, &base, &object,
         ));
+        assert_eq!(
+            observed_successor_profile_version(&row, &actor, &device, &profile, &base, &object),
+            Some(7)
+        );
         assert!(!observed_successor_is_exact(
             &row,
             &actor,
@@ -963,6 +980,17 @@ mod tests {
             &base,
             &object,
         ));
+        assert_eq!(
+            observed_successor_profile_version(
+                &row,
+                &actor,
+                &DeviceId::parse("device_foreign_observer_01")?,
+                &profile,
+                &base,
+                &object,
+            ),
+            None
+        );
         let foreign = ActorContext::new(
             TenantScope::new(tenant),
             ActorId::parse("actor_foreign_observer_01")?,
