@@ -1,7 +1,7 @@
 use crate::d1_command_identity::command_journal_id;
 use crate::d1_identity_acl::{
     ClientGrantMutation, CreateInvitationMutation, CreateProfileMutation, MembershipStatusMutation,
-    MutationEnvelope, OwnerTransferMutation, ProfileAssignmentMutation, ProfileGrantMutation,
+    MutationEnvelope, OwnerTransferMutation, ProfileAssignmentMutation, ProfileRenameMutation, ProfileGrantMutation,
     ProfileGrantValue,
 };
 use profile_platform_primitives::{ActorContext, AggregateVersion};
@@ -31,8 +31,15 @@ INSERT INTO membership_status_commands (
 
 const PROFILE_CREATE_COMMAND: &str = r#"
 INSERT INTO profile_create_commands (
-    tenant_id, command_id, command_actor_id, profile_id, executed_at_ms
-) VALUES (?, ?, ?, ?, ?)
+    tenant_id, command_id, command_actor_id, profile_id, display_name, executed_at_ms
+) VALUES (?, ?, ?, ?, ?, ?)
+"#;
+
+const PROFILE_RENAME_COMMAND: &str = r#"
+INSERT INTO profile_rename_commands (
+    tenant_id, command_id, command_actor_id, profile_id,
+    display_name, expected_profile_version, executed_at_ms
+) VALUES (?, ?, ?, ?, ?, ?, ?)
 "#;
 
 const PROFILE_CREATOR_GRANT: &str = r#"
@@ -331,6 +338,7 @@ impl D1GovernedCommandRepository {
                 command_id.as_str(),
                 actor_id,
                 resource_id,
+                mutation.display_name,
                 now
             )?,
             query!(
@@ -377,6 +385,32 @@ impl D1GovernedCommandRepository {
                 &mutation.envelope,
                 now,
             )?,
+        ];
+        self.database.batch(statements).await
+    }
+
+    pub async fn rename_profile(
+        &self, actor: &ActorContext, mutation: ProfileRenameMutation<'_>,
+    ) -> Result<Vec<D1Result>> {
+        let tenant_id = actor.tenant_scope().tenant_id().as_str();
+        let actor_id = actor.actor_id().as_str();
+        let command_id = command_journal_id(
+            actor.tenant_scope().tenant_id(), actor.actor_id(), mutation.envelope.idempotency_key,
+        )?;
+        let now = sqlite_integer(mutation.envelope.now.value())?;
+        let expires_at = sqlite_integer(mutation.envelope.idempotency_expires_at.value())?;
+        let expected_version = sqlite_version(mutation.expected_profile_version)?;
+        let aggregate_version = next_version_value(mutation.expected_profile_version)?;
+        let resource_id = mutation.profile_id.as_str();
+        let statements = vec![
+            query!(&self.database, PROFILE_RENAME_COMMAND, tenant_id,
+                command_id.as_str(), actor_id, resource_id, mutation.display_name, expected_version, now)?,
+            idempotency_statement(&self.database, tenant_id, actor_id, "profile.rename",
+                "renamed", resource_id, &mutation.envelope, now, expires_at)?,
+            audit_statement(&self.database, tenant_id, actor.correlation_id().as_str(),
+                actor_id, "profile.rename", "profile", resource_id, "renamed", &mutation.envelope, now)?,
+            outbox_statement(&self.database, tenant_id, "profile", resource_id,
+                aggregate_version, "profile.renamed.v1", &mutation.envelope, now)?,
         ];
         self.database.batch(statements).await
     }

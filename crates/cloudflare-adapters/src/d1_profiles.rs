@@ -1,7 +1,7 @@
 use crate::d1_governed_commands::D1GovernedCommandRepository;
 use crate::d1_idempotency::{D1IdempotencyRepository, IdempotencyDecision};
 use crate::d1_identity_acl::{
-    CreateProfileMutation, MutationEnvelope, ProfileAssignmentMutation, ProfileGrantMutation,
+    CreateProfileMutation, MutationEnvelope, ProfileAssignmentMutation, ProfileRenameMutation, ProfileGrantMutation,
     ProfileGrantValue, ResolvedMembershipRole,
 };
 use crate::d1_identity_queries::{D1IdentityQueryRepository, ProfileProjection};
@@ -9,7 +9,7 @@ use application_ports::CommandExecutionEvidence;
 use application_ports::profile_creation::ProfileCreateGrantSpec;
 use application_ports::profiles::{
     ProfileApplicationPort, ProfileAssignmentApplicationPort, ProfileAssignmentPortError,
-    ProfileAssignmentPortErrorClass, ProfileAssignmentWrite, ProfileCreateWrite,
+    ProfileAssignmentPortErrorClass, ProfileAssignmentWrite, ProfileCreateWrite, ProfileRenameWrite,
     ProfileDetachmentWrite, ProfileGrantApplicationPort, ProfileGrantPortError,
     ProfileGrantPortErrorClass, ProfileGrantRole, ProfileGrantWrite, ProfilePortError,
     ProfilePortErrorClass, ProfileReadModel, ProfileReplayDecision, ProfileReplayReceipt,
@@ -72,6 +72,7 @@ impl ProfileApplicationPort for D1ProfileApplicationRepository {
         let evidence = write.evidence();
         let mutation = CreateProfileMutation {
             profile_id: write.profile().profile_id(),
+            display_name: write.display_name().as_str(),
             envelope: mutation_envelope(evidence, write.event_payload_json()),
         };
         self.governed
@@ -84,6 +85,15 @@ impl ProfileApplicationPort for D1ProfileApplicationRepository {
             .await
             .map(|_| ())
             .map_err(map_write_error)
+    }
+
+    async fn rename_profile(&self, actor: &ActorContext, write: &ProfileRenameWrite) -> Result<(), ProfilePortError> {
+        let mutation = ProfileRenameMutation {
+            profile_id: write.profile_id(), display_name: write.display_name().as_str(),
+            expected_profile_version: write.expected_profile_version(),
+            envelope: mutation_envelope(write.evidence(), write.event_payload_json()),
+        };
+        self.governed.rename_profile(actor, mutation).await.map(|_| ()).map_err(map_write_error)
     }
 
     async fn find_visible_profile(
@@ -290,6 +300,7 @@ fn profile_read_model(projection: ProfileProjection) -> Result<ProfileReadModel,
         status,
         version,
         projection.linked_client_id().cloned(),
+        projection.display_name().to_owned(),
     ))
 }
 
@@ -306,6 +317,7 @@ const fn integrity_failure() -> ProfilePortError {
 }
 
 fn classify_write_failure(message: &str) -> ProfilePortErrorClass {
+    if message.contains("profile_rename_version_mismatch") { return ProfilePortErrorClass::VersionConflict; }
     if message.contains("profile_create_membership_not_active")
         || message.contains("profile_grant_membership_not_active")
     {

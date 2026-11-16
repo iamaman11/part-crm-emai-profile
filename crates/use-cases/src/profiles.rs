@@ -1,7 +1,7 @@
 use crate::error::ApplicationError;
 use application_ports::CommandExecutionEvidence;
 use application_ports::profiles::{
-    ProfileApplicationPort, ProfileCreateWrite, ProfilePortError, ProfilePortErrorClass,
+    ProfileApplicationPort, ProfileCreateWrite, ProfileRenameWrite, ProfilePortError, ProfilePortErrorClass,
     ProfileReadModel, ProfileReplayDecision, ProfileReplayReceipt,
 };
 use contracts::ProblemCode;
@@ -10,25 +10,24 @@ use identity_access_domain::{
     AuthorizationDecision, Membership, MembershipRole, ProfileCapability, ProfileGrant,
     authorize_profile,
 };
-use profile_domain::{BrowserProfile, ProfileStatus};
+use profile_domain::{BrowserProfile, ProfileName, ProfileStatus};
 use profile_platform_primitives::{ActorContext, AggregateVersion, ClientId, DeviceId, ProfileId};
 
 const PROFILE_CREATE_COMMAND: &str = "profile.create";
+const PROFILE_RENAME_COMMAND: &str = "profile.rename";
 const PROFILE_CREATED_EVENT_PAYLOAD: &str = "{}";
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ExecuteCreateProfileCommand {
     profile_id: ProfileId,
+    display_name: ProfileName,
     evidence: CommandExecutionEvidence,
 }
 
 impl ExecuteCreateProfileCommand {
     #[must_use]
-    pub const fn new(profile_id: ProfileId, evidence: CommandExecutionEvidence) -> Self {
-        Self {
-            profile_id,
-            evidence,
-        }
+    pub const fn new(profile_id: ProfileId, display_name: ProfileName, evidence: CommandExecutionEvidence) -> Self {
+        Self { profile_id, display_name, evidence }
     }
 }
 
@@ -65,6 +64,7 @@ impl ProfileMutationOutcome {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ProfileDetails {
     profile_id: ProfileId,
+    display_name: String,
     status: ProfileStatus,
     version: AggregateVersion,
     linked_client_id: Option<ClientId>,
@@ -75,6 +75,8 @@ impl ProfileDetails {
     pub const fn profile_id(&self) -> &ProfileId {
         &self.profile_id
     }
+
+    pub fn display_name(&self) -> &str { &self.display_name }
 
     #[must_use]
     pub const fn status(&self) -> ProfileStatus {
@@ -96,6 +98,7 @@ impl From<ProfileReadModel> for ProfileDetails {
     fn from(value: ProfileReadModel) -> Self {
         Self {
             profile_id: value.profile_id().clone(),
+            display_name: value.display_name().to_owned(),
             status: value.status(),
             version: value.version(),
             linked_client_id: value.linked_client_id().cloned(),
@@ -107,6 +110,7 @@ impl From<ProfileReadModel> for ProfileDetails {
 pub enum ProfileOperationError {
     NotFound,
     Conflict,
+    VersionConflict,
     IntegrityFailure,
     InternalFailure,
     DependencyUnavailable,
@@ -117,6 +121,7 @@ impl fmt::Display for ProfileOperationError {
         formatter.write_str(match self {
             Self::NotFound => "profile not found",
             Self::Conflict => "profile command conflict",
+            Self::VersionConflict => "profile version conflict",
             Self::IntegrityFailure => "profile data integrity failure",
             Self::InternalFailure => "profile application internal failure",
             Self::DependencyUnavailable => "profile dependency unavailable",
@@ -155,7 +160,7 @@ pub async fn execute_create_profile<P: ProfileApplicationPort>(
         ProfileReplayDecision::Conflict => return Err(ProfileOperationError::Conflict),
     }
 
-    let write = ProfileCreateWrite::new(profile, command.evidence, PROFILE_CREATED_EVENT_PAYLOAD);
+    let write = ProfileCreateWrite::new(profile, command.display_name, command.evidence, PROFILE_CREATED_EVENT_PAYLOAD);
     match port.create_profile(actor, &write).await {
         Ok(()) => Ok(ProfileMutationOutcome {
             result_code: "created".to_owned(),
@@ -175,6 +180,65 @@ pub async fn execute_create_profile<P: ProfileApplicationPort>(
                 ProfileReplayDecision::Miss | ProfileReplayDecision::Conflict => {
                     Err(ProfileOperationError::Conflict)
                 }
+            }
+        }
+        Err(error) => Err(map_profile_port_error(error)),
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ExecuteRenameProfileCommand {
+    pub profile_id: ProfileId,
+    pub display_name: ProfileName,
+    pub expected_profile_version: AggregateVersion,
+    pub evidence: CommandExecutionEvidence,
+}
+
+pub async fn execute_rename_profile<P: ProfileApplicationPort>(
+    actor: &ActorContext,
+    role: MembershipRole,
+    port: &P,
+    command: ExecuteRenameProfileCommand,
+) -> Result<ProfileMutationOutcome, ProfileOperationError> {
+    if role != MembershipRole::TenantOwner {
+        return Err(ProfileOperationError::NotFound);
+    }
+    let next_version = command.expected_profile_version.next()
+        .map_err(|_| ProfileOperationError::Conflict)?;
+    let profile_id = command.profile_id.as_str().to_owned();
+    match port.decide_replay(actor, PROFILE_RENAME_COMMAND, &command.evidence)
+        .await.map_err(map_profile_port_error)?
+    {
+        ProfileReplayDecision::Replay(receipt) => {
+            return Ok(ProfileMutationOutcome {
+                result_code: receipt.result_code().to_owned(),
+                resource_id: receipt.result_reference().unwrap_or(&profile_id).to_owned(),
+                aggregate_version: next_version,
+                replayed: true,
+            });
+        }
+        ProfileReplayDecision::Conflict => return Err(ProfileOperationError::Conflict),
+        ProfileReplayDecision::Miss => {}
+    }
+    let write = ProfileRenameWrite::new(
+        command.profile_id, command.display_name, command.expected_profile_version,
+        command.evidence, "{}",
+    );
+    match port.rename_profile(actor, &write).await {
+        Ok(()) => Ok(ProfileMutationOutcome {
+            result_code: "renamed".to_owned(), resource_id: profile_id,
+            aggregate_version: next_version, replayed: false,
+        }),
+        Err(error) if error.class() == ProfilePortErrorClass::Conflict => {
+            match port.decide_replay(actor, PROFILE_RENAME_COMMAND, write.evidence())
+                .await.map_err(map_profile_port_error)?
+            {
+                ProfileReplayDecision::Replay(receipt) => Ok(ProfileMutationOutcome {
+                    result_code: receipt.result_code().to_owned(),
+                    resource_id: receipt.result_reference().unwrap_or(&profile_id).to_owned(),
+                    aggregate_version: next_version, replayed: true,
+                }),
+                _ => Err(ProfileOperationError::Conflict),
             }
         }
         Err(error) => Err(map_profile_port_error(error)),
@@ -212,6 +276,7 @@ fn replay_outcome(
 fn map_profile_port_error(error: ProfilePortError) -> ProfileOperationError {
     match error.class() {
         ProfilePortErrorClass::Conflict => ProfileOperationError::Conflict,
+        ProfilePortErrorClass::VersionConflict => ProfileOperationError::VersionConflict,
         ProfilePortErrorClass::IntegrityFailure => ProfileOperationError::IntegrityFailure,
         ProfilePortErrorClass::InternalFailure => ProfileOperationError::InternalFailure,
         ProfilePortErrorClass::DependencyUnavailable => {
@@ -307,7 +372,7 @@ mod tests {
     use crate::error::ApplicationError;
     use application_ports::CommandExecutionEvidence;
     use application_ports::profiles::{
-        ProfileApplicationPort, ProfileCreateWrite, ProfilePortError, ProfilePortErrorClass,
+        ProfileApplicationPort, ProfileCreateWrite, ProfileRenameWrite, ProfilePortError, ProfilePortErrorClass,
         ProfileReadModel, ProfileReplayDecision, ProfileReplayReceipt,
     };
     use contracts::ProblemCode;
@@ -315,7 +380,7 @@ mod tests {
         Membership, MembershipRole, MembershipStatus, ProfileGrant, ProfileGrantRole,
     };
     use profile_domain::{
-        BrowserProfile, GenerationVerification, ProfileGeneration, ProfileStatus,
+        BrowserProfile, GenerationVerification, ProfileGeneration, ProfileName, ProfileStatus,
     };
     use profile_platform_primitives::{
         ActorContext, ActorId, AggregateVersion, AuditEventId, ClientId, CorrelationId, DeviceId,
@@ -390,6 +455,8 @@ mod tests {
             }
         }
 
+        async fn rename_profile(&self, _actor: &ActorContext, _write: &ProfileRenameWrite) -> Result<(), ProfilePortError> { Ok(()) }
+
         async fn find_visible_profile(
             &self,
             _scope: &TenantScope,
@@ -423,6 +490,7 @@ mod tests {
     fn create_command() -> Result<ExecuteCreateProfileCommand, Box<dyn std::error::Error>> {
         Ok(ExecuteCreateProfileCommand::new(
             ProfileId::parse("profile_01JPROFILEAPP")?,
+            ProfileName::parse("Test profile")?,
             evidence()?,
         ))
     }
@@ -519,6 +587,7 @@ mod tests {
             ProfileStatus::Ready,
             AggregateVersion::new(4)?,
             Some(ClientId::parse("client_01JPROFILEAPP")?),
+            "Test profile".to_owned(),
         )));
         let profile_id = ProfileId::parse("profile_01JPROFILEAPP")?;
         let details = block_on(get_visible_profile(

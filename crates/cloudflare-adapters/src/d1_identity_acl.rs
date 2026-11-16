@@ -266,6 +266,14 @@ pub struct MembershipStatusMutation<'a> {
 
 pub struct CreateProfileMutation<'a> {
     pub profile_id: &'a ProfileId,
+    pub display_name: &'a str,
+    pub envelope: MutationEnvelope<'a>,
+}
+
+pub struct ProfileRenameMutation<'a> {
+    pub profile_id: &'a ProfileId,
+    pub display_name: &'a str,
+    pub expected_profile_version: AggregateVersion,
     pub envelope: MutationEnvelope<'a>,
 }
 
