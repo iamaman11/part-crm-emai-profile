@@ -678,6 +678,56 @@
             }
           }
         }
+      },
+      "patch": {
+        "operationId": "renameProfileMetadata",
+        "security": [
+          {
+            "cloudflareAccessJwt": []
+          }
+        ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/TenantPath"
+          },
+          {
+            "$ref": "#/components/parameters/ProfilePath"
+          },
+          {
+            "$ref": "#/components/parameters/CorrelationHeader"
+          },
+          {
+            "$ref": "#/components/parameters/IdempotencyHeader"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ProfileRenameRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Profile renamed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MutationReceipt"
+                }
+              }
+            }
+          },
+          "404": {
+            "$ref": "#/components/responses/NeutralNotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          }
+        }
       }
     },
     "/api/v1/tenants/{tenantId}/profiles/{profileId}/grants/{actorId}": {
@@ -1315,11 +1365,17 @@
         "type": "object",
         "additionalProperties": false,
         "required": [
-          "profileId"
+          "profileId",
+          "displayName"
         ],
         "properties": {
           "profileId": {
             "$ref": "#/components/schemas/OpaqueId"
+          },
+          "displayName": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 80
           }
         }
       },
@@ -1329,7 +1385,8 @@
         "required": [
           "profileId",
           "status",
-          "version"
+          "version",
+          "displayName"
         ],
         "properties": {
           "profileId": {
@@ -1364,6 +1421,11 @@
           },
           "canOperate": {
             "type": "boolean"
+          },
+          "displayName": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 80
           }
         }
       },
@@ -1468,6 +1530,24 @@
           "pendingObjects": {
             "type": "integer",
             "minimum": 0
+          }
+        }
+      },
+      "ProfileRenameRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "displayName",
+          "expectedProfileVersion"
+        ],
+        "properties": {
+          "displayName": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 80
+          },
+          "expectedProfileVersion": {
+            "$ref": "#/components/schemas/AggregateVersion"
           }
         }
       }

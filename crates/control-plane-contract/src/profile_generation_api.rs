@@ -138,6 +138,7 @@ pub enum GenerationStatusDto {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ProfileProjectionDto {
     pub profile_id: String,
+    pub display_name: String,
     pub status: ProfileStatusDto,
     pub version: u64,
     pub linked_client_id: Option<String>,
@@ -149,6 +150,14 @@ pub struct ProfileProjectionDto {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ProfileCreateRequest {
     pub profile_id: String,
+    pub display_name: String,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ProfileRenameRequest {
+    pub display_name: String,
+    pub expected_profile_version: u64,
 }
 
 /// Strict, versioned user action; the D1 command is replay-safe for this exact
@@ -375,9 +384,10 @@ pub fn openapi_fragment() -> Value {
                 "ProfileProjectionDto": {
                     "type": "object",
                     "additionalProperties": false,
-                    "required": ["profileId", "status", "version", "linkedClientId"],
+                    "required": ["profileId", "displayName", "status", "version", "linkedClientId"],
                     "properties": {
                         "profileId": opaque_id_schema(),
+                        "displayName": {"type": "string", "minLength": 1, "maxLength": 80},
                         "status": schema_ref("ProfileStatusDto"),
                         "version": positive_version_schema(),
                         "linkedClientId": nullable_opaque_id_schema(),
@@ -387,8 +397,16 @@ pub fn openapi_fragment() -> Value {
                 "ProfileCreateRequestDto": {
                     "type": "object",
                     "additionalProperties": false,
-                    "required": ["profileId"],
-                    "properties": {"profileId": opaque_id_schema()}
+                    "required": ["profileId", "displayName"],
+                    "properties": {"profileId": opaque_id_schema(), "displayName": {"type": "string", "minLength": 1, "maxLength": 80}}
+                },
+                "ProfileRenameRequestDto": {
+                    "type": "object", "additionalProperties": false,
+                    "required": ["displayName", "expectedProfileVersion"],
+                    "properties": {
+                        "displayName": {"type": "string", "minLength": 1, "maxLength": 80},
+                        "expectedProfileVersion": positive_version_schema()
+                    }
                 },
                 "ProfileGrantRequestDto": {
                     "type": "object",
@@ -517,7 +535,7 @@ mod tests {
     #[test]
     fn profile_mutations_are_strict_and_reject_legacy_request_digest() {
         assert!(
-            serde_json::from_str::<ProfileCreateRequest>(r#"{"profileId":"profile_01JTEST"}"#)
+            serde_json::from_str::<ProfileCreateRequest>(r#"{"profileId":"profile_01JTEST","displayName":"Test profile"}"#)
                 .is_ok()
         );
         for value in [
@@ -761,6 +779,7 @@ mod tests {
     fn wire_enums_and_nullable_projection_are_stable() -> Result<(), Box<dyn std::error::Error>> {
         let profile = serde_json::to_value(ProfileProjectionDto {
             profile_id: "profile_01JTEST".to_owned(),
+            display_name: "Test profile".to_owned(),
             status: ProfileStatusDto::DirtyLocal,
             version: 7,
             linked_client_id: None,

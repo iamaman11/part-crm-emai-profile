@@ -43,6 +43,7 @@ impl ClientProjection {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ProfileProjection {
     profile_id: ProfileId,
+    display_name: String,
     status: String,
     active_generation_id: Option<GenerationId>,
     version: u64,
@@ -54,6 +55,7 @@ impl ProfileProjection {
     pub const fn profile_id(&self) -> &ProfileId {
         &self.profile_id
     }
+    pub fn display_name(&self) -> &str { &self.display_name }
 
     #[must_use]
     pub fn status(&self) -> &str {
@@ -135,6 +137,7 @@ impl D1IdentityQueryRepository {
             r#"
             SELECT
                 profile.profile_id,
+                profile.display_name,
                 profile.status,
                 profile.active_generation_id,
                 profile.version,
@@ -180,6 +183,7 @@ struct ClientProjectionRow {
 #[derive(Deserialize)]
 struct ProfileProjectionRow {
     profile_id: String,
+    display_name: String,
     status: String,
     active_generation_id: Option<String>,
     version: i64,
@@ -199,6 +203,7 @@ fn client_projection(row: ClientProjectionRow) -> Result<ClientProjection> {
 fn profile_projection(row: ProfileProjectionRow) -> Result<ProfileProjection> {
     Ok(ProfileProjection {
         profile_id: ProfileId::parse(row.profile_id).map_err(identifier_error)?,
+        display_name: row.display_name,
         status: row.status,
         active_generation_id: row
             .active_generation_id

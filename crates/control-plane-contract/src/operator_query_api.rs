@@ -22,6 +22,7 @@ pub const MAILBOX_STATUSES: [&str; 4] = ["ACTIVE", "AUTH_REQUIRED", "SUSPENDED",
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ProfileListItemDto {
     pub profile_id: String,
+    pub display_name: String,
     pub status: String,
     pub version: u64,
     pub linked_client_id: Option<String>,
@@ -93,9 +94,10 @@ pub fn openapi_fragment() -> Value {
                 "ProfileListItemDto": {
                     "type": "object",
                     "additionalProperties": false,
-                    "required": ["profileId", "status", "version", "linkedClientId", "activeGenerationId"],
+                    "required": ["profileId", "displayName", "status", "version", "linkedClientId", "activeGenerationId"],
                     "properties": {
                         "profileId": {"type": "string", "minLength": 8, "maxLength": 96},
+                        "displayName": {"type": "string", "minLength": 1, "maxLength": 80},
                         "status": schema_ref("OperatorProfileStatus"),
                         "version": {"type": "integer", "minimum": 1},
                         "linkedClientId": nullable_opaque_id_schema(),
