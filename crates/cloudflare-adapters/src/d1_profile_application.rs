@@ -6,9 +6,9 @@ use application_ports::profile_assignment_context::{
 };
 use application_ports::profiles::{
     ProfileApplicationPort, ProfileAssignmentApplicationPort, ProfileAssignmentPortError,
-    ProfileAssignmentPortErrorClass, ProfileAssignmentWrite, ProfileCreateWrite, ProfileRenameWrite,
+    ProfileAssignmentPortErrorClass, ProfileAssignmentWrite, ProfileCreateWrite,
     ProfileDetachmentWrite, ProfileGrantApplicationPort, ProfileGrantPortError, ProfileGrantWrite,
-    ProfilePortError, ProfileReadModel, ProfileReplayDecision,
+    ProfilePortError, ProfileReadModel, ProfileRenameWrite, ProfileReplayDecision,
 };
 use client_domain::{ClientKind, ClientRecord, ClientStatus};
 use identity_access_domain::MembershipRole;
