@@ -284,6 +284,74 @@ impl<C: GenerationReopenControlPort> GenerationReopenControlPort
     }
 }
 
+/// Restore already performs the exact signed R2 GET, AEAD opening and BPGW
+/// materialization. Reuse THAT cold read to provide optional retention proof,
+/// rather than downloading the same large CURRENT again after every Save.
+/// Any missing/mismatched proof is a retention miss, not a failed Restore.
+#[cfg(windows)]
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn ensure_authoritative_current_with_cold_evidence<C, D>(
+    root: &MaterializationRoot,
+    tenant_id: &TenantId,
+    profile_id: &ProfileId,
+    generation_id: &GenerationId,
+    profile_version: u64,
+    device_id: &DeviceId,
+    workspace_epoch: u64,
+    control: &mut C,
+    downloader: &mut D,
+) -> Result<Option<([u8; 32], Vec<u8>)>, AuthoritativeGenerationMaterializationError>
+where
+    C: GenerationReopenControlPort,
+    C::Error: Into<GenerationReopenControlError>,
+    D: GenerationObjectDownloadPort,
+    D::Error: Into<GenerationObjectDownloadError>,
+{
+    use crate::generation_snapshot::digest_closed_workspace_streaming;
+
+    let mut observed = ColdCurrentEvidenceControl {
+        delegate: control,
+        authenticated_prelude: None,
+    };
+    // Never modify the original Restore owner or its error classification.
+    ensure_authoritative_current(
+        root,
+        tenant_id,
+        profile_id,
+        generation_id,
+        profile_version,
+        device_id,
+        workspace_epoch,
+        &mut observed,
+        downloader,
+    )?;
+    let proof = (|| {
+        let prelude = observed.authenticated_prelude?;
+        let inspected = inspect_generation_metadata_prelude(&prelude).ok()?;
+        if inspected.metadata().tenant_id() != tenant_id
+            || inspected.metadata().profile_id() != profile_id
+            || inspected.metadata().generation_id() != generation_id
+        {
+            return None;
+        }
+        let restored = root.open_profile_current(tenant_id, profile_id).ok()?;
+        if restored.base_generation_id() != Some(generation_id)
+            || restored.profile_version() != profile_version
+            || restored.pending_sync().is_some()
+            || !matches!(
+                fs::symlink_metadata(restored.path().join(".local-unsynced")),
+                Err(ref error) if error.kind() == std::io::ErrorKind::NotFound
+            )
+            || !matches!(browser_writer_locks_absent(&restored), Ok(true))
+        {
+            return None;
+        }
+        let inventory = restored.inventory().ok()?;
+        let (_, digest) = digest_closed_workspace_streaming(&restored, &inventory).ok()?;
+        (digest == inspected.metadata().plaintext_digest().bytes()).then_some((digest, prelude))
+    })();
+    Ok(proof)
+}
 /// Independently cold-restore the server-selected CURRENT into an ephemeral
 /// local root, then prove its complete native Firefox BPGW snapshot equals the
 /// original *closed* installed profile under the existing OS writer lock.
@@ -293,7 +361,7 @@ impl<C: GenerationReopenControlPort> GenerationReopenControlPort
 /// durable, CURRENT-bound proof and after signed PUT capabilities expire.
 /// Never opens or manages a browser, creates a cloud generation, or changes
 /// the original profile. The scratch root is removed on all return paths.
-#[cfg(windows)]
+#[cfg(all(windows, test))]
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn prove_cold_current_restore<C, D>(
     installed: &MaterializationRoot,
