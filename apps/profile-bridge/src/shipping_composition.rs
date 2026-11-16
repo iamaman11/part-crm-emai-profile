@@ -1896,6 +1896,86 @@ mod windows {
             Ok(())
         }
 
+        /// Test-only, explicitly opted-in transport-refusal fault. No staging
+        /// cloud host is reachable through this origin. The native profile
+        /// remains openable and its CURRENT base, fingerprint and dirty WAL
+        /// must be unchanged after the bounded Sync retry path fails.
+        #[test]
+        #[ignore = "requires previously restored disposable CURRENT and explicit loopback failure opt-in"]
+        fn network_refusal_does_not_erase_local_ready_profile()
+        -> Result<(), Box<dyn std::error::Error>> {
+            if std::env::var("PROFILE_BRIDGE_TEST_FORCE_NETWORK_REFUSAL").as_deref()
+                != Ok("YES_LOOPBACK_NO_CLOUD")
+            {
+                eprintln!("PHYSICAL_OFFLINE_SYNC_SKIPPED: no explicit fault opt-in");
+                return Ok(());
+            }
+            let root_path = PathBuf::from(
+                std::env::var_os("PROFILE_BRIDGE_TEST_CLOSED_SYNC_ROOT")
+                    .ok_or("missing disposable CURRENT fixture")?,
+            );
+            let profile = std::env::var("PROFILE_BRIDGE_TEST_CLOSED_SYNC_PROFILE")?;
+            if !is_opted_in_disposable_restore(&root_path, &profile) {
+                return Err("refuse non-restored or non-disposable profile root".into());
+            }
+            let binding_path = PathBuf::from(
+                std::env::var_os("PROFILE_BRIDGE_TEST_CLOSED_SYNC_BINDING")
+                    .ok_or("missing disposable test binding")?,
+            );
+            let binding = WindowsDeviceApplicationBinding::open(&binding_path)?;
+            let profile_id = ProfileId::parse(profile)?;
+            let expected_version =
+                std::env::var("PROFILE_BRIDGE_TEST_CLOSED_SYNC_VERSION")?.parse::<u64>()?;
+            let root = MaterializationRoot::open_or_create(&root_path)?;
+            let before = root.open_profile_current(binding.tenant_id(), &profile_id)?;
+            if before.profile_version() != expected_version
+                || before.base_generation_id().is_none()
+                || before.pending_sync().is_some()
+                || !crate::browser_execution::browser_writer_locks_absent(&before)?
+            {
+                return Err("fixture not a closed verified CURRENT".into());
+            }
+            let dirty_path = before.path().join(".local-unsynced");
+            let dirty_bytes = std::fs::read(&dirty_path)?;
+            if dirty_bytes != b"local-unsynced-v2" {
+                return Err("test requires prior successful GUI CleanClose".into());
+            }
+            let fingerprint_path = before.path().join("camoufox-config.json");
+            let fingerprint = std::fs::read(&fingerprint_path)?;
+            let current_base = before.base_generation_id().cloned();
+            let intent = InitialProfileOpen {
+                tenant_id: binding.tenant_id().clone(),
+                actor_id: binding.actor_id().clone(),
+                profile_id: profile_id.clone(),
+                expected_version,
+                status: InitialProfileStatus::Ready,
+            };
+            let _sync_owner = ClosedSyncAdmission::try_acquire(&before)?
+                .ok_or("another Sync owner already holds the fixture")?;
+            // Intentionally no D1/R2 route: refusal on local loopback. The
+            // exact production Sync owner, retry and local checkpoint remain.
+            eprintln!("R13_SCOPED_NETWORK_REFUSAL_STARTED");
+            let result =
+                run_closed_sync_with_admission(&intent, &binding, &root, "https://127.0.0.1:1");
+            assert!(
+                matches!(
+                    result,
+                    Err(super::ShippingCompositionError::SyncUnconfirmed)
+                ),
+                "offline Sync must refuse without granting a cloud receipt: {result:?}"
+            );
+            let after = root.open_profile_current(binding.tenant_id(), &profile_id)?;
+            assert_eq!(after.profile_version(), expected_version);
+            assert_eq!(after.base_generation_id(), current_base.as_ref());
+            assert!(after.pending_sync().is_none());
+            assert_eq!(std::fs::read(&dirty_path)?, dirty_bytes);
+            assert_eq!(std::fs::read(&fingerprint_path)?, fingerprint);
+            assert!(crate::browser_execution::browser_writer_locks_absent(
+                &after
+            )?);
+            eprintln!("R13_SCOPED_NETWORK_REFUSAL_DIRTY_PROFILE_PRESERVED_PASS");
+            Ok(())
+        }
         /// Explicitly opted-in staging-only test. The original Rust Sync
         /// owner, signed R2 PUT and exact D1 CURRENT are all used unchanged.
         /// Only a separately restored/closed disposable scratch profile may
