@@ -1021,7 +1021,7 @@ mod tests {
         assert_eq!(sources[42]["source_root"], CURRENT_SUCCESSOR_ROOT);
         assert_eq!(
             sources[43]["migration_file"],
-            PROFILE_NAME_REVISION
+            DELETE_SIGNED_PUT_EXPIRY_REVISION
         );
         assert_eq!(sources[43]["source_root"], CURRENT_SUCCESSOR_ROOT);
         assert_eq!(sources[44]["migration_file"], PROFILE_NAME_REVISION);
