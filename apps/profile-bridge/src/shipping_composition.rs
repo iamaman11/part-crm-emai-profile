@@ -1675,17 +1675,14 @@ mod windows {
                 delivery.runtime_root(),
                 delivery_health_before_launch(delivery.pending_health_confirmation()),
                 |open_result| {
-                    // The browser's profile admission is still held here.
-                    // The SAME Rust process completes closed Sync before a
-                    // subsequent Open can touch browser bytes. No child launch
-                    // or OS-lock handoff exists in the normal lifecycle.
+                    // Firefox has already released its native writer.
+                    // Sync acquires a separate per-profile cloud admission;
+                    // this MUST NOT block a new local Open during offline or
+                    // slow network operations. A conflicting browser writer
+                    // prevents snapshot/seal or local receipt updates, and
+                    // the original .local-unsynced data survives unchanged.
                     if native_close_admits_automatic_sync(&open_result) {
-                        if let Err(error) = run_closed_sync_with_admission(
-                            intent,
-                            &binding,
-                            &root,
-                            &config.control_plane_origin,
-                        ) {
+                        if let Err(error) = run_closed_sync(intent) {
                             eprintln!(
                                 "BRIDGE_CLOUD_SYNC_UNCONFIRMED;error={error:?};NEXT_SAFE_STEP=PRESERVE_LOCAL_BYTES"
                             );

@@ -357,10 +357,14 @@ def main() -> int:
     )[0]
     # Existing local CURRENT is always opened locally. The only cloud
     # boundary before Open is RestoreRequired for a missing local workspace.
-    assert "run_closed_sync_with_admission(" in run_initial
+    assert "run_closed_sync(intent)" in run_initial
+    assert "run_closed_sync_with_admission(" in composition
     assert "RestoreRequired" in run_initial
     assert "ensure_authoritative_current" in run_initial
-    assert "run_closed_sync(intent)" not in run_initial
+    # Network Sync follows a verified native Close, never local Open.
+    assert run_initial.index(
+        "if native_close_admits_automatic_sync(&open_result)"
+    ) < run_initial.index("run_closed_sync(intent)")
     assert "if dirty {" not in run_initial
     assert "crate::local_browser_open::LocalOpenError::StaleLocalWorkspace" not in run_initial
     # Automatic cloud Save needs a positively confirmed native close;
