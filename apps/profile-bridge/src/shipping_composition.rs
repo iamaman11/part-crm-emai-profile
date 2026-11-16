@@ -478,6 +478,168 @@ mod windows {
         Ok(())
     }
 
+    /// A previous signed PUT could have failed after sealing the exact local
+    /// Prepared descriptor. An old CURRENT read alone is NEVER permission to
+    /// erase it: first acquire the same fresh Coordinator authority as a
+    /// normal READY Sync and obtain the existing affirmative D1 retry verdict.
+    /// Under native writer admission only the local pending marker is retired;
+    /// all Firefox bytes, fingerprint, base version and dirty evidence survive.
+    fn clear_prepared_pending_after_proven_nonapplication(
+        intent: &crate::generation_initialization::InitialProfileOpen,
+        binding: &WindowsDeviceApplicationBinding,
+        root: &MaterializationRoot,
+        origin: &str,
+        base: &profile_platform_primitives::GenerationId,
+        pending: &PendingSyncDescriptor,
+    ) -> Result<(), ClosedReadySyncError> {
+        use crate::browser_execution::browser_writer_locks_absent;
+        use crate::local_profile::BridgeWorkspaceLock;
+        use crate::shipping_generation_successor_control::request_prepared_pending_retry_decision;
+        use control_plane_contract::profile_generation_api::BridgeGenerationSuccessorRetryVerdict;
+        use std::fs;
+
+        if pending.is_committed() {
+            return Err(ClosedReadySyncError::VersionConflict);
+        }
+        let application = WindowsDeviceApplication::from_system(origin.to_owned(), binding.clone())
+            .map_err(|_| ClosedReadySyncError::Unconfirmed)?;
+        let mut transport = application.transport();
+        let actor = profile_platform_primitives::ActorContext::new(
+            profile_platform_primitives::TenantScope::new(intent.tenant_id.clone()),
+            intent.actor_id.clone(),
+            profile_platform_primitives::CorrelationId::parse("corr_pending_ready_retry")
+                .map_err(|_| ClosedReadySyncError::Unconfirmed)?,
+        );
+        let claim = reauthorize_current_ready_generation(
+            intent,
+            &actor,
+            binding.device_id(),
+            &mut transport,
+        )
+        .map_err(|error| match error {
+            crate::generation_initialization::InitialProfileError::LeaseConflict => {
+                ClosedReadySyncError::LeaseConflict
+            }
+            _ => ClosedReadySyncError::Unconfirmed,
+        })?;
+        let mut enrollment = ControlPlaneEnrollment::new(transport.clone());
+        let enrolled = enrollment
+            .redeem_claim(&claim, binding.device_id(), now().map_err(|_| ())?)
+            .map_err(|_| ClosedReadySyncError::Unconfirmed)?;
+        if enrolled.actor().actor_id() != actor.actor_id()
+            || enrolled.actor().tenant_scope().tenant_id() != actor.tenant_scope().tenant_id()
+            || enrolled.profile_id() != &intent.profile_id
+            || enrolled.generation_id() != base
+        {
+            return Err(ClosedReadySyncError::VersionConflict);
+        }
+        let mut coordinator =
+            SharedControlPlaneCoordinator::new(ControlPlaneCoordinator::new(transport.clone()));
+        let lease = coordinator
+            .claim_launch_intent(
+                enrolled.actor(),
+                &intent.profile_id,
+                binding.device_id(),
+                enrolled.launch_intent_id(),
+            )
+            .map_err(|error| match error {
+                ShippingControlPlaneError::LaunchLeaseConflict => {
+                    ClosedReadySyncError::LeaseConflict
+                }
+                _ => ClosedReadySyncError::Unconfirmed,
+            })?;
+        let outcome = (|| -> Result<(), ClosedReadySyncError> {
+            if request_prepared_pending_retry_decision(
+                &intent.tenant_id,
+                &intent.profile_id,
+                base,
+                pending,
+                &lease,
+                &mut transport,
+            )
+            .map_err(|_| ClosedReadySyncError::Unconfirmed)?
+                != BridgeGenerationSuccessorRetryVerdict::NotAppliedRetryable
+            {
+                // A registered, committed or foreign candidate is NEVER
+                // discarded as a retryable upload.
+                return Err(ClosedReadySyncError::VersionConflict);
+            }
+            let timing = coordinator
+                .runtime_timing()
+                .map_err(|_| ClosedReadySyncError::Unconfirmed)?;
+            if !safe_reconnect_writer_window(
+                timing.idle_expires_at_ms(),
+                timing.hard_expires_at_ms(),
+                now().map_err(|_| ClosedReadySyncError::Unconfirmed)?,
+            ) {
+                return Err(ClosedReadySyncError::Unconfirmed);
+            }
+            let workspace = root
+                .open_profile_current(&intent.tenant_id, &intent.profile_id)
+                .map_err(|_| ClosedReadySyncError::Unconfirmed)?;
+            if workspace.profile_version() != intent.expected_version
+                || workspace.base_generation_id() != Some(base)
+                || workspace.pending_sync() != Some(pending)
+                || fs::read(workspace.path().join(".local-unsynced"))
+                    .map_err(|_| ClosedReadySyncError::Unconfirmed)?
+                    != b"local-unsynced-v2"
+                || !matches!(browser_writer_locks_absent(&workspace), Ok(true))
+            {
+                return Err(ClosedReadySyncError::VersionConflict);
+            }
+            let guard = BridgeWorkspaceLock::acquire_or_recover_interrupted(
+                &workspace,
+                binding.device_id(),
+                now()
+                    .map_err(|_| ClosedReadySyncError::Unconfirmed)?
+                    .value(),
+            )
+            .map_err(|_| ClosedReadySyncError::Unconfirmed)?;
+            let mutation = (|| -> Result<(), ClosedReadySyncError> {
+                let active = root
+                    .open_profile_current(&intent.tenant_id, &intent.profile_id)
+                    .map_err(|_| ClosedReadySyncError::Unconfirmed)?;
+                if active.path() != workspace.path()
+                    || active.generation_id() != workspace.generation_id()
+                    || active.profile_version() != intent.expected_version
+                    || active.base_generation_id() != Some(base)
+                    || active.pending_sync() != Some(pending)
+                    || fs::read(active.path().join(".local-unsynced"))
+                        .map_err(|_| ClosedReadySyncError::Unconfirmed)?
+                        != b"local-unsynced-v2"
+                    || !matches!(browser_writer_locks_absent(&active), Ok(true))
+                {
+                    return Err(ClosedReadySyncError::VersionConflict);
+                }
+                let cleared = root
+                    .clear_profile_current_pending_sync(&active)
+                    .map_err(|_| ClosedReadySyncError::Unconfirmed)?;
+                if cleared.pending_sync().is_some()
+                    || cleared.profile_version() != intent.expected_version
+                    || cleared.base_generation_id() != Some(base)
+                    || fs::read(cleared.path().join(".local-unsynced"))
+                        .map_err(|_| ClosedReadySyncError::Unconfirmed)?
+                        != b"local-unsynced-v2"
+                {
+                    return Err(ClosedReadySyncError::Unconfirmed);
+                }
+                Ok(())
+            })();
+            let released = guard
+                .release()
+                .map_err(|_| ClosedReadySyncError::Unconfirmed);
+            mutation?;
+            released?;
+            Ok(())
+        })();
+        let close = coordinator
+            .close_lease(&lease)
+            .map_err(|_| ClosedReadySyncError::Unconfirmed);
+        outcome?;
+        close?;
+        eprintln!("BRIDGE_PENDING_RETRY_D1_NONAPPLIED_CONFIRMED;LOCAL_DIRTY_PRESERVED");
+        Ok(())
+    }
     fn sync_closed_ready_with_rebase(
         intent: &crate::generation_initialization::InitialProfileOpen,
         binding: &WindowsDeviceApplicationBinding,
@@ -537,7 +699,27 @@ mod windows {
             ) {
                 return Err(ClosedReadySyncError::VersionConflict);
             }
-            return Err(ClosedReadySyncError::Unconfirmed);
+            // A confirmed original CURRENT is not permission to retry:
+            // the signed PUT spool was lost at process exit. The existing
+            // D1 observer must prove that this exact candidate was not applied.
+            let base = workspace
+                .base_generation_id()
+                .ok_or(ClosedReadySyncError::VersionConflict)?;
+            if current.generation_id() != base {
+                return Err(ClosedReadySyncError::VersionConflict);
+            }
+            clear_prepared_pending_after_proven_nonapplication(
+                intent, binding, root, origin, base, &pending,
+            )?;
+            // Same READY Sync under the same ClosedSyncAdmission. No alternate
+            // upload path, cloud generation guess or local byte replacement.
+            return sync_closed_ready_with_rebase(
+                intent,
+                binding,
+                root,
+                origin,
+                allow_same_device_rebase,
+            );
         }
         let Some(base) = workspace.base_generation_id().cloned() else {
             // First DRAFT -> READY committed in D1, but our HTTP response or
