@@ -1421,7 +1421,7 @@ fn request_fresh_retry_decision_streamed<T: MachineHttpPort>(
 /// from the vanished upload spool. Ask the existing D1 observer for an exact
 /// nonapplication decision under a freshly acquired Coordinator lease.
 /// No cloud mutation, upload, Save receipt, or local byte cleanup occurs here.
-#[cfg(any(windows, test))]
+#[cfg(windows)]
 pub(crate) fn request_prepared_pending_retry_decision<T: MachineHttpPort>(
     tenant_id: &TenantId,
     profile_id: &ProfileId,
