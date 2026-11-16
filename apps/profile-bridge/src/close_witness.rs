@@ -141,7 +141,10 @@ mod tests {
     #[test]
     fn normal_close_requires_live_reset_and_new_valid_final_file() {
         let dir = fixture();
-        let started = SystemTime::now();
+        // Test-only: establish the invocation before the fixture file writes.
+        // Windows metadata timestamp granularity can round an immediate write
+        // below SystemTime::now(); production's strict timestamp gate is unchanged.
+        let started = SystemTime::now() - std::time::Duration::from_secs(2);
         let checkpoint = dir.path().join("user_data/sessionCheckpoints.json");
         fs::write(&checkpoint, br#"{"sessionstore-windows-restored":true}"#).unwrap();
         assert!(live_run_checkpoint_reset(dir.path()));
