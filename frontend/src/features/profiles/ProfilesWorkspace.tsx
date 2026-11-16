@@ -4,10 +4,12 @@ import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { useEffect, useRef, useState, type FormEvent } from 'react';
 import { useTenant } from '../../app/TenantContext';
 import {
+  assignProfile,
   changeGenerationActivation,
   commandCoordinator,
   createProfile,
   deleteProfile,
+  detachProfile,
   getCoordinator,
   getGeneration,
   getProfile,
@@ -32,6 +34,16 @@ type GenerationActionCommand = (
   | { kind: 'activate' | 'deactivate'; expectedVersion: number }
   | { kind: 'quarantine'; expectedVersion: number }
 ) & { target: GenerationActionTarget };
+
+type ProfileClientAssociationCommand =
+  ProfileSelection
+  & { version: number; reason: string }
+  & ({ kind: 'attach'; clientId: string } | { kind: 'detach' });
+
+type ProfileClientAssociationReadback = ProfileSelection & {
+  minVersion: number;
+  linkedClientId: string | null;
+};
 
 interface GrantDraft {
   actorId: string;
@@ -73,6 +85,10 @@ export function ProfilesWorkspace({
   const selected = useRef({ tenantId, profileId, generationId });
   selected.current = { tenantId, profileId, generationId };
 
+  const [clientIdDraft, setClientIdDraft] = useState('');
+  const [relationshipReason, setRelationshipReason] = useState('');
+  const [relationshipRefreshUnconfirmed, setRelationshipRefreshUnconfirmed] = useState(false);
+  const relationshipReadback = useRef<ProfileClientAssociationReadback | null>(null);
   const [openError, setOpenError] = useState<Error | null>(null);
   const [localDeleteError, setLocalDeleteError] = useState<Error | null>(null);
   const requestLocalDeletion = (terminal: ProfileProjection) => {
@@ -113,6 +129,18 @@ export function ProfilesWorkspace({
       // newly selected profile, even if the previous request succeeded.
       if (selected.current.tenantId === target.tenantId
         && selected.current.profileId === target.profileId) {
+        const expected = relationshipReadback.current;
+        if (expected
+          && expected.tenantId === target.tenantId
+          && expected.profileId === target.profileId) {
+          if (!data || data.version < expected.minVersion
+            || data.linkedClientId !== expected.linkedClientId) {
+            setRelationshipRefreshUnconfirmed(true);
+            return;
+          }
+          relationshipReadback.current = null;
+          setRelationshipRefreshUnconfirmed(false);
+        }
         setProfile((previous) => acceptProfileReadback(previous, data ?? null));
       }
     },
@@ -143,6 +171,51 @@ export function ProfilesWorkspace({
       if (receipt.status === 'DELETED') setGeneration(null);
     },
   });
+  // Client linkage is a business relationship, not an ACL or browser state.
+  // Reuse the identical typed optimistic commands already used in ClientProfilesPanel.
+  const relationship = useLogicalCommandMutation(
+    (command: ProfileClientAssociationCommand, idempotencyKey) =>
+      command.kind === 'attach'
+        ? assignProfile(command.tenantId, command.profileId, {
+          clientId: command.clientId,
+          reason: command.reason,
+          expectedProfileVersion: command.version,
+        }, idempotencyKey)
+        : detachProfile(command.tenantId, command.profileId, {
+          reason: command.reason,
+          expectedProfileVersion: command.version,
+        }, idempotencyKey),
+    {
+      onSuccess: async (_receipt, command) => {
+        const expected: ProfileClientAssociationReadback = {
+          tenantId: command.tenantId,
+          profileId: command.profileId,
+          minVersion: command.version + 1,
+          linkedClientId: command.kind === 'attach' ? command.clientId : null,
+        };
+        if (selected.current.tenantId !== command.tenantId
+          || selected.current.profileId !== command.profileId) return;
+        relationshipReadback.current = expected;
+        setRelationshipRefreshUnconfirmed(true);
+        void cache.invalidateQueries({ queryKey: ['operator-query', command.tenantId, 'profiles'] });
+        void cache.invalidateQueries({ queryKey: ['client-registry', command.tenantId] });
+        try {
+          const refreshed = await getProfile(command.tenantId, command.profileId);
+          if (selected.current.tenantId !== command.tenantId
+            || selected.current.profileId !== command.profileId
+            || relationshipReadback.current !== expected) return;
+          if (refreshed.version < expected.minVersion
+            || refreshed.linkedClientId !== expected.linkedClientId) return;
+          relationshipReadback.current = null;
+          setRelationshipRefreshUnconfirmed(false);
+          setRelationshipReason('');
+          setProfile((previous) => acceptProfileReadback(previous, refreshed));
+        } catch {
+          // Never infer success from a receipt or replay a mutation on readback failure.
+        }
+      },
+    },
+  );
   const grant = useLogicalCommandMutation((input: GrantDraft & { revoke: boolean }, idempotencyKey) => setProfileGrant(
       tenantId,
       profileId,
@@ -232,6 +305,10 @@ export function ProfilesWorkspace({
     setGeneration(null);
     setCoordinator(null);
     setGenerationRefreshUnconfirmed(false);
+    setClientIdDraft('');
+    setRelationshipReason('');
+    setRelationshipRefreshUnconfirmed(false);
+    relationshipReadback.current = null;
     if (tenantId && nextProfileId) lookup.mutate({ tenantId, profileId: nextProfileId });
   }, [tenantId, selectedProfileId]);
 
@@ -378,6 +455,47 @@ export function ProfilesWorkspace({
             <div><dt>Status</dt><dd>{profile.status}</dd></div>
             <div><dt>Client</dt><dd>{profile.linkedClientId ?? 'Not assigned'}</dd></div>
           </dl>
+          {owner && ['DRAFT', 'READY', 'SUSPENDED', 'QUARANTINED'].includes(profile.status) && (
+            <details>
+              <summary>Manage client association</summary>
+              <p>Client linkage is a business relationship; it does not grant profile access.</p>
+              <form className="stack-form" onSubmit={(event: FormEvent<HTMLFormElement>) => {
+                event.preventDefault();
+                if (relationship.isPending || relationshipRefreshUnconfirmed
+                  || !clientIdDraft.trim() || !relationshipReason.trim()) return;
+                relationship.mutate({
+                  kind: 'attach', tenantId, profileId: profile.profileId,
+                  version: profile.version, clientId: clientIdDraft.trim(), reason: relationshipReason.trim(),
+                });
+              }}>
+                <label htmlFor="profile-client-association-id">Client ID</label>
+                <input id="profile-client-association-id" value={clientIdDraft} onChange={(event) => setClientIdDraft(event.currentTarget.value)} placeholder="client_..." required />
+                <label htmlFor="profile-client-association-reason">Reason</label>
+                <input id="profile-client-association-reason" value={relationshipReason} onChange={(event) => setRelationshipReason(event.currentTarget.value)} maxLength={500} required />
+                <button type="submit" disabled={relationship.isPending || relationshipRefreshUnconfirmed || !clientIdDraft.trim() || !relationshipReason.trim() || clientIdDraft.trim() === profile.linkedClientId}>
+                  {profile.linkedClientId ? 'Change client' : 'Attach client'}
+                </button>
+              </form>
+              {profile.linkedClientId && (
+                <ConfirmAction
+                  label="Detach client"
+                  consequence="Remove only the Client/Profile relationship. Browser data and independent profile access remain unchanged."
+                  disabled={relationship.isPending || relationshipRefreshUnconfirmed || !relationshipReason.trim()}
+                  onConfirm={() => relationship.mutateAsync({
+                    kind: 'detach', tenantId, profileId: profile.profileId,
+                    version: profile.version, reason: relationshipReason.trim(),
+                  }).then(() => undefined)}
+                />
+              )}
+              <StatusMessage state={relationship.error ?? (relationship.isPending ? 'Updating client relationship…' : null)} />
+              {relationshipRefreshUnconfirmed && (
+                <div role="alert">
+                  Relationship command completed, but the new profile version was not confirmed. Refresh the read model; do not repeat the command.
+                  <button type="button" onClick={() => lookup.mutate({ tenantId, profileId: profile.profileId })} disabled={lookup.isPending}>Refresh relationship</button>
+                </div>
+              )}
+            </details>
+          )}
           <details>
             <summary>Technical identifiers</summary>
             <dl className="projection">
