@@ -1856,6 +1856,105 @@ mod windows {
     }
 
     #[cfg(test)]
+    mod physical_staging_closed_sync {
+        use super::{
+            ClosedSyncAdmission, MaterializationRoot, WindowsDeviceApplicationBinding,
+            run_closed_sync_with_admission,
+        };
+        use crate::generation_initialization::{InitialProfileOpen, InitialProfileStatus};
+        use profile_platform_primitives::ProfileId;
+        use std::path::{Path, PathBuf};
+
+        fn is_opted_in_disposable_restore(root: &Path, profile: &str) -> bool {
+            root.is_absolute()
+                && root.starts_with(std::env::temp_dir())
+                && root != std::env::temp_dir()
+                && std::fs::read_to_string(root.join(".physical-staging-verified-restore"))
+                    .as_deref()
+                    .is_ok_and(|found| found == format!("restored-test-profile={profile}\n"))
+        }
+
+        #[test]
+        fn staging_sync_requires_matching_authenticated_restore_marker()
+        -> Result<(), Box<dyn std::error::Error>> {
+            let root = std::env::temp_dir().join(format!(
+                "profilebridge-physical-guard-{}-{}",
+                std::process::id(),
+                std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)?
+                    .as_nanos()
+            ));
+            std::fs::create_dir(&root)?;
+            assert!(!is_opted_in_disposable_restore(&root, "profile_example_a"));
+            std::fs::write(
+                root.join(".physical-staging-verified-restore"),
+                "restored-test-profile=profile_example_b\n",
+            )?;
+            assert!(!is_opted_in_disposable_restore(&root, "profile_example_a"));
+            assert!(is_opted_in_disposable_restore(&root, "profile_example_b"));
+            std::fs::remove_dir_all(root)?;
+            Ok(())
+        }
+
+        /// Explicitly opted-in staging-only test. The original Rust Sync
+        /// owner, signed R2 PUT and exact D1 CURRENT are all used unchanged.
+        /// Only a separately restored/closed disposable scratch profile may
+        /// be used; never point this test at the installed profile root.
+        #[test]
+        #[ignore = "mutates one explicitly opted-in staging TEST profile only"]
+        fn authorized_test_profile_closed_sync_advances_exact_current()
+        -> Result<(), Box<dyn std::error::Error>> {
+            let Some(scratch) = std::env::var_os("PROFILE_BRIDGE_TEST_CLOSED_SYNC_ROOT") else {
+                eprintln!("PHYSICAL_STAGING_SYNC_SKIPPED: no mutation fixture");
+                return Ok(());
+            };
+            if std::env::var("PROFILE_BRIDGE_TEST_ALLOW_STAGING_MUTATION").as_deref()
+                != Ok("YES_SCOPED_DISPOSABLE_PROFILE")
+            {
+                return Err("explicit staging TEST mutation admission required".into());
+            }
+            let scratch = PathBuf::from(scratch);
+            let profile_text = std::env::var("PROFILE_BRIDGE_TEST_CLOSED_SYNC_PROFILE")?;
+            if !is_opted_in_disposable_restore(&scratch, &profile_text) {
+                return Err("refuse non-test or installed profile path".into());
+            }
+            let binding_path = std::env::var_os("PROFILE_BRIDGE_TEST_CLOSED_SYNC_BINDING")
+                .ok_or("missing test device binding")?;
+            let profile_id = ProfileId::parse(profile_text)?;
+            let version =
+                std::env::var("PROFILE_BRIDGE_TEST_CLOSED_SYNC_VERSION")?.parse::<u64>()?;
+            let binding = WindowsDeviceApplicationBinding::open(&PathBuf::from(binding_path))?;
+            let root = MaterializationRoot::open_or_create(&scratch)?;
+            let workspace = root.open_profile_current(binding.tenant_id(), &profile_id)?;
+            if workspace.profile_version() != version
+                || workspace.base_generation_id().is_none()
+                || std::fs::read(workspace.path().join(".local-unsynced"))? != b"local-unsynced-v2"
+                || !crate::browser_execution::browser_writer_locks_absent(&workspace)?
+            {
+                return Err("test profile not a closed dirty verified CURRENT".into());
+            }
+            let _cloud_owner = ClosedSyncAdmission::try_acquire(&workspace)?
+                .ok_or("another cloud Sync owner already active")?;
+            let intent = InitialProfileOpen {
+                tenant_id: binding.tenant_id().clone(),
+                actor_id: binding.actor_id().clone(),
+                profile_id: profile_id.clone(),
+                expected_version: version,
+                status: InitialProfileStatus::Ready,
+            };
+            eprintln!("R6_STAGING_EXACT_CLOSED_SYNC_STARTED");
+            run_closed_sync_with_admission(&intent, &binding, &root, "https://staging.alegria.by")?;
+            let after = root.open_profile_current(binding.tenant_id(), &profile_id)?;
+            assert_eq!(after.profile_version(), version + 1);
+            assert!(after.pending_sync().is_none());
+            assert!(!after.path().join(".local-unsynced").exists());
+            assert!(after.base_generation_id().is_some());
+            eprintln!("R6_STAGING_EXACT_CLOSED_SYNC_CLEAN_LOCAL_PASS");
+            Ok(())
+        }
+    }
+
+    #[cfg(test)]
     mod closed_sync_retry_tests {
         use super::{MAX_CLOSED_SYNC_ATTEMPTS, next_sync_retry_delay};
 
@@ -1894,6 +1993,146 @@ mod tests {
             run_closed_profile_sync(&intent),
             Err(ShippingCompositionError::UnsupportedPlatform)
         ));
+        Ok(())
+    }
+}
+
+// A physically run, read-only staging CURRENT acceptance probe.
+// No user profile, D1/R2 mutation or installed runtime is changed.
+#[cfg(all(windows, test))]
+mod physical_cloud_current_restore {
+    use crate::authoritative_generation::ensure_authoritative_current;
+    use crate::generation_reopen::{
+        GenerationReopenControlPort, VerifiedGenerationObjectStreamDownloader,
+    };
+    use crate::local_profile::MaterializationRoot;
+    use crate::shipping_control_plane::ControlPlaneCoordinator;
+    use crate::windows_device_application::{
+        WindowsDeviceApplication, WindowsDeviceApplicationBinding,
+    };
+    use crate::windows_generation_get::WindowsSignedGenerationObjectGet;
+    use profile_platform_primitives::ProfileId;
+    use std::path::PathBuf;
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    #[test]
+    #[ignore = "requires a bound Windows device and a fresh disposable staging Restore root"]
+    fn staging_verified_current_cold_restore_to_scratch() -> Result<(), Box<dyn std::error::Error>>
+    {
+        let Some(root_path) = std::env::var_os("PROFILE_BRIDGE_TEST_COLD_RESTORE_ROOT") else {
+            eprintln!("PHYSICAL_STAGING_RESTORE_SKIPPED: no cloud fixture");
+            return Ok(());
+        };
+        let binding_path = std::env::var_os("PROFILE_BRIDGE_TEST_COLD_RESTORE_BINDING")
+            .ok_or("incomplete cloud fixture: binding")?;
+        let profile_id_text = std::env::var("PROFILE_BRIDGE_TEST_COLD_RESTORE_PROFILE")
+            .map_err(|_| "incomplete cloud fixture: profile")?;
+        let version = std::env::var("PROFILE_BRIDGE_TEST_COLD_RESTORE_VERSION")
+            .map_err(|_| "incomplete cloud fixture: version")?
+            .parse::<u64>()?;
+        let root_path = PathBuf::from(root_path);
+        if !root_path.is_absolute()
+            || !root_path.starts_with(std::env::temp_dir())
+            || !root_path.is_dir()
+            || std::fs::read_dir(&root_path)?.next().is_some()
+        {
+            return Err("refuse nonempty or nonscratch restore destination".into());
+        }
+        let binding = WindowsDeviceApplicationBinding::open(&PathBuf::from(binding_path))?;
+        let profile_id = ProfileId::parse(&profile_id_text)?;
+        let app =
+            WindowsDeviceApplication::from_system("https://staging.alegria.by", binding.clone())?;
+        let mut control = ControlPlaneCoordinator::for_local_current_restore(app.transport());
+        eprintln!("R5_STAGING_CURRENT_CAPABILITY_REQUESTED");
+        let current = control.download_capability(binding.tenant_id(), &profile_id)?;
+        eprintln!("R5_STAGING_CURRENT_CAPABILITY_CONFIRMED");
+        let mut downloader = VerifiedGenerationObjectStreamDownloader::new(
+            WindowsSignedGenerationObjectGet::from_system()?,
+        );
+        let root = MaterializationRoot::open_or_create(&root_path)?;
+        let epoch = u64::try_from(SystemTime::now().duration_since(UNIX_EPOCH)?.as_millis())?;
+        ensure_authoritative_current(
+            &root,
+            binding.tenant_id(),
+            &profile_id,
+            current.generation_id(),
+            version,
+            binding.device_id(),
+            epoch,
+            &mut control,
+            &mut downloader,
+        )?;
+        let recovered = root.open_profile_current(binding.tenant_id(), &profile_id)?;
+        assert_eq!(recovered.profile_version(), version);
+        assert_eq!(
+            recovered.base_generation_id(),
+            Some(current.generation_id())
+        );
+        assert!(recovered.path().join("user_data").is_dir());
+        assert!(!recovered.path().join(".local-unsynced").exists());
+        let _ = recovered.inventory()?;
+        // Only a successful, authenticated, disposable Restore arms the
+        // explicit opt-in physical staging Sync test for this profile.
+        std::fs::write(
+            root_path.join(".physical-staging-verified-restore"),
+            format!("restored-test-profile={profile_id_text}\n"),
+        )?;
+        eprintln!("R5_STAGING_CURRENT_AUTHENTICATED_COLD_RESTORE_PASS");
+        Ok(())
+    }
+
+    #[test]
+    #[ignore = "requires prior authenticated cold Restore and scoped GUI WM_CLOSE"]
+    fn staging_restored_current_reopens_in_real_camoufox() -> Result<(), Box<dyn std::error::Error>>
+    {
+        let Some(root_path) = std::env::var_os("PROFILE_BRIDGE_TEST_COLD_RESTORE_ROOT") else {
+            eprintln!("PHYSICAL_STAGING_GUI_SKIPPED: no Restore fixture");
+            return Ok(());
+        };
+        let binding_path = std::env::var_os("PROFILE_BRIDGE_TEST_COLD_RESTORE_BINDING")
+            .ok_or("incomplete restored GUI fixture: binding")?;
+        let runtime = std::env::var_os("PROFILE_BRIDGE_TEST_NATIVE_RUNTIME_ROOT")
+            .ok_or("incomplete restored GUI fixture: SDK runtime")?;
+        let profile_id =
+            ProfileId::parse(std::env::var("PROFILE_BRIDGE_TEST_COLD_RESTORE_PROFILE")?)?;
+        let version = std::env::var("PROFILE_BRIDGE_TEST_COLD_RESTORE_VERSION")?.parse::<u64>()?;
+        let root_path = PathBuf::from(root_path);
+        if !root_path.starts_with(std::env::temp_dir()) || !root_path.is_absolute() {
+            return Err("refuse nonscratch restored GUI root".into());
+        }
+        let binding = WindowsDeviceApplicationBinding::open(&PathBuf::from(binding_path))?;
+        let root = MaterializationRoot::open_or_create(&root_path)?;
+        let workspace = root.open_profile_current(binding.tenant_id(), &profile_id)?;
+        if workspace.profile_version() != version || workspace.base_generation_id().is_none() {
+            return Err("only previously restored verified CURRENT may be opened".into());
+        }
+        let config_path = workspace.path().join("camoufox-config.json");
+        let config_before = std::fs::read(&config_path)?;
+        let intent = crate::generation_initialization::InitialProfileOpen {
+            tenant_id: binding.tenant_id().clone(),
+            actor_id: binding.actor_id().clone(),
+            profile_id: profile_id.clone(),
+            expected_version: version,
+            status: crate::generation_initialization::InitialProfileStatus::Ready,
+        };
+        eprintln!("R5_STAGING_RESTORED_GUI_OPEN_STARTED");
+        assert_eq!(
+            crate::local_browser_open::open_with_before_launch(
+                &root,
+                &intent,
+                binding.device_id(),
+                &PathBuf::from(runtime),
+                None,
+            ),
+            Ok(()),
+            "real restored Camoufox must close Clean after external user-style WM_CLOSE"
+        );
+        assert_eq!(std::fs::read(&config_path)?, config_before);
+        assert!(workspace.path().join(".local-unsynced").is_file());
+        assert!(crate::browser_execution::browser_writer_locks_absent(
+            &workspace
+        )?);
+        eprintln!("R5_STAGING_RESTORED_GUI_CLEANCLOSE_PASS");
         Ok(())
     }
 }
