@@ -1578,7 +1578,7 @@ mod tests {
     #[cfg(windows)]
     #[test]
     #[ignore = "requires PROFILE_BRIDGE_TEST_PYTHON"]
-    fn windows_python_missing_playwright_close_event_uses_native_release_gate()
+    fn windows_python_missing_playwright_close_event_does_not_certify_clean()
     -> Result<(), Box<dyn std::error::Error>> {
         use std::fs;
         use std::path::PathBuf;
@@ -1617,7 +1617,8 @@ time.sleep(15)
         let started = Instant::now();
         assert_eq!(
             run_python_with_executable(&python, &runtime_root, &folder, "--local-open", None,)?,
-            super::NativeBrowserCompletion::NativeWriterReleased
+            super::NativeBrowserCompletion::CloseUnconfirmed,
+            "native writer release must not forge a clean Firefox checkpoint"
         );
         assert!(started.elapsed() >= Duration::from_secs(2));
         assert!(started.elapsed() < Duration::from_secs(10));
@@ -1746,14 +1747,15 @@ sys.stderr.flush()
             Ok(Some(ready))
         });
         assert!(
-            run_python_with_executable(
+            !run_python_with_executable(
                 &python,
                 &runtime_root,
                 &folder,
                 "--local-open",
                 Some(before_launch),
             )?
-            .confirms_closed_profile()
+            .confirms_closed_profile(),
+            "delivery BrowserReady is not a clean Firefox session receipt"
         );
         assert!(
             crate::windows_delivery_runtime::tests::active_health_confirmed_for_test(&state_root,)?
