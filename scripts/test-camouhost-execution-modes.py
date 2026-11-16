@@ -64,7 +64,8 @@ def verify_upstream_camoufox_config_is_final(runtime) -> None:
             "SAFE": "untouched",
         }
         assert base["firefox_user_prefs"] == {"official-webgl-setting": True}
-        assert "args" not in base
+        assert base["args"] == ["-new-tab", runtime.MANAGED_BOOTSTRAP_TAB_URL]
+        assert base["ignore_default_args"] == ["about:blank"]
         assert sdk_calls[0]["config"] == identity
         assert sdk_calls[0]["config"] is not identity
         assert sdk_calls[0]["user_data_dir"] == str(Path("/disposable/user_data"))
@@ -74,13 +75,15 @@ def verify_upstream_camoufox_config_is_final(runtime) -> None:
         assert identity == {"canvas:seed": 12345, "webGl:vendor": "test-gpu"}
 
         new = runtime.camoufox_launch_options({}, Path("/disposable"), identity, first_run=True)
-        assert new["args"] == ["-new-tab", "about:blank"]
+        assert new["args"] == ["-new-tab", runtime.MANAGED_BOOTSTRAP_TAB_URL]
+        assert new["ignore_default_args"] == ["about:blank"]
         assert new["env"]["CAMOU_CONFIG_1"] == "sdk-composed-identity"
         assert "get_env_vars" not in vars(fake_utils)
 
         isolated = runtime.camoufox_launch_options({}, Path("/disposable"), identity, isolated=True)
         assert isolated["offline"] is True
         assert isolated["args"] == ["-new-tab", runtime.MANAGED_BOOTSTRAP_TAB_URL]
+        assert isolated["ignore_default_args"] == ["about:blank"]
         assert isolated["env"]["CAMOU_CONFIG_1"] == "sdk-composed-identity"
 
 
