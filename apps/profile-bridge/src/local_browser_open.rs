@@ -2271,4 +2271,63 @@ sys.stderr.flush()
             b"local-unsynced-v2"
         );
     }
+    /// Reuse one native profile and exactly one SDK fingerprint through ten
+    /// independent real GUI runs while the cloud Sync owner stays occupied.
+    /// Requires a scoped external WM_CLOSE of each disposable Camoufox window.
+    #[cfg(windows)]
+    #[test]
+    #[ignore = "requires isolated SDK/fingerprint fixture and ten scoped GUI WM_CLOSE events"]
+    fn real_gui_ten_reopens_keep_identity_and_offline_admission()
+    -> Result<(), Box<dyn std::error::Error>> {
+        use crate::local_profile::{ClosedSyncAdmission, MaterializationRoot};
+        use profile_platform_primitives::DeviceId;
+        use std::fs;
+
+        let Some((runtime, fpgen, root_path)) = physical_gui_fixture()? else {
+            return Ok(());
+        };
+        let root = MaterializationRoot::open_or_create(&root_path)?;
+        let intent = intent();
+        let generation = local_generation(&intent)?;
+        let workspace = open_or_create_workspace(&root, &intent, &generation)?;
+        fs::create_dir_all(workspace.path().join("user_data"))?;
+        let config = workspace.path().join("camoufox-config.json");
+        fs::copy(fpgen, &config)?;
+        let saved_config = fs::read(&config)?;
+        let evidence = workspace.path().join("user_data/repeated-open-proof.txt");
+        fs::write(&evidence, b"one-local-profile-unchanged-through-ten-runs")?;
+        let _cloud_sync = ClosedSyncAdmission::try_acquire(&workspace)?
+            .ok_or("test cloud Sync owner unavailable")?;
+        let device = DeviceId::parse("device_real_gui_ten_reopens")?;
+
+        for cycle in 1..=10 {
+            eprintln!("R3_REAL_GUI_OPEN_STARTED cycle={cycle}");
+            assert_eq!(
+                super::open_with_before_launch(&root, &intent, &device, &runtime, None),
+                Ok(()),
+                "native GUI cycle {cycle} must finish with proven clean Firefox Close"
+            );
+            assert_eq!(
+                fs::read(&config)?,
+                saved_config,
+                "fingerprint changed on GUI cycle {cycle}"
+            );
+            assert_eq!(
+                fs::read(&evidence)?,
+                b"one-local-profile-unchanged-through-ten-runs",
+                "local test bytes changed on GUI cycle {cycle}"
+            );
+            assert_eq!(
+                fs::read(workspace.path().join(".local-unsynced"))?,
+                b"local-unsynced-v2",
+                "a cloud-owned stall cannot claim a Save receipt on cycle {cycle}"
+            );
+            assert!(
+                crate::browser_execution::browser_writer_locks_absent(&workspace)?,
+                "native Firefox lock retained after cycle {cycle}"
+            );
+            eprintln!("R3_REAL_GUI_CLEAN_DONE cycle={cycle}");
+        }
+        Ok(())
+    }
 }
