@@ -484,6 +484,8 @@ def test_profile_display_name_governance() -> None:
     """Create, rename, invalid actor, stale version and duplicate name use one D1 command path."""
     connection = database()
     try:
+        # Exercise the additive successor-v2 schema without rewriting accepted legacy D1.
+        connection.executescript((ROOT / "migrations" / "d1-successor-v2" / "0045_profile_display_name.sql").read_text(encoding="utf-8"))
         seed(connection)
         with connection:
             connection.execute(

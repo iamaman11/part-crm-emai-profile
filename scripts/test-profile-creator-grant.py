@@ -104,7 +104,7 @@ def execute_create(
 ) -> None:
     connection.execute(
         sql["PROFILE_CREATE_COMMAND"],
-        (TENANT, command, actor, profile, NOW),
+        (TENANT, command, actor, profile, "Named test profile", NOW),
     )
     connection.execute(
         sql["PROFILE_CREATOR_GRANT"],

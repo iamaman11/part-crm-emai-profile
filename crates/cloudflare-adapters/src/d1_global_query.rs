@@ -79,7 +79,7 @@ impl D1GlobalSearchRepository {
         let row = query!(
             &self.database,
             r#"
-            SELECT profile.profile_id, profile.status, profile.version,
+            SELECT profile.profile_id, profile.display_name, profile.status, profile.version,
                    assignment.client_id AS linked_client_id,
                    profile.active_generation_id
             FROM browser_profiles AS profile
@@ -228,6 +228,7 @@ struct ClientRow {
 #[derive(Deserialize)]
 struct ProfileRow {
     profile_id: String,
+    display_name: String,
     status: String,
     version: i64,
     linked_client_id: Option<String>,
@@ -272,6 +273,7 @@ fn map_profile_row(row: ProfileRow) -> Result<ProfileReadProjection, QueryPortEr
             .map(GenerationId::parse)
             .transpose()
             .map_err(|_| integrity_error())?,
+        row.display_name,
     ))
 }
 

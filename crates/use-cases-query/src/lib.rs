@@ -461,6 +461,7 @@ mod client_profile_tests {
                     AggregateVersion::INITIAL,
                     Some(self.expected_client_id.clone()),
                     None,
+                    "Queried profile".to_owned(),
                 )],
                 None,
             ))
