@@ -46,6 +46,11 @@ def load_schema(connection: sqlite3.Connection) -> None:
     connection.execute("PRAGMA foreign_keys = ON")
     for path in sorted(MIGRATIONS.glob("[0-9][0-9][0-9][0-9]_*.sql")):
         connection.executescript(path.read_text(encoding="utf-8"))
+    # Production create SQL now targets the successor-v2 display-name column.
+    # Prove it against the additive successor schema while keeping accepted legacy immutable.
+    connection.executescript(
+        (ROOT / "migrations" / "d1-successor-v2" / "0045_profile_display_name.sql").read_text(encoding="utf-8")
+    )
     connection.commit()
 
 
