@@ -2330,4 +2330,91 @@ sys.stderr.flush()
         }
         Ok(())
     }
+    /// Three independently invoked Windows processes test the existing
+    /// production local Open owner, not a new browser manager:
+    /// start -> supervisor kills only this Rust test process after actual SDK
+    /// Ready while Firefox remains alive; probe -> still-live Firefox excludes
+    /// a new Open; recover -> user WM_CLOSE was delivered to orphaned Firefox,
+    /// and the same dirty folder can be reopened and closed normally.
+    #[cfg(windows)]
+    #[test]
+    #[ignore = "requires isolated SDK fixture, scoped Rust test process kill and two WM_CLOSE events"]
+    fn real_gui_bridge_process_death_preserves_browser_and_recovers()
+    -> Result<(), Box<dyn std::error::Error>> {
+        use crate::local_profile::MaterializationRoot;
+        use profile_platform_primitives::DeviceId;
+        use std::fs;
+        use std::io::ErrorKind;
+
+        let Some((runtime, fpgen, root_path)) = physical_gui_fixture()? else {
+            return Ok(());
+        };
+        let phase = std::env::var("PROFILE_BRIDGE_TEST_OWNER_CRASH_PHASE")
+            .map_err(|_| "PROFILE_BRIDGE_TEST_OWNER_CRASH_PHASE required with GUI fixture")?;
+        if !matches!(phase.as_str(), "start" | "probe" | "recover") {
+            return Err("invalid scoped owner-crash test phase".into());
+        }
+        let root = MaterializationRoot::open_or_create(&root_path)?;
+        let intent = intent();
+        let generation = local_generation(&intent)?;
+        let workspace = open_or_create_workspace(&root, &intent, &generation)?;
+        let config = workspace.path().join("camoufox-config.json");
+        let proof = workspace.path().join("user_data/owner-crash-proof.txt");
+        if phase == "start" {
+            fs::create_dir_all(workspace.path().join("user_data"))?;
+            if config.exists() || proof.exists() {
+                return Err("refuse to overwrite existing crash test identity".into());
+            }
+            fs::copy(&fpgen, &config)?;
+            fs::write(&proof, b"original-test-cookies-must-survive")?;
+        } else if !config.is_file() || !proof.is_file() {
+            return Err("original crash test identity or proof missing".into());
+        }
+        let initial_identity = fs::read(fpgen)?;
+        assert_eq!(fs::read(&config)?, initial_identity);
+        assert_eq!(fs::read(&proof)?, b"original-test-cookies-must-survive");
+        let device = DeviceId::parse("device_real_bridge_process_crash")?;
+
+        if phase == "start" {
+            eprintln!("R4_BRIDGE_OWNER_START_NATIVE_OPEN");
+            let outcome = super::open_with_before_launch(&root, &intent, &device, &runtime, None);
+            return Err(format!(
+                "the scoped external controller did not kill the Rust owner: {outcome:?}"
+            )
+            .into());
+        }
+
+        if phase == "probe" {
+            // Firefox still owns the original native parent.lock. The Rust
+            // admission from the killed parent cannot fabricate another owner.
+            eprintln!("R4_BRIDGE_OWNER_PROBE_WHILE_FIREFOX_LIVE");
+            assert_eq!(
+                super::open_with_before_launch(&root, &intent, &device, &runtime, None),
+                Err(LocalOpenError::ProfileBusy),
+                "new Open must be excluded while orphaned Firefox still owns profile files"
+            );
+        } else {
+            eprintln!("R4_BRIDGE_OWNER_RECOVER_OPEN_STARTED");
+            assert_eq!(
+                super::open_with_before_launch(&root, &intent, &device, &runtime, None),
+                Ok(()),
+                "same profile must reopen after orphaned Firefox was closed"
+            );
+            assert!(crate::browser_execution::browser_writer_locks_absent(
+                &workspace
+            )?);
+        }
+        assert_eq!(fs::read(&config)?, initial_identity);
+        assert_eq!(fs::read(&proof)?, b"original-test-cookies-must-survive");
+        assert_eq!(
+            fs::read(workspace.path().join(".local-unsynced"))?,
+            b"local-unsynced-v2"
+        );
+        assert!(!matches!(
+            fs::metadata(workspace.path().join(".local-unsynced")),
+            Err(ref error) if error.kind() == ErrorKind::NotFound
+        ));
+        eprintln!("R4_BRIDGE_OWNER_PHASE_PASS phase={phase}");
+        Ok(())
+    }
 }
