@@ -2,7 +2,7 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { TenantProvider } from '../../app/TenantContext';
-import { assignProfile, changeGenerationActivation, deleteProfile, detachProfile, dispatchBrowserProfileDelete, dispatchBrowserProfileOpen, getCoordinator, getGeneration, getProfile } from './api';
+import { assignProfile, changeGenerationActivation, deleteProfile, detachProfile, dispatchBrowserProfileDelete, dispatchBrowserProfileOpen, getCoordinator, getGeneration, getProfile, renameProfile } from './api';
 import { ProfilesWorkspace } from './ProfilesWorkspace';
 
 vi.mock('./api', () => ({
@@ -17,6 +17,7 @@ vi.mock('./api', () => ({
   getCoordinator: vi.fn(),
   getGeneration: vi.fn(),
   getProfile: vi.fn(),
+  renameProfile: vi.fn(),
   quarantineGeneration: vi.fn(),
   registerGeneration: vi.fn(),
   setProfileGrant: vi.fn(),
@@ -128,6 +129,82 @@ describe('Profile card client relationship (#870)', () => {
     await waitFor(() => expect(screen.getByText('client_test')).toBeTruthy());
     expect(screen.queryByText(/Relationship command completed, but the new profile version was not confirmed/)).toBeNull();
     expect(assignProfile).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('Profile names are D1-backed business metadata (#870)', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    window.history.replaceState(null, '', '/profiles');
+  });
+
+  it('renames through a versioned command and authoritative readback without touching browser launch', async () => {
+    let current = {
+      profileId: 'profile_test', displayName: 'First name',
+      status: 'READY', version: 4, linkedClientId: null, canOperate: true,
+    };
+    vi.mocked(getProfile).mockImplementation(async () => ({
+      ...current,
+    }) as Awaited<ReturnType<typeof getProfile>>);
+    vi.mocked(renameProfile).mockImplementation(async (tenant, profileId, body, idempotencyKey) => {
+      expect(tenant).toBe('tenant_test');
+      expect(profileId).toBe('profile_test');
+      expect(body).toEqual({ displayName: 'Updated name', expectedProfileVersion: 4 });
+      expect(idempotencyKey.length).toBeGreaterThan(4);
+      current = { ...current, displayName: body.displayName, version: 5 };
+      return { resultCode: 'renamed', resourceId: profileId, aggregateVersion: 5 };
+    });
+    const cache = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    render(
+      <QueryClientProvider client={cache}>
+        <TenantProvider loadTenantContexts={async () => ({
+          tenants: [{ tenantId: 'tenant_test', displayName: 'Test tenant', actorId: 'actor_test', role: 'TENANT_OWNER' }],
+        })}>
+          <ProfilesWorkspace selectedProfileId="profile_test" onProfileSelected={() => undefined} />
+        </TenantProvider>
+      </QueryClientProvider>,
+    );
+    await screen.findByRole('heading', { name: 'First name' });
+    fireEvent.click(screen.getByText('Rename profile'));
+    fireEvent.change(screen.getByLabelText('Profile name'), { target: { value: 'Updated name' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Save name' }));
+    await screen.findByRole('heading', { name: 'Updated name' });
+    expect(renameProfile).toHaveBeenCalledTimes(1);
+    expect(localOpen).not.toHaveBeenCalled();
+  });
+
+  it('keeps a rename unconfirmed after stale readback and refreshes without repeating it', async () => {
+    let current = {
+      profileId: 'profile_test', displayName: 'Before',
+      status: 'READY', version: 7, linkedClientId: null, canOperate: true,
+    };
+    vi.mocked(getProfile).mockImplementation(async () => ({
+      ...current,
+    }) as Awaited<ReturnType<typeof getProfile>>);
+    vi.mocked(renameProfile).mockResolvedValue({
+      resultCode: 'renamed', resourceId: 'profile_test', aggregateVersion: 8,
+    });
+    const cache = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    render(
+      <QueryClientProvider client={cache}>
+        <TenantProvider loadTenantContexts={async () => ({
+          tenants: [{ tenantId: 'tenant_test', displayName: 'Test tenant', actorId: 'actor_test', role: 'TENANT_OWNER' }],
+        })}>
+          <ProfilesWorkspace selectedProfileId="profile_test" onProfileSelected={() => undefined} />
+        </TenantProvider>
+      </QueryClientProvider>,
+    );
+    await screen.findByRole('heading', { name: 'Before' });
+    fireEvent.click(screen.getByText('Rename profile'));
+    fireEvent.change(screen.getByLabelText('Profile name'), { target: { value: 'After' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Save name' }));
+    expect(await screen.findByText(/Rename command completed, but the updated name was not confirmed/)).toBeTruthy();
+    expect((screen.getByRole('button', { name: 'Save name' }) as HTMLButtonElement).disabled).toBe(true);
+    expect(renameProfile).toHaveBeenCalledTimes(1);
+    current = { ...current, displayName: 'After', version: 8 };
+    fireEvent.click(screen.getByRole('button', { name: 'Refresh profile name' }));
+    await screen.findByRole('heading', { name: 'After' });
+    expect(renameProfile).toHaveBeenCalledTimes(1);
   });
 });
 

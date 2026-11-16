@@ -479,6 +479,72 @@ def test_invitation_and_resource_guards(connection: sqlite3.Connection) -> None:
     ).fetchone()[0] == 3
 
 
+
+def test_profile_display_name_governance() -> None:
+    """Create, rename, invalid actor, stale version and duplicate name use one D1 command path."""
+    connection = database()
+    try:
+        seed(connection)
+        with connection:
+            connection.execute(
+                """
+                INSERT INTO profile_create_commands (
+                    tenant_id, command_id, command_actor_id, profile_id, display_name, executed_at_ms
+                ) VALUES (?, 'command_new_named_profile', ?, 'profile_named_commands', 'New profile', 100)
+                """,
+                (TENANT, OWNER),
+            )
+        row = connection.execute(
+            "SELECT display_name, version FROM browser_profiles WHERE tenant_id=? AND profile_id='profile_named_commands'",
+            (TENANT,),
+        ).fetchone()
+        assert (row["display_name"], row["version"]) == ("New profile", 1)
+
+        with connection:
+            connection.execute(
+                """
+                INSERT INTO profile_rename_commands (
+                    tenant_id, command_id, command_actor_id, profile_id,
+                    display_name, expected_profile_version, executed_at_ms
+                ) VALUES (?, 'command_rename_name', ?, 'profile_named_commands', 'Renamed profile', 1, 101)
+                """,
+                (TENANT, OWNER),
+            )
+        row = connection.execute(
+            "SELECT display_name, version FROM browser_profiles WHERE tenant_id=? AND profile_id='profile_named_commands'",
+            (TENANT,),
+        ).fetchone()
+        assert (row["display_name"], row["version"]) == ("Renamed profile", 2)
+
+        def rename(command: str, actor: str, version: int, name: str) -> None:
+            connection.execute(
+                """
+                INSERT INTO profile_rename_commands (
+                    tenant_id, command_id, command_actor_id, profile_id,
+                    display_name, expected_profile_version, executed_at_ms
+                ) VALUES (?, ?, ?, 'profile_named_commands', ?, ?, 102)
+                """,
+                (TENANT, command, actor, name, version),
+            )
+
+        expect_abort(lambda: rename("command_non_owner_rename", MEMBER, 2, "Wrong owner"),
+                     "profile_rename_owner_required")
+        connection.rollback()
+        expect_abort(lambda: rename("command_stale_name", OWNER, 1, "Stale"),
+                     "profile_rename_version_mismatch")
+        connection.rollback()
+        expect_abort(lambda: rename("command_duplicate_name", OWNER, 2, "Renamed profile"),
+                     "profile_rename_version_mismatch")
+        connection.rollback()
+        row = connection.execute(
+            "SELECT display_name, version FROM browser_profiles WHERE tenant_id=? AND profile_id='profile_named_commands'",
+            (TENANT,),
+        ).fetchone()
+        assert (row["display_name"], row["version"]) == ("Renamed profile", 2)
+    finally:
+        connection.close()
+
+
 def main() -> int:
     connection = database()
     try:
@@ -488,6 +554,7 @@ def main() -> int:
         test_concurrent_winner_allows_only_exact_live_replay(connection)
         test_last_owner_and_membership_version(connection)
         test_invitation_and_resource_guards(connection)
+        test_profile_display_name_governance()
         assert connection.execute("PRAGMA foreign_key_check").fetchall() == []
         assert connection.execute("PRAGMA integrity_check").fetchone()[0] == "ok"
     finally:

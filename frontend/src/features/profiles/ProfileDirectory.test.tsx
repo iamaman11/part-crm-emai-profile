@@ -40,6 +40,7 @@ describe('ProfileDirectory tenant bootstrap boundary', () => {
       profiles: [
         {
           profileId: 'profile_active_test',
+          displayName: 'Test profile_active_test',
           status: 'READY',
           version: 2,
           linkedClientId: null,
@@ -47,6 +48,7 @@ describe('ProfileDirectory tenant bootstrap boundary', () => {
         },
         {
           profileId: 'profile_deleted_test',
+          displayName: 'Test profile_deleted_test',
           status: 'DELETED',
           version: 3,
           linkedClientId: null,
@@ -79,6 +81,7 @@ describe('ProfileDirectory tenant bootstrap boundary', () => {
     mockedListProfiles.mockResolvedValue({
       profiles: [{
         profileId: 'profile_only_deleted',
+          displayName: 'Test profile_only_deleted',
         status: 'DELETED',
         version: 3,
         linkedClientId: null,
@@ -109,6 +112,7 @@ describe('ProfileDirectory tenant bootstrap boundary', () => {
         return {
           profiles: [{
             profileId: 'profile_page_two_ready',
+          displayName: 'Test profile_page_two_ready',
             status: 'READY',
             version: 4,
             linkedClientId: null,
@@ -120,6 +124,7 @@ describe('ProfileDirectory tenant bootstrap boundary', () => {
       return {
         profiles: [{
           profileId: 'profile_page_one_deleted',
+          displayName: 'Test profile_page_one_deleted',
           status: 'DELETED',
           version: 3,
           linkedClientId: null,
@@ -157,6 +162,7 @@ describe('ProfileDirectory tenant bootstrap boundary', () => {
       return {
         profiles: [{
           profileId: 'profile_page_one_ready',
+          displayName: 'Test profile_page_one_ready',
           status: 'READY',
           version: 2,
           linkedClientId: null,

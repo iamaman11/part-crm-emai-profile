@@ -351,3 +351,19 @@ mod tests {
         Ok(())
     }
 }
+
+#[cfg(test)]
+mod profile_name_tests {
+    use super::ProfileName;
+
+    #[test]
+    fn profile_names_are_trimmed_and_bounded_without_altering_profile_identity() {
+        assert_eq!(ProfileName::parse("  Sales account  ").unwrap().as_str(), "Sales account");
+        assert_eq!(ProfileName::parse("Европа").unwrap().as_str(), "Европа");
+        for invalid in ["", "   ", "bad\u{0000}name", "bad\nname"] {
+            assert!(ProfileName::parse(invalid).is_err());
+        }
+        assert!(ProfileName::parse("x".repeat(81)).is_err());
+        assert!(ProfileName::parse("x".repeat(80)).is_ok());
+    }
+}
