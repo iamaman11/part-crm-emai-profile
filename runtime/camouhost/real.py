@@ -827,10 +827,12 @@ def camoufox_launch_options(
 
     if isolated:
         options["offline"] = True
-        options["args"] = ["-new-tab", MANAGED_BOOTSTRAP_TAB_URL]
-    elif first_run:
-        # Only a new empty Firefox profile needs the startup tab argument.
-        options["args"] = ["-new-tab", "about:blank"]
+    # The pinned official Playwright/Juggler persistent launch fails without an
+    # explicit startup tab and its own default about:blank becomes an extra
+    # user-visible tab on *every* Open. Exactly one distinguishable SDK-owned
+    # bootstrap is therefore required on first and later launches alike.
+    options["args"] = ["-new-tab", MANAGED_BOOTSTRAP_TAB_URL]
+    options["ignore_default_args"] = ["about:blank"]
     return options
 
 
@@ -1537,6 +1539,68 @@ def read_local_open_request() -> tuple[dict[str, Any] | None, bool]:
     return config, first_run
 
 
+def observe_native_bootstrap_tabs(context: Any) -> None:
+    """Retire only exact app-owned bootstrap tabs after Playwright sees pages.
+
+    Firefox restores user pages asynchronously *after* BrowserContext Ready;
+    an immediate snapshot of context.pages is not a restoration-complete event.
+    The official Playwright page/navigation events are enough to clean our own
+    tagged tabs without opening, closing or rewriting any user tab. If the
+    browser has no user tab, keep one bootstrap; never close its last page.
+    """
+    observed: set[int] = set()
+    sweeping = False
+    pending = False
+
+    async def sweep() -> None:
+        nonlocal sweeping, pending
+        try:
+            while True:
+                pending = False
+                if context.is_closed():
+                    break
+                pages = [page for page in context.pages if not page.is_closed()]
+                tagged = [page for page in pages if page.url == MANAGED_BOOTSTRAP_TAB_URL]
+                other = [page for page in pages if page.url != MANAGED_BOOTSTRAP_TAB_URL]
+                to_close = tagged if other else tagged[1:]
+                for page in to_close:
+                    if context.is_closed() or page.is_closed():
+                        continue
+                    if len([p for p in context.pages if not p.is_closed()]) <= 1:
+                        break
+                    # A page may have navigated between event dispatch and
+                    # cleanup. Never close a user page based on stale data.
+                    if page.url == MANAGED_BOOTSTRAP_TAB_URL:
+                        with contextlib.suppress(Exception):
+                            await page.close()
+                if not pending:
+                    break
+        finally:
+            sweeping = False
+
+    def schedule(*_event: Any) -> None:
+        nonlocal sweeping, pending
+        if context.is_closed():
+            return
+        pending = True
+        if not sweeping:
+            sweeping = True
+            asyncio.create_task(sweep())
+
+    def attach(page: Any) -> None:
+        if id(page) in observed:
+            return
+        observed.add(id(page))
+        page.on("framenavigated", schedule)
+        page.on("close", schedule)
+        schedule()
+
+    context.on("page", attach)
+    for page in list(context.pages):
+        attach(page)
+    schedule()
+
+
 async def run_local_profile(root: Path, config: dict[str, Any] | None, first_run: bool) -> int:
     """Launch one local profile and wait passively for Playwright's close event."""
     from native_process import launch_native_camoufox
@@ -1577,6 +1641,17 @@ async def run_local_profile(root: Path, config: dict[str, Any] | None, first_run
             admission_granted=True,
             headless=False,
         )
+        # The bootstrap page is ours, not the user's. For first Create only,
+        # turn the sole tagged blank page into an ordinary blank. For a saved
+        # profile, keep the tagged page until real session pages are observed.
+        if first_run and len(session.context.pages) == 1:
+            first = session.context.pages[0]
+            if first.url == MANAGED_BOOTSTRAP_TAB_URL:
+                with contextlib.suppress(Exception):
+                    await first.goto(
+                        "about:blank", wait_until="domcontentloaded", timeout=5_000
+                    )
+        observe_native_bootstrap_tabs(session.context)
         report_runtime_stage("launch", "ready")
 
         # No native window/process inspection or SessionStore access.

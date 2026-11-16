@@ -80,6 +80,7 @@ impl std::error::Error for LocalOpenError {}
 enum NativeBrowserCompletion {
     SdkClosed,
     NativeWriterReleased,
+    RecoveryRequired,
     LaunchFailed,
     LaunchUnconfirmed,
     CloseUnconfirmed,
@@ -448,6 +449,7 @@ fn await_adapter_or_native_release(
     folder: &Path,
     browser_ready: &AtomicBool,
     startup_proof_timeout: Duration,
+    current_run_reset: &AtomicBool,
 ) -> Result<(std::process::ExitStatus, bool), LocalOpenError> {
     let proof_started = Instant::now();
     let mut writer_was_observed = false;
@@ -471,6 +473,11 @@ fn await_adapter_or_native_release(
             match crate::browser_execution::browser_writer_locks_absent_at(folder) {
                 Ok(false) => {
                     writer_was_observed = true;
+                    // Only Rust observes Firefox's existing on-disk checkpoint,
+                    // while the actual Windows native writer is still active.
+                    if crate::close_witness::live_run_checkpoint_reset(folder) {
+                        current_run_reset.store(true, Ordering::Release);
+                    }
                     released_since = None;
                 }
                 Ok(true) if writer_was_observed => {
@@ -544,6 +551,8 @@ fn run_python_with_input(
     let ready_seen_by_reader = Arc::clone(&native_ready_seen);
 
     let native_started = Instant::now();
+    let native_started_wall = SystemTime::now();
+    let current_run_reset = AtomicBool::new(false);
     let mut child = crate::windows_native::background_command(executable)
         .arg("-B")
         .arg(runtime_root.join(ENTRYPOINT))
@@ -674,6 +683,7 @@ fn run_python_with_input(
             folder,
             &native_ready_seen,
             NATIVE_STARTUP_PROOF_TIMEOUT,
+            &current_run_reset,
         )?
     } else {
         (
@@ -707,14 +717,53 @@ fn run_python_with_input(
     } else {
         None
     };
-    Ok(classify_native_browser_completion(
+    let completion = classify_native_browser_completion(
         action,
         browser_ready,
         completed.success(),
         native_close_seen.load(Ordering::Acquire),
         native_adapter_released,
         native_writer_absent,
-    ))
+    );
+    if action != "--local-open"
+        || !matches!(
+            completion,
+            NativeBrowserCompletion::SdkClosed | NativeBrowserCompletion::NativeWriterReleased
+        )
+    {
+        return Ok(completion);
+    }
+    // A crashed Firefox produces the same SDK close event, Python exit=0,
+    // and released parent.lock as a graceful user Close. The sole Rust owner
+    // must independently prove an actual Firefox final state from THIS run.
+    let writer_released = (0..20).any(|attempt| {
+        match crate::browser_execution::browser_writer_locks_absent_at(folder) {
+            Ok(true) => true,
+            _ if attempt < 19 => {
+                std::thread::sleep(Duration::from_millis(50));
+                false
+            }
+            _ => false,
+        }
+    });
+    if !writer_released {
+        return Ok(NativeBrowserCompletion::CloseUnconfirmed);
+    }
+    Ok(
+        match crate::close_witness::verify_final_close(
+            folder,
+            native_started_wall,
+            current_run_reset.load(Ordering::Acquire),
+        ) {
+            crate::close_witness::CloseWitness::Clean => completion,
+            crate::close_witness::CloseWitness::RecoveryRequired => {
+                NativeBrowserCompletion::RecoveryRequired
+            }
+            crate::close_witness::CloseWitness::Unconfirmed => {
+                NativeBrowserCompletion::CloseUnconfirmed
+            }
+        },
+    )
 }
 
 fn mark_local_unsynced(folder: &Path) -> Result<(), LocalOpenError> {
@@ -920,7 +969,19 @@ fn open_under_profile_admission(
             // Keep the durable writer admission: Firefox may still own bytes.
             return Err(LocalOpenError::LaunchConfirmation);
         }
-        NativeBrowserCompletion::CloseUnconfirmed => {
+        NativeBrowserCompletion::CloseUnconfirmed | NativeBrowserCompletion::RecoveryRequired => {
+            // A crashed Firefox has genuinely released its kernel file handle.
+            // Retain every original browser byte and .local-unsynced marker,
+            // but free the Bridge admission to permit the SAME profile to
+            // reopen/recover without a machine restart or manual deletion.
+            if matches!(
+                crate::browser_execution::browser_writer_locks_absent(&workspace),
+                Ok(true)
+            ) {
+                writer
+                    .release()
+                    .map_err(|_| LocalOpenError::InvalidLocalWorkspace)?;
+            }
             return Err(LocalOpenError::BrowserNotClosedCleanly);
         }
         NativeBrowserCompletion::SdkClosed | NativeBrowserCompletion::NativeWriterReleased => {}
@@ -1152,6 +1213,7 @@ mod tests {
             root.path(),
             &ready,
             Duration::from_secs(30),
+            &std::sync::atomic::AtomicBool::new(false),
         )?;
         released.join().expect("native writer release thread");
         assert!(
@@ -1182,6 +1244,7 @@ mod tests {
             root.path(),
             &ready,
             Duration::from_secs(30),
+            &std::sync::atomic::AtomicBool::new(false),
         )?;
         assert!(
             status.success(),
@@ -1199,6 +1262,7 @@ mod tests {
             root.path(),
             &ready,
             Duration::from_secs(30),
+            &std::sync::atomic::AtomicBool::new(false),
         )?;
         assert!(status.success());
         assert!(!stopped, "missing READY must not authorize stop");
@@ -1211,6 +1275,7 @@ mod tests {
             root.path(),
             &ready,
             Duration::from_secs(30),
+            &std::sync::atomic::AtomicBool::new(false),
         )?;
         assert!(status.success());
         assert!(!stopped, "unobserved writer must not authorize stop");
@@ -1344,6 +1409,7 @@ mod tests {
             directory.path(),
             &ready,
             Duration::from_millis(50),
+            &std::sync::atomic::AtomicBool::new(false),
         );
         assert_eq!(outcome, Err(LocalOpenError::LaunchConfirmation));
         assert!(
@@ -1379,6 +1445,7 @@ mod tests {
                 root.path(),
                 &ready,
                 Duration::from_millis(50),
+                &std::sync::atomic::AtomicBool::new(false),
             );
             assert_eq!(outcome, Err(LocalOpenError::LaunchConfirmation));
             assert!(
@@ -1440,6 +1507,7 @@ mod tests {
                 owner_workspace.path(),
                 &ready,
                 Duration::from_millis(50),
+                &std::sync::atomic::AtomicBool::new(false),
             );
             // Rust deliberately releases the profile admission on timeout.
             // The child, not this parent thread, retains kernel ownership.
