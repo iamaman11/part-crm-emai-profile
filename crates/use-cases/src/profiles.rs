@@ -1,8 +1,8 @@
 use crate::error::ApplicationError;
 use application_ports::CommandExecutionEvidence;
 use application_ports::profiles::{
-    ProfileApplicationPort, ProfileCreateWrite, ProfileRenameWrite, ProfilePortError, ProfilePortErrorClass,
-    ProfileReadModel, ProfileReplayDecision, ProfileReplayReceipt,
+    ProfileApplicationPort, ProfileCreateWrite, ProfilePortError, ProfilePortErrorClass,
+    ProfileReadModel, ProfileRenameWrite, ProfileReplayDecision, ProfileReplayReceipt,
 };
 use contracts::ProblemCode;
 use core::fmt;
@@ -26,8 +26,16 @@ pub struct ExecuteCreateProfileCommand {
 
 impl ExecuteCreateProfileCommand {
     #[must_use]
-    pub const fn new(profile_id: ProfileId, display_name: ProfileName, evidence: CommandExecutionEvidence) -> Self {
-        Self { profile_id, display_name, evidence }
+    pub const fn new(
+        profile_id: ProfileId,
+        display_name: ProfileName,
+        evidence: CommandExecutionEvidence,
+    ) -> Self {
+        Self {
+            profile_id,
+            display_name,
+            evidence,
+        }
     }
 }
 
@@ -76,7 +84,9 @@ impl ProfileDetails {
         &self.profile_id
     }
 
-    pub fn display_name(&self) -> &str { &self.display_name }
+    pub fn display_name(&self) -> &str {
+        &self.display_name
+    }
 
     #[must_use]
     pub const fn status(&self) -> ProfileStatus {
@@ -160,7 +170,12 @@ pub async fn execute_create_profile<P: ProfileApplicationPort>(
         ProfileReplayDecision::Conflict => return Err(ProfileOperationError::Conflict),
     }
 
-    let write = ProfileCreateWrite::new(profile, command.display_name, command.evidence, PROFILE_CREATED_EVENT_PAYLOAD);
+    let write = ProfileCreateWrite::new(
+        profile,
+        command.display_name,
+        command.evidence,
+        PROFILE_CREATED_EVENT_PAYLOAD,
+    );
     match port.create_profile(actor, &write).await {
         Ok(()) => Ok(ProfileMutationOutcome {
             result_code: "created".to_owned(),
@@ -203,11 +218,15 @@ pub async fn execute_rename_profile<P: ProfileApplicationPort>(
     if role != MembershipRole::TenantOwner {
         return Err(ProfileOperationError::NotFound);
     }
-    let next_version = command.expected_profile_version.next()
+    let next_version = command
+        .expected_profile_version
+        .next()
         .map_err(|_| ProfileOperationError::Conflict)?;
     let profile_id = command.profile_id.as_str().to_owned();
-    match port.decide_replay(actor, PROFILE_RENAME_COMMAND, &command.evidence)
-        .await.map_err(map_profile_port_error)?
+    match port
+        .decide_replay(actor, PROFILE_RENAME_COMMAND, &command.evidence)
+        .await
+        .map_err(map_profile_port_error)?
     {
         ProfileReplayDecision::Replay(receipt) => {
             return Ok(ProfileMutationOutcome {
@@ -221,22 +240,30 @@ pub async fn execute_rename_profile<P: ProfileApplicationPort>(
         ProfileReplayDecision::Miss => {}
     }
     let write = ProfileRenameWrite::new(
-        command.profile_id, command.display_name, command.expected_profile_version,
-        command.evidence, "{}",
+        command.profile_id,
+        command.display_name,
+        command.expected_profile_version,
+        command.evidence,
+        "{}",
     );
     match port.rename_profile(actor, &write).await {
         Ok(()) => Ok(ProfileMutationOutcome {
-            result_code: "renamed".to_owned(), resource_id: profile_id,
-            aggregate_version: next_version, replayed: false,
+            result_code: "renamed".to_owned(),
+            resource_id: profile_id,
+            aggregate_version: next_version,
+            replayed: false,
         }),
         Err(error) if error.class() == ProfilePortErrorClass::Conflict => {
-            match port.decide_replay(actor, PROFILE_RENAME_COMMAND, write.evidence())
-                .await.map_err(map_profile_port_error)?
+            match port
+                .decide_replay(actor, PROFILE_RENAME_COMMAND, write.evidence())
+                .await
+                .map_err(map_profile_port_error)?
             {
                 ProfileReplayDecision::Replay(receipt) => Ok(ProfileMutationOutcome {
                     result_code: receipt.result_code().to_owned(),
                     resource_id: receipt.result_reference().unwrap_or(&profile_id).to_owned(),
-                    aggregate_version: next_version, replayed: true,
+                    aggregate_version: next_version,
+                    replayed: true,
                 }),
                 _ => Err(ProfileOperationError::Conflict),
             }
@@ -372,8 +399,8 @@ mod tests {
     use crate::error::ApplicationError;
     use application_ports::CommandExecutionEvidence;
     use application_ports::profiles::{
-        ProfileApplicationPort, ProfileCreateWrite, ProfileRenameWrite, ProfilePortError, ProfilePortErrorClass,
-        ProfileReadModel, ProfileReplayDecision, ProfileReplayReceipt,
+        ProfileApplicationPort, ProfileCreateWrite, ProfilePortError, ProfilePortErrorClass,
+        ProfileReadModel, ProfileRenameWrite, ProfileReplayDecision, ProfileReplayReceipt,
     };
     use contracts::ProblemCode;
     use identity_access_domain::{
@@ -455,7 +482,13 @@ mod tests {
             }
         }
 
-        async fn rename_profile(&self, _actor: &ActorContext, _write: &ProfileRenameWrite) -> Result<(), ProfilePortError> { Ok(()) }
+        async fn rename_profile(
+            &self,
+            _actor: &ActorContext,
+            _write: &ProfileRenameWrite,
+        ) -> Result<(), ProfilePortError> {
+            Ok(())
+        }
 
         async fn find_visible_profile(
             &self,

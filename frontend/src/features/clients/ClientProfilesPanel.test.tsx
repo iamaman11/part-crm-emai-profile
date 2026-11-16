@@ -31,6 +31,7 @@ const clientId = 'client_01JCLIENTPROFILES';
 function profileItem(profileId: string, version: number) {
   return {
     profileId,
+    displayName: profileId,
     status: 'READY' as const,
     version,
     linkedClientId: clientId,
@@ -126,6 +127,7 @@ describe('ClientProfilesPanel relationship and native Open navigation', () => {
   it('loads the profile through its own visibility boundary before attach or atomic reassign', async () => {
     mockedGetProfile.mockResolvedValue({
       profileId: 'profile_01JCLIENTPROFILES_ATTACH',
+      displayName: 'profile_01JCLIENTPROFILES_ATTACH',
       status: 'READY',
       version: 7,
       linkedClientId: 'client_01JOTHER',

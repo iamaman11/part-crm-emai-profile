@@ -11,7 +11,8 @@ use crate::request_evidence;
 use application_ports::profiles::ProfileStatus;
 use control_plane_contract::RouteClass;
 use control_plane_contract::profile_generation_api::{
-    ProfileCreateRequest, ProfileRenameRequest, ProfileGrantRequest, ProfileProjectionDto, ProfileStatusDto,
+    ProfileCreateRequest, ProfileGrantRequest, ProfileProjectionDto, ProfileRenameRequest,
+    ProfileStatusDto,
 };
 use control_plane_contract::profile_relationship_api::{
     ProfileAssignmentRequest, ProfileDetachmentRequest,
@@ -29,8 +30,9 @@ use use_cases::profile_grants::{
     ProfileGrantOutcome, authorize_profile_grant, execute_profile_grant,
 };
 use use_cases::profiles::{
-    ExecuteCreateProfileCommand, ExecuteRenameProfileCommand, ProfileDetails, ProfileMutationOutcome, ProfileOperationError,
-    authorize_profile_create, execute_create_profile, execute_rename_profile, get_visible_profile,
+    ExecuteCreateProfileCommand, ExecuteRenameProfileCommand, ProfileDetails,
+    ProfileMutationOutcome, ProfileOperationError, authorize_profile_create,
+    execute_create_profile, execute_rename_profile, get_visible_profile,
 };
 use worker::{Env, Request, Response, Result};
 
@@ -124,7 +126,10 @@ async fn create_profile(request: &mut Request, env: &Env, tenant_id: &str) -> Re
 }
 
 async fn rename_profile(
-    request: &mut Request, env: &Env, tenant_id: &str, profile_id: &str,
+    request: &mut Request,
+    env: &Env,
+    tenant_id: &str,
+    profile_id: &str,
 ) -> Result<Response> {
     let Some(actor) = resolve_active_request_actor(request, env, Some(tenant_id)).await? else {
         return neutral_not_found(&correlation_hint(request));
@@ -151,11 +156,18 @@ async fn rename_profile(
     };
     let application = profile_application(env)?;
     match execute_rename_profile(
-        actor.actor(), membership_role(&actor), &application,
+        actor.actor(),
+        membership_role(&actor),
+        &application,
         ExecuteRenameProfileCommand {
-            profile_id, display_name, expected_profile_version: version, evidence,
+            profile_id,
+            display_name,
+            expected_profile_version: version,
+            evidence,
         },
-    ).await {
+    )
+    .await
+    {
         Ok(outcome) => rename_receipt(&outcome),
         Err(error) => operation_failure(actor.actor().correlation_id().as_str(), error),
     }
@@ -392,7 +404,9 @@ fn operation_failure(correlation_id: &str, error: ProfileOperationError) -> Resu
     match error {
         ProfileOperationError::NotFound => neutral_not_found(correlation_id),
         ProfileOperationError::Conflict => problem(correlation_id, 409, "conflict", "Conflict"),
-        ProfileOperationError::VersionConflict => problem(correlation_id, 409, "version_conflict", "Version Conflict"),
+        ProfileOperationError::VersionConflict => {
+            problem(correlation_id, 409, "version_conflict", "Version Conflict")
+        }
         ProfileOperationError::IntegrityFailure => problem(
             correlation_id,
             500,
@@ -501,7 +515,8 @@ fn rename_receipt(outcome: &ProfileMutationOutcome) -> Result<Response> {
         result_code: outcome.result_code().to_owned(),
         resource_id: outcome.resource_id().to_owned(),
         aggregate_version: outcome.aggregate_version().value(),
-    }).map(|response| response.with_status(200))
+    })
+    .map(|response| response.with_status(200))
 }
 
 fn assignment_receipt(outcome: &ProfileAssignmentOutcome) -> Result<Response> {

@@ -40,7 +40,9 @@ impl ProfileReadProjection {
         &self.profile_id
     }
 
-    pub fn display_name(&self) -> &str { &self.display_name }
+    pub fn display_name(&self) -> &str {
+        &self.display_name
+    }
 
     #[must_use]
     pub const fn status(&self) -> ProfileStatus {

@@ -55,7 +55,9 @@ impl ProfileProjection {
     pub const fn profile_id(&self) -> &ProfileId {
         &self.profile_id
     }
-    pub fn display_name(&self) -> &str { &self.display_name }
+    pub fn display_name(&self) -> &str {
+        &self.display_name
+    }
 
     #[must_use]
     pub fn status(&self) -> &str {

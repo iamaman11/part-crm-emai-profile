@@ -41,7 +41,7 @@ describe('Profile card client relationship (#870)', () => {
 
   it('attaches and detaches through the existing typed, versioned commands with confirmed readback', async () => {
     let current = {
-      profileId: 'profile_test', status: 'READY', version: 7,
+      profileId: 'profile_test', displayName: 'profile_test', status: 'READY', version: 7,
       linkedClientId: null as string | null, canOperate: true,
     };
     vi.mocked(getProfile).mockImplementation(async () =>
@@ -97,7 +97,7 @@ describe('Profile card client relationship (#870)', () => {
 
   it('refuses to infer an updated relationship from an old readback, without repeating the command', async () => {
     let current = {
-      profileId: 'profile_test', status: 'READY', version: 4,
+      profileId: 'profile_test', displayName: 'profile_test', status: 'READY', version: 4,
       linkedClientId: null as string | null, canOperate: true,
     };
     vi.mocked(getProfile).mockImplementation(async () => ({
@@ -211,7 +211,7 @@ describe('Profile names are D1-backed business metadata (#870)', () => {
 describe('ProfilesWorkspace generation refresh (#802 F06)', () => {
   it('opens with the authenticated tenant and selected local profile without a Worker launch request', async () => {
     profileLookup.mockResolvedValue({
-      profileId: 'profile_test', status: 'READY', version: 7, linkedClientId: null, canOperate: true,
+      profileId: 'profile_test', displayName: 'profile_test', status: 'READY', version: 7, linkedClientId: null, canOperate: true,
       activeGenerationId: 'generation_current',
     } as Awaited<ReturnType<typeof getProfile>>);
     const cache = new QueryClient({ defaultOptions: { queries: { retry: false } } });
@@ -249,7 +249,7 @@ describe('ProfilesWorkspace generation refresh (#802 F06)', () => {
   });
 
   it('refreshes authoritative profile and generation after deactivate/reactivate without reload', async () => {
-    const profile = { profileId: 'profile_test', status: 'READY', version: 11, linkedClientId: null, canOperate: true, activeGenerationId: 'generation_test' as string | null };
+    const profile = { profileId: 'profile_test', displayName: 'profile_test', status: 'READY', version: 11, linkedClientId: null, canOperate: true, activeGenerationId: 'generation_test' as string | null };
     const generation = { generationId: 'generation_test', status: 'VERIFIED', version: 3, verificationReference: null };
     profileLookup.mockImplementation(async () => ({ ...profile }) as Awaited<ReturnType<typeof getProfile>>);
     generationLookup.mockImplementation(async () => ({ ...generation }) as Awaited<ReturnType<typeof getGeneration>>);
@@ -316,7 +316,7 @@ describe('ProfilesWorkspace generation refresh (#802 F06)', () => {
       finishOld = resolve;
     });
     profileLookup.mockImplementation(async (_tenant, id) => ({
-      profileId: id, status: 'READY', version: 11, linkedClientId: null, canOperate: true,
+      profileId: id, displayName: id, status: 'READY', version: 11, linkedClientId: null, canOperate: true,
       activeGenerationId: id === 'profile_old' ? 'generation_old' : null,
     }) as Awaited<ReturnType<typeof getProfile>>);
     generationLookup.mockResolvedValue({
@@ -356,13 +356,13 @@ describe('ProfilesWorkspace generation refresh (#802 F06)', () => {
 
   it('replaces a pending Delete receipt with terminal DELETED after Refresh', async () => {
     let current: Awaited<ReturnType<typeof getProfile>> = {
-      profileId: 'profile_disposable', status: 'READY', version: 2,
+      profileId: 'profile_disposable', displayName: 'profile_disposable', status: 'READY', version: 2,
       linkedClientId: null, canOperate: true,
     };
     profileLookup.mockImplementation(async () => ({ ...current! }));
     vi.mocked(deleteProfile).mockImplementation(async () => {
       current = { ...current!, status: 'DELETING', version: 3 };
-      return { profileId: 'profile_disposable', status: 'DELETING',
+      return { profileId: 'profile_disposable', displayName: 'profile_disposable', status: 'DELETING',
         pendingObjects: 0 } as Awaited<ReturnType<typeof deleteProfile>>;
     });
     const cache = new QueryClient({ defaultOptions: { queries: { retry: false } } });
@@ -390,7 +390,7 @@ describe('ProfilesWorkspace generation refresh (#802 F06)', () => {
 
   it('automatically reads terminal DELETED without replaying the cloud Delete command', async () => {
     let current: Awaited<ReturnType<typeof getProfile>> = {
-      profileId: 'profile_pending', status: 'DELETING', version: 3,
+      profileId: 'profile_pending', displayName: 'profile_pending', status: 'DELETING', version: 3,
       linkedClientId: null, canOperate: false,
     };
     profileLookup.mockImplementation(async () => ({ ...current! }));
@@ -428,7 +428,7 @@ describe('ProfilesWorkspace generation refresh (#802 F06)', () => {
     const oldRead = new Promise<Awaited<ReturnType<typeof getProfile>>>((resolve) => {
       resolveOld = resolve;
     });
-    const ready = { profileId: 'profile_same', status: 'READY', version: 2,
+    const ready = { profileId: 'profile_same', displayName: 'profile_same', status: 'READY', version: 2,
       linkedClientId: null, canOperate: true } as Awaited<ReturnType<typeof getProfile>>;
     const deleted = { ...ready, status: 'DELETED', version: 4,
       canOperate: false } as Awaited<ReturnType<typeof getProfile>>;
@@ -440,7 +440,7 @@ describe('ProfilesWorkspace generation refresh (#802 F06)', () => {
       return deleted;
     });
     vi.mocked(deleteProfile).mockResolvedValue({
-      profileId: 'profile_same', status: 'DELETED', pendingObjects: 0,
+      profileId: 'profile_same', displayName: 'profile_same', status: 'DELETED', pendingObjects: 0,
     } as Awaited<ReturnType<typeof deleteProfile>>);
     const cache = new QueryClient({ defaultOptions: { queries: { retry: false } } });
     render(
@@ -467,7 +467,7 @@ describe('ProfilesWorkspace generation refresh (#802 F06)', () => {
 
   it('shows why a DELETED profile cannot be reopened without calling the Bridge', async () => {
     profileLookup.mockResolvedValue({
-      profileId: 'profile_deleted', status: 'DELETED', version: 3,
+      profileId: 'profile_deleted', displayName: 'profile_deleted', status: 'DELETED', version: 3,
       activeGenerationId: null, linkedClientId: null, canOperate: true,
     } as Awaited<ReturnType<typeof getProfile>>);
     const cache = new QueryClient({ defaultOptions: { queries: { retry: false } } });
@@ -490,7 +490,7 @@ describe('ProfilesWorkspace generation refresh (#802 F06)', () => {
 
   it('never exposes native Open to an independently visible viewer-only profile', async () => {
     profileLookup.mockResolvedValue({
-      profileId: 'profile_viewer', status: 'READY', version: 7,
+      profileId: 'profile_viewer', displayName: 'profile_viewer', status: 'READY', version: 7,
       activeGenerationId: 'generation_current', linkedClientId: null,
       canOperate: false,
     } as Awaited<ReturnType<typeof getProfile>>);
@@ -520,7 +520,7 @@ describe('ProfilesWorkspace generation refresh (#802 F06)', () => {
     profileLookup.mockImplementation(async (_tenant, id) => {
       if (id === 'profile_old') return oldRead;
       return {
-        profileId: id, status: 'READY', version: 8, linkedClientId: null, canOperate: true,
+        profileId: id, displayName: id, status: 'READY', version: 8, linkedClientId: null, canOperate: true,
       } as Awaited<ReturnType<typeof getProfile>>;
     });
     const cache = new QueryClient({ defaultOptions: { queries: { retry: false } } });
@@ -539,7 +539,7 @@ describe('ProfilesWorkspace generation refresh (#802 F06)', () => {
     await screen.findByRole('heading', { name: 'profile_new' });
     await act(async () => {
       resolveOld({
-        profileId: 'profile_old', status: 'SUSPENDED', version: 18, linkedClientId: null, canOperate: true,
+        profileId: 'profile_old', displayName: 'profile_old', status: 'SUSPENDED', version: 18, linkedClientId: null, canOperate: true,
       } as Awaited<ReturnType<typeof getProfile>>);
       await oldRead;
     });
@@ -560,7 +560,7 @@ describe('ProfilesWorkspace generation refresh (#802 F06)', () => {
       resolveCoordinator = resolve;
     });
     profileLookup.mockImplementation(async (_tenant, id) => ({
-      profileId: id, status: 'READY', version: 9, linkedClientId: null, canOperate: true,
+      profileId: id, displayName: id, status: 'READY', version: 9, linkedClientId: null, canOperate: true,
     }) as Awaited<ReturnType<typeof getProfile>>);
     generationLookup.mockReturnValue(oldGeneration);
     coordinatorLookup.mockReturnValue(oldCoordinator);
@@ -603,7 +603,7 @@ describe('ProfilesWorkspace generation refresh (#802 F06)', () => {
   it('revalidates the same selected profile and the directory after returning from Camoufox', async () => {
     let version = 7;
     profileLookup.mockImplementation(async () => ({
-      profileId: 'profile_external_save', status: 'READY', version,
+      profileId: 'profile_external_save', displayName: 'profile_external_save', status: 'READY', version,
       activeGenerationId: 'generation_current', linkedClientId: null, canOperate: true,
     }) as Awaited<ReturnType<typeof getProfile>>);
     const cache = new QueryClient({ defaultOptions: { queries: { retry: false } } });
@@ -629,7 +629,7 @@ describe('ProfilesWorkspace generation refresh (#802 F06)', () => {
 
   it('explains a quarantined generation and never submits its invalid activation', async () => {
     profileLookup.mockResolvedValue({
-      profileId: 'profile_test', status: 'READY', version: 7, activeGenerationId: 'generation_current',
+      profileId: 'profile_test', displayName: 'profile_test', status: 'READY', version: 7, activeGenerationId: 'generation_current',
       linkedClientId: null, canOperate: true,
     } as Awaited<ReturnType<typeof getProfile>>);
     generationLookup.mockResolvedValue({

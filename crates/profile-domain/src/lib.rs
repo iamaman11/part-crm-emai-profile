@@ -29,7 +29,9 @@ impl ProfileName {
     }
 
     #[must_use]
-    pub fn as_str(&self) -> &str { &self.0 }
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -358,7 +360,10 @@ mod profile_name_tests {
 
     #[test]
     fn profile_names_are_trimmed_and_bounded_without_altering_profile_identity() {
-        assert_eq!(ProfileName::parse("  Sales account  ").unwrap().as_str(), "Sales account");
+        assert_eq!(
+            ProfileName::parse("  Sales account  ").unwrap().as_str(),
+            "Sales account"
+        );
         assert_eq!(ProfileName::parse("Европа").unwrap().as_str(), "Европа");
         for invalid in ["", "   ", "bad\u{0000}name", "bad\nname"] {
             assert!(ProfileName::parse(invalid).is_err());

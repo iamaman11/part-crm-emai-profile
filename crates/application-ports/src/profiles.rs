@@ -59,7 +59,9 @@ impl ProfileCreateWrite {
         &self.profile
     }
 
-    pub const fn display_name(&self) -> &ProfileName { &self.display_name }
+    pub const fn display_name(&self) -> &ProfileName {
+        &self.display_name
+    }
 
     #[must_use]
     pub const fn evidence(&self) -> &CommandExecutionEvidence {
@@ -82,17 +84,36 @@ pub struct ProfileRenameWrite {
 }
 
 impl ProfileRenameWrite {
-    pub fn new(profile_id: ProfileId, display_name: ProfileName,
-        expected_profile_version: AggregateVersion, evidence: CommandExecutionEvidence,
-        event_payload_json: impl Into<String>) -> Self {
-        Self { profile_id, display_name, expected_profile_version, evidence,
-            event_payload_json: event_payload_json.into() }
+    pub fn new(
+        profile_id: ProfileId,
+        display_name: ProfileName,
+        expected_profile_version: AggregateVersion,
+        evidence: CommandExecutionEvidence,
+        event_payload_json: impl Into<String>,
+    ) -> Self {
+        Self {
+            profile_id,
+            display_name,
+            expected_profile_version,
+            evidence,
+            event_payload_json: event_payload_json.into(),
+        }
     }
-    pub const fn profile_id(&self) -> &ProfileId { &self.profile_id }
-    pub const fn display_name(&self) -> &ProfileName { &self.display_name }
-    pub const fn expected_profile_version(&self) -> AggregateVersion { self.expected_profile_version }
-    pub const fn evidence(&self) -> &CommandExecutionEvidence { &self.evidence }
-    pub fn event_payload_json(&self) -> &str { &self.event_payload_json }
+    pub const fn profile_id(&self) -> &ProfileId {
+        &self.profile_id
+    }
+    pub const fn display_name(&self) -> &ProfileName {
+        &self.display_name
+    }
+    pub const fn expected_profile_version(&self) -> AggregateVersion {
+        self.expected_profile_version
+    }
+    pub const fn evidence(&self) -> &CommandExecutionEvidence {
+        &self.evidence
+    }
+    pub fn event_payload_json(&self) -> &str {
+        &self.event_payload_json
+    }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -511,7 +532,9 @@ impl ProfileReadModel {
         &self.profile_id
     }
 
-    pub fn display_name(&self) -> &str { &self.display_name }
+    pub fn display_name(&self) -> &str {
+        &self.display_name
+    }
 
     #[must_use]
     pub const fn status(&self) -> ProfileStatus {
@@ -544,7 +567,11 @@ pub trait ProfileApplicationPort {
         write: &ProfileCreateWrite,
     ) -> Result<(), ProfilePortError>;
 
-    async fn rename_profile(&self, actor: &ActorContext, write: &ProfileRenameWrite) -> Result<(), ProfilePortError>;
+    async fn rename_profile(
+        &self,
+        actor: &ActorContext,
+        write: &ProfileRenameWrite,
+    ) -> Result<(), ProfilePortError>;
 
     async fn find_visible_profile(
         &self,

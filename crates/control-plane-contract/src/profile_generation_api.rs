@@ -535,8 +535,10 @@ mod tests {
     #[test]
     fn profile_mutations_are_strict_and_reject_legacy_request_digest() {
         assert!(
-            serde_json::from_str::<ProfileCreateRequest>(r#"{"profileId":"profile_01JTEST","displayName":"Test profile"}"#)
-                .is_ok()
+            serde_json::from_str::<ProfileCreateRequest>(
+                r#"{"profileId":"profile_01JTEST","displayName":"Test profile"}"#
+            )
+            .is_ok()
         );
         for value in [
             r#"{"profileId":"profile_01JTEST","requestDigest":"legacy"}"#,
