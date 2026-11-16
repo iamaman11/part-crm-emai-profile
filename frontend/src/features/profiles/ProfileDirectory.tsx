@@ -59,7 +59,7 @@ export function ProfileDirectory({
             <tbody>
               {visibleProfiles.map((profile) => (
                 <tr key={profile.profileId} aria-current={profile.profileId === selectedProfileId ? 'true' : undefined}>
-                  <td><code>{profile.profileId}</code></td>
+                  <td><strong>{profile.displayName}</strong> <code>{profile.profileId}</code></td>
                   <td>{profile.status}</td>
                   <td>{profile.linkedClientId ?? 'Unassigned'}</td>
                   <td>

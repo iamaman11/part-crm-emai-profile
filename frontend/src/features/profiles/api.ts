@@ -5,6 +5,7 @@ import {
   activateProfileGeneration as activateProfileGenerationOperation,
   assignProfileToClient as assignProfileToClientOperation,
   createProfileMetadata as createProfileMetadataOperation,
+  renameProfileMetadata as renameProfileMetadataOperation,
   deleteProfileMetadata as deleteProfileMetadataOperation,
   deactivateProfileGeneration as deactivateProfileGenerationOperation,
   detachProfileFromClient as detachProfileFromClientOperation,
@@ -27,6 +28,7 @@ import type {
   CoordinatorResponseDto,
   MutationReceipt,
   ProfileCreateRequest,
+  ProfileRenameRequest,
   ProfileDeleteResponse,
   ProfileDetachmentRequest,
   ProfileGenerationResponse,
@@ -38,6 +40,7 @@ import type {
 } from '../../shared/api/generated/operations';
 
 export type CreateProfileInput = ProfileCreateRequest;
+export type RenameProfileInput = ProfileRenameRequest;
 export type AssignProfileInput = AssignmentRequest;
 export type DetachProfileInput = ProfileDetachmentRequest;
 export type SetProfileGrantInput = ProfileGrantRequest;
@@ -69,12 +72,12 @@ export function getProfile(tenantId: string, profileId: string): Promise<Profile
   return getProfileMetadataOperation({ tenantId, profileId });
 }
 
-export function createProfile(tenantId: string, profileId: string, idempotencyKey: string): Promise<MutationReceipt> {
-  return createProfileMetadataOperation({
-    tenantId,
-    body: { profileId },
-    idempotencyKey,
-  });
+export function createProfile(tenantId: string, profileId: string, displayName: string, idempotencyKey: string): Promise<MutationReceipt> {
+  return createProfileMetadataOperation({ tenantId, body: { profileId, displayName }, idempotencyKey });
+}
+
+export function renameProfile(tenantId: string, profileId: string, body: RenameProfileInput, idempotencyKey: string): Promise<MutationReceipt> {
+  return renameProfileMetadataOperation({ tenantId, profileId, body, idempotencyKey });
 }
 
 export function deleteProfile(

@@ -14,6 +14,7 @@ import {
   getGeneration,
   getProfile,
   quarantineGeneration,
+  renameProfile,
   registerGeneration,
   setProfileGrant,
   verifyGeneration,
@@ -34,6 +35,9 @@ type GenerationActionCommand = (
   | { kind: 'activate' | 'deactivate'; expectedVersion: number }
   | { kind: 'quarantine'; expectedVersion: number }
 ) & { target: GenerationActionTarget };
+
+type ProfileNameCommand = ProfileSelection & { displayName: string; version: number };
+type ProfileNameReadback = ProfileSelection & { displayName: string; minVersion: number };
 
 type ProfileClientAssociationCommand =
   ProfileSelection
@@ -85,6 +89,9 @@ export function ProfilesWorkspace({
   const selected = useRef({ tenantId, profileId, generationId });
   selected.current = { tenantId, profileId, generationId };
 
+  const [profileNameDraft, setProfileNameDraft] = useState('');
+  const [profileNameUnconfirmed, setProfileNameUnconfirmed] = useState(false);
+  const profileNameReadback = useRef<ProfileNameReadback | null>(null);
   const [clientIdDraft, setClientIdDraft] = useState('');
   const [relationshipReason, setRelationshipReason] = useState('');
   const [relationshipRefreshUnconfirmed, setRelationshipRefreshUnconfirmed] = useState(false);
@@ -141,16 +148,60 @@ export function ProfilesWorkspace({
           relationshipReadback.current = null;
           setRelationshipRefreshUnconfirmed(false);
         }
+        const nameExpected = profileNameReadback.current;
+        if (nameExpected && nameExpected.tenantId === target.tenantId && nameExpected.profileId === target.profileId) {
+          if (!data || data.version < nameExpected.minVersion || data.displayName !== nameExpected.displayName) {
+            setProfileNameUnconfirmed(true);
+            return;
+          }
+          profileNameReadback.current = null;
+          setProfileNameUnconfirmed(false);
+        }
+        if (data) setProfileNameDraft(data.displayName);
         setProfile((previous) => acceptProfileReadback(previous, data ?? null));
       }
     },
   });
-  const create = useLogicalCommandMutation((id: string, idempotencyKey) => createProfile(tenantId, id, idempotencyKey), {
+  const create = useLogicalCommandMutation((input: { profileId: string; displayName: string }, idempotencyKey) => createProfile(tenantId, input.profileId, input.displayName, idempotencyKey), {
     onSuccess: (receipt) => {
       void cache.invalidateQueries({ queryKey: ['operator-query', tenantId, 'profiles'] });
       if (receipt?.resourceId) onProfileSelected(receipt.resourceId);
     },
   });
+  const rename = useLogicalCommandMutation(
+    (command: ProfileNameCommand, idempotencyKey) => renameProfile(
+      command.tenantId, command.profileId,
+      { displayName: command.displayName, expectedProfileVersion: command.version },
+      idempotencyKey,
+    ),
+    {
+      onSuccess: async (_receipt, command) => {
+        if (selected.current.tenantId !== command.tenantId
+          || selected.current.profileId !== command.profileId) return;
+        const expected: ProfileNameReadback = {
+          tenantId: command.tenantId, profileId: command.profileId,
+          displayName: command.displayName, minVersion: command.version + 1,
+        };
+        profileNameReadback.current = expected;
+        setProfileNameUnconfirmed(true);
+        void cache.invalidateQueries({ queryKey: ['operator-query', command.tenantId, 'profiles'] });
+        try {
+          const refreshed = await getProfile(command.tenantId, command.profileId);
+          if (selected.current.tenantId !== command.tenantId
+            || selected.current.profileId !== command.profileId
+            || profileNameReadback.current !== expected
+            || refreshed.version < expected.minVersion
+            || refreshed.displayName !== expected.displayName) return;
+          profileNameReadback.current = null;
+          setProfileNameUnconfirmed(false);
+          setProfile((previous) => acceptProfileReadback(previous, refreshed));
+          setProfileNameDraft(refreshed.displayName);
+        } catch {
+          // The command is not replayed when its readback is lost.
+        }
+      },
+    },
+  );
   const deleteAction = useMutation({
     mutationFn: async ({ targetTenant, targetProfile, expectedVersion }: {
       targetTenant: string;
@@ -305,6 +356,9 @@ export function ProfilesWorkspace({
     setGeneration(null);
     setCoordinator(null);
     setGenerationRefreshUnconfirmed(false);
+    setProfileNameDraft('');
+    setProfileNameUnconfirmed(false);
+    profileNameReadback.current = null;
     setClientIdDraft('');
     setRelationshipReason('');
     setRelationshipRefreshUnconfirmed(false);
@@ -396,7 +450,7 @@ export function ProfilesWorkspace({
     <div className="workspace-grid">
       <section className="panel">
         <span className="eyebrow">Browser profile</span>
-        <h2>{profile?.profileId ?? selectedProfileId ?? 'Profile'}</h2>
+        <h2>{profile?.displayName ?? profile?.profileId ?? selectedProfileId ?? 'Profile'}</h2>
         <details><summary>Find a profile by identifier</summary>
         <form
           className="stack-form"
@@ -457,11 +511,41 @@ export function ProfilesWorkspace({
           </dl>
           {owner && ['DRAFT', 'READY', 'SUSPENDED', 'QUARANTINED'].includes(profile.status) && (
             <details>
+              <summary>Rename profile</summary>
+              <form className="stack-form" onSubmit={(event) => {
+                event.preventDefault();
+                if (rename.isPending || profileNameUnconfirmed || relationship.isPending
+                  || !profileNameDraft.trim() || profileNameDraft.trim() === profile.displayName) return;
+                rename.mutate({
+                  tenantId, profileId: profile.profileId, version: profile.version,
+                  displayName: profileNameDraft.trim(),
+                });
+              }}>
+                <label htmlFor="profile-display-name">Profile name</label>
+                <input id="profile-display-name" value={profileNameDraft}
+                  onChange={(event) => setProfileNameDraft(event.currentTarget.value)}
+                  maxLength={80} required />
+                <button type="submit" disabled={rename.isPending || profileNameUnconfirmed
+                  || relationship.isPending || !profileNameDraft.trim()
+                  || profileNameDraft.trim() === profile.displayName}>Save name</button>
+              </form>
+              <StatusMessage state={rename.error ?? (rename.isPending ? 'Renaming profile…' : null)} />
+              {profileNameUnconfirmed && <div role="alert">
+                Rename command completed, but the updated name was not confirmed. Refresh without repeating the command.
+                <button type="button" disabled={lookup.isPending}
+                  onClick={() => lookup.mutate({ tenantId, profileId: profile.profileId })}>
+                  Refresh profile name
+                </button>
+              </div>}
+            </details>
+          )}
+          {owner && ['DRAFT', 'READY', 'SUSPENDED', 'QUARANTINED'].includes(profile.status) && (
+            <details>
               <summary>Manage client association</summary>
               <p>Client linkage is a business relationship; it does not grant profile access.</p>
               <form className="stack-form" onSubmit={(event: FormEvent<HTMLFormElement>) => {
                 event.preventDefault();
-                if (relationship.isPending || relationshipRefreshUnconfirmed
+                if (relationship.isPending || rename.isPending || profileNameUnconfirmed || relationshipRefreshUnconfirmed
                   || !clientIdDraft.trim() || !relationshipReason.trim()) return;
                 relationship.mutate({
                   kind: 'attach', tenantId, profileId: profile.profileId,
@@ -472,7 +556,7 @@ export function ProfilesWorkspace({
                 <input id="profile-client-association-id" value={clientIdDraft} onChange={(event) => setClientIdDraft(event.currentTarget.value)} placeholder="client_..." required />
                 <label htmlFor="profile-client-association-reason">Reason</label>
                 <input id="profile-client-association-reason" value={relationshipReason} onChange={(event) => setRelationshipReason(event.currentTarget.value)} maxLength={500} required />
-                <button type="submit" disabled={relationship.isPending || relationshipRefreshUnconfirmed || !clientIdDraft.trim() || !relationshipReason.trim() || clientIdDraft.trim() === profile.linkedClientId}>
+                <button type="submit" disabled={relationship.isPending || rename.isPending || profileNameUnconfirmed || relationshipRefreshUnconfirmed || !clientIdDraft.trim() || !relationshipReason.trim() || clientIdDraft.trim() === profile.linkedClientId}>
                   {profile.linkedClientId ? 'Change client' : 'Attach client'}
                 </button>
               </form>
@@ -480,7 +564,7 @@ export function ProfilesWorkspace({
                 <ConfirmAction
                   label="Detach client"
                   consequence="Remove only the Client/Profile relationship. Browser data and independent profile access remain unchanged."
-                  disabled={relationship.isPending || relationshipRefreshUnconfirmed || !relationshipReason.trim()}
+                  disabled={relationship.isPending || rename.isPending || profileNameUnconfirmed || relationshipRefreshUnconfirmed || !relationshipReason.trim()}
                   onConfirm={() => relationship.mutateAsync({
                     kind: 'detach', tenantId, profileId: profile.profileId,
                     version: profile.version, reason: relationshipReason.trim(),
@@ -509,11 +593,15 @@ export function ProfilesWorkspace({
       {!selectedProfileId && <section className="panel">
         <span className="eyebrow">New browser profile</span>
         <h2>Create profile</h2>
-        <p>Create a profile, then choose Open browser. The application prepares the browser state and saves changes when you close it.</p>
+        <p>Name your profile, then choose Open browser. The application prepares the browser state and saves changes when you close it.</p>
         <form className="stack-form" onSubmit={(event) => {
           event.preventDefault();
-          create.mutate(field(new FormData(event.currentTarget), 'profileId') || `profile_${globalThis.crypto.randomUUID().replaceAll('-', '')}`);
+          const data = new FormData(event.currentTarget);
+          create.mutate({ profileId: field(data, 'profileId') || `profile_${globalThis.crypto.randomUUID().replaceAll('-', '')}`,
+            displayName: field(data, 'displayName') });
         }}>
+          <label htmlFor="profile-create-name">Profile name</label>
+          <input id="profile-create-name" name="displayName" minLength={1} maxLength={80} required disabled={!enabled} placeholder="For example, Sales mailbox" />
           <details><summary>Advanced: custom identifier</summary>
             <label htmlFor="profile-create-id">Profile ID</label>
             <input id="profile-create-id" name="profileId" placeholder="Generated automatically" disabled={!enabled} />
