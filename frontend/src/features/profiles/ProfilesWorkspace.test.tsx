@@ -79,7 +79,7 @@ describe('Profile card client relationship (#870)', () => {
     );
 
     expect(await screen.findByRole('heading', { name: 'profile_test' })).toBeTruthy();
-    fireEvent.click(screen.getByText('Manage client association'));
+    fireEvent.click(await screen.findByText('Manage client association'));
     fireEvent.change(screen.getByLabelText('Client ID'), { target: { value: 'client_test' } });
     fireEvent.change(screen.getByLabelText('Reason'), { target: { value: 'Verified relationship' } });
     fireEvent.click(screen.getByRole('button', { name: 'Attach client' }));
@@ -116,7 +116,7 @@ describe('Profile card client relationship (#870)', () => {
       </QueryClientProvider>,
     );
     await screen.findByRole('heading', { name: 'profile_test' });
-    fireEvent.click(screen.getByText('Manage client association'));
+    fireEvent.click(await screen.findByText('Manage client association'));
     fireEvent.change(screen.getByLabelText('Client ID'), { target: { value: 'client_test' } });
     fireEvent.change(screen.getByLabelText('Reason'), { target: { value: 'Test assignment' } });
     fireEvent.click(screen.getByRole('button', { name: 'Attach client' }));
