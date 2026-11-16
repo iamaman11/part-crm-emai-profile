@@ -145,7 +145,7 @@ pub fn run_delivery_command(
 mod windows {
     use super::{ShippingCompositionError, ShippingDeliveryCommand};
     use crate::authoritative_generation::{
-        ensure_authoritative_current, prove_cold_current_restore,
+        ensure_authoritative_current_with_cold_evidence,
         reconcile_closed_draft_with_confirmed_current,
         reconcile_closed_ready_with_confirmed_current,
     };
@@ -1139,74 +1139,48 @@ mod windows {
         }
     }
 
-    /// Non-critical retention admission runs only after the *normal* Sync
-    /// owner has confirmed CURRENT and cleared local dirty/pending evidence.
-    /// It performs the existing independent R2 GET/AEAD/native-byte proof,
-    /// then asks the existing D1 owner to freeze a delayed exact predecessor.
-    /// Its failure cannot turn a committed Save into an error or create a
-    /// competing browser writer, Sync owner, R2 DELETE or persistent retry.
-    fn try_retire_predecessor_after_clean_sync(
+    /// Retention is strictly optional and only follows a REAL cold Restore.
+    /// That Restore already read/decrypted/materialized signed R2 CURRENT;
+    /// no second 200-MiB GET or upload runs in the user's Sync hot path.
+    /// Worker D1 owns exact admission; existing cron owns the eventual DELETE.
+    /// If not admitted, keep old immutable R2 bytes; never delay local Open
+    /// or revoke VERIFIED CURRENT on an optional cleanup failure.
+    pub(super) fn try_admit_retirement_after_cold_restore(
         intent: &crate::generation_initialization::InitialProfileOpen,
         binding: &WindowsDeviceApplicationBinding,
-        root: &MaterializationRoot,
         origin: &str,
-    ) {
-        let result = (|| -> Result<(), ()> {
-            let workspace = root
-                .open_profile_current(&intent.tenant_id, &intent.profile_id)
-                .map_err(|_| ())?;
-            if workspace.pending_sync().is_some()
-                || !matches!(
-                    std::fs::symlink_metadata(workspace.path().join(".local-unsynced")),
-                    Err(ref error) if error.kind() == std::io::ErrorKind::NotFound
-                )
-            {
-                return Err(());
-            }
-            let generation = workspace.base_generation_id().ok_or(())?.clone();
-            let version = workspace.profile_version();
+        generation: &profile_platform_primitives::GenerationId,
+        version: u64,
+        digest: [u8; 32],
+        prelude: &[u8],
+    ) -> bool {
+        let result = (|| -> Result<bool, ()> {
             let application =
                 WindowsDeviceApplication::from_system(origin.to_owned(), binding.clone())
                     .map_err(|_| ())?;
             let mut control =
                 ControlPlaneCoordinator::for_local_current_restore(application.transport());
-            let reader = WindowsSignedGenerationObjectGet::from_system().map_err(|_| ())?;
-            let mut downloader = VerifiedGenerationObjectStreamDownloader::new(reader);
-            let (native_digest, metadata_prelude) = prove_cold_current_restore(
-                root,
-                &intent.tenant_id,
-                &intent.profile_id,
-                &generation,
-                version,
-                binding.device_id(),
-                now().map_err(|_| ())?.value(),
-                &mut control,
-                &mut downloader,
-            )
-            .map_err(|_| ())?;
-            admit_retirement_with_uncertain_retry(
+            let admitted = admit_retirement_with_uncertain_retry(
                 || {
                     control.admit_cold_current_retirement(
                         &intent.tenant_id,
                         &intent.profile_id,
-                        &generation,
+                        generation,
                         version,
-                        &metadata_prelude,
-                        native_digest,
+                        prelude,
+                        digest,
                     )
                 },
                 thread::sleep,
             )
             .map_err(|_| ())?;
-            Ok(())
+            Ok(admitted)
         })();
-        if result.is_err() {
-            // Bounded local evidence only. A missed admission retains old R2
-            // bytes, and is never represented as a Save/CURRENT failure.
+        if !matches!(result, Ok(true)) {
             eprintln!("BRIDGE_COLD_CURRENT_RETIREMENT_DEFERRED");
         }
+        matches!(result, Ok(true))
     }
-
     fn wait_for_native_writer_release<E>(
         mut probe: impl FnMut() -> Result<bool, E>,
         mut pause: impl FnMut(Duration),
@@ -1341,9 +1315,8 @@ mod windows {
                         Cause::None,
                         0,
                     );
-                    if intent.status == InitialProfileStatus::Ready {
-                        try_retire_predecessor_after_clean_sync(intent, binding, root, origin);
-                    }
+                    // Optional predecessor retirement waits for a future actual
+                    // cold Restore, not a redundant full R2 GET in Sync.
                 }
                 return Ok(());
             }
@@ -1893,7 +1866,7 @@ mod windows {
                     .map_err(|_| ShippingCompositionError::RestoreUnavailable)?;
                 let mut downloader = VerifiedGenerationObjectStreamDownloader::new(reader);
                 let epoch = now()?.value();
-                ensure_authoritative_current(
+                let cold_evidence = ensure_authoritative_current_with_cold_evidence(
                     &root,
                     &intent.tenant_id,
                     &intent.profile_id,
@@ -1905,6 +1878,17 @@ mod windows {
                     &mut downloader,
                 )
                 .map_err(|_| ShippingCompositionError::RestoreUnavailable)?;
+                if let Some((digest, prelude)) = cold_evidence {
+                    try_admit_retirement_after_cold_restore(
+                        intent,
+                        &binding,
+                        &config.control_plane_origin,
+                        selected.generation_id(),
+                        intent.expected_version,
+                        digest,
+                        &prelude,
+                    );
+                }
                 // Re-enter the same local Open with the same runtime and owners.
                 open_local()
             }
@@ -2263,7 +2247,7 @@ mod tests {
 // No user profile, D1/R2 mutation or installed runtime is changed.
 #[cfg(all(windows, test))]
 mod physical_cloud_current_restore {
-    use crate::authoritative_generation::ensure_authoritative_current;
+    use crate::authoritative_generation::ensure_authoritative_current_with_cold_evidence;
     use crate::generation_reopen::{
         GenerationReopenControlPort, VerifiedGenerationObjectStreamDownloader,
     };
@@ -2313,7 +2297,7 @@ mod physical_cloud_current_restore {
         );
         let root = MaterializationRoot::open_or_create(&root_path)?;
         let epoch = u64::try_from(SystemTime::now().duration_since(UNIX_EPOCH)?.as_millis())?;
-        ensure_authoritative_current(
+        let cold_evidence = ensure_authoritative_current_with_cold_evidence(
             &root,
             binding.tenant_id(),
             &profile_id,
@@ -2333,6 +2317,31 @@ mod physical_cloud_current_restore {
         assert!(recovered.path().join("user_data").is_dir());
         assert!(!recovered.path().join(".local-unsynced").exists());
         let _ = recovered.inventory()?;
+        let (native_digest, prelude) =
+            cold_evidence.ok_or("authenticated cold Restore proof unavailable")?;
+        if std::env::var("PROFILE_BRIDGE_TEST_ALLOW_STAGING_MUTATION").as_deref()
+            == Ok("YES_SCOPED_DISPOSABLE_PROFILE")
+        {
+            let intent = crate::generation_initialization::InitialProfileOpen {
+                tenant_id: binding.tenant_id().clone(),
+                actor_id: binding.actor_id().clone(),
+                profile_id: profile_id.clone(),
+                expected_version: version,
+                status: crate::generation_initialization::InitialProfileStatus::Ready,
+            };
+            if !super::windows::try_admit_retirement_after_cold_restore(
+                &intent,
+                &binding,
+                "https://staging.alegria.by",
+                current.generation_id(),
+                version,
+                native_digest,
+                &prelude,
+            ) {
+                return Err("explicit staging cold retirement admission not confirmed".into());
+            }
+            eprintln!("STAGING_EXISTING_D1_COLD_RETIREMENT_ADMITTED");
+        }
         // Only a successful, authenticated, disposable Restore arms the
         // explicit opt-in physical staging Sync test for this profile.
         std::fs::write(
