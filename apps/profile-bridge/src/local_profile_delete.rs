@@ -177,7 +177,7 @@ mod tests {
     }
     fn response(status: &str, version: u64) -> Readback {
         Readback { status: 200, body: format!(
-            r#"{{"profileId":"profile_delete_test_01","status":"{status}","version":{version},"linkedClientId":null,"canOperate":false}}"#
+            r#"{{"profileId":"profile_delete_test_01","displayName":"Deleted test profile","status":"{status}","version":{version},"linkedClientId":null,"canOperate":false}}"#
         ).into_bytes() }
     }
     #[test]
