@@ -40,7 +40,8 @@ const PROFILE_DELETE_EXACT_REVISION: &str = "0041_profile_delete_exact_r2_receip
 const CURRENT_COLD_RETIREMENT_REVISION: &str = "0042_profile_current_cold_retirement.sql";
 const DELETE_ASSIGNMENT_LIFECYCLE_REVISION: &str = "0043_profile_delete_assignment_lifecycle.sql";
 const DELETE_SIGNED_PUT_EXPIRY_REVISION: &str = "0044_profile_delete_exact_upload_expiry.sql";
-const CURRENT_SUCCESSOR_FILES: [&str; 13] = [
+const PROFILE_NAME_REVISION: &str = "0045_profile_display_name.sql";
+const CURRENT_SUCCESSOR_FILES: [&str; 14] = [
     BRIDGE_ENROLLMENT_REVISION,
     PUBLIC_KEY_BINDING_REVISION,
     DEVICE_APPLICATION_AUTHORITY_REVISION,
@@ -54,6 +55,7 @@ const CURRENT_SUCCESSOR_FILES: [&str; 13] = [
     CURRENT_COLD_RETIREMENT_REVISION,
     DELETE_ASSIGNMENT_LIFECYCLE_REVISION,
     DELETE_SIGNED_PUT_EXPIRY_REVISION,
+    PROFILE_NAME_REVISION,
 ];
 
 #[derive(Debug, Clone)]
@@ -245,6 +247,17 @@ impl CatalogSuccessor {
             code_rollback_allowed: true,
             contract_preconditions: Vec::new(),
         });
+        ordered_history.push(PROFILE_NAME_REVISION.to_owned());
+        migration_source_roots.push(CURRENT_SUCCESSOR_ROOT.to_owned());
+        post_epoch.push(MigrationContract {
+            migration_file: PROFILE_NAME_REVISION.to_owned(),
+            migration_class: MigrationClass::Expand,
+            rollout_order: RolloutOrder::MigrateBeforeCode,
+            fail_forward_required: false,
+            destructive: false,
+            code_rollback_allowed: true,
+            contract_preconditions: Vec::new(),
+        });
         validate_contiguous_history(&ordered_history, predecessor_authority.historical_len)?;
         let history_digest =
             successor_history_digest(root, &ordered_history, &migration_source_roots)?;
@@ -318,9 +331,9 @@ impl CatalogSuccessor {
             .ordered_history
             .last()
             .ok_or_else(|| D1Error::new("Catalog successor-v2 migration lineage is empty"))?;
-        if latest != DELETE_SIGNED_PUT_EXPIRY_REVISION {
+        if latest != PROFILE_NAME_REVISION {
             return Err(D1Error::new(
-                "Catalog profile Delete signed PUT expiry requires exact schema0044",
+                "Catalog profile display name requires exact schema0045",
             ));
         }
         let target = latest;
@@ -891,7 +904,7 @@ fn repository_identity_from_components(components: &[Value]) -> Result<String, D
 mod tests {
     use super::{
         BRIDGE_ENROLLMENT_REVISION, CURRENT_COLD_RETIREMENT_REVISION, CURRENT_SUCCESSOR_ROOT,
-        DELETE_ASSIGNMENT_LIFECYCLE_REVISION, DELETE_SIGNED_PUT_EXPIRY_REVISION,
+        DELETE_ASSIGNMENT_LIFECYCLE_REVISION, DELETE_SIGNED_PUT_EXPIRY_REVISION, PROFILE_NAME_REVISION,
         DEVICE_APPLICATION_AUTHORITY_REVISION, NATIVE_BROWSER_RECOVERY_REVISION,
         PREDECESSOR_SUCCESSOR_ROOT, PROFILE_DELETE_EXACT_REVISION, PUBLIC_KEY_BINDING_REVISION,
         RETIREMENT_GUARD_REVISION, STREAMING_GENERATION_REVISION, SUCCESSOR_CONTRACT_REVISION,
@@ -908,7 +921,7 @@ mod tests {
     #[test]
     fn current_catalog_appends_initialization_after_pas2_contract() -> Result<(), Box<dyn Error>> {
         let authority = component_authority(&repository_root(), "catalog")?;
-        assert_eq!(authority.ordered_history.len(), 44);
+        assert_eq!(authority.ordered_history.len(), 45);
         assert_eq!(authority.ordered_history[31], BRIDGE_ENROLLMENT_REVISION);
         assert_eq!(authority.ordered_history[32], PUBLIC_KEY_BINDING_REVISION);
         assert_eq!(
@@ -918,9 +931,9 @@ mod tests {
         assert_eq!(authority.ordered_history[34], SUCCESSOR_CONTRACT_REVISION);
         assert_eq!(
             authority.current_repository_revision,
-            DELETE_SIGNED_PUT_EXPIRY_REVISION
+            PROFILE_NAME_REVISION
         );
-        assert_eq!(authority.post_epoch.len(), 18);
+        assert_eq!(authority.post_epoch.len(), 19);
         Ok(())
     }
 
@@ -929,15 +942,15 @@ mod tests {
         let contract = release_contract(&repository_root(), "catalog")?;
         assert_eq!(
             contract["target_schema_revision"],
-            DELETE_SIGNED_PUT_EXPIRY_REVISION
+            PROFILE_NAME_REVISION
         );
         assert_eq!(
             contract["supported_schema_min"],
-            DELETE_SIGNED_PUT_EXPIRY_REVISION
+            PROFILE_NAME_REVISION
         );
         assert_eq!(
             contract["supported_schema_max"],
-            DELETE_SIGNED_PUT_EXPIRY_REVISION
+            PROFILE_NAME_REVISION
         );
         Ok(())
     }
@@ -969,7 +982,7 @@ mod tests {
         let sources = catalog["executable_migration_sources"]
             .as_array()
             .ok_or("executable migration source projection is missing")?;
-        assert_eq!(sources.len(), 44);
+        assert_eq!(sources.len(), 45);
         assert_eq!(sources[26]["source_root"], PREDECESSOR_SUCCESSOR_ROOT);
         assert_eq!(sources[27]["source_root"], "migrations/d1");
         assert_eq!(sources[31]["migration_file"], BRIDGE_ENROLLMENT_REVISION);
@@ -1008,9 +1021,11 @@ mod tests {
         assert_eq!(sources[42]["source_root"], CURRENT_SUCCESSOR_ROOT);
         assert_eq!(
             sources[43]["migration_file"],
-            DELETE_SIGNED_PUT_EXPIRY_REVISION
+            PROFILE_NAME_REVISION
         );
         assert_eq!(sources[43]["source_root"], CURRENT_SUCCESSOR_ROOT);
+        assert_eq!(sources[44]["migration_file"], PROFILE_NAME_REVISION);
+        assert_eq!(sources[44]["source_root"], CURRENT_SUCCESSOR_ROOT);
         assert_eq!(
             projection["executable_schema_authority"],
             serde_json::json!([

@@ -971,7 +971,7 @@ def self_test() -> None:
         if first_archive.read_bytes() != second_archive.read_bytes():
             fail("identical D2 inputs produced non-deterministic release archives")
         schema_contract = first.get("schema_contract")
-        expected_latest_schema = "0044_profile_delete_exact_upload_expiry.sql"
+        expected_latest_schema = "0045_profile_display_name.sql"
         if not isinstance(schema_contract, dict) or not (
             schema_contract.get("database_component") == "catalog"
             and schema_contract.get("target_schema_revision") == expected_latest_schema
@@ -993,6 +993,7 @@ def self_test() -> None:
             "0042_profile_current_cold_retirement.sql",
             "0043_profile_delete_assignment_lifecycle.sql",
             "0044_profile_delete_exact_upload_expiry.sql",
+            "0045_profile_display_name.sql",
         ):
             require_regular_file(first_dir / "migrations" / "d1" / revision, "materialized successor migration")
 
