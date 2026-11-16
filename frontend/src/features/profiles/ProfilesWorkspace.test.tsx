@@ -2,16 +2,18 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { TenantProvider } from '../../app/TenantContext';
-import { changeGenerationActivation, deleteProfile, dispatchBrowserProfileDelete, dispatchBrowserProfileOpen, getCoordinator, getGeneration, getProfile } from './api';
+import { assignProfile, changeGenerationActivation, deleteProfile, detachProfile, dispatchBrowserProfileDelete, dispatchBrowserProfileOpen, getCoordinator, getGeneration, getProfile } from './api';
 import { ProfilesWorkspace } from './ProfilesWorkspace';
 
 vi.mock('./api', () => ({
   dispatchBrowserProfileOpen: vi.fn(),
   dispatchBrowserProfileDelete: vi.fn(),
+  assignProfile: vi.fn(),
   changeGenerationActivation: vi.fn(),
   commandCoordinator: vi.fn(),
   createProfile: vi.fn(),
   deleteProfile: vi.fn(),
+  detachProfile: vi.fn(),
   getCoordinator: vi.fn(),
   getGeneration: vi.fn(),
   getProfile: vi.fn(),
@@ -29,6 +31,105 @@ const localOpen = vi.mocked(dispatchBrowserProfileOpen);
 const localDelete = vi.mocked(dispatchBrowserProfileDelete);
 const terminalDeletedText =
   'Cloud deletion confirmed. To discard the local browser copy, close Camoufox and click Remove local copy. Local removal has not been verified.';
+
+describe('Profile card client relationship (#870)', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    window.history.replaceState(null, '', '/profiles');
+  });
+
+  it('attaches and detaches through the existing typed, versioned commands with confirmed readback', async () => {
+    let current = {
+      profileId: 'profile_test', status: 'READY', version: 7,
+      linkedClientId: null as string | null, canOperate: true,
+    };
+    vi.mocked(getProfile).mockImplementation(async () =>
+      ({ ...current }) as Awaited<ReturnType<typeof getProfile>>);
+    vi.mocked(assignProfile).mockImplementation(async (_tenant, _profileId, input, idempotencyKey) => {
+      expect(_tenant).toBe('tenant_test');
+      expect(_profileId).toBe('profile_test');
+      expect(input).toEqual({
+        clientId: 'client_test', reason: 'Verified relationship',
+        expectedProfileVersion: 7,
+      });
+      expect(idempotencyKey.length).toBeGreaterThan(4);
+      current = { ...current, linkedClientId: input.clientId, version: 8 };
+      return { resultCode: 'SUCCEEDED', resourceId: 'profile_test' } as Awaited<ReturnType<typeof assignProfile>>;
+    });
+    vi.mocked(detachProfile).mockImplementation(async (_tenant, _profileId, input, idempotencyKey) => {
+      expect(_tenant).toBe('tenant_test');
+      expect(_profileId).toBe('profile_test');
+      expect(input).toEqual({
+        reason: 'Verified detachment', expectedProfileVersion: 8,
+      });
+      expect(idempotencyKey.length).toBeGreaterThan(4);
+      current = { ...current, linkedClientId: null, version: 9 };
+      return { resultCode: 'SUCCEEDED', resourceId: 'profile_test' } as Awaited<ReturnType<typeof detachProfile>>;
+    });
+
+    const cache = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    render(
+      <QueryClientProvider client={cache}>
+        <TenantProvider loadTenantContexts={async () => ({
+          tenants: [{ tenantId: 'tenant_test', displayName: 'Test tenant', actorId: 'actor_test', role: 'TENANT_OWNER' }],
+        })}>
+          <ProfilesWorkspace selectedProfileId="profile_test" onProfileSelected={() => undefined} />
+        </TenantProvider>
+      </QueryClientProvider>,
+    );
+
+    expect(await screen.findByRole('heading', { name: 'profile_test' })).toBeTruthy();
+    fireEvent.click(screen.getByText('Manage client association'));
+    fireEvent.change(screen.getByLabelText('Client ID'), { target: { value: 'client_test' } });
+    fireEvent.change(screen.getByLabelText('Reason'), { target: { value: 'Verified relationship' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Attach client' }));
+    await waitFor(() => expect(assignProfile).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(screen.getByText('client_test')).toBeTruthy());
+
+    fireEvent.change(screen.getByLabelText('Reason'), { target: { value: 'Verified detachment' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Detach client' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Confirm Detach client' }));
+    await waitFor(() => expect(detachProfile).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(screen.getByText('Not assigned')).toBeTruthy());
+    expect(current.version).toBe(9);
+  });
+
+  it('refuses to infer an updated relationship from an old readback, without repeating the command', async () => {
+    let current = {
+      profileId: 'profile_test', status: 'READY', version: 4,
+      linkedClientId: null as string | null, canOperate: true,
+    };
+    vi.mocked(getProfile).mockImplementation(async () => ({
+      ...current,
+    }) as Awaited<ReturnType<typeof getProfile>>);
+    vi.mocked(assignProfile).mockResolvedValue({
+      resultCode: 'SUCCEEDED', resourceId: 'profile_test',
+    } as Awaited<ReturnType<typeof assignProfile>>);
+    const cache = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    render(
+      <QueryClientProvider client={cache}>
+        <TenantProvider loadTenantContexts={async () => ({
+          tenants: [{ tenantId: 'tenant_test', displayName: 'Test tenant', actorId: 'actor_test', role: 'TENANT_OWNER' }],
+        })}>
+          <ProfilesWorkspace selectedProfileId="profile_test" onProfileSelected={() => undefined} />
+        </TenantProvider>
+      </QueryClientProvider>,
+    );
+    await screen.findByRole('heading', { name: 'profile_test' });
+    fireEvent.click(screen.getByText('Manage client association'));
+    fireEvent.change(screen.getByLabelText('Client ID'), { target: { value: 'client_test' } });
+    fireEvent.change(screen.getByLabelText('Reason'), { target: { value: 'Test assignment' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Attach client' }));
+    expect(await screen.findByText(/Relationship command completed, but the new profile version was not confirmed/)).toBeTruthy();
+    expect((screen.getByRole('button', { name: 'Attach client' }) as HTMLButtonElement).disabled).toBe(true);
+    expect(assignProfile).toHaveBeenCalledTimes(1);
+    current = { ...current, version: 5, linkedClientId: 'client_test' };
+    fireEvent.click(screen.getByRole('button', { name: 'Refresh relationship' }));
+    await waitFor(() => expect(screen.getByText('client_test')).toBeTruthy());
+    expect(screen.queryByText(/Relationship command completed, but the new profile version was not confirmed/)).toBeNull();
+    expect(assignProfile).toHaveBeenCalledTimes(1);
+  });
+});
 
 describe('ProfilesWorkspace generation refresh (#802 F06)', () => {
   it('opens with the authenticated tenant and selected local profile without a Worker launch request', async () => {
