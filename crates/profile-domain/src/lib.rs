@@ -5,6 +5,33 @@ pub mod registry;
 use core::fmt;
 use profile_platform_primitives::{AggregateVersion, GenerationId, ProfileId, TenantId};
 
+/// Display metadata lives in D1; changing it never mutates a Firefox profile.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ProfileName(String);
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct InvalidProfileName;
+
+impl fmt::Display for InvalidProfileName {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str("profile name must contain 1-80 visible characters")
+    }
+}
+impl std::error::Error for InvalidProfileName {}
+
+impl ProfileName {
+    pub fn parse(input: impl AsRef<str>) -> Result<Self, InvalidProfileName> {
+        let value = input.as_ref().trim();
+        if value.is_empty() || value.chars().count() > 80 || value.chars().any(char::is_control) {
+            return Err(InvalidProfileName);
+        }
+        Ok(Self(value.to_owned()))
+    }
+
+    #[must_use]
+    pub fn as_str(&self) -> &str { &self.0 }
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum ProfileStatus {
     Draft,

@@ -2,7 +2,7 @@ use crate::commands::CommandExecutionEvidence;
 use core::fmt;
 use identity_access_domain::MembershipRole;
 pub use profile_domain::ProfileStatus;
-use profile_domain::{BrowserProfile, ProfileGeneration};
+use profile_domain::{BrowserProfile, ProfileGeneration, ProfileName};
 use profile_platform_primitives::{
     ActorContext, ActorId, AggregateVersion, AssignmentId, ClientId, GenerationId, ProfileId,
     TenantScope,
@@ -33,6 +33,7 @@ pub trait ProfileRepository {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ProfileCreateWrite {
     profile: BrowserProfile,
+    display_name: ProfileName,
     evidence: CommandExecutionEvidence,
     event_payload_json: String,
 }
@@ -41,11 +42,13 @@ impl ProfileCreateWrite {
     #[must_use]
     pub fn new(
         profile: BrowserProfile,
+        display_name: ProfileName,
         evidence: CommandExecutionEvidence,
         event_payload_json: impl Into<String>,
     ) -> Self {
         Self {
             profile,
+            display_name,
             evidence,
             event_payload_json: event_payload_json.into(),
         }
@@ -56,6 +59,8 @@ impl ProfileCreateWrite {
         &self.profile
     }
 
+    pub const fn display_name(&self) -> &ProfileName { &self.display_name }
+
     #[must_use]
     pub const fn evidence(&self) -> &CommandExecutionEvidence {
         &self.evidence
@@ -65,6 +70,29 @@ impl ProfileCreateWrite {
     pub fn event_payload_json(&self) -> &str {
         &self.event_payload_json
     }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ProfileRenameWrite {
+    profile_id: ProfileId,
+    display_name: ProfileName,
+    expected_profile_version: AggregateVersion,
+    evidence: CommandExecutionEvidence,
+    event_payload_json: String,
+}
+
+impl ProfileRenameWrite {
+    pub fn new(profile_id: ProfileId, display_name: ProfileName,
+        expected_profile_version: AggregateVersion, evidence: CommandExecutionEvidence,
+        event_payload_json: impl Into<String>) -> Self {
+        Self { profile_id, display_name, expected_profile_version, evidence,
+            event_payload_json: event_payload_json.into() }
+    }
+    pub const fn profile_id(&self) -> &ProfileId { &self.profile_id }
+    pub const fn display_name(&self) -> &ProfileName { &self.display_name }
+    pub const fn expected_profile_version(&self) -> AggregateVersion { self.expected_profile_version }
+    pub const fn evidence(&self) -> &CommandExecutionEvidence { &self.evidence }
+    pub fn event_payload_json(&self) -> &str { &self.event_payload_json }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -316,6 +344,7 @@ pub enum ProfileReplayDecision {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum ProfilePortErrorClass {
     Conflict,
+    VersionConflict,
     IntegrityFailure,
     InternalFailure,
     DependencyUnavailable,
@@ -342,6 +371,7 @@ impl fmt::Display for ProfilePortError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter.write_str(match self.class {
             ProfilePortErrorClass::Conflict => "profile port conflict",
+            ProfilePortErrorClass::VersionConflict => "profile port version conflict",
             ProfilePortErrorClass::IntegrityFailure => "profile port integrity failure",
             ProfilePortErrorClass::InternalFailure => "profile port internal failure",
             ProfilePortErrorClass::DependencyUnavailable => "profile port dependency unavailable",
@@ -452,6 +482,7 @@ impl std::error::Error for ProfileGrantPortError {}
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ProfileReadModel {
     profile_id: ProfileId,
+    display_name: String,
     status: ProfileStatus,
     version: AggregateVersion,
     linked_client_id: Option<ClientId>,
@@ -464,9 +495,11 @@ impl ProfileReadModel {
         status: ProfileStatus,
         version: AggregateVersion,
         linked_client_id: Option<ClientId>,
+        display_name: String,
     ) -> Self {
         Self {
             profile_id,
+            display_name,
             status,
             version,
             linked_client_id,
@@ -477,6 +510,8 @@ impl ProfileReadModel {
     pub const fn profile_id(&self) -> &ProfileId {
         &self.profile_id
     }
+
+    pub fn display_name(&self) -> &str { &self.display_name }
 
     #[must_use]
     pub const fn status(&self) -> ProfileStatus {
@@ -508,6 +543,8 @@ pub trait ProfileApplicationPort {
         actor: &ActorContext,
         write: &ProfileCreateWrite,
     ) -> Result<(), ProfilePortError>;
+
+    async fn rename_profile(&self, actor: &ActorContext, write: &ProfileRenameWrite) -> Result<(), ProfilePortError>;
 
     async fn find_visible_profile(
         &self,
