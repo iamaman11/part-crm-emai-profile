@@ -2032,6 +2032,32 @@ sys.stderr.flush()
     }
 
     /// Disposable official Camoufox GUI while a cloud Sync OS lock is active.
+    /// CI runs the complete native-test filter without a physical GUI and
+    /// deliberately has no scratch SDK / fingerprint / WM_CLOSE controller.
+    /// Skip ONLY that absent-fixture case. A partial test configuration is
+    /// a setup error, never a false green physical acceptance.
+    #[cfg(windows)]
+    fn physical_gui_fixture() -> Result<
+        Option<(std::path::PathBuf, std::path::PathBuf, std::path::PathBuf)>,
+        Box<dyn std::error::Error>,
+    > {
+        let runtime = std::env::var_os("PROFILE_BRIDGE_TEST_NATIVE_RUNTIME_ROOT");
+        let fingerprint = std::env::var_os("PROFILE_BRIDGE_TEST_SAVED_FPGEN_CONFIG");
+        let scratch = std::env::var_os("PROFILE_BRIDGE_TEST_SCRATCH_ROOT");
+        match (runtime, fingerprint, scratch) {
+            (None, None, None) => {
+                eprintln!("PHYSICAL_GUI_SKIPPED: no isolated Windows GUI fixture");
+                Ok(None)
+            }
+            (Some(runtime), Some(fingerprint), Some(scratch)) => {
+                Ok(Some((runtime.into(), fingerprint.into(), scratch.into())))
+            }
+            _ => {
+                Err("incomplete physical GUI test fixture; require all three scratch paths".into())
+            }
+        }
+    }
+
     /// Force-kill only this disposable Firefox GUI; then reopen the SAME
     /// profile while the cloud Sync admission remains held continuously.
     #[cfg(windows)]
@@ -2041,18 +2067,11 @@ sys.stderr.flush()
     -> Result<(), Box<dyn std::error::Error>> {
         use crate::local_profile::{ClosedSyncAdmission, MaterializationRoot};
         use profile_platform_primitives::DeviceId;
-        use std::{fs, path::PathBuf};
+        use std::fs;
 
-        let runtime = PathBuf::from(
-            std::env::var_os("PROFILE_BRIDGE_TEST_NATIVE_RUNTIME_ROOT")
-                .ok_or("missing test runtime")?,
-        );
-        let fpgen = PathBuf::from(
-            std::env::var_os("PROFILE_BRIDGE_TEST_SAVED_FPGEN_CONFIG")
-                .ok_or("missing official saved fingerprint")?,
-        );
-        let root_path =
-            std::env::var_os("PROFILE_BRIDGE_TEST_SCRATCH_ROOT").ok_or("missing scratch root")?;
+        let Some((runtime, fpgen, root_path)) = physical_gui_fixture()? else {
+            return Ok(());
+        };
         let root = MaterializationRoot::open_or_create(&root_path)?;
         let intent = intent();
         let generation = local_generation(&intent)?;
@@ -2108,18 +2127,11 @@ sys.stderr.flush()
     -> Result<(), Box<dyn std::error::Error>> {
         use crate::local_profile::{ClosedSyncAdmission, MaterializationRoot};
         use profile_platform_primitives::DeviceId;
-        use std::{fs, path::PathBuf};
+        use std::fs;
 
-        let runtime = PathBuf::from(
-            std::env::var_os("PROFILE_BRIDGE_TEST_NATIVE_RUNTIME_ROOT")
-                .ok_or("missing scratch SDK runtime")?,
-        );
-        let fpgen = PathBuf::from(
-            std::env::var_os("PROFILE_BRIDGE_TEST_SAVED_FPGEN_CONFIG")
-                .ok_or("missing scratch saved fingerprint")?,
-        );
-        let root_path = std::env::var_os("PROFILE_BRIDGE_TEST_SCRATCH_ROOT")
-            .ok_or("missing scratch materialization root")?;
+        let Some((runtime, fpgen, root_path)) = physical_gui_fixture()? else {
+            return Ok(());
+        };
         let root = MaterializationRoot::open_or_create(&root_path)?;
         let intent = intent();
         let generation = local_generation(&intent)?;
