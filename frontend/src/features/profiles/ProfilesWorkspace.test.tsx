@@ -81,12 +81,12 @@ describe('Profile card client relationship (#870)', () => {
     expect(await screen.findByRole('heading', { name: 'profile_test' })).toBeTruthy();
     fireEvent.click(await screen.findByText('Manage client association'));
     fireEvent.change(screen.getByLabelText('Client ID'), { target: { value: 'client_test' } });
-    fireEvent.change(screen.getByLabelText('Reason'), { target: { value: 'Verified relationship' } });
+    fireEvent.change(screen.getByLabelText('Reason', { selector: '#profile-client-association-reason' }), { target: { value: 'Verified relationship' } });
     fireEvent.click(screen.getByRole('button', { name: 'Attach client' }));
     await waitFor(() => expect(assignProfile).toHaveBeenCalledTimes(1));
     await waitFor(() => expect(screen.getByText('client_test')).toBeTruthy());
 
-    fireEvent.change(screen.getByLabelText('Reason'), { target: { value: 'Verified detachment' } });
+    fireEvent.change(screen.getByLabelText('Reason', { selector: '#profile-client-association-reason' }), { target: { value: 'Verified detachment' } });
     fireEvent.click(screen.getByRole('button', { name: 'Detach client' }));
     fireEvent.click(screen.getByRole('button', { name: 'Confirm Detach client' }));
     await waitFor(() => expect(detachProfile).toHaveBeenCalledTimes(1));
@@ -118,7 +118,7 @@ describe('Profile card client relationship (#870)', () => {
     await screen.findByRole('heading', { name: 'profile_test' });
     fireEvent.click(await screen.findByText('Manage client association'));
     fireEvent.change(screen.getByLabelText('Client ID'), { target: { value: 'client_test' } });
-    fireEvent.change(screen.getByLabelText('Reason'), { target: { value: 'Test assignment' } });
+    fireEvent.change(screen.getByLabelText('Reason', { selector: '#profile-client-association-reason' }), { target: { value: 'Test assignment' } });
     fireEvent.click(screen.getByRole('button', { name: 'Attach client' }));
     expect(await screen.findByText(/Relationship command completed, but the new profile version was not confirmed/)).toBeTruthy();
     expect((screen.getByRole('button', { name: 'Attach client' }) as HTMLButtonElement).disabled).toBe(true);
