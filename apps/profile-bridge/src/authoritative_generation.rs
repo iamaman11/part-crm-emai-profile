@@ -1553,6 +1553,42 @@ mod tests {
         Ok(())
     }
 
+    /// The already-required first cold Restore must yield exact authenticated
+    /// R2 retirement evidence from that ONE download, without a second GET.
+    #[cfg(windows)]
+    #[test]
+    fn cold_restore_retirement_evidence_uses_exactly_one_authenticated_download()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let fixture = Fixture::without_browser_identity()?;
+        let mut control = fixture.control();
+        let mut downloader = FakeStreamDownloader {
+            container: fixture.container.clone(),
+            calls: 0,
+        };
+        let evidence = super::ensure_authoritative_current_with_cold_evidence(
+            &fixture.root,
+            &fixture.tenant_id,
+            &fixture.profile_id,
+            &fixture.generation_id,
+            2,
+            &DeviceId::parse("device_single_cold_restore")?,
+            9,
+            &mut control,
+            &mut downloader,
+        )?
+        .ok_or("a real authorized cold Restore must yield verified native evidence")?;
+        assert_ne!(evidence.0, [0; 32]);
+        assert!(!evidence.1.is_empty());
+        assert_eq!(downloader.calls, 1, "must never re-download after Restore");
+        let restored = fixture
+            .root
+            .open_profile_current(&fixture.tenant_id, &fixture.profile_id)?;
+        assert_eq!(restored.profile_version(), 2);
+        assert_eq!(restored.base_generation_id(), Some(&fixture.generation_id));
+        assert!(!restored.path().join(".local-unsynced").exists());
+        fixture.cleanup();
+        Ok(())
+    }
     #[cfg(windows)]
     #[test]
     fn exact_current_cold_restore_proves_native_bytes_without_replacing_original()
