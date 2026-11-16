@@ -87,6 +87,7 @@ pub async fn dispatch(route: RouteClass, request: &Request, env: &Env) -> Result
                         .iter()
                         .map(|profile| ProfileListItemDto {
                             profile_id: profile.profile_id().as_str().to_owned(),
+                            display_name: profile.display_name().to_owned(),
                             status: profile_status(profile.status()).to_owned(),
                             version: profile.version().value(),
                             linked_client_id: profile
