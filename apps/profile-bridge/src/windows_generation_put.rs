@@ -9,20 +9,13 @@ use crate::shipping_generation_save::{
 use bridge_domain::BridgePortError;
 use encrypted_generation_domain::{MAX_GENERATION_CONTAINER_BYTES, MAX_STREAM_CONTAINER_BYTES};
 use std::collections::BTreeSet;
-use std::env;
-use std::fs;
 use std::io::Read;
-use std::path::{Path, PathBuf};
-use std::process::{Command, Output, Stdio};
 
 const MAX_SIGNED_GENERATION_URL_BYTES: usize = 8_192;
 const MAX_SIGNED_UPLOAD_HEADERS: usize = 16;
 const MAX_SIGNED_UPLOAD_HEADER_NAME_BYTES: usize = 128;
 const MAX_SIGNED_UPLOAD_HEADER_VALUE_BYTES: usize = 1_024;
 const MAX_PUT_RESPONSE_BYTES: usize = 1_024;
-const CURL_CONNECT_TIMEOUT_SECONDS: &str = "10";
-const CURL_GENERATION_TOTAL_TIMEOUT_SECONDS: &str = "120";
-const HTTP_STATUS_MARKER: &[u8] = b"\nPROFILE_BRIDGE_HTTP_STATUS:";
 
 /// Effect-only Windows adapter for one server-issued immutable generation PUT capability.
 ///
@@ -32,21 +25,111 @@ const HTTP_STATUS_MARKER: &[u8] = b"\nPROFILE_BRIDGE_HTTP_STATUS:";
 /// pre-commit failure. Exact object verification remains server-owned and is required again before
 /// successor commit.
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub struct WindowsSignedGenerationObjectPut {
-    curl_executable: PathBuf,
-}
+pub struct WindowsSignedGenerationObjectPut;
 
 impl WindowsSignedGenerationObjectPut {
     pub fn from_system() -> Result<Self, BridgePortError> {
-        Ok(Self {
-            curl_executable: system_curl_executable()?,
+        Ok(Self)
+    }
+
+    fn request(
+        &self,
+        capability: &SignedGenerationUploadCapability,
+        body: reqwest::Body,
+        expected: u64,
+    ) -> Result<reqwest::RequestBuilder, BridgePortError> {
+        if expected == 0 || expected > MAX_STREAM_CONTAINER_BYTES {
+            return Err(BridgePortError::InvalidResponse);
+        }
+        let url = capability
+            .url()
+            .map_err(|_| BridgePortError::InvalidResponse)?;
+        if !valid_signed_r2_url(url) {
+            return Err(BridgePortError::InvalidResponse);
+        }
+        let headers = capability
+            .headers()
+            .map_err(|_| BridgePortError::InvalidResponse)?;
+        if headers.is_empty() || headers.len() > MAX_SIGNED_UPLOAD_HEADERS {
+            return Err(BridgePortError::InvalidResponse);
+        }
+        let mut names = BTreeSet::new();
+        let mut request = crate::native_transport::shared()?
+            .client
+            .put(url)
+            .timeout(std::time::Duration::from_secs(120))
+            .body(body);
+        for (name, value) in headers {
+            if !valid_header_name(name) || !valid_header_value(value) || !names.insert(name) {
+                return Err(BridgePortError::InvalidResponse);
+            }
+            // Framing is bounded and cannot be overridden by a capability.
+            if name == "transfer-encoding"
+                || (name == "content-length" && value.parse::<u64>().ok() != Some(expected))
+            {
+                return Err(BridgePortError::InvalidResponse);
+            }
+            let mut header = reqwest::header::HeaderValue::from_str(value)
+                .map_err(|_| BridgePortError::InvalidResponse)?;
+            header.set_sensitive(true);
+            request = request.header(name, header);
+        }
+        if !names.contains("content-length") {
+            request = request.header(reqwest::header::CONTENT_LENGTH, expected);
+        }
+        Ok(request)
+    }
+
+    fn send(request: reqwest::RequestBuilder) -> Result<(), BridgePortError> {
+        let transport = crate::native_transport::shared()?;
+        let started = std::time::Instant::now();
+        transport.runtime.block_on(async {
+            use crate::native_transport::{
+                HttpFailure, HttpOperation, completed, failure, note_failure,
+            };
+            let mut response = request
+                .send()
+                .await
+                .map_err(|e| failure(HttpOperation::GenerationPut, None, &e, started))?;
+            let status = response.status().as_u16();
+            let mut received = 0usize;
+            while let Some(chunk) = response
+                .chunk()
+                .await
+                .map_err(|e| failure(HttpOperation::GenerationPut, None, &e, started))?
+            {
+                received = received
+                    .checked_add(chunk.len())
+                    .ok_or(BridgePortError::InvalidResponse)?;
+                if received > MAX_PUT_RESPONSE_BYTES {
+                    return Err(note_failure(
+                        HttpOperation::GenerationPut,
+                        None,
+                        HttpFailure::Size,
+                        Some(status),
+                        Some(received as u64),
+                        started,
+                    )
+                    .into());
+                }
+            }
+            completed(
+                HttpOperation::GenerationPut,
+                None,
+                status,
+                received as u64,
+                started,
+            );
+            if !(200..300).contains(&status) || received != 0 {
+                return Err(BridgePortError::InvalidResponse);
+            }
+            Ok(())
         })
     }
 }
 
 impl SignedGenerationObjectPutPort for WindowsSignedGenerationObjectPut {
     type Error = BridgePortError;
-
     fn put_exact(
         &mut self,
         capability: &SignedGenerationUploadCapability,
@@ -55,9 +138,52 @@ impl SignedGenerationObjectPutPort for WindowsSignedGenerationObjectPut {
         if container.is_empty() || container.len() > MAX_GENERATION_CONTAINER_BYTES {
             return Err(BridgePortError::InvalidResponse);
         }
-        let mut reader = container;
-        self.put_bounded_source(capability, &mut reader, container.len() as u64)
+        let request = self.request(
+            capability,
+            reqwest::Body::from(container.to_vec()),
+            container.len() as u64,
+        )?;
+        Self::send(request)
     }
+}
+
+// Same open file identity: never reopen a path. The mutex is a revocation
+// barrier: after take(), no body poll can touch the shared file cursor.
+struct Source {
+    file: std::fs::File,
+    remaining: u64,
+    failed: bool,
+}
+type SourceGate = std::sync::Arc<std::sync::Mutex<Option<Source>>>;
+
+fn body_from_gate(gate: SourceGate) -> reqwest::Body {
+    let stream = futures_util::stream::poll_fn(move |_| {
+        use std::task::Poll;
+        let Ok(mut slot) = gate.lock() else {
+            return Poll::Ready(Some(Err::<Vec<u8>, _>(std::io::Error::other(
+                "source gate poisoned",
+            ))));
+        };
+        let Some(source) = slot.as_mut() else {
+            return Poll::Ready(None);
+        };
+        if source.remaining == 0 || source.failed {
+            return Poll::Ready(None);
+        }
+        let size = source.remaining.min(65536) as usize;
+        let mut bytes = vec![0u8; size];
+        match source.file.read_exact(&mut bytes) {
+            Ok(()) => {
+                source.remaining -= size as u64;
+                Poll::Ready(Some(Ok(bytes)))
+            }
+            Err(error) => {
+                source.failed = true;
+                Poll::Ready(Some(Err(error)))
+            }
+        }
+    });
+    reqwest::Body::wrap_stream(stream)
 }
 
 impl SignedGenerationObjectStreamPutPort for WindowsSignedGenerationObjectPut {
@@ -70,143 +196,36 @@ impl SignedGenerationObjectStreamPutPort for WindowsSignedGenerationObjectPut {
             .recheck_and_rewind()
             .map_err(|_| BridgePortError::InvalidResponse)?;
         let expected = object.expected_bytes();
-        let result = self.put_bounded_source(capability, object.reader(), expected);
-        // Always re-read the exact open handle after a network effect.
-        // A file mutation while uploading forbids returning success/commit.
+        let gate = std::sync::Arc::new(std::sync::Mutex::new(Some(Source {
+            file: object
+                .reader()
+                .try_clone()
+                .map_err(|_| BridgePortError::Unavailable)?,
+            remaining: expected,
+            failed: false,
+        })));
+        let result = self
+            .request(capability, body_from_gate(gate.clone()), expected)
+            .and_then(Self::send);
+        // Revoke even when send returns early. Acquiring the lock waits for a
+        // currently executing synchronous read; no later poll can read the file.
+        let source = gate
+            .lock()
+            .map_err(|_| BridgePortError::Unavailable)?
+            .take()
+            .ok_or(BridgePortError::Unavailable)?;
+        let complete = source.remaining == 0 && !source.failed;
+        drop(source);
         object
             .recheck_and_rewind()
             .map_err(|_| BridgePortError::InvalidResponse)?;
-        result
-    }
-}
-
-impl WindowsSignedGenerationObjectPut {
-    fn put_bounded_source<R: Read>(
-        &mut self,
-        capability: &SignedGenerationUploadCapability,
-        source: &mut R,
-        expected_bytes: u64,
-    ) -> Result<(), BridgePortError> {
-        if expected_bytes == 0 || expected_bytes > MAX_STREAM_CONTAINER_BYTES {
+        result?;
+        if !complete {
             return Err(BridgePortError::InvalidResponse);
         }
-        let signed_url = capability
-            .url()
-            .map_err(|_| BridgePortError::InvalidResponse)?;
-        if !valid_signed_r2_url(signed_url) {
-            return Err(BridgePortError::InvalidResponse);
-        }
-        let headers = capability
-            .headers()
-            .map_err(|_| BridgePortError::InvalidResponse)?;
-        if headers.is_empty() || headers.len() > MAX_SIGNED_UPLOAD_HEADERS {
-            return Err(BridgePortError::InvalidResponse);
-        }
-        let mut names = BTreeSet::new();
-        for (name, value) in &headers {
-            if !valid_header_name(name)
-                || !valid_header_value(value)
-                || !names.insert((*name).to_owned())
-            {
-                return Err(BridgePortError::InvalidResponse);
-            }
-        }
-
-        let mut command = crate::windows_native::background_command(&self.curl_executable);
-        command
-            .env_clear()
-            .arg("--silent")
-            .arg("--show-error")
-            .arg("--proto")
-            .arg("=https")
-            .arg("--max-redirs")
-            .arg("0")
-            .arg("--connect-timeout")
-            .arg(CURL_CONNECT_TIMEOUT_SECONDS)
-            .arg("--max-time")
-            .arg(CURL_GENERATION_TOTAL_TIMEOUT_SECONDS)
-            .arg("--max-filesize")
-            .arg(MAX_PUT_RESPONSE_BYTES.to_string())
-            .arg("--noproxy")
-            .arg("*")
-            .arg("--request")
-            .arg("PUT")
-            .arg("--url")
-            .arg(signed_url)
-            .arg("--data-binary")
-            .arg("@-")
-            .arg("--write-out")
-            .arg("\nPROFILE_BRIDGE_HTTP_STATUS:%{http_code}")
-            .stdin(Stdio::piped())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::null());
-        for (name, value) in headers {
-            command.arg("--header").arg(format!("{name}: {value}"));
-        }
-        inherit_windows_system_root(&mut command);
-
-        let mut child = command.spawn().map_err(|_| BridgePortError::Unavailable)?;
-        // Preserve bounded RAM for 512 MiB spools. A short read, extra
-        // trailing byte, or changed source is NOT a successful PUT.
-        let result = (|| -> Result<(), BridgePortError> {
-            let mut stdin = child.stdin.take().ok_or(BridgePortError::Unavailable)?;
-            let copied = std::io::copy(&mut (&mut *source).take(expected_bytes), &mut stdin)
-                .map_err(|_| BridgePortError::Unavailable)?;
-            if copied != expected_bytes {
-                return Err(BridgePortError::InvalidResponse);
-            }
-            drop(stdin); // curl needs EOF before writing its HTTP status.
-            let mut trailing = [0_u8; 1];
-            if source
-                .read(&mut trailing)
-                .map_err(|_| BridgePortError::Unavailable)?
-                != 0
-            {
-                return Err(BridgePortError::InvalidResponse);
-            }
-            Ok(())
-        })();
-        if let Err(error) = result {
-            let _ = child.kill();
-            let _ = child.wait();
-            return Err(error);
-        }
-        let output = child
-            .wait_with_output()
-            .map_err(|_| BridgePortError::Unavailable)?;
-        let (status, body) = decode_curl_http_output(output)?;
-        if !(200..300).contains(&status) || !body.is_empty() {
-            return Err(BridgePortError::InvalidResponse);
-        }
+        eprintln!("R2_NATIVE_PUT_SOURCE_VERIFIED bytes={expected}");
         Ok(())
     }
-}
-
-fn decode_curl_http_output(output: Output) -> Result<(u16, Vec<u8>), BridgePortError> {
-    let max_output_bytes = MAX_PUT_RESPONSE_BYTES
-        .checked_add(HTTP_STATUS_MARKER.len())
-        .and_then(|value| value.checked_add(3))
-        .ok_or(BridgePortError::InvalidResponse)?;
-    if !output.status.success() || output.stdout.len() > max_output_bytes {
-        return Err(BridgePortError::Unavailable);
-    }
-    let marker = output
-        .stdout
-        .windows(HTTP_STATUS_MARKER.len())
-        .rposition(|window| window == HTTP_STATUS_MARKER)
-        .ok_or(BridgePortError::InvalidResponse)?;
-    if marker > MAX_PUT_RESPONSE_BYTES {
-        return Err(BridgePortError::Unavailable);
-    }
-    let status_bytes = &output.stdout[marker + HTTP_STATUS_MARKER.len()..];
-    if status_bytes.len() != 3 || !status_bytes.iter().all(u8::is_ascii_digit) {
-        return Err(BridgePortError::InvalidResponse);
-    }
-    let status = std::str::from_utf8(status_bytes)
-        .map_err(|_| BridgePortError::InvalidResponse)?
-        .parse::<u16>()
-        .map_err(|_| BridgePortError::InvalidResponse)?;
-    Ok((status, output.stdout[..marker].to_vec()))
 }
 
 pub(crate) fn valid_signed_r2_url(value: &str) -> bool {
@@ -269,32 +288,6 @@ fn valid_header_value(value: &str) -> bool {
         && !value
             .bytes()
             .any(|byte| byte == b'\r' || byte == b'\n' || byte == 0)
-}
-
-pub(crate) fn system_curl_executable() -> Result<PathBuf, BridgePortError> {
-    let system_root = env::var_os("SystemRoot").ok_or(BridgePortError::Unavailable)?;
-    let curl_executable = PathBuf::from(system_root).join("System32").join("curl.exe");
-    validate_regular_absolute_file(&curl_executable)?;
-    Ok(curl_executable)
-}
-
-pub(crate) fn inherit_windows_system_root(command: &mut Command) {
-    for key in ["SystemRoot", "WINDIR"] {
-        if let Some(value) = env::var_os(key) {
-            command.env(key, value);
-        }
-    }
-}
-
-fn validate_regular_absolute_file(path: &Path) -> Result<(), BridgePortError> {
-    if !path.is_absolute() {
-        return Err(BridgePortError::InvalidResponse);
-    }
-    let metadata = fs::symlink_metadata(path).map_err(|_| BridgePortError::Unavailable)?;
-    if metadata.file_type().is_symlink() || !metadata.is_file() {
-        return Err(BridgePortError::InvalidResponse);
-    }
-    Ok(())
 }
 
 #[cfg(test)]

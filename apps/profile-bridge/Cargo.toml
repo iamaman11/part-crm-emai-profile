@@ -59,9 +59,21 @@ tempfile = "=3.23.0"
 zeroize.workspace = true
 
 [target.'cfg(windows)'.dependencies]
+futures-util = "=0.3.34"
+native-tls = "=0.2.18"
+thiserror = "=2.0.21"
+tracing = "=0.1.44"
+tracing-subscriber = { version = "=0.3.23", default-features = false, features = ["fmt", "json"] }
+reqwest = { version = "=0.13.5", default-features = false, features = ["native-tls", "http2", "stream", "system-proxy"] }
+tokio = { workspace = true, features = ["rt-multi-thread", "net", "time", "macros"] }
 windows-device-key = { path = "../../platform/windows-device-key" }
 windows-desktop-ui = { path = "../../platform/windows-desktop-ui" }
 windows-delivery-signature = { path = "../../platform/windows-delivery-signature" }
 
 [lints]
 workspace = true
+
+
+
+
+

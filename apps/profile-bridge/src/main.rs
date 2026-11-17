@@ -32,6 +32,20 @@ use std::process::ExitCode;
 use zeroize::Zeroizing;
 
 fn main() -> ExitCode {
+    #[cfg(windows)]
+    {
+        // Only the adapter's explicit allowlisted fields; never dependency HTTP tracing.
+        use tracing_subscriber::Layer;
+        use tracing_subscriber::filter::Targets;
+        use tracing_subscriber::layer::SubscriberExt;
+        let layer = tracing_subscriber::fmt::layer()
+            .json()
+            .with_writer(std::io::stderr)
+            .with_filter(
+                Targets::new().with_target("profile_bridge_transport", tracing::Level::INFO),
+            );
+        let _ = tracing::subscriber::set_global_default(tracing_subscriber::registry().with(layer));
+    }
     let internal_sync = env::args_os()
         .nth(1)
         .is_some_and(|arg| arg == "--sync-closed");

@@ -13,14 +13,6 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 
 #[cfg(windows)]
-use std::env;
-#[cfg(windows)]
-use std::os::windows::process::CommandExt;
-#[cfg(windows)]
-use std::process::{Child, Command, ExitStatus, Stdio};
-#[cfg(windows)]
-use std::thread;
-#[cfg(windows)]
 use std::time::{Duration, Instant};
 
 const RELEASE_SET_PREFIX: &str = "release-set-v3-sha256-";
@@ -39,116 +31,7 @@ static PENDING_SEQUENCE: AtomicU64 = AtomicU64::new(1);
 #[cfg(windows)]
 const FETCH_PROCESS_TIMEOUT: Duration = Duration::from_secs(15 * 60);
 #[cfg(windows)]
-const FETCH_PROCESS_POLL_INTERVAL: Duration = Duration::from_millis(250);
-#[cfg(windows)]
 const FETCH_NO_BYTE_TIMEOUT: Duration = Duration::from_secs(60);
-
-#[cfg(windows)]
-const FETCH_SCRIPT: &str = r#"param(
-    [Parameter(Mandatory=$true)][string]$Uri,
-    [Parameter(Mandatory=$true)][string]$Destination,
-    [Parameter(Mandatory=$true)][UInt64]$ExpectedSize
-)
-$ErrorActionPreference = 'Stop'
-$handler = $null
-$client = $null
-$response = $null
-$stream = $null
-$file = $null
-$code = 30
-try {
-    Add-Type -AssemblyName System.Net.Http
-    $handler = [System.Net.Http.HttpClientHandler]::new()
-    $handler.AllowAutoRedirect = $true
-    $handler.MaxAutomaticRedirections = 5
-    # Use Windows' configured user/system proxy. Do not log the proxy or credentials.
-    $handler.UseProxy = $true
-    $client = [System.Net.Http.HttpClient]::new($handler)
-    $client.Timeout = [System.TimeSpan]::FromMinutes(10)
-    [void]$client.DefaultRequestHeaders.UserAgent.ParseAdd('profile-bridge-windows-delivery/1')
-    $response = $client.GetAsync(
-        $Uri,
-        [System.Net.Http.HttpCompletionOption]::ResponseHeadersRead
-    ).GetAwaiter().GetResult()
-    if (-not $response.IsSuccessStatusCode) {
-        $code = 20
-    }
-    elseif (
-        $null -eq $response.RequestMessage -or
-        $response.RequestMessage.RequestUri.Scheme -cne 'https'
-    ) {
-        $code = 24
-    }
-    elseif (
-        $null -ne $response.Content.Headers.ContentLength -and
-        [UInt64]$response.Content.Headers.ContentLength -ne $ExpectedSize
-    ) {
-        $code = 21
-    }
-    else {
-        $stream = $response.Content.ReadAsStreamAsync().GetAwaiter().GetResult()
-        $file = [System.IO.File]::Open(
-            $Destination,
-            [System.IO.FileMode]::CreateNew,
-            [System.IO.FileAccess]::Write,
-            [System.IO.FileShare]::None
-        )
-        $buffer = New-Object byte[] 65536
-        [UInt64]$total = 0
-        $code = 0
-        while (($read = $stream.Read($buffer, 0, $buffer.Length)) -gt 0) {
-            $next = $total + [UInt64]$read
-            if ($next -gt $ExpectedSize) {
-                $code = 22
-                break
-            }
-            $file.Write($buffer, 0, $read)
-            $total = $next
-        }
-        if ($code -eq 0 -and $total -ne $ExpectedSize) {
-            $code = 23
-        }
-        if ($code -eq 0) {
-            $file.Flush($true)
-        }
-    }
-}
-catch {
-    # Only a closed numeric category crosses the installer boundary. Never emit
-    # the exception message, URL, proxy, stack trace or credentials.
-    $exception = $_.Exception
-    while ($null -ne $exception.InnerException) {
-        $exception = $exception.InnerException
-    }
-    if ($exception -is [System.Net.Sockets.SocketException]) {
-        if ($exception.SocketErrorCode -eq [System.Net.Sockets.SocketError]::HostNotFound -or
-            $exception.SocketErrorCode -eq [System.Net.Sockets.SocketError]::NoData -or
-            $exception.SocketErrorCode -eq [System.Net.Sockets.SocketError]::TryAgain) {
-            $code = 31 # DNS
-        } else {
-            $code = 32 # CONNECT
-        }
-    } elseif ($exception -is [System.Security.Authentication.AuthenticationException]) {
-        $code = 33 # TLS
-    } elseif ($exception -is [System.TimeoutException] -or
-              $exception -is [System.Threading.Tasks.TaskCanceledException]) {
-        $code = 34 # TIMEOUT
-    } elseif ($exception -is [System.IO.IOException] -or
-              $exception -is [System.UnauthorizedAccessException]) {
-        $code = 36 # DISK (read or write failure indistinguishable at this layer)
-    } else {
-        $code = 30 # UNCLASSIFIED_NETWORK_OR_IO
-    }
-}
-finally {
-    if ($null -ne $file) { $file.Dispose() }
-    if ($null -ne $stream) { $stream.Dispose() }
-    if ($null -ne $response) { $response.Dispose() }
-    if ($null -ne $client) { $client.Dispose() }
-    elseif ($null -ne $handler) { $handler.Dispose() }
-}
-exit $code
-"#;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct DeliveryDownloadRoot {
@@ -564,22 +447,12 @@ fn metadata_is_link_or_reparse(metadata: &Metadata) -> bool {
 
 #[cfg(windows)]
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub struct WindowsReleaseAssetFetcher {
-    powershell_executable: PathBuf,
-}
+pub struct WindowsReleaseAssetFetcher {}
 
 #[cfg(windows)]
 impl WindowsReleaseAssetFetcher {
     pub fn from_system() -> Result<Self, WindowsReleaseAssetFetcherError> {
-        let powershell_executable = system_powershell_executable()?;
-        Ok(Self {
-            powershell_executable,
-        })
-    }
-
-    #[must_use]
-    pub fn powershell_executable(&self) -> &Path {
-        &self.powershell_executable
+        Ok(Self {})
     }
 }
 
@@ -600,40 +473,18 @@ impl DeliveryAssetFetcher for WindowsReleaseAssetFetcher {
         let url = release_asset_url(release_set_id, asset_name)
             .ok_or(WindowsReleaseAssetFetcherError::InvalidRequest)?;
         validate_download_destination(destination)?;
-        let script_path = fetch_script_path(destination);
-        write_new_synced(&script_path, FETCH_SCRIPT.as_bytes())?;
-
-        let mut command = Command::new(&self.powershell_executable);
-        command.creation_flags(0x0800_0000); // CREATE_NO_WINDOW: setup owns the visible UI.
-        command
-            .env_clear()
-            .args(["-NoLogo", "-NoProfile", "-NonInteractive", "-File"])
-            .arg(&script_path)
-            .arg("-Uri")
-            .arg(url)
-            .arg("-Destination")
-            .arg(destination)
-            .arg("-ExpectedSize")
-            .arg(expected_size_bytes.to_string())
-            .stdin(Stdio::null())
-            .stdout(Stdio::null())
-            .stderr(Stdio::null());
-        inherit_windows_system_environment(&mut command);
-        let status = command
-            .spawn()
-            .map_err(|_| WindowsReleaseAssetFetcherError::Process)
-            .and_then(|mut child| {
-                wait_for_fetch_process(&mut child, destination, expected_size_bytes, asset_name)
-            });
-        let cleanup =
-            fs::remove_file(&script_path).map_err(|_| WindowsReleaseAssetFetcherError::ScratchIo);
-        let outcome = match (status, cleanup) {
-            (Ok(status), Ok(())) => fetch_exit_disposition(status.code()),
-            (Err(error), _) => Err(error),
-            (_, Err(error)) => Err(error),
-        };
+        let transport = crate::native_transport::shared()?;
+        let client = transport.delivery_client()?;
+        let outcome = transport.runtime.block_on(async {
+            tokio::time::timeout(
+                FETCH_PROCESS_TIMEOUT,
+                fetch_native(client, url, destination, expected_size_bytes, asset_name),
+            )
+            .await
+            .map_err(|_| WindowsReleaseAssetFetcherError::Timeout)?
+        });
         if let Err(error) = outcome {
-            // Static categories only. Never print the URL, raw PowerShell error,
+            // Static categories only. Never print the URL, raw network error,
             // proxy configuration, local path or any profile content.
             emit_install_failure(asset_name, error.category());
             // The canonical download owner knows the typed network failure.
@@ -680,141 +531,134 @@ fn validate_download_destination(path: &Path) -> Result<(), WindowsReleaseAssetF
 }
 
 #[cfg(windows)]
-fn fetch_script_path(destination: &Path) -> PathBuf {
-    let sequence = PENDING_SEQUENCE.fetch_add(1, Ordering::Relaxed);
-    destination.with_file_name(format!(
-        ".delivery-fetch-{}-{sequence}.ps1",
-        std::process::id()
-    ))
+async fn await_progress<F: std::future::Future>(
+    future: F,
+    asset: &str,
+    bytes: u64,
+    total: u64,
+    idle_limit: Duration,
+) -> Result<F::Output, WindowsReleaseAssetFetcherError> {
+    let mut future = std::pin::pin!(future);
+    let started = Instant::now();
+    let mut tick = tokio::time::interval_at(
+        tokio::time::Instant::now() + Duration::from_secs(1),
+        Duration::from_secs(1),
+    );
+    loop {
+        tokio::select! {
+            biased;
+            value = &mut future => return Ok(value),
+            _ = tick.tick() => {
+                let idle = started.elapsed();
+                emit_install_progress(asset, bytes, total, idle.as_secs());
+                if idle >= idle_limit { return Err(WindowsReleaseAssetFetcherError::Stalled); }
+            }
+        }
+    }
 }
 
 #[cfg(windows)]
-fn write_new_synced(path: &Path, bytes: &[u8]) -> Result<(), WindowsReleaseAssetFetcherError> {
+async fn fetch_native(
+    client: &reqwest::Client,
+    url: String,
+    destination: &Path,
+    expected_size: u64,
+    asset_name: &str,
+) -> Result<(), WindowsReleaseAssetFetcherError> {
+    use crate::native_transport::{HttpOperation, completed, failure};
+    let started = Instant::now();
+    let map = |e: reqwest::Error| {
+        WindowsReleaseAssetFetcherError::from(failure(HttpOperation::Delivery, None, &e, started))
+    };
+    emit_install_progress(asset_name, 0, expected_size, 0);
+    let mut response = await_progress(
+        client
+            .get(url)
+            .header(
+                reqwest::header::USER_AGENT,
+                "profile-bridge-windows-delivery/1",
+            )
+            .send(),
+        asset_name,
+        0,
+        expected_size,
+        FETCH_NO_BYTE_TIMEOUT,
+    )
+    .await?
+    .map_err(map)?;
+    let status = response.status().as_u16();
+    if !response.status().is_success() {
+        completed(HttpOperation::Delivery, None, status, 0, started);
+        return Err(WindowsReleaseAssetFetcherError::Http);
+    }
+    if response.url().scheme() != "https" {
+        return Err(WindowsReleaseAssetFetcherError::InsecureRedirect);
+    }
+    if response
+        .content_length()
+        .is_some_and(|len| len != expected_size)
+    {
+        return Err(WindowsReleaseAssetFetcherError::Size);
+    }
     let mut file = OpenOptions::new()
         .write(true)
         .create_new(true)
-        .open(path)
-        .map_err(|_| WindowsReleaseAssetFetcherError::ScratchIo)?;
-    file.write_all(bytes)
-        .and_then(|()| file.sync_all())
-        .map_err(|_| WindowsReleaseAssetFetcherError::ScratchIo)
-}
-
-#[cfg(windows)]
-fn system_powershell_executable() -> Result<PathBuf, WindowsReleaseAssetFetcherError> {
-    let system_root =
-        env::var_os("SystemRoot").ok_or(WindowsReleaseAssetFetcherError::PlatformUnavailable)?;
-    let executable = PathBuf::from(system_root)
-        .join("System32")
-        .join("WindowsPowerShell")
-        .join("v1.0")
-        .join("powershell.exe");
-    let metadata = fs::symlink_metadata(&executable)
-        .map_err(|_| WindowsReleaseAssetFetcherError::PlatformUnavailable)?;
-    if metadata_is_link_or_reparse(&metadata) || !metadata.is_file() {
-        return Err(WindowsReleaseAssetFetcherError::PlatformUnavailable);
-    }
-    Ok(executable)
-}
-
-#[cfg(windows)]
-fn inherit_windows_system_environment(command: &mut Command) {
-    for key in ["SystemRoot", "WINDIR"] {
-        if let Some(value) = env::var_os(key) {
-            command.env(key, value);
-        }
-    }
-}
-
-#[cfg(windows)]
-fn wait_for_fetch_process(
-    child: &mut Child,
-    destination: &Path,
-    expected_size: u64,
-    asset_name: &str,
-) -> Result<ExitStatus, WindowsReleaseAssetFetcherError> {
-    wait_for_fetch_process_with_limits(
-        child,
-        destination,
-        expected_size,
+        .open(destination)
+        .map_err(|_| WindowsReleaseAssetFetcherError::Disk)?;
+    let mut bytes = 0u64;
+    let mut last_report = Instant::now();
+    while let Some(chunk) = await_progress(
+        response.chunk(),
         asset_name,
+        bytes,
+        expected_size,
         FETCH_NO_BYTE_TIMEOUT,
-        FETCH_PROCESS_TIMEOUT,
     )
-}
-
-#[cfg(windows)]
-fn wait_for_fetch_process_with_limits(
-    child: &mut Child,
-    destination: &Path,
-    expected_size: u64,
-    asset_name: &str,
-    idle_limit: Duration,
-    total_limit: Duration,
-) -> Result<ExitStatus, WindowsReleaseAssetFetcherError> {
-    let started = Instant::now();
-    let mut last_byte_at = started;
-    let mut last_bytes = 0_u64;
-    let mut last_report_second = u64::MAX;
-    loop {
-        // Poll the actual destination file. No child output or remote headers are
-        // trusted to claim progress; the final size + SHA256 is still authoritative.
-        match fs::symlink_metadata(destination) {
-            Ok(metadata) if metadata.is_file() && !metadata_is_link_or_reparse(&metadata) => {
-                let bytes = metadata.len();
-                if bytes < last_bytes || bytes > expected_size {
-                    terminate_fetch(child)?;
-                    return Err(WindowsReleaseAssetFetcherError::Size);
-                }
-                if bytes != last_bytes {
-                    last_bytes = bytes;
-                    last_byte_at = Instant::now();
-                    last_report_second = u64::MAX;
-                }
-            }
-            Ok(_) => {
-                terminate_fetch(child)?;
-                return Err(WindowsReleaseAssetFetcherError::ScratchIo);
-            }
-            Err(error) if error.kind() == io::ErrorKind::NotFound => {}
-            Err(_) => {
-                terminate_fetch(child)?;
-                return Err(WindowsReleaseAssetFetcherError::ScratchIo);
-            }
+    .await?
+    .map_err(map)?
+    {
+        if chunk.is_empty() {
+            continue;
         }
-        let idle = last_byte_at.elapsed();
-        if last_report_second != idle.as_secs() {
-            emit_install_progress(asset_name, last_bytes, expected_size, idle.as_secs());
-            last_report_second = idle.as_secs();
+        let next = bytes
+            .checked_add(chunk.len() as u64)
+            .ok_or(WindowsReleaseAssetFetcherError::Size)?;
+        if next > expected_size {
+            return Err(WindowsReleaseAssetFetcherError::Size);
         }
-        match child.try_wait() {
-            Ok(Some(status)) => return Ok(status),
-            Ok(None) => {}
-            Err(_) => return Err(WindowsReleaseAssetFetcherError::Process),
+        file.write_all(&chunk)
+            .map_err(|_| WindowsReleaseAssetFetcherError::Disk)?;
+        bytes = next;
+        if last_report.elapsed() >= Duration::from_secs(1) {
+            emit_install_progress(asset_name, bytes, expected_size, 0);
+            last_report = Instant::now();
         }
-        if started.elapsed() >= total_limit {
-            terminate_fetch(child)?;
-            return Err(WindowsReleaseAssetFetcherError::Timeout);
-        }
-        if idle >= idle_limit {
-            terminate_fetch(child)?;
-            return Err(WindowsReleaseAssetFetcherError::Stalled);
-        }
-        thread::sleep(FETCH_PROCESS_POLL_INTERVAL);
     }
+    if bytes != expected_size {
+        return Err(WindowsReleaseAssetFetcherError::Size);
+    }
+    file.sync_all()
+        .map_err(|_| WindowsReleaseAssetFetcherError::Disk)?;
+    emit_install_progress(asset_name, bytes, expected_size, 0);
+    completed(HttpOperation::Delivery, None, status, bytes, started);
+    Ok(())
 }
 
 #[cfg(windows)]
-fn terminate_fetch(child: &mut Child) -> Result<(), WindowsReleaseAssetFetcherError> {
-    // On a stalled socket, the only permitted termination is the installer-owned
-    // network helper, never Firefox, Bridge user sessions or profile processes.
-    child
-        .kill()
-        .map_err(|_| WindowsReleaseAssetFetcherError::Process)?;
-    child
-        .wait()
-        .map_err(|_| WindowsReleaseAssetFetcherError::Process)?;
-    Ok(())
+impl From<crate::native_transport::HttpFailure> for WindowsReleaseAssetFetcherError {
+    fn from(value: crate::native_transport::HttpFailure) -> Self {
+        use crate::native_transport::HttpFailure;
+        match value {
+            HttpFailure::Dns => Self::Dns,
+            HttpFailure::Connect => Self::Connect,
+            HttpFailure::Tls => Self::Tls,
+            HttpFailure::Timeout => Self::Timeout,
+            HttpFailure::Redirect => Self::InsecureRedirect,
+            HttpFailure::Size => Self::Size,
+            HttpFailure::Disk => Self::Disk,
+            HttpFailure::Network => Self::Process,
+        }
+    }
 }
 
 #[cfg(windows)]
@@ -833,22 +677,6 @@ pub(crate) fn emit_install_stage(asset: &str, stage: &str) {
 fn emit_install_failure(asset: &str, category: &str) {
     println!("PROFILE_BRIDGE_DOWNLOAD_FAILURE_V1={asset}|{category}");
     let _ = io::stdout().flush();
-}
-
-#[cfg(windows)]
-fn fetch_exit_disposition(code: Option<i32>) -> Result<(), WindowsReleaseAssetFetcherError> {
-    match code {
-        Some(0) => Ok(()),
-        Some(20) => Err(WindowsReleaseAssetFetcherError::Http),
-        Some(21..=23) => Err(WindowsReleaseAssetFetcherError::Size),
-        Some(24) => Err(WindowsReleaseAssetFetcherError::InsecureRedirect),
-        Some(31) => Err(WindowsReleaseAssetFetcherError::Dns),
-        Some(32) => Err(WindowsReleaseAssetFetcherError::Connect),
-        Some(33) => Err(WindowsReleaseAssetFetcherError::Tls),
-        Some(34) => Err(WindowsReleaseAssetFetcherError::Timeout),
-        Some(36) => Err(WindowsReleaseAssetFetcherError::Disk),
-        _ => Err(WindowsReleaseAssetFetcherError::Process),
-    }
 }
 
 #[cfg(windows)]
@@ -1046,63 +874,54 @@ mod tests {
 
     #[cfg(windows)]
     #[test]
-    fn native_silent_fetch_exits_with_bounded_stall_and_cleans_child() -> TestResult {
-        let directory = TestDirectory::create("native-stall")?;
-        // No destination appears: this simulates the observed zero-byte
-        // response-header/connect hang without using a network endpoint.
-        let mut child = Command::new(system_powershell_executable()?)
-            .args([
-                "-NoLogo",
-                "-NoProfile",
-                "-NonInteractive",
-                "-Command",
-                "Start-Sleep -Seconds 30",
-            ])
-            .stdin(Stdio::null())
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .spawn()?;
-        let result = wait_for_fetch_process_with_limits(
-            &mut child,
-            &directory.0.join("still-missing.pending"),
-            1_188_812_800,
+    fn native_fetch_wait_has_bounded_stall() -> TestResult {
+        let transport = crate::native_transport::shared()?;
+        let result = transport.runtime.block_on(await_progress(
+            std::future::pending::<()>(),
             RUNTIME_BUNDLE_ASSET,
-            Duration::from_secs(2),
-            Duration::from_secs(10),
-        );
+            0,
+            100,
+            Duration::from_millis(50),
+        ));
         assert_eq!(result, Err(WindowsReleaseAssetFetcherError::Stalled));
-        assert!(child.try_wait()?.is_some(), "installer fetch child leaked");
         Ok(())
     }
 
     #[cfg(windows)]
     #[test]
-    fn network_categories_never_embed_urls_or_credentials() {
-        for (code, category) in [
-            (20, "HTTP"),
-            (21, "SIZE"),
-            (22, "SIZE"),
-            (23, "SIZE"),
-            (24, "INSECURE_REDIRECT"),
-            (31, "DNS"),
-            (32, "CONNECT"),
-            (33, "TLS"),
-            (34, "TIMEOUT"),
-            (36, "DISK"),
+    fn network_categories_are_closed_and_safe() {
+        use crate::native_transport::HttpFailure;
+        for (error, category) in [
+            (HttpFailure::Dns, "DNS"),
+            (HttpFailure::Connect, "CONNECT"),
+            (HttpFailure::Tls, "TLS"),
+            (HttpFailure::Timeout, "TIMEOUT"),
+            (HttpFailure::Redirect, "INSECURE_REDIRECT"),
+            (HttpFailure::Size, "SIZE"),
+            (HttpFailure::Disk, "DISK"),
+            (HttpFailure::Network, "NETWORK_OR_PROCESS"),
         ] {
             assert_eq!(
-                fetch_exit_disposition(Some(code)).unwrap_err().category(),
+                WindowsReleaseAssetFetcherError::from(error).category(),
                 category
             );
         }
-        assert_eq!(fetch_exit_disposition(Some(0)), Ok(()));
-        assert_eq!(
-            fetch_exit_disposition(Some(30)).unwrap_err().category(),
-            "NETWORK_OR_PROCESS"
-        );
-        assert!(FETCH_SCRIPT.contains("$handler.UseProxy = $true"));
-        assert!(!FETCH_SCRIPT.contains("Write-Host"));
-        assert!(!FETCH_SCRIPT.contains("Write-Error"));
+    }
+
+    #[cfg(windows)]
+    #[test]
+    #[ignore = "requires independently obtained published release identity, size and SHA-256"]
+    fn native_published_release_asset_exact_download() -> TestResult {
+        let directory = TestDirectory::create("native-release")?;
+        let dest = directory.0.join(PROFILE_BRIDGE_ASSET);
+        let mut fetcher = WindowsReleaseAssetFetcher::from_system()?;
+        let release = std::env::var("PROFILE_BRIDGE_TEST_RELEASE_ID")?;
+        let expected = std::env::var("PROFILE_BRIDGE_TEST_RELEASE_BYTES")?.parse::<u64>()?;
+        let digest = std::env::var("PROFILE_BRIDGE_TEST_RELEASE_SHA256")?;
+        fetcher.fetch_release_asset(&release, PROFILE_BRIDGE_ASSET, &dest, expected)?;
+        assert!(verify_file_identity(&dest, expected, &digest)?);
+        eprintln!("NATIVE_PUBLISHED_RELEASE_SHA256_VERIFIED");
+        Ok(())
     }
 
     struct RejectingFetcher;
@@ -1494,15 +1313,6 @@ mod tests {
                 Err(DeliveryDownloadError::InvalidRoot)
             );
         }
-        Ok(())
-    }
-
-    #[cfg(windows)]
-    #[test]
-    fn system_fetcher_uses_absolute_system_powershell() -> TestResult {
-        let fetcher = WindowsReleaseAssetFetcher::from_system()?;
-        assert!(fetcher.powershell_executable().is_absolute());
-        assert!(fetcher.powershell_executable().is_file());
         Ok(())
     }
 
