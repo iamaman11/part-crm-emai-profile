@@ -34,6 +34,7 @@ function profileItem(profileId: string, version: number) {
     displayName: profileId,
     status: 'READY' as const,
     version,
+    metadataVersion: version,
     linkedClientId: clientId,
     activeGenerationId: null,
   };
@@ -130,6 +131,7 @@ describe('ClientProfilesPanel relationship and native Open navigation', () => {
       displayName: 'profile_01JCLIENTPROFILES_ATTACH',
       status: 'READY',
       version: 7,
+      metadataVersion: 7,
       linkedClientId: 'client_01JOTHER',
     });
 
@@ -149,7 +151,7 @@ describe('ClientProfilesPanel relationship and native Open navigation', () => {
       {
         clientId,
         reason: 'move to selected client',
-        expectedProfileVersion: 7,
+        expectedMetadataVersion: 7,
       },
       expect.any(String),
     );
@@ -178,7 +180,7 @@ describe('ClientProfilesPanel relationship and native Open navigation', () => {
       tenantId,
       'profile_01JCLIENTPROFILES_DETACH',
       {
-        expectedProfileVersion: 4,
+        expectedMetadataVersion: 4,
         reason: 'relationship no longer applies',
       },
       expect.any(String),
