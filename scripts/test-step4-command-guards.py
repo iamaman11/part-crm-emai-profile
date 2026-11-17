@@ -19,12 +19,17 @@ ROLLBACK_PROFILE = "profile_rollback_commands"
 CONCURRENT_PROFILE = "profile_concurrent_commands"
 
 
-def database() -> sqlite3.Connection:
+def database(*, canonical_pas2: bool = False) -> sqlite3.Connection:
     connection = sqlite3.connect(":memory:")
     connection.row_factory = sqlite3.Row
     connection.execute("PRAGMA foreign_keys = ON")
     for migration in sorted(MIGRATIONS.glob("[0-9][0-9][0-9][0-9]_*.sql")):
-        connection.executescript(migration.read_text(encoding="utf-8"))
+        source = (
+            ROOT / "migrations/d1-successor/0027_pas2_payload_fingerprint_expand.sql"
+            if canonical_pas2 and migration.name == "0027_pas2_payload_fingerprint.sql"
+            else migration
+        )
+        connection.executescript(source.read_text(encoding="utf-8"))
     return connection
 
 
@@ -592,6 +597,80 @@ def test_profile_display_name_governance() -> None:
         connection.close()
 
 
+def test_profile_assignment_context_metadata_revision() -> None:
+    """Execute the shipping adapter SQL against divergent native and metadata revisions."""
+    connection = database(canonical_pas2=True)
+    try:
+        successor = ROOT / "migrations/d1-successor-v2"
+        for migration in sorted(successor.glob("[0-9][0-9][0-9][0-9]_*.sql")):
+            connection.executescript(migration.read_text(encoding="utf-8"))
+        seed(connection)
+        adapter = (ROOT / "crates/cloudflare-adapters/src/d1_profile_application.rs").read_text(
+            encoding="utf-8"
+        )
+
+        def context_sql(method: str) -> str:
+            return adapter.split(f"async fn {method}(", 1)[1].split('r#"', 1)[1].split('"#', 1)[0]
+
+        assign_sql = context_sql("load_profile_assignment_context")
+        detach_sql = context_sql("load_profile_detachment_context")
+        with connection:
+            connection.execute(
+                """
+                INSERT INTO profile_rename_commands (
+                    tenant_id, command_id, command_actor_id, profile_id, display_name,
+                    expected_metadata_version, executed_at_ms
+                ) VALUES (?, 'command_context_rename', ?, ?, 'Renamed profile', 1, 100)
+                """,
+                (TENANT, OWNER, PROFILE),
+            )
+
+        def revisions() -> tuple[int, int, str | None]:
+            row = connection.execute(
+                "SELECT version, metadata_version, active_generation_id FROM browser_profiles "
+                "WHERE tenant_id=? AND profile_id=?",
+                (TENANT, PROFILE),
+            ).fetchone()
+            return tuple(row)
+
+        def assignment(operation: str, command: str, expected: int, timestamp: int) -> None:
+            connection.execute(
+                """
+                INSERT INTO profile_assignment_commands (
+                    tenant_id, command_id, command_actor_id, assignment_id, profile_id,
+                    client_id, operation, expected_metadata_version, reason, executed_at_ms
+                ) VALUES (?, ?, ?, 'assignment_context_test', ?, ?, ?, ?, 'metadata context test', ?)
+                """,
+                (TENANT, command, OWNER, PROFILE, CLIENT, operation, expected, timestamp),
+            )
+
+        assert revisions() == (1, 2, None)
+        context = connection.execute(assign_sql, (CLIENT, TENANT, PROFILE)).fetchone()
+        assert context[0] == 2, "assignment adapter must read metadata revision, not native CURRENT"
+        assert context["profile_metadata_version"] == 2
+        assert context["current_assignment_id"] is None
+        expect_abort(lambda: assignment("ASSIGN", "command_context_stale_attach", 1, 101),
+                     "profile_assignment_version_mismatch")
+        connection.rollback()
+        with connection:
+            assignment("ASSIGN", "command_context_attach", context["profile_metadata_version"], 102)
+        assert revisions() == (1, 3, None)
+        context = connection.execute(detach_sql, (TENANT, PROFILE)).fetchone()
+        assert context[0] == 3, "detachment adapter must read metadata revision, not native CURRENT"
+        assert context["profile_metadata_version"] == 3
+        assert context["current_assignment_id"] == "assignment_context_test"
+        expect_abort(lambda: assignment("DETACH", "command_context_stale_detach", 2, 103),
+                     "profile_assignment_version_mismatch")
+        connection.rollback()
+        with connection:
+            assignment("DETACH", "command_context_detach", context["profile_metadata_version"], 104)
+        assert revisions() == (1, 4, None)
+        assert connection.execute(detach_sql, (TENANT, PROFILE)).fetchone()["current_assignment_id"] is None
+        assert connection.execute("PRAGMA foreign_key_check").fetchall() == []
+    finally:
+        connection.close()
+
+
 def main() -> int:
     connection = database()
     try:
@@ -602,6 +681,7 @@ def main() -> int:
         test_last_owner_and_membership_version(connection)
         test_invitation_and_resource_guards(connection)
         test_profile_display_name_governance()
+        test_profile_assignment_context_metadata_revision()
         assert connection.execute("PRAGMA foreign_key_check").fetchall() == []
         assert connection.execute("PRAGMA integrity_check").fetchone()[0] == "ok"
     finally:

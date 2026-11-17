@@ -189,7 +189,7 @@ where
         .map_err(map_port_error)?
         .ok_or(ProfileAssignmentOperationError::NotFound)?;
 
-    if context.profile_version() != command.expected_metadata_version {
+    if context.profile_metadata_version() != command.expected_metadata_version {
         return Err(ProfileAssignmentOperationError::VersionConflict);
     }
 
@@ -208,12 +208,12 @@ where
     )
     .map_err(map_transition_error)?;
     let next = transition.next();
-    let next_version = next_profile_assignment_version(context.profile_version())?;
+    let next_version = next_profile_assignment_version(context.profile_metadata_version())?;
     let write = ProfileAssignmentWrite::new(
         next.assignment_id().clone(),
         next.profile_id().clone(),
         next.client_id().clone(),
-        context.profile_version(),
+        context.profile_metadata_version(),
         next.reason(),
         command.evidence,
         EVENT_PAYLOAD,
@@ -277,7 +277,7 @@ where
         .map_err(map_port_error)?
         .ok_or(ProfileAssignmentOperationError::NotFound)?;
 
-    if context.profile_version() != command.expected_metadata_version {
+    if context.profile_metadata_version() != command.expected_metadata_version {
         return Err(ProfileAssignmentOperationError::VersionConflict);
     }
 
@@ -297,7 +297,7 @@ where
         closed.assignment_id().clone(),
         closed.profile_id().clone(),
         closed.client_id().clone(),
-        context.profile_version(),
+        context.profile_metadata_version(),
         reason,
         command.evidence,
         EVENT_PAYLOAD,

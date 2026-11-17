@@ -59,7 +59,7 @@ impl CurrentProfileAssignmentSnapshot {
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ProfileAssignmentContext {
-    profile_version: AggregateVersion,
+    profile_metadata_version: AggregateVersion,
     target_client: ClientRecord,
     current: Option<CurrentProfileAssignmentSnapshot>,
 }
@@ -67,20 +67,20 @@ pub struct ProfileAssignmentContext {
 impl ProfileAssignmentContext {
     #[must_use]
     pub const fn new(
-        profile_version: AggregateVersion,
+        profile_metadata_version: AggregateVersion,
         target_client: ClientRecord,
         current: Option<CurrentProfileAssignmentSnapshot>,
     ) -> Self {
         Self {
-            profile_version,
+            profile_metadata_version,
             target_client,
             current,
         }
     }
 
     #[must_use]
-    pub const fn profile_version(&self) -> AggregateVersion {
-        self.profile_version
+    pub const fn profile_metadata_version(&self) -> AggregateVersion {
+        self.profile_metadata_version
     }
 
     #[must_use]
@@ -96,25 +96,25 @@ impl ProfileAssignmentContext {
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ProfileDetachmentContext {
-    profile_version: AggregateVersion,
+    profile_metadata_version: AggregateVersion,
     current: Option<CurrentProfileAssignmentSnapshot>,
 }
 
 impl ProfileDetachmentContext {
     #[must_use]
     pub const fn new(
-        profile_version: AggregateVersion,
+        profile_metadata_version: AggregateVersion,
         current: Option<CurrentProfileAssignmentSnapshot>,
     ) -> Self {
         Self {
-            profile_version,
+            profile_metadata_version,
             current,
         }
     }
 
     #[must_use]
-    pub const fn profile_version(&self) -> AggregateVersion {
-        self.profile_version
+    pub const fn profile_metadata_version(&self) -> AggregateVersion {
+        self.profile_metadata_version
     }
 
     #[must_use]
