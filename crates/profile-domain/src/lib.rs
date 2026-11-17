@@ -360,7 +360,10 @@ mod profile_name_tests {
 
     #[test]
     fn profile_names_are_trimmed_and_bounded() -> Result<(), Box<dyn std::error::Error>> {
-        assert_eq!(ProfileName::parse("  Sales account  ")?.as_str(), "Sales account");
+        assert_eq!(
+            ProfileName::parse("  Sales account  ")?.as_str(),
+            "Sales account"
+        );
         assert_eq!(ProfileName::parse("Европа")?.as_str(), "Европа");
         for invalid in ["", "   ", "bad\u{0000}name", "bad\nname"] {
             assert!(ProfileName::parse(invalid).is_err());
