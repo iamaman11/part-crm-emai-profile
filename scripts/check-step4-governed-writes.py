@@ -764,6 +764,18 @@ def validate_profile_relationship_d1_behavior(errors: list[str]) -> None:
             None,
         ) or profile_metadata_version(database) != 5:
             errors.append("history-guard negative proof corrupted the active relationship")
+        # CRM-only operations must not mutate the browser/CURRENT lifecycle version.
+        # A native ProfileBridge that closed against the original version can Sync.
+        native_versions = database.execute(
+            "SELECT profile_id, version FROM browser_profiles "
+            "WHERE tenant_id = ? AND profile_id IN (?, ?) ORDER BY profile_id",
+            ("tenant_p1_fixture", "profile_p1_fixture", "profile_concurrent_p1_fixture"),
+        ).fetchall()
+        if len(native_versions) != 2 or any(row[1] != 1 for row in native_versions):
+            errors.append(
+                "CRM assignments/detach changed native browser Profile version; "
+                "subsequent local CURRENT Sync would be version-conflicted"
+            )
     except (AssertionError, OSError, sqlite3.DatabaseError) as error:
         errors.append(f"P1 governed relationship D1 behavior proof failed: {error}")
     finally:

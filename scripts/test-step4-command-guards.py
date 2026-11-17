@@ -543,6 +543,51 @@ def test_profile_display_name_governance() -> None:
             (TENANT,),
         ).fetchone()
         assert (row["display_name"], row["version"], row["metadata_version"]) == ("Renamed profile", 1, 2)
+
+        # Independently governed profile ACL changes also leave native CURRENT
+        # unchanged and serialize only against metadata_version.
+        with connection:
+            connection.execute(
+                """
+                INSERT INTO profile_grant_commands (
+                    tenant_id, command_id, command_actor_id, target_actor_id,
+                    profile_id, operation, role, expected_metadata_version,
+                    reason, executed_at_ms
+                ) VALUES (?, 'command_named_profile_grant', ?, ?,
+                          'profile_named_commands', 'GRANT', 'PROFILE_VIEWER', 2,
+                          'metadata authorization', 103)
+                """,
+                (TENANT, OWNER, MEMBER),
+            )
+        row = connection.execute(
+            "SELECT version, metadata_version FROM browser_profiles "
+            "WHERE tenant_id=? AND profile_id='profile_named_commands'",
+            (TENANT,),
+        ).fetchone()
+        assert (row["version"], row["metadata_version"]) == (1, 3)
+
+        expect_abort(
+            lambda: connection.execute(
+                """
+                INSERT INTO profile_grant_commands (
+                    tenant_id, command_id, command_actor_id, target_actor_id,
+                    profile_id, operation, role, expected_metadata_version,
+                    reason, executed_at_ms
+                ) VALUES (?, 'command_named_profile_stale_grant', ?, ?,
+                          'profile_named_commands', 'REVOKE', 'PROFILE_VIEWER', 2,
+                          'stale metadata authorization', 104)
+                """,
+                (TENANT, OWNER, MEMBER),
+            ),
+            "profile_grant_version_mismatch",
+        )
+        connection.rollback()
+        row = connection.execute(
+            "SELECT version, metadata_version FROM browser_profiles "
+            "WHERE tenant_id=? AND profile_id='profile_named_commands'",
+            (TENANT,),
+        ).fetchone()
+        assert (row["version"], row["metadata_version"]) == (1, 3)
     finally:
         connection.close()
 
