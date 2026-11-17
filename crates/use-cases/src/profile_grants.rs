@@ -37,7 +37,7 @@ impl ProfileGrantAction {
 pub struct ExecuteProfileGrantCommand {
     target_actor_id: ActorId,
     profile_id: ProfileId,
-    expected_profile_version: AggregateVersion,
+    expected_metadata_version: AggregateVersion,
     role: String,
     reason: String,
     evidence: CommandExecutionEvidence,
@@ -48,7 +48,7 @@ impl ExecuteProfileGrantCommand {
     pub fn new(
         target_actor_id: ActorId,
         profile_id: ProfileId,
-        expected_profile_version: AggregateVersion,
+        expected_metadata_version: AggregateVersion,
         role: impl Into<String>,
         reason: impl Into<String>,
         evidence: CommandExecutionEvidence,
@@ -56,7 +56,7 @@ impl ExecuteProfileGrantCommand {
         Self {
             target_actor_id,
             profile_id,
-            expected_profile_version,
+            expected_metadata_version,
             role: role.into(),
             reason: reason.into(),
             evidence,
@@ -163,7 +163,7 @@ pub async fn execute_profile_grant<P: ProfileGrantApplicationPort>(
     command: ExecuteProfileGrantCommand,
 ) -> Result<ProfileGrantOutcome, ProfileGrantOperationError> {
     authorize_profile_grant(membership_role)?;
-    let next_version = next_profile_grant_version(command.expected_profile_version)?;
+    let next_version = next_profile_grant_version(command.expected_metadata_version)?;
     let grant_role = parse_profile_grant_role(&command.role)?;
     let command_name = action.command_name();
 
@@ -187,7 +187,7 @@ pub async fn execute_profile_grant<P: ProfileGrantApplicationPort>(
     let write = ProfileGrantWrite::new(
         command.target_actor_id,
         command.profile_id,
-        command.expected_profile_version,
+        command.expected_metadata_version,
         grant_role,
         command.reason,
         command.evidence,

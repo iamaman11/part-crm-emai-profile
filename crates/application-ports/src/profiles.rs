@@ -78,7 +78,7 @@ impl ProfileCreateWrite {
 pub struct ProfileRenameWrite {
     profile_id: ProfileId,
     display_name: ProfileName,
-    expected_profile_version: AggregateVersion,
+    expected_metadata_version: AggregateVersion,
     evidence: CommandExecutionEvidence,
     event_payload_json: String,
 }
@@ -87,14 +87,14 @@ impl ProfileRenameWrite {
     pub fn new(
         profile_id: ProfileId,
         display_name: ProfileName,
-        expected_profile_version: AggregateVersion,
+        expected_metadata_version: AggregateVersion,
         evidence: CommandExecutionEvidence,
         event_payload_json: impl Into<String>,
     ) -> Self {
         Self {
             profile_id,
             display_name,
-            expected_profile_version,
+            expected_metadata_version,
             evidence,
             event_payload_json: event_payload_json.into(),
         }
@@ -105,8 +105,8 @@ impl ProfileRenameWrite {
     pub const fn display_name(&self) -> &ProfileName {
         &self.display_name
     }
-    pub const fn expected_profile_version(&self) -> AggregateVersion {
-        self.expected_profile_version
+    pub const fn expected_metadata_version(&self) -> AggregateVersion {
+        self.expected_metadata_version
     }
     pub const fn evidence(&self) -> &CommandExecutionEvidence {
         &self.evidence
@@ -121,7 +121,7 @@ pub struct ProfileAssignmentWrite {
     assignment_id: AssignmentId,
     profile_id: ProfileId,
     client_id: ClientId,
-    expected_profile_version: AggregateVersion,
+    expected_metadata_version: AggregateVersion,
     reason: String,
     evidence: CommandExecutionEvidence,
     event_payload_json: String,
@@ -133,7 +133,7 @@ impl ProfileAssignmentWrite {
         assignment_id: AssignmentId,
         profile_id: ProfileId,
         client_id: ClientId,
-        expected_profile_version: AggregateVersion,
+        expected_metadata_version: AggregateVersion,
         reason: impl Into<String>,
         evidence: CommandExecutionEvidence,
         event_payload_json: impl Into<String>,
@@ -142,7 +142,7 @@ impl ProfileAssignmentWrite {
             assignment_id,
             profile_id,
             client_id,
-            expected_profile_version,
+            expected_metadata_version,
             reason: reason.into(),
             evidence,
             event_payload_json: event_payload_json.into(),
@@ -165,8 +165,8 @@ impl ProfileAssignmentWrite {
     }
 
     #[must_use]
-    pub const fn expected_profile_version(&self) -> AggregateVersion {
-        self.expected_profile_version
+    pub const fn expected_metadata_version(&self) -> AggregateVersion {
+        self.expected_metadata_version
     }
 
     #[must_use]
@@ -190,7 +190,7 @@ pub struct ProfileDetachmentWrite {
     assignment_id: AssignmentId,
     profile_id: ProfileId,
     client_id: ClientId,
-    expected_profile_version: AggregateVersion,
+    expected_metadata_version: AggregateVersion,
     reason: String,
     evidence: CommandExecutionEvidence,
     event_payload_json: String,
@@ -202,7 +202,7 @@ impl ProfileDetachmentWrite {
         assignment_id: AssignmentId,
         profile_id: ProfileId,
         client_id: ClientId,
-        expected_profile_version: AggregateVersion,
+        expected_metadata_version: AggregateVersion,
         reason: impl Into<String>,
         evidence: CommandExecutionEvidence,
         event_payload_json: impl Into<String>,
@@ -211,7 +211,7 @@ impl ProfileDetachmentWrite {
             assignment_id,
             profile_id,
             client_id,
-            expected_profile_version,
+            expected_metadata_version,
             reason: reason.into(),
             evidence,
             event_payload_json: event_payload_json.into(),
@@ -234,8 +234,8 @@ impl ProfileDetachmentWrite {
     }
 
     #[must_use]
-    pub const fn expected_profile_version(&self) -> AggregateVersion {
-        self.expected_profile_version
+    pub const fn expected_metadata_version(&self) -> AggregateVersion {
+        self.expected_metadata_version
     }
 
     #[must_use]
@@ -264,7 +264,7 @@ pub enum ProfileGrantRole {
 pub struct ProfileGrantWrite {
     target_actor_id: ActorId,
     profile_id: ProfileId,
-    expected_profile_version: AggregateVersion,
+    expected_metadata_version: AggregateVersion,
     role: ProfileGrantRole,
     reason: String,
     evidence: CommandExecutionEvidence,
@@ -276,7 +276,7 @@ impl ProfileGrantWrite {
     pub fn new(
         target_actor_id: ActorId,
         profile_id: ProfileId,
-        expected_profile_version: AggregateVersion,
+        expected_metadata_version: AggregateVersion,
         role: ProfileGrantRole,
         reason: impl Into<String>,
         evidence: CommandExecutionEvidence,
@@ -285,7 +285,7 @@ impl ProfileGrantWrite {
         Self {
             target_actor_id,
             profile_id,
-            expected_profile_version,
+            expected_metadata_version,
             role,
             reason: reason.into(),
             evidence,
@@ -304,8 +304,8 @@ impl ProfileGrantWrite {
     }
 
     #[must_use]
-    pub const fn expected_profile_version(&self) -> AggregateVersion {
-        self.expected_profile_version
+    pub const fn expected_metadata_version(&self) -> AggregateVersion {
+        self.expected_metadata_version
     }
 
     #[must_use]
@@ -506,6 +506,7 @@ pub struct ProfileReadModel {
     display_name: String,
     status: ProfileStatus,
     version: AggregateVersion,
+    metadata_version: AggregateVersion,
     linked_client_id: Option<ClientId>,
 }
 
@@ -515,6 +516,7 @@ impl ProfileReadModel {
         profile_id: ProfileId,
         status: ProfileStatus,
         version: AggregateVersion,
+        metadata_version: AggregateVersion,
         linked_client_id: Option<ClientId>,
         display_name: String,
     ) -> Self {
@@ -523,6 +525,7 @@ impl ProfileReadModel {
             display_name,
             status,
             version,
+            metadata_version,
             linked_client_id,
         }
     }
@@ -544,6 +547,11 @@ impl ProfileReadModel {
     #[must_use]
     pub const fn version(&self) -> AggregateVersion {
         self.version
+    }
+
+    #[must_use]
+    pub const fn metadata_version(&self) -> AggregateVersion {
+        self.metadata_version
     }
 
     #[must_use]

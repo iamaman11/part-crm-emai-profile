@@ -38,7 +38,7 @@ INSERT INTO profile_create_commands (
 const PROFILE_RENAME_COMMAND: &str = r#"
 INSERT INTO profile_rename_commands (
     tenant_id, command_id, command_actor_id, profile_id,
-    display_name, expected_profile_version, executed_at_ms
+    display_name, expected_metadata_version, executed_at_ms
 ) VALUES (?, ?, ?, ?, ?, ?, ?)
 "#;
 
@@ -51,14 +51,14 @@ INSERT INTO profile_grants (
 const PROFILE_ASSIGNMENT_COMMAND: &str = r#"
 INSERT INTO profile_assignment_commands (
     tenant_id, command_id, command_actor_id, assignment_id,
-    profile_id, client_id, operation, expected_profile_version, reason, executed_at_ms
+    profile_id, client_id, operation, expected_metadata_version, reason, executed_at_ms
 ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 "#;
 
 const PROFILE_GRANT_COMMAND: &str = r#"
 INSERT INTO profile_grant_commands (
     tenant_id, command_id, command_actor_id, target_actor_id,
-    profile_id, operation, role, expected_profile_version, reason, executed_at_ms
+    profile_id, operation, role, expected_metadata_version, reason, executed_at_ms
 ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 "#;
 
@@ -403,8 +403,8 @@ impl D1GovernedCommandRepository {
         )?;
         let now = sqlite_integer(mutation.envelope.now.value())?;
         let expires_at = sqlite_integer(mutation.envelope.idempotency_expires_at.value())?;
-        let expected_version = sqlite_version(mutation.expected_profile_version)?;
-        let aggregate_version = next_version_value(mutation.expected_profile_version)?;
+        let expected_version = sqlite_version(mutation.expected_metadata_version)?;
+        let aggregate_version = next_version_value(mutation.expected_metadata_version)?;
         let resource_id = mutation.profile_id.as_str();
         let statements = vec![
             query!(
@@ -503,8 +503,8 @@ impl D1GovernedCommandRepository {
         )?;
         let now = sqlite_integer(mutation.envelope.now.value())?;
         let expires_at = sqlite_integer(mutation.envelope.idempotency_expires_at.value())?;
-        let expected_version = sqlite_version(mutation.expected_profile_version)?;
-        let aggregate_version = next_version_value(mutation.expected_profile_version)?;
+        let expected_version = sqlite_version(mutation.expected_metadata_version)?;
+        let aggregate_version = next_version_value(mutation.expected_metadata_version)?;
         let resource_id = mutation.profile_id.as_str();
         let statements = vec![
             query!(
@@ -589,8 +589,8 @@ impl D1GovernedCommandRepository {
         )?;
         let now = sqlite_integer(mutation.envelope.now.value())?;
         let expires_at = sqlite_integer(mutation.envelope.idempotency_expires_at.value())?;
-        let expected_version = sqlite_version(mutation.expected_profile_version)?;
-        let aggregate_version = next_version_value(mutation.expected_profile_version)?;
+        let expected_version = sqlite_version(mutation.expected_metadata_version)?;
+        let aggregate_version = next_version_value(mutation.expected_metadata_version)?;
         let action = if operation == "GRANT" {
             "profile.grant"
         } else {

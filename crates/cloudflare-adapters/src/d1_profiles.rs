@@ -95,7 +95,7 @@ impl ProfileApplicationPort for D1ProfileApplicationRepository {
         let mutation = ProfileRenameMutation {
             profile_id: write.profile_id(),
             display_name: write.display_name().as_str(),
-            expected_profile_version: write.expected_profile_version(),
+            expected_metadata_version: write.expected_metadata_version(),
             envelope: mutation_envelope(write.evidence(), write.event_payload_json()),
         };
         self.governed
@@ -152,7 +152,7 @@ impl ProfileAssignmentApplicationPort for D1ProfileApplicationRepository {
             assignment_id: write.assignment_id(),
             profile_id: write.profile_id(),
             client_id: write.client_id(),
-            expected_profile_version: write.expected_profile_version(),
+            expected_metadata_version: write.expected_metadata_version(),
             reason: write.reason(),
             envelope: mutation_envelope(evidence, write.event_payload_json()),
         };
@@ -173,7 +173,7 @@ impl ProfileAssignmentApplicationPort for D1ProfileApplicationRepository {
             assignment_id: write.assignment_id(),
             profile_id: write.profile_id(),
             client_id: write.client_id(),
-            expected_profile_version: write.expected_profile_version(),
+            expected_metadata_version: write.expected_metadata_version(),
             reason: write.reason(),
             envelope: mutation_envelope(evidence, write.event_payload_json()),
         };
@@ -234,7 +234,7 @@ impl D1ProfileApplicationRepository {
         let mutation = ProfileGrantMutation {
             target_actor_id: write.target_actor_id(),
             profile_id: write.profile_id(),
-            expected_profile_version: write.expected_profile_version(),
+            expected_metadata_version: write.expected_metadata_version(),
             role: map_profile_grant_role(write.role()),
             reason: write.reason(),
             envelope: mutation_envelope(evidence, write.event_payload_json()),
@@ -304,10 +304,13 @@ fn profile_read_model(projection: ProfileProjection) -> Result<ProfileReadModel,
         _ => return Err(integrity_failure()),
     };
     let version = AggregateVersion::new(projection.version()).map_err(|_| integrity_failure())?;
+    let metadata_version =
+        AggregateVersion::new(projection.metadata_version()).map_err(|_| integrity_failure())?;
     Ok(ProfileReadModel::new(
         projection.profile_id().clone(),
         status,
         version,
+        metadata_version,
         projection.linked_client_id().cloned(),
         projection.display_name().to_owned(),
     ))

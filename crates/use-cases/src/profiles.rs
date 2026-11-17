@@ -205,7 +205,7 @@ pub async fn execute_create_profile<P: ProfileApplicationPort>(
 pub struct ExecuteRenameProfileCommand {
     pub profile_id: ProfileId,
     pub display_name: ProfileName,
-    pub expected_profile_version: AggregateVersion,
+    pub expected_metadata_version: AggregateVersion,
     pub evidence: CommandExecutionEvidence,
 }
 
@@ -219,7 +219,7 @@ pub async fn execute_rename_profile<P: ProfileApplicationPort>(
         return Err(ProfileOperationError::NotFound);
     }
     let next_version = command
-        .expected_profile_version
+        .expected_metadata_version
         .next()
         .map_err(|_| ProfileOperationError::Conflict)?;
     let profile_id = command.profile_id.as_str().to_owned();
@@ -242,7 +242,7 @@ pub async fn execute_rename_profile<P: ProfileApplicationPort>(
     let write = ProfileRenameWrite::new(
         command.profile_id,
         command.display_name,
-        command.expected_profile_version,
+        command.expected_metadata_version,
         command.evidence,
         "{}",
     );

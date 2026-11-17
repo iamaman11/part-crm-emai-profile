@@ -273,7 +273,7 @@ pub struct CreateProfileMutation<'a> {
 pub struct ProfileRenameMutation<'a> {
     pub profile_id: &'a ProfileId,
     pub display_name: &'a str,
-    pub expected_profile_version: AggregateVersion,
+    pub expected_metadata_version: AggregateVersion,
     pub envelope: MutationEnvelope<'a>,
 }
 
@@ -281,7 +281,7 @@ pub struct ProfileAssignmentMutation<'a> {
     pub assignment_id: &'a profile_platform_primitives::AssignmentId,
     pub profile_id: &'a ProfileId,
     pub client_id: &'a ClientId,
-    pub expected_profile_version: AggregateVersion,
+    pub expected_metadata_version: AggregateVersion,
     pub reason: &'a str,
     pub envelope: MutationEnvelope<'a>,
 }
@@ -289,7 +289,7 @@ pub struct ProfileAssignmentMutation<'a> {
 pub struct ProfileGrantMutation<'a> {
     pub target_actor_id: &'a ActorId,
     pub profile_id: &'a ProfileId,
-    pub expected_profile_version: AggregateVersion,
+    pub expected_metadata_version: AggregateVersion,
     pub role: ProfileGrantValue,
     pub reason: &'a str,
     pub envelope: MutationEnvelope<'a>,
