@@ -515,7 +515,7 @@ fn actual_deployed_context_traverses_separate_sealed_contract_and_current_expand
                 &count.to_string(),
             ],
         )?;
-        let stage_len = if count == 35 { 9 } else { 1 };
+        let stage_len = if count == 35 { 10 } else { 1 };
         for migration in &history[count..count + stage_len] {
             receipt = append_execution_event(
                 &receipt,
@@ -667,7 +667,13 @@ repository=json.loads((scratch/'repository.json').read_text())
 catalog=next(c for c in repository['components'] if c['component_id']=='catalog')
 sources=catalog['executable_migration_sources']
 def snapshot():
- return {table:db.execute('SELECT * FROM '+table+' ORDER BY 1,2').fetchall() for table in ['tenants','memberships','clients','browser_profiles']}
+ preserved={}
+ for table in ['tenants','memberships','clients','browser_profiles']:
+  # Compare every predecessor column; the new display_name is checked separately.
+  columns=[row[1] for row in db.execute('PRAGMA table_info('+table+')')
+           if not (table=='browser_profiles' and row[1]=='display_name')]
+  preserved[table]=db.execute('SELECT '+','.join(columns)+' FROM '+table+' ORDER BY 1,2').fetchall()
+ return preserved
 if initial:
  db.execute('CREATE TABLE d1_migrations(id INTEGER PRIMARY KEY,name TEXT NOT NULL UNIQUE)')
  for i,m in enumerate(sources[:34]):
@@ -689,11 +695,14 @@ if count==34:
  # The first ALTER failed atomically, and the corrected SQL must retain all rows.
  assert db.execute("SELECT count(*) FROM sqlite_master WHERE name='idempotency_records_pas2_contract_legacy'").fetchone()==(0,)
  db.execute('PRAGMA case_sensitive_like=OFF')
-for i,m in enumerate(sources[count:count+(9 if count==35 else 1)],start=count):
+for i,m in enumerate(sources[count:count+(10 if count==35 else 1)],start=count):
  db.executescript((bounded/m['migration_file']).read_text())
  db.execute('INSERT INTO d1_migrations(id,name) VALUES(?,?)',(i+1,m['migration_file']))
 (scratch/'observed-ledger.json').write_text(json.dumps([r[0] for r in db.execute('SELECT name FROM d1_migrations ORDER BY id')]))
 assert json.loads((scratch/'before.json').read_text())==json.loads(json.dumps(snapshot()))
+if count==35:
+ names=db.execute('SELECT display_name FROM browser_profiles').fetchall()
+ assert names and all(row[0]=='Unnamed profile' for row in names),names
 assert db.execute('PRAGMA foreign_key_check').fetchall()==[]
 assert db.execute('PRAGMA quick_check').fetchone()==('ok',)
 assert 'request_digest' not in [r[1] for r in db.execute('PRAGMA table_info(idempotency_records)')]
