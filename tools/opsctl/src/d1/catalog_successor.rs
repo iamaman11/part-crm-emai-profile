@@ -904,11 +904,12 @@ fn repository_identity_from_components(components: &[Value]) -> Result<String, D
 mod tests {
     use super::{
         BRIDGE_ENROLLMENT_REVISION, CURRENT_COLD_RETIREMENT_REVISION, CURRENT_SUCCESSOR_ROOT,
-        DELETE_ASSIGNMENT_LIFECYCLE_REVISION, DELETE_SIGNED_PUT_EXPIRY_REVISION, PROFILE_NAME_REVISION,
+        DELETE_ASSIGNMENT_LIFECYCLE_REVISION, DELETE_SIGNED_PUT_EXPIRY_REVISION,
         DEVICE_APPLICATION_AUTHORITY_REVISION, NATIVE_BROWSER_RECOVERY_REVISION,
-        PREDECESSOR_SUCCESSOR_ROOT, PROFILE_DELETE_EXACT_REVISION, PUBLIC_KEY_BINDING_REVISION,
-        RETIREMENT_GUARD_REVISION, STREAMING_GENERATION_REVISION, SUCCESSOR_CONTRACT_REVISION,
-        WORKING_PROOF_REVISION, component_authority, release_contract, repository_projection,
+        PREDECESSOR_SUCCESSOR_ROOT, PROFILE_DELETE_EXACT_REVISION, PROFILE_NAME_REVISION,
+        PUBLIC_KEY_BINDING_REVISION, RETIREMENT_GUARD_REVISION, STREAMING_GENERATION_REVISION,
+        SUCCESSOR_CONTRACT_REVISION, WORKING_PROOF_REVISION, component_authority, release_contract,
+        repository_projection,
     };
     use serde_json::Value;
     use std::error::Error;
@@ -929,10 +930,7 @@ mod tests {
             DEVICE_APPLICATION_AUTHORITY_REVISION
         );
         assert_eq!(authority.ordered_history[34], SUCCESSOR_CONTRACT_REVISION);
-        assert_eq!(
-            authority.current_repository_revision,
-            PROFILE_NAME_REVISION
-        );
+        assert_eq!(authority.current_repository_revision, PROFILE_NAME_REVISION);
         assert_eq!(authority.post_epoch.len(), 19);
         Ok(())
     }
@@ -940,18 +938,9 @@ mod tests {
     #[test]
     fn release_window_requires_exact_initialization_schema() -> Result<(), Box<dyn Error>> {
         let contract = release_contract(&repository_root(), "catalog")?;
-        assert_eq!(
-            contract["target_schema_revision"],
-            PROFILE_NAME_REVISION
-        );
-        assert_eq!(
-            contract["supported_schema_min"],
-            PROFILE_NAME_REVISION
-        );
-        assert_eq!(
-            contract["supported_schema_max"],
-            PROFILE_NAME_REVISION
-        );
+        assert_eq!(contract["target_schema_revision"], PROFILE_NAME_REVISION);
+        assert_eq!(contract["supported_schema_min"], PROFILE_NAME_REVISION);
+        assert_eq!(contract["supported_schema_max"], PROFILE_NAME_REVISION);
         Ok(())
     }
 
