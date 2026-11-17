@@ -45,6 +45,7 @@ pub enum Stage {
     Pairing,
     Delivery,
     RuntimeIdentityObserved,
+    Transport,
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Serialize, Eq, PartialEq)]
@@ -100,6 +101,56 @@ pub enum Cause {
     DownloadDisk,
     DownloadRedirect,
     DownloadProcess,
+    NetworkDns,
+    NetworkConnect,
+    NetworkTls,
+    NetworkTimeout,
+    NetworkRedirect,
+    NetworkResponseSize,
+    NetworkLocalIo,
+    NetworkHttp,
+    NetworkUnclassified,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Serialize, Eq, PartialEq)]
+#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
+pub(crate) enum TransportOperation {
+    Machine,
+    Pairing,
+    GenerationGet,
+    GenerationPut,
+    Delivery,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+struct TransportObservation {
+    operation: TransportOperation,
+    status: Option<u16>,
+    correlation_id: Option<String>,
+    bytes: Option<u64>,
+}
+
+fn valid_transport_correlation(value: &str) -> bool {
+    value.starts_with("corr_")
+        && value.len() <= 128
+        && value
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-')
+}
+
+impl TransportObservation {
+    fn valid(&self) -> bool {
+        self.status
+            .is_none_or(|status| (100..=599).contains(&status))
+            && self
+                .correlation_id
+                .as_deref()
+                .is_none_or(valid_transport_correlation)
+            && self
+                .bytes
+                .is_none_or(|bytes| bytes <= 8 * 1024 * 1024 * 1024)
+    }
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -119,6 +170,8 @@ struct Observation {
     verified_runtime: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     verified_sequence: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    transport: Option<TransportObservation>,
 }
 
 fn unix_ms() -> Option<u64> {
@@ -225,7 +278,12 @@ fn journal_dir(root: &Path, create: bool) -> Option<PathBuf> {
 enum ObservationExtra<'a> {
     None,
     Pages(u16),
-    VerifiedRuntime { sequence: u64, release_id: &'a str },
+    VerifiedRuntime {
+        sequence: u64,
+        release_id: &'a str,
+    },
+    #[cfg(any(windows, test))]
+    Transport(TransportObservation),
 }
 
 fn try_record(
@@ -237,13 +295,15 @@ fn try_record(
     duration_ms: u64,
     extra: ObservationExtra<'_>,
 ) -> Option<()> {
-    let (open_pages, runtime) = match extra {
-        ObservationExtra::None => (None, None),
-        ObservationExtra::Pages(count) => (Some(count), None),
+    let (open_pages, runtime, transport) = match extra {
+        ObservationExtra::None => (None, None, None),
+        ObservationExtra::Pages(count) => (Some(count), None, None),
         ObservationExtra::VerifiedRuntime {
             sequence,
             release_id,
-        } => (None, Some((sequence, release_id))),
+        } => (None, Some((sequence, release_id)), None),
+        #[cfg(any(windows, test))]
+        ObservationExtra::Transport(detail) => (None, None, Some(detail)),
     };
     let directory = journal_dir(root, true)?;
     let now = unix_ms()?;
@@ -259,6 +319,7 @@ fn try_record(
         open_pages,
         verified_runtime: runtime.map(|(_, id)| id.to_owned()),
         verified_sequence: runtime.map(|(sequence, _)| sequence),
+        transport,
     };
     let bytes = serde_json::to_vec(&record).ok()?;
     if bytes.len() > MAX_RECORD_BYTES as usize {
@@ -337,6 +398,15 @@ fn observations(root: &Path) -> Vec<Observation> {
                 .all(|b| b.is_ascii_hexdigit() || b == b'_')
             || record.duration_ms > 86_400_000
             || record.open_pages.is_some_and(|count| count > 512)
+            || match &record.transport {
+                Some(detail) => {
+                    record.stage != Stage::Transport
+                        || record.cloud != Cloud::Unknown
+                        || record.outcome != Outcome::Failed
+                        || !detail.valid()
+                }
+                None => record.stage == Stage::Transport,
+            }
             || match (&record.verified_runtime, record.verified_sequence) {
                 (None, None) => false,
                 (Some(id), Some(sequence)) => {
@@ -401,6 +471,61 @@ fn prune(directory: &Path, now: u64) {
         if index < excess || timestamp.is_some_and(|stamp| now.saturating_sub(stamp) > MAX_AGE_MS) {
             let _ = fs::remove_file(path);
         }
+    }
+}
+
+/// Failure-only persistence in the existing bounded diagnostic report, never
+/// a synchronization or retry receipt. No URL/body/header/error text.
+#[cfg(windows)]
+pub(crate) fn record_transport_failure(
+    operation: TransportOperation,
+    correlation: Option<&str>,
+    status: Option<u16>,
+    bytes: Option<u64>,
+    cause: Cause,
+    duration_ms: u64,
+) {
+    if let Some(root) = installed_root() {
+        record_transport_failure_at(
+            &root,
+            operation,
+            correlation,
+            status,
+            bytes,
+            cause,
+            duration_ms,
+        );
+    }
+}
+
+#[cfg(any(windows, test))]
+fn record_transport_failure_at(
+    root: &Path,
+    operation: TransportOperation,
+    correlation: Option<&str>,
+    status: Option<u16>,
+    bytes: Option<u64>,
+    cause: Cause,
+    duration_ms: u64,
+) {
+    let detail = TransportObservation {
+        operation,
+        correlation_id: correlation
+            .filter(|v| valid_transport_correlation(v))
+            .map(str::to_owned),
+        status,
+        bytes,
+    };
+    if detail.valid() {
+        let _ = try_record(
+            root,
+            Stage::Transport,
+            Outcome::Failed,
+            Cloud::Unknown,
+            cause,
+            duration_ms,
+            ObservationExtra::Transport(detail),
+        );
     }
 }
 
@@ -545,6 +670,22 @@ pub fn report_at(root: &Path) -> String {
             break;
         }
         report.push_str(&line);
+        if let Some(detail) = record.transport {
+            let detail_line = format!(
+                "HTTP_OPERATION={:?};CORRELATION={};STATUS={};BYTES_OBSERVED={}\n",
+                detail.operation,
+                detail.correlation_id.as_deref().unwrap_or("NOT_AVAILABLE"),
+                detail
+                    .status
+                    .map_or_else(|| "NOT_AVAILABLE".to_owned(), |v| v.to_string()),
+                detail
+                    .bytes
+                    .map_or_else(|| "NOT_AVAILABLE".to_owned(), |v| v.to_string())
+            );
+            if report.len() + detail_line.len() <= MAX_REPORT_BYTES {
+                report.push_str(&detail_line);
+            }
+        }
         if let Some(pages) = record.open_pages {
             let count_line = format!(
                 "OBSERVED_OPEN_PAGES={pages};RESTORED_COUNT=UNPROVEN;WINDOW_COUNT=UNKNOWN\n"
@@ -572,6 +713,40 @@ mod tests {
         ));
         fs::create_dir_all(root.join("state"))?;
         Ok(root)
+    }
+
+    #[test]
+    fn transport_failure_is_typed_bounded_and_non_authoritative()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let root = test_root()?;
+        record_transport_failure_at(
+            &root,
+            TransportOperation::GenerationPut,
+            Some("corr_test_123"),
+            Some(403),
+            Some(0),
+            Cause::NetworkHttp,
+            20,
+        );
+        record_transport_failure_at(
+            &root,
+            TransportOperation::Machine,
+            Some("https://invalid/?secret=canary"),
+            None,
+            None,
+            Cause::NetworkDns,
+            15,
+        );
+        let report = report_at(&root);
+        assert!(report.contains(
+            "HTTP_OPERATION=GenerationPut;CORRELATION=corr_test_123;STATUS=403;BYTES_OBSERVED=0"
+        ));
+        assert!(report.contains("CAUSE=NetworkDns"));
+        assert!(report.contains("CLOUD=Unknown"));
+        assert!(!report.contains("canary"));
+        assert!(!report.contains("EXACT_SAVED_BY_OWNER"));
+        fs::remove_dir_all(root)?;
+        Ok(())
     }
 
     #[test]

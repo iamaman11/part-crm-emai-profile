@@ -206,3 +206,5 @@ mod tests {
         Ok(())
     }
 }
+#[cfg(windows)]
+mod native_transport;

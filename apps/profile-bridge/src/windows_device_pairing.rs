@@ -18,7 +18,7 @@ use std::env;
 use std::fs::{self, OpenOptions};
 use std::io::Write;
 use std::path::{Path, PathBuf};
-use std::process::{Command, Output, Stdio};
+use std::process::{Command, Stdio};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 use windows_device_key::{KeyDisposition, PersistedP256Key};
@@ -26,9 +26,6 @@ use zeroize::{Zeroize, Zeroizing};
 
 const MAX_CONTROL_PLANE_RESPONSE_BYTES: usize = 65_536;
 const MAX_BINDING_BYTES: u64 = 4_096;
-const CURL_CONNECT_TIMEOUT_SECONDS: &str = "10";
-const CURL_TOTAL_TIMEOUT_SECONDS: &str = "20";
-const HTTP_STATUS_MARKER: &[u8] = b"\nPROFILE_BRIDGE_HTTP_STATUS:";
 const KEY_NAME_PREFIX: &str = "part-crm.device.";
 const PAIRING_MAX_LIFETIME_MS: u64 = 600_000;
 const CHALLENGE_MAX_LIFETIME_MS: u64 = 120_000;
@@ -291,52 +288,20 @@ fn post_json(
     if !valid_route_path(path) {
         return Err(BridgePortError::InvalidResponse);
     }
-    let curl = system_executable("curl.exe")?;
-    let mut command = crate::windows_native::background_command(curl);
-    command
-        .env_clear()
-        .arg("--silent")
-        .arg("--show-error")
-        .arg("--proto")
-        .arg("=https")
-        .arg("--connect-timeout")
-        .arg(CURL_CONNECT_TIMEOUT_SECONDS)
-        .arg("--max-time")
-        .arg(CURL_TOTAL_TIMEOUT_SECONDS)
-        .arg("--max-filesize")
-        .arg(MAX_CONTROL_PLANE_RESPONSE_BYTES.to_string())
-        .arg("--noproxy")
-        .arg("*")
-        .arg("--header")
-        .arg("Accept: application/json")
-        .arg("--header")
-        .arg("Content-Type: application/json")
-        .arg("--header")
-        .arg(format!("X-Correlation-Id: {}", correlation_id.as_str()))
-        .arg("--request")
-        .arg("POST")
-        .arg("--url")
-        .arg(format!("{origin}{path}"))
-        .arg("--data-binary")
-        .arg("@-")
-        .arg("--write-out")
-        .arg("\nPROFILE_BRIDGE_HTTP_STATUS:%{http_code}")
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::null());
-    inherit_windows_system_root(&mut command);
-
-    let mut child = command.spawn().map_err(|_| BridgePortError::Unavailable)?;
-    child
-        .stdin
-        .take()
-        .ok_or(BridgePortError::Unavailable)?
-        .write_all(body)
-        .map_err(|_| BridgePortError::Unavailable)?;
-    let output = child
-        .wait_with_output()
-        .map_err(|_| BridgePortError::Unavailable)?;
-    let (status, body) = decode_curl_http_output(output, MAX_CONTROL_PLANE_RESPONSE_BYTES)?;
+    let request = crate::native_transport::shared()?
+        .client
+        .post(format!("{origin}{path}"))
+        .timeout(std::time::Duration::from_secs(20))
+        .header("Accept", "application/json")
+        .header("Content-Type", "application/json")
+        .header("X-Correlation-Id", correlation_id.as_str())
+        .body(body.to_vec());
+    let (status, body) = crate::native_transport::buffered(
+        request,
+        MAX_CONTROL_PLANE_RESPONSE_BYTES,
+        crate::native_transport::HttpOperation::Pairing,
+        Some(correlation_id.as_str()),
+    )?;
     Ok(HttpResponse { status, body })
 }
 
@@ -516,40 +481,6 @@ fn hex_encode(bytes: &[u8]) -> String {
         output.push(char::from(HEX[usize::from(byte & 0x0f)]));
     }
     output
-}
-
-fn decode_curl_http_output(
-    mut output: Output,
-    max_body_bytes: usize,
-) -> Result<(u16, Vec<u8>), BridgePortError> {
-    let decoded = (|| {
-        let max_output_bytes = max_body_bytes
-            .checked_add(HTTP_STATUS_MARKER.len())
-            .and_then(|value| value.checked_add(3))
-            .ok_or(BridgePortError::InvalidResponse)?;
-        if !output.status.success() || output.stdout.len() > max_output_bytes {
-            return Err(BridgePortError::Unavailable);
-        }
-        let marker = output
-            .stdout
-            .windows(HTTP_STATUS_MARKER.len())
-            .rposition(|window| window == HTTP_STATUS_MARKER)
-            .ok_or(BridgePortError::InvalidResponse)?;
-        if marker > max_body_bytes {
-            return Err(BridgePortError::Unavailable);
-        }
-        let status_bytes = &output.stdout[marker + HTTP_STATUS_MARKER.len()..];
-        if status_bytes.len() != 3 || !status_bytes.iter().all(u8::is_ascii_digit) {
-            return Err(BridgePortError::InvalidResponse);
-        }
-        let status = std::str::from_utf8(status_bytes)
-            .map_err(|_| BridgePortError::InvalidResponse)?
-            .parse::<u16>()
-            .map_err(|_| BridgePortError::InvalidResponse)?;
-        Ok((status, output.stdout[..marker].to_vec()))
-    })();
-    output.stdout.zeroize();
-    decoded
 }
 
 #[cfg(test)]

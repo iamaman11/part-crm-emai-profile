@@ -17,11 +17,8 @@ use device_domain::{
 use profile_platform_primitives::{ActorId, CorrelationId, DeviceId, TenantId, UnixMillis};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
-use std::env;
 use std::fs;
-use std::io::Write;
-use std::path::{Path, PathBuf};
-use std::process::{Command, Output, Stdio};
+use std::path::Path;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -30,13 +27,9 @@ use zeroize::Zeroizing;
 
 const MAX_ADMISSION_STATE_BYTES: u64 = 4_096;
 const MAX_CONTROL_PLANE_RESPONSE_BYTES: usize = 65_536;
-const HTTP_STATUS_MARKER: &[u8] = b"\nPROFILE_BRIDGE_HTTP_STATUS:";
-const CURL_CONNECT_TIMEOUT_SECONDS: &str = "10";
-const CURL_TOTAL_TIMEOUT_SECONDS: &str = "20";
 const SESSION_RENEWAL_MARGIN_MS: u64 = 60_000;
 const SESSION_MAX_LIFETIME_MS: u64 = 900_000;
 const KEY_NAME_PREFIX: &str = "part-crm.device.";
-const CURL_SESSION_ENV: &str = "PROFILE_BRIDGE_CURL_DEVICE_SESSION";
 static REQUEST_SEQUENCE: AtomicU64 = AtomicU64::new(1);
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -172,7 +165,6 @@ impl DeviceAuthenticationPort for WindowsDeviceApplication {
 
 #[derive(Clone)]
 pub struct WindowsApplicationSessionHttp {
-    curl_executable: PathBuf,
     origin: String,
     binding: WindowsDeviceApplicationBinding,
     key_name: String,
@@ -201,10 +193,7 @@ impl WindowsApplicationSessionHttp {
     ) -> Result<Self, BridgePortError> {
         let origin = origin.into();
         crate::installed_connection::ControlPlaneOrigin::parse(origin.as_str())?;
-        let curl_executable = system_curl_executable()?;
-        require_curl_variable_support(&curl_executable)?;
         Ok(Self {
-            curl_executable,
             origin,
             binding,
             key_name,
@@ -346,83 +335,41 @@ impl WindowsApplicationSessionHttp {
         if !valid_route_path(path) || matches!(method, MachineHttpMethod::Get) != body.is_none() {
             return Err(BridgePortError::InvalidResponse);
         }
-        let mut command = crate::windows_native::background_command(&self.curl_executable);
-        command
-            .env_clear()
-            .arg("--silent")
-            .arg("--show-error")
-            .arg("--proto")
-            .arg("=https")
-            .arg("--connect-timeout")
-            .arg(CURL_CONNECT_TIMEOUT_SECONDS)
-            .arg("--max-time")
-            .arg(CURL_TOTAL_TIMEOUT_SECONDS)
-            .arg("--max-filesize")
-            .arg(MAX_CONTROL_PLANE_RESPONSE_BYTES.to_string())
-            .arg("--noproxy")
-            .arg("*")
-            .arg("--header")
-            .arg("Accept: application/json")
-            .arg("--header")
-            .arg(format!("X-Correlation-Id: {}", correlation_id.as_str()))
-            .arg("--request")
-            .arg(match method {
-                MachineHttpMethod::Get => "GET",
-                MachineHttpMethod::PostJson => "POST",
-            })
-            .arg("--url")
-            .arg(format!("{}{path}", self.origin))
-            .arg("--write-out")
-            .arg("\nPROFILE_BRIDGE_HTTP_STATUS:%{http_code}")
-            .stdin(if body.is_some() {
-                Stdio::piped()
-            } else {
-                Stdio::null()
-            })
-            .stdout(Stdio::piped())
-            .stderr(Stdio::null());
-        if body.is_some() {
-            command
-                .arg("--header")
-                .arg("Content-Type: application/json")
-                .arg("--data-binary")
-                .arg("@-");
+        let transport = crate::native_transport::shared()?;
+        let url = format!("{}{path}", self.origin);
+        let mut request = match method {
+            MachineHttpMethod::Get => transport.client.get(url),
+            MachineHttpMethod::PostJson => transport.client.post(url),
+        }
+        .timeout(std::time::Duration::from_secs(20))
+        .header("Accept", "application/json")
+        .header("X-Correlation-Id", correlation_id.as_str());
+        if let Some(payload) = body {
+            request = request
+                .header("Content-Type", "application/json")
+                .body(payload.to_vec());
         }
         if let Some(proof) = proof {
-            command
-                .env(CURL_SESSION_ENV, proof.session_token)
-                .arg("--variable")
-                .arg(format!("%{CURL_SESSION_ENV}"))
-                .arg("--expand-header")
-                .arg(format!(
-                    "{DEVICE_APPLICATION_SESSION_HEADER}: {{{{{CURL_SESSION_ENV}}}}}"
-                ))
-                .arg("--header")
-                .arg(format!(
-                    "{DEVICE_REQUEST_PROOF_EXPIRES_HEADER}: {}",
-                    proof.expires_at.value()
-                ))
-                .arg("--header")
-                .arg(format!(
-                    "{DEVICE_REQUEST_PROOF_SIGNATURE_HEADER}: {}",
-                    proof.signature_hex
-                ));
+            let mut token = reqwest::header::HeaderValue::from_str(proof.session_token)
+                .map_err(|_| BridgePortError::InvalidResponse)?;
+            token.set_sensitive(true);
+            let mut sig = reqwest::header::HeaderValue::from_str(&proof.signature_hex)
+                .map_err(|_| BridgePortError::InvalidResponse)?;
+            sig.set_sensitive(true);
+            request = request
+                .header(DEVICE_APPLICATION_SESSION_HEADER, token)
+                .header(
+                    DEVICE_REQUEST_PROOF_EXPIRES_HEADER,
+                    proof.expires_at.value().to_string(),
+                )
+                .header(DEVICE_REQUEST_PROOF_SIGNATURE_HEADER, sig);
         }
-        inherit_windows_system_root(&mut command);
-
-        let mut child = command.spawn().map_err(|_| BridgePortError::Unavailable)?;
-        if let Some(payload) = body {
-            child
-                .stdin
-                .take()
-                .ok_or(BridgePortError::Unavailable)?
-                .write_all(payload)
-                .map_err(|_| BridgePortError::Unavailable)?;
-        }
-        let output = child
-            .wait_with_output()
-            .map_err(|_| BridgePortError::Unavailable)?;
-        let (status, body) = decode_curl_http_output(output, MAX_CONTROL_PLANE_RESPONSE_BYTES)?;
+        let (status, body) = crate::native_transport::buffered(
+            request,
+            MAX_CONTROL_PLANE_RESPONSE_BYTES,
+            crate::native_transport::HttpOperation::Machine,
+            Some(correlation_id.as_str()),
+        )?;
         Ok(MachineHttpResponse::new(status, body))
     }
 }
@@ -506,56 +453,6 @@ fn now() -> Result<UnixMillis, BridgePortError> {
     Ok(UnixMillis::new(millis))
 }
 
-fn require_curl_variable_support(curl: &Path) -> Result<(), BridgePortError> {
-    let output = crate::windows_native::background_command(curl)
-        .arg("--version")
-        .stdin(Stdio::null())
-        .stderr(Stdio::null())
-        .output()
-        .map_err(|_| BridgePortError::Unavailable)?;
-    if !output.status.success() || !curl_version_supports_variables(&output.stdout) {
-        return Err(BridgePortError::Unavailable);
-    }
-    Ok(())
-}
-
-fn curl_version_supports_variables(stdout: &[u8]) -> bool {
-    let Ok(value) = std::str::from_utf8(stdout) else {
-        return false;
-    };
-    let Some(version) = value
-        .lines()
-        .next()
-        .and_then(|line| line.strip_prefix("curl "))
-        .and_then(|line| line.split_ascii_whitespace().next())
-    else {
-        return false;
-    };
-    let mut parts = version.split('.');
-    let Some(major) = parts.next().and_then(|value| value.parse::<u64>().ok()) else {
-        return false;
-    };
-    let Some(minor) = parts.next().and_then(|value| value.parse::<u64>().ok()) else {
-        return false;
-    };
-    major > 8 || (major == 8 && minor >= 3)
-}
-
-fn system_curl_executable() -> Result<PathBuf, BridgePortError> {
-    let system_root = env::var_os("SystemRoot").ok_or(BridgePortError::Unavailable)?;
-    let curl_executable = PathBuf::from(system_root).join("System32").join("curl.exe");
-    validate_regular_absolute_file(&curl_executable, None)?;
-    Ok(curl_executable)
-}
-
-fn inherit_windows_system_root(command: &mut Command) {
-    for key in ["SystemRoot", "WINDIR"] {
-        if let Some(value) = env::var_os(key) {
-            command.env(key, value);
-        }
-    }
-}
-
 fn valid_route_path(path: &str) -> bool {
     path.starts_with('/')
         && path.len() <= 512
@@ -602,36 +499,6 @@ fn hex_encode(bytes: &[u8]) -> String {
     output
 }
 
-fn decode_curl_http_output(
-    output: Output,
-    max_body_bytes: usize,
-) -> Result<(u16, Vec<u8>), BridgePortError> {
-    let max_output_bytes = max_body_bytes
-        .checked_add(HTTP_STATUS_MARKER.len())
-        .and_then(|value| value.checked_add(3))
-        .ok_or(BridgePortError::InvalidResponse)?;
-    if !output.status.success() || output.stdout.len() > max_output_bytes {
-        return Err(BridgePortError::Unavailable);
-    }
-    let marker = output
-        .stdout
-        .windows(HTTP_STATUS_MARKER.len())
-        .rposition(|window| window == HTTP_STATUS_MARKER)
-        .ok_or(BridgePortError::InvalidResponse)?;
-    if marker > max_body_bytes {
-        return Err(BridgePortError::Unavailable);
-    }
-    let status_bytes = &output.stdout[marker + HTTP_STATUS_MARKER.len()..];
-    if status_bytes.len() != 3 || !status_bytes.iter().all(u8::is_ascii_digit) {
-        return Err(BridgePortError::InvalidResponse);
-    }
-    let status = std::str::from_utf8(status_bytes)
-        .map_err(|_| BridgePortError::InvalidResponse)?
-        .parse::<u16>()
-        .map_err(|_| BridgePortError::InvalidResponse)?;
-    Ok((status, output.stdout[..marker].to_vec()))
-}
-
 fn validate_regular_absolute_file(
     path: &Path,
     max_bytes: Option<u64>,
@@ -651,17 +518,7 @@ fn validate_regular_absolute_file(
 
 #[cfg(test)]
 mod tests {
-    use super::{curl_version_supports_variables, decode_exact_lower_hex, valid_lower_hex_exact};
-
-    #[test]
-    fn curl_secret_expansion_requires_version_that_supports_variables() {
-        assert!(curl_version_supports_variables(b"curl 8.3.0 (Windows)\r\n"));
-        assert!(curl_version_supports_variables(b"curl 9.0.0 (Windows)\r\n"));
-        assert!(!curl_version_supports_variables(
-            b"curl 8.2.1 (Windows)\r\n"
-        ));
-        assert!(!curl_version_supports_variables(b"not-curl 8.3.0\r\n"));
-    }
+    use super::{decode_exact_lower_hex, valid_lower_hex_exact};
 
     #[test]
     fn admission_transport_is_strict_about_origin_and_hex() {

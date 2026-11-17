@@ -2262,6 +2262,56 @@ mod physical_cloud_current_restore {
     use std::time::{SystemTime, UNIX_EPOCH};
 
     #[test]
+    #[ignore = "requires a bound Windows device and explicitly selected staging test profile; waits real signed URL lifetime"]
+    fn staging_expired_signed_get_and_fresh_capability() -> Result<(), Box<dyn std::error::Error>> {
+        use crate::generation_reopen::SignedGenerationObjectStreamGetPort;
+        let root = PathBuf::from(
+            std::env::var_os("PROFILE_BRIDGE_TEST_COLD_RESTORE_ROOT")
+                .ok_or("missing scratch root")?,
+        );
+        if !root.is_absolute()
+            || !root.starts_with(std::env::temp_dir())
+            || !root.is_dir()
+            || std::fs::read_dir(&root)?.next().is_some()
+        {
+            return Err("refuse nonempty or nonscratch root".into());
+        }
+        let binding = WindowsDeviceApplicationBinding::open(&PathBuf::from(
+            std::env::var_os("PROFILE_BRIDGE_TEST_COLD_RESTORE_BINDING")
+                .ok_or("missing binding")?,
+        ))?;
+        let profile_id =
+            ProfileId::parse(&std::env::var("PROFILE_BRIDGE_TEST_COLD_RESTORE_PROFILE")?)?;
+        let app =
+            WindowsDeviceApplication::from_system("https://staging.alegria.by", binding.clone())?;
+        let mut control = ControlPlaneCoordinator::for_local_current_restore(app.transport());
+        let cap = control.download_capability(binding.tenant_id(), &profile_id)?;
+        let url = cap.signed_url().ok_or("missing signed capability")?;
+        let mut http = WindowsSignedGenerationObjectGet::from_system()?;
+        let received = http.get_exact_stream(url, cap.container_bytes(), &mut std::io::sink())?;
+        assert_eq!(received, 200);
+        let ttl = cap.expires_seconds();
+        assert!((1..=300).contains(&ttl));
+        eprintln!("SIGNED_GET_VALID_HTTP=200 TTL_SECONDS={ttl}");
+        std::thread::sleep(std::time::Duration::from_secs(u64::from(ttl) + 5));
+        let expired = http.get_exact_stream(url, cap.container_bytes(), &mut std::io::sink())?;
+        assert_eq!(expired, 403);
+        eprintln!("EXPIRED_GET_HTTP={expired}");
+        let fresh = control.download_capability(binding.tenant_id(), &profile_id)?;
+        assert_eq!(fresh.generation_id(), cap.generation_id());
+        assert_eq!(fresh.container_digest(), cap.container_digest());
+        assert_eq!(fresh.container_bytes(), cap.container_bytes());
+        assert!(fresh.signed_url() != cap.signed_url());
+        let mut downloader = VerifiedGenerationObjectStreamDownloader::new(http);
+        let pending = root.join(".pending-expiry-proof.bpgc");
+        let verified = downloader.download_to_new_pending_file(&fresh, &pending)?;
+        drop(verified);
+        std::fs::remove_file(&pending)?;
+        eprintln!("FRESH_SIGNED_GET_EXACT_DIGEST_PASS");
+        Ok(())
+    }
+
+    #[test]
     #[ignore = "requires a bound Windows device and a fresh disposable staging Restore root"]
     fn staging_verified_current_cold_restore_to_scratch() -> Result<(), Box<dyn std::error::Error>>
     {
