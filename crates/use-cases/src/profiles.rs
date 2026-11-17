@@ -75,6 +75,7 @@ pub struct ProfileDetails {
     display_name: String,
     status: ProfileStatus,
     version: AggregateVersion,
+    metadata_version: AggregateVersion,
     linked_client_id: Option<ClientId>,
 }
 
@@ -99,6 +100,11 @@ impl ProfileDetails {
     }
 
     #[must_use]
+    pub const fn metadata_version(&self) -> AggregateVersion {
+        self.metadata_version
+    }
+
+    #[must_use]
     pub const fn linked_client_id(&self) -> Option<&ClientId> {
         self.linked_client_id.as_ref()
     }
@@ -111,6 +117,7 @@ impl From<ProfileReadModel> for ProfileDetails {
             display_name: value.display_name().to_owned(),
             status: value.status(),
             version: value.version(),
+            metadata_version: value.metadata_version(),
             linked_client_id: value.linked_client_id().cloned(),
         }
     }
@@ -619,6 +626,7 @@ mod tests {
             ProfileId::parse("profile_01JPROFILEAPP")?,
             ProfileStatus::Ready,
             AggregateVersion::new(4)?,
+            AggregateVersion::new(2)?,
             Some(ClientId::parse("client_01JPROFILEAPP")?),
             "Test profile".to_owned(),
         )));
@@ -632,6 +640,7 @@ mod tests {
         assert_eq!(details.profile_id(), &profile_id);
         assert_eq!(details.status(), ProfileStatus::Ready);
         assert_eq!(details.version().value(), 4);
+        assert_eq!(details.metadata_version().value(), 2);
         assert_eq!(
             details.linked_client_id().map(ClientId::as_str),
             Some("client_01JPROFILEAPP")
