@@ -79,7 +79,9 @@ REQUIRED_CLIENT_ADAPTER_TOKENS = (
     ".revoke_client_grant(actor, mutation)",
 )
 REQUIRED_PROFILE_APPLICATION_TOKENS = (
-    'const PROFILE_CREATE_COMMAND: &str = "profile.create";', "decide_replay", "create_profile",
+    'const PROFILE_CREATE_COMMAND: &str = "profile.create";',
+    'const PROFILE_RENAME_COMMAND: &str = "profile.rename";',
+    "decide_replay", "create_profile", "port.rename_profile(actor, &write)",
     "ProfileReplayDecision::Conflict",
 )
 REQUIRED_PROFILE_ASSIGNMENT_APPLICATION_TOKENS = (
@@ -100,14 +102,16 @@ REQUIRED_PROFILE_ADAPTER_TOKENS = (
     "ProfileCreateGrantSpec", "map_profile_grant_role(write.creator_grant_role())",
     "write.creator_grant_reason()", ".create_profile(", ".assign_profile(actor, mutation)",
     ".detach_profile(actor, mutation)", ".grant_profile(actor, mutation)",
-    ".revoke_profile_grant(actor, mutation)",
+    ".revoke_profile_grant(actor, mutation)", ".rename_profile(actor, mutation)",
 )
 REQUIRED_GOVERNED_TOKENS = (
     "owner_transfer_commands", "membership_status_commands", "invitation_create_commands",
     "profile_create_commands", "PROFILE_CREATOR_GRANT", "creator_grant_role.database_value()",
     "creator_grant_reason", "profile_assignment_commands", '"profile.assign_client"',
     '"profile.detach_client"', '"profile.client_assigned.v1"', '"profile.client_detached.v1"',
-    "profile_grant_commands", "client_grant_commands", "self.database.batch(statements).await",
+    "profile_grant_commands", "client_grant_commands", "profile_rename_commands",
+    "PROFILE_RENAME_COMMAND", '"profile.rename"', '"profile.renamed.v1"',
+    "self.database.batch(statements).await",
 )
 REQUIRED_ACCEPTANCE_TOKENS = (
     "invitation_acceptances", "INSERT INTO memberships", "INSERT INTO idempotency_records",
@@ -804,8 +808,8 @@ def main() -> int:
 
     if "part-crm:d1-command-journal:v1" not in command_identity:
         errors.append("D1 command journal IDs are missing their domain-separated identity tag")
-    if governed.count("let command_id = command_journal_id(") != 7 or governed.count("command_id.as_str(),") != 7:
-        errors.append("legacy governed command tables must use exactly seven actor-bound journal IDs")
+    if governed.count("let command_id = command_journal_id(") != 8 or governed.count("command_id.as_str(),") != 8:
+        errors.append("governed command tables must use exactly eight actor-bound journal IDs, including profile.rename")
     if generation.count("let command_id = command_journal_id(") != 5 or generation.count("command_id.as_str(),") != 5:
         errors.append("profile generation command tables must use exactly five actor-bound journal IDs")
 

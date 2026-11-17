@@ -186,14 +186,15 @@ fn actual_deployed_context_traverses_separate_sealed_contract_and_current_expand
                 history[count + 5],
                 history[count + 6],
                 history[count + 7],
-                history[count + 8]
+                history[count + 8],
+                history[count + 9]
             ])
         } else {
             json!([history[count]])
         };
         assert_eq!(native_plan["planned_migrations"], expected);
         let expected_target = if count == 35 {
-            &history[count + 8]
+            &history[count + 9]
         } else {
             &history[count]
         };
@@ -343,7 +344,7 @@ fn actual_deployed_context_traverses_separate_sealed_contract_and_current_expand
         )?;
         assert_eq!(tx.transaction_plan.phase, phase);
         let expected_transaction_target = if count == 35 {
-            &history[count + 8]
+            &history[count + 9]
         } else {
             &history[count]
         };
