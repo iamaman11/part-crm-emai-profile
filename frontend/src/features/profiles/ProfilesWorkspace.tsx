@@ -36,16 +36,16 @@ type GenerationActionCommand = (
   | { kind: 'quarantine'; expectedVersion: number }
 ) & { target: GenerationActionTarget };
 
-type ProfileNameCommand = ProfileSelection & { displayName: string; version: number };
-type ProfileNameReadback = ProfileSelection & { displayName: string; minVersion: number };
+type ProfileNameCommand = ProfileSelection & { displayName: string; metadataVersion: number };
+type ProfileNameReadback = ProfileSelection & { displayName: string; minMetadataVersion: number };
 
 type ProfileClientAssociationCommand =
   ProfileSelection
-  & { version: number; reason: string }
+  & { metadataVersion: number; reason: string }
   & ({ kind: 'attach'; clientId: string } | { kind: 'detach' });
 
 type ProfileClientAssociationReadback = ProfileSelection & {
-  minVersion: number;
+  minMetadataVersion: number;
   linkedClientId: string | null;
 };
 
@@ -53,7 +53,7 @@ interface GrantDraft {
   actorId: string;
   role: 'PROFILE_VIEWER' | 'PROFILE_OPERATOR';
   reason: string;
-  expectedProfileVersion: number;
+  expectedMetadataVersion: number;
 }
 
 // Projection reads can finish out of order for the same selected profile.
@@ -63,7 +63,7 @@ function acceptProfileReadback(
   latest: ProfileProjection | null,
 ): ProfileProjection | null {
   if (!previous || !latest || previous.profileId !== latest.profileId) return latest;
-  if (latest.version < previous.version || (previous.status === 'DELETED' && latest.status !== 'DELETED')) {
+  if (latest.version < previous.version || latest.metadataVersion < previous.metadataVersion || (previous.status === 'DELETED' && latest.status !== 'DELETED')) {
     return previous;
   }
   return latest;
@@ -140,7 +140,7 @@ export function ProfilesWorkspace({
         if (expected
           && expected.tenantId === target.tenantId
           && expected.profileId === target.profileId) {
-          if (!data || data.version < expected.minVersion
+          if (!data || data.metadataVersion < expected.minMetadataVersion
             || data.linkedClientId !== expected.linkedClientId) {
             setRelationshipRefreshUnconfirmed(true);
             return;
@@ -150,7 +150,7 @@ export function ProfilesWorkspace({
         }
         const nameExpected = profileNameReadback.current;
         if (nameExpected && nameExpected.tenantId === target.tenantId && nameExpected.profileId === target.profileId) {
-          if (!data || data.version < nameExpected.minVersion || data.displayName !== nameExpected.displayName) {
+          if (!data || data.metadataVersion < nameExpected.minMetadataVersion || data.displayName !== nameExpected.displayName) {
             setProfileNameUnconfirmed(true);
             return;
           }
@@ -171,7 +171,7 @@ export function ProfilesWorkspace({
   const rename = useLogicalCommandMutation(
     (command: ProfileNameCommand, idempotencyKey) => renameProfile(
       command.tenantId, command.profileId,
-      { displayName: command.displayName, expectedProfileVersion: command.version },
+      { displayName: command.displayName, expectedMetadataVersion: command.metadataVersion },
       idempotencyKey,
     ),
     {
@@ -180,7 +180,7 @@ export function ProfilesWorkspace({
           || selected.current.profileId !== command.profileId) return;
         const expected: ProfileNameReadback = {
           tenantId: command.tenantId, profileId: command.profileId,
-          displayName: command.displayName, minVersion: command.version + 1,
+          displayName: command.displayName, minMetadataVersion: command.metadataVersion + 1,
         };
         profileNameReadback.current = expected;
         setProfileNameUnconfirmed(true);
@@ -190,7 +190,7 @@ export function ProfilesWorkspace({
           if (selected.current.tenantId !== command.tenantId
             || selected.current.profileId !== command.profileId
             || profileNameReadback.current !== expected
-            || refreshed.version < expected.minVersion
+            || refreshed.metadataVersion < expected.minMetadataVersion
             || refreshed.displayName !== expected.displayName) return;
           profileNameReadback.current = null;
           setProfileNameUnconfirmed(false);
@@ -230,18 +230,18 @@ export function ProfilesWorkspace({
         ? assignProfile(command.tenantId, command.profileId, {
           clientId: command.clientId,
           reason: command.reason,
-          expectedProfileVersion: command.version,
+          expectedMetadataVersion: command.metadataVersion,
         }, idempotencyKey)
         : detachProfile(command.tenantId, command.profileId, {
           reason: command.reason,
-          expectedProfileVersion: command.version,
+          expectedMetadataVersion: command.metadataVersion,
         }, idempotencyKey),
     {
       onSuccess: async (_receipt, command) => {
         const expected: ProfileClientAssociationReadback = {
           tenantId: command.tenantId,
           profileId: command.profileId,
-          minVersion: command.version + 1,
+          minMetadataVersion: command.metadataVersion + 1,
           linkedClientId: command.kind === 'attach' ? command.clientId : null,
         };
         if (selected.current.tenantId !== command.tenantId
@@ -255,7 +255,7 @@ export function ProfilesWorkspace({
           if (selected.current.tenantId !== command.tenantId
             || selected.current.profileId !== command.profileId
             || relationshipReadback.current !== expected) return;
-          if (refreshed.version < expected.minVersion
+          if (refreshed.metadataVersion < expected.minMetadataVersion
             || refreshed.linkedClientId !== expected.linkedClientId) return;
           relationshipReadback.current = null;
           setRelationshipRefreshUnconfirmed(false);
@@ -271,7 +271,7 @@ export function ProfilesWorkspace({
       tenantId,
       profileId,
       input.actorId,
-      { role: input.role, reason: input.reason, expectedProfileVersion: input.expectedProfileVersion },
+      { role: input.role, reason: input.reason, expectedMetadataVersion: input.expectedMetadataVersion },
       idempotencyKey,
       input.revoke,
     ), {});
@@ -517,7 +517,7 @@ export function ProfilesWorkspace({
                 if (rename.isPending || profileNameUnconfirmed || relationship.isPending
                   || !profileNameDraft.trim() || profileNameDraft.trim() === profile.displayName) return;
                 rename.mutate({
-                  tenantId, profileId: profile.profileId, version: profile.version,
+                  tenantId, profileId: profile.profileId, metadataVersion: profile.metadataVersion,
                   displayName: profileNameDraft.trim(),
                 });
               }}>
@@ -549,7 +549,7 @@ export function ProfilesWorkspace({
                   || !clientIdDraft.trim() || !relationshipReason.trim()) return;
                 relationship.mutate({
                   kind: 'attach', tenantId, profileId: profile.profileId,
-                  version: profile.version, clientId: clientIdDraft.trim(), reason: relationshipReason.trim(),
+                  metadataVersion: profile.metadataVersion, clientId: clientIdDraft.trim(), reason: relationshipReason.trim(),
                 });
               }}>
                 <label htmlFor="profile-client-association-id">Client ID</label>
@@ -567,14 +567,14 @@ export function ProfilesWorkspace({
                   disabled={relationship.isPending || rename.isPending || profileNameUnconfirmed || relationshipRefreshUnconfirmed || !relationshipReason.trim()}
                   onConfirm={() => relationship.mutateAsync({
                     kind: 'detach', tenantId, profileId: profile.profileId,
-                    version: profile.version, reason: relationshipReason.trim(),
+                    metadataVersion: profile.metadataVersion, reason: relationshipReason.trim(),
                   }).then(() => undefined)}
                 />
               )}
               <StatusMessage state={relationship.error ?? (relationship.isPending ? 'Updating client relationship…' : null)} />
               {relationshipRefreshUnconfirmed && (
                 <div role="alert">
-                  Relationship command completed, but the new profile version was not confirmed. Refresh the read model; do not repeat the command.
+                  Relationship command completed, but the new metadata version was not confirmed. Refresh the read model; do not repeat the command.
                   <button type="button" onClick={() => lookup.mutate({ tenantId, profileId: profile.profileId })} disabled={lookup.isPending}>Refresh relationship</button>
                 </div>
               )}
@@ -617,7 +617,7 @@ export function ProfilesWorkspace({
         <h2>Profile grant</h2>
         <ProfileGrantPanel
           disabled={!profileLoaded}
-          defaultVersion={profile?.version ?? 1}
+          defaultVersion={profile?.metadataVersion ?? 1}
           busy={grant.isPending}
           onGrant={(draft) => grant.mutate({ ...draft, revoke: false })}
           onRevoke={(draft) => grant.mutateAsync({ ...draft, revoke: true }).then(() => undefined)}
@@ -710,19 +710,19 @@ function ProfileGrantPanel({ disabled, defaultVersion, busy, onGrant, onRevoke }
   const [actorId, setActorId] = useState('');
   const [role, setRole] = useState<'PROFILE_VIEWER' | 'PROFILE_OPERATOR'>('PROFILE_VIEWER');
   const [reason, setReason] = useState('');
-  const [expectedProfileVersion, setExpectedVersion] = useState(defaultVersion);
+  const [expectedMetadataVersion, setExpectedVersion] = useState(defaultVersion);
 
   useEffect(() => {
     setExpectedVersion(defaultVersion);
   }, [defaultVersion]);
 
-  const draft = { actorId, role, reason, expectedProfileVersion };
+  const draft = { actorId, role, reason, expectedMetadataVersion };
   const unavailable = disabled || busy || !actorId || !reason;
   return (
     <div className="action-grid">
       <label>Actor ID<input value={actorId} onChange={(e) => setActorId(e.currentTarget.value)} disabled={disabled} /></label>
       <label>Role<select value={role} onChange={(e) => setRole(e.currentTarget.value as typeof role)} disabled={disabled}><option value="PROFILE_VIEWER">Viewer</option><option value="PROFILE_OPERATOR">Operator</option></select></label>
-      <label>Expected version<input type="number" min="1" value={expectedProfileVersion} onChange={(e) => setExpectedVersion(Number(e.currentTarget.value))} disabled={disabled} /></label>
+      <label>Expected metadata version<input type="number" min="1" value={expectedMetadataVersion} onChange={(e) => setExpectedVersion(Number(e.currentTarget.value))} disabled={disabled} /></label>
       <label className="wide">Reason<input value={reason} onChange={(e) => setReason(e.currentTarget.value)} disabled={disabled} /></label>
       <button type="button" disabled={unavailable} onClick={() => onGrant(draft)}>Apply grant</button>
       <ConfirmAction label="revoke profile grant" consequence="This removes explicit profile access. Client assignment is unaffected." disabled={unavailable} onConfirm={() => onRevoke(draft)} />
