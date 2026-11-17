@@ -103,10 +103,10 @@ fn actual_deployed_context_traverses_separate_sealed_contract_and_current_expand
                 .ok_or("migration name is missing")
         })
         .collect::<Result<Vec<_>, _>>()?;
-    assert_eq!(history.len(), 44);
+    assert_eq!(history.len(), 45);
     assert_eq!(
         history.last().map(String::as_str),
-        Some("0044_profile_delete_exact_upload_expiry.sql")
+        Some("0045_profile_display_name.sql")
     );
     let target = json!({"source":{"authority":"accepted-main","repository":"iamaman11/part-crm-emai-profile","ref":"refs/heads/main","event":"push","commit_sha":SOURCE},"schema_contract":catalog["release_schema_contract"]});
     let mut current = target.clone();
@@ -143,7 +143,7 @@ fn actual_deployed_context_traverses_separate_sealed_contract_and_current_expand
     write(&dir.join("runtime-context.json"), &context)?;
     let mut prior_authorization: Option<Value> = None;
     // Current ordinary migration planning includes every remaining typed
-    // successor expansion (0036..0044) after the separate sealed CONTRACT.
+    // successor expansion (0036..0045) after the separate sealed CONTRACT.
     for count in [34, 35] {
         let ledger = json!([{"success":true,"results":history[..count].iter().enumerate().map(|(i,n)|json!({"id":i+1,"name":n})).collect::<Vec<_>>()}]);
         write(&dir.join("ledger.json"), &ledger)?;
@@ -198,7 +198,7 @@ fn actual_deployed_context_traverses_separate_sealed_contract_and_current_expand
             &history[count]
         };
         assert_eq!(native_plan["target_revision"], expected_target.as_str());
-        assert_eq!(native_plan["desired_target_revision"], history[43]);
+        assert_eq!(native_plan["desired_target_revision"], history[44]);
         write(&dir.join("native-stage.json"), &native_plan)?;
         write(
             &dir.join("deployment-snapshot.json"),
