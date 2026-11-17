@@ -664,6 +664,31 @@ mod tests {
         Ok(())
     }
 
+    #[test]
+    fn cloud_sync_admission_is_separate_from_exclusive_native_writer()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let (_test_root, _root, workspace, device) = fixture("cloud-vs-browser")?;
+        let sync = ClosedSyncAdmission::try_acquire(&workspace)?
+            .ok_or("first cloud Sync owner missing")?;
+
+        // A running browser must still acquire its native file writer
+        // without waiting for any network request controlled by Sync.
+        let writer = BridgeWorkspaceLock::acquire(&workspace, &device, 1)?;
+        assert!(
+            ClosedSyncAdmission::try_acquire(&workspace)?.is_none(),
+            "the second cloud Sync owner must remain excluded"
+        );
+        assert!(matches!(
+            BridgeWorkspaceLock::acquire(&workspace, &device, 2),
+            Err(LocalProfileError::LockBusy)
+        ));
+        writer.release()?;
+        drop(sync);
+
+        BridgeWorkspaceLock::acquire(&workspace, &device, 3)?.release()?;
+        Ok(())
+    }
+
     /// The production Windows kernel must release an admission held by a
     /// killed child; no stale PID marker or manual lock cleanup is involved.
     #[cfg(windows)]
@@ -677,7 +702,11 @@ mod tests {
         let profile = ProfileId::parse(std::env::var("PROFILE_BRIDGE_TEST_SYNC_PROFILE")?)?;
         let generation =
             GenerationId::parse(std::env::var("PROFILE_BRIDGE_TEST_SYNC_GENERATION")?)?;
-        let workspace = root.open_generation(&tenant, &profile, &generation)?;
+        let workspace = if std::env::var_os("PROFILE_BRIDGE_TEST_SYNC_USE_CURRENT").is_some() {
+            root.open_profile_current(&tenant, &profile)?
+        } else {
+            root.open_generation(&tenant, &profile, &generation)?
+        };
         let _owner = ClosedSyncAdmission::try_acquire(&workspace)?
             .ok_or("native child could not acquire the Sync admission")?;
         std::thread::sleep(std::time::Duration::from_secs(12));

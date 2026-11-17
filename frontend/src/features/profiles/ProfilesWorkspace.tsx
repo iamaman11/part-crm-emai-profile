@@ -4,14 +4,17 @@ import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { useEffect, useRef, useState, type FormEvent } from 'react';
 import { useTenant } from '../../app/TenantContext';
 import {
+  assignProfile,
   changeGenerationActivation,
   commandCoordinator,
   createProfile,
   deleteProfile,
+  detachProfile,
   getCoordinator,
   getGeneration,
   getProfile,
   quarantineGeneration,
+  renameProfile,
   registerGeneration,
   setProfileGrant,
   verifyGeneration,
@@ -33,11 +36,24 @@ type GenerationActionCommand = (
   | { kind: 'quarantine'; expectedVersion: number }
 ) & { target: GenerationActionTarget };
 
+type ProfileNameCommand = ProfileSelection & { displayName: string; metadataVersion: number };
+type ProfileNameReadback = ProfileSelection & { displayName: string; minMetadataVersion: number };
+
+type ProfileClientAssociationCommand =
+  ProfileSelection
+  & { metadataVersion: number; reason: string }
+  & ({ kind: 'attach'; clientId: string } | { kind: 'detach' });
+
+type ProfileClientAssociationReadback = ProfileSelection & {
+  minMetadataVersion: number;
+  linkedClientId: string | null;
+};
+
 interface GrantDraft {
   actorId: string;
   role: 'PROFILE_VIEWER' | 'PROFILE_OPERATOR';
   reason: string;
-  expectedProfileVersion: number;
+  expectedMetadataVersion: number;
 }
 
 // Projection reads can finish out of order for the same selected profile.
@@ -47,7 +63,7 @@ function acceptProfileReadback(
   latest: ProfileProjection | null,
 ): ProfileProjection | null {
   if (!previous || !latest || previous.profileId !== latest.profileId) return latest;
-  if (latest.version < previous.version || (previous.status === 'DELETED' && latest.status !== 'DELETED')) {
+  if (latest.version < previous.version || latest.metadataVersion < previous.metadataVersion || (previous.status === 'DELETED' && latest.status !== 'DELETED')) {
     return previous;
   }
   return latest;
@@ -73,6 +89,13 @@ export function ProfilesWorkspace({
   const selected = useRef({ tenantId, profileId, generationId });
   selected.current = { tenantId, profileId, generationId };
 
+  const [profileNameDraft, setProfileNameDraft] = useState('');
+  const [profileNameUnconfirmed, setProfileNameUnconfirmed] = useState(false);
+  const profileNameReadback = useRef<ProfileNameReadback | null>(null);
+  const [clientIdDraft, setClientIdDraft] = useState('');
+  const [relationshipReason, setRelationshipReason] = useState('');
+  const [relationshipRefreshUnconfirmed, setRelationshipRefreshUnconfirmed] = useState(false);
+  const relationshipReadback = useRef<ProfileClientAssociationReadback | null>(null);
   const [openError, setOpenError] = useState<Error | null>(null);
   const [localDeleteError, setLocalDeleteError] = useState<Error | null>(null);
   const requestLocalDeletion = (terminal: ProfileProjection) => {
@@ -113,16 +136,72 @@ export function ProfilesWorkspace({
       // newly selected profile, even if the previous request succeeded.
       if (selected.current.tenantId === target.tenantId
         && selected.current.profileId === target.profileId) {
+        const expected = relationshipReadback.current;
+        if (expected
+          && expected.tenantId === target.tenantId
+          && expected.profileId === target.profileId) {
+          if (!data || data.metadataVersion < expected.minMetadataVersion
+            || data.linkedClientId !== expected.linkedClientId) {
+            setRelationshipRefreshUnconfirmed(true);
+            return;
+          }
+          relationshipReadback.current = null;
+          setRelationshipRefreshUnconfirmed(false);
+        }
+        const nameExpected = profileNameReadback.current;
+        if (nameExpected && nameExpected.tenantId === target.tenantId && nameExpected.profileId === target.profileId) {
+          if (!data || data.metadataVersion < nameExpected.minMetadataVersion || data.displayName !== nameExpected.displayName) {
+            setProfileNameUnconfirmed(true);
+            return;
+          }
+          profileNameReadback.current = null;
+          setProfileNameUnconfirmed(false);
+        }
+        if (data) setProfileNameDraft(data.displayName);
         setProfile((previous) => acceptProfileReadback(previous, data ?? null));
       }
     },
   });
-  const create = useLogicalCommandMutation((id: string, idempotencyKey) => createProfile(tenantId, id, idempotencyKey), {
+  const create = useLogicalCommandMutation((input: { profileId: string; displayName: string }, idempotencyKey) => createProfile(tenantId, input.profileId, input.displayName, idempotencyKey), {
     onSuccess: (receipt) => {
       void cache.invalidateQueries({ queryKey: ['operator-query', tenantId, 'profiles'] });
       if (receipt?.resourceId) onProfileSelected(receipt.resourceId);
     },
   });
+  const rename = useLogicalCommandMutation(
+    (command: ProfileNameCommand, idempotencyKey) => renameProfile(
+      command.tenantId, command.profileId,
+      { displayName: command.displayName, expectedMetadataVersion: command.metadataVersion },
+      idempotencyKey,
+    ),
+    {
+      onSuccess: async (_receipt, command) => {
+        if (selected.current.tenantId !== command.tenantId
+          || selected.current.profileId !== command.profileId) return;
+        const expected: ProfileNameReadback = {
+          tenantId: command.tenantId, profileId: command.profileId,
+          displayName: command.displayName, minMetadataVersion: command.metadataVersion + 1,
+        };
+        profileNameReadback.current = expected;
+        setProfileNameUnconfirmed(true);
+        void cache.invalidateQueries({ queryKey: ['operator-query', command.tenantId, 'profiles'] });
+        try {
+          const refreshed = await getProfile(command.tenantId, command.profileId);
+          if (selected.current.tenantId !== command.tenantId
+            || selected.current.profileId !== command.profileId
+            || profileNameReadback.current !== expected
+            || refreshed.metadataVersion < expected.minMetadataVersion
+            || refreshed.displayName !== expected.displayName) return;
+          profileNameReadback.current = null;
+          setProfileNameUnconfirmed(false);
+          setProfile((previous) => acceptProfileReadback(previous, refreshed));
+          setProfileNameDraft(refreshed.displayName);
+        } catch {
+          // The command is not replayed when its readback is lost.
+        }
+      },
+    },
+  );
   const deleteAction = useMutation({
     mutationFn: async ({ targetTenant, targetProfile, expectedVersion }: {
       targetTenant: string;
@@ -143,11 +222,56 @@ export function ProfilesWorkspace({
       if (receipt.status === 'DELETED') setGeneration(null);
     },
   });
+  // Client linkage is a business relationship, not an ACL or browser state.
+  // Reuse the identical typed optimistic commands already used in ClientProfilesPanel.
+  const relationship = useLogicalCommandMutation(
+    (command: ProfileClientAssociationCommand, idempotencyKey) =>
+      command.kind === 'attach'
+        ? assignProfile(command.tenantId, command.profileId, {
+          clientId: command.clientId,
+          reason: command.reason,
+          expectedMetadataVersion: command.metadataVersion,
+        }, idempotencyKey)
+        : detachProfile(command.tenantId, command.profileId, {
+          reason: command.reason,
+          expectedMetadataVersion: command.metadataVersion,
+        }, idempotencyKey),
+    {
+      onSuccess: async (_receipt, command) => {
+        const expected: ProfileClientAssociationReadback = {
+          tenantId: command.tenantId,
+          profileId: command.profileId,
+          minMetadataVersion: command.metadataVersion + 1,
+          linkedClientId: command.kind === 'attach' ? command.clientId : null,
+        };
+        if (selected.current.tenantId !== command.tenantId
+          || selected.current.profileId !== command.profileId) return;
+        relationshipReadback.current = expected;
+        setRelationshipRefreshUnconfirmed(true);
+        void cache.invalidateQueries({ queryKey: ['operator-query', command.tenantId, 'profiles'] });
+        void cache.invalidateQueries({ queryKey: ['client-registry', command.tenantId] });
+        try {
+          const refreshed = await getProfile(command.tenantId, command.profileId);
+          if (selected.current.tenantId !== command.tenantId
+            || selected.current.profileId !== command.profileId
+            || relationshipReadback.current !== expected) return;
+          if (refreshed.metadataVersion < expected.minMetadataVersion
+            || refreshed.linkedClientId !== expected.linkedClientId) return;
+          relationshipReadback.current = null;
+          setRelationshipRefreshUnconfirmed(false);
+          setRelationshipReason('');
+          setProfile((previous) => acceptProfileReadback(previous, refreshed));
+        } catch {
+          // Never infer success from a receipt or replay a mutation on readback failure.
+        }
+      },
+    },
+  );
   const grant = useLogicalCommandMutation((input: GrantDraft & { revoke: boolean }, idempotencyKey) => setProfileGrant(
       tenantId,
       profileId,
       input.actorId,
-      { role: input.role, reason: input.reason, expectedProfileVersion: input.expectedProfileVersion },
+      { role: input.role, reason: input.reason, expectedMetadataVersion: input.expectedMetadataVersion },
       idempotencyKey,
       input.revoke,
     ), {});
@@ -232,6 +356,13 @@ export function ProfilesWorkspace({
     setGeneration(null);
     setCoordinator(null);
     setGenerationRefreshUnconfirmed(false);
+    setProfileNameDraft('');
+    setProfileNameUnconfirmed(false);
+    profileNameReadback.current = null;
+    setClientIdDraft('');
+    setRelationshipReason('');
+    setRelationshipRefreshUnconfirmed(false);
+    relationshipReadback.current = null;
     if (tenantId && nextProfileId) lookup.mutate({ tenantId, profileId: nextProfileId });
   }, [tenantId, selectedProfileId]);
 
@@ -319,7 +450,7 @@ export function ProfilesWorkspace({
     <div className="workspace-grid">
       <section className="panel">
         <span className="eyebrow">Browser profile</span>
-        <h2>{profile?.profileId ?? selectedProfileId ?? 'Profile'}</h2>
+        <h2>{profile?.displayName ?? profile?.profileId ?? selectedProfileId ?? 'Profile'}</h2>
         <details><summary>Find a profile by identifier</summary>
         <form
           className="stack-form"
@@ -378,6 +509,77 @@ export function ProfilesWorkspace({
             <div><dt>Status</dt><dd>{profile.status}</dd></div>
             <div><dt>Client</dt><dd>{profile.linkedClientId ?? 'Not assigned'}</dd></div>
           </dl>
+          {owner && ['DRAFT', 'READY', 'SUSPENDED', 'QUARANTINED'].includes(profile.status) && (
+            <details>
+              <summary>Rename profile</summary>
+              <form className="stack-form" onSubmit={(event) => {
+                event.preventDefault();
+                if (rename.isPending || profileNameUnconfirmed || relationship.isPending
+                  || !profileNameDraft.trim() || profileNameDraft.trim() === profile.displayName) return;
+                rename.mutate({
+                  tenantId, profileId: profile.profileId, metadataVersion: profile.metadataVersion,
+                  displayName: profileNameDraft.trim(),
+                });
+              }}>
+                <label htmlFor="profile-display-name">Profile name</label>
+                <input id="profile-display-name" value={profileNameDraft}
+                  onChange={(event) => setProfileNameDraft(event.currentTarget.value)}
+                  maxLength={80} required />
+                <button type="submit" disabled={rename.isPending || profileNameUnconfirmed
+                  || relationship.isPending || !profileNameDraft.trim()
+                  || profileNameDraft.trim() === profile.displayName}>Save name</button>
+              </form>
+              <StatusMessage state={rename.error ?? (rename.isPending ? 'Renaming profile…' : null)} />
+              {profileNameUnconfirmed && <div role="alert">
+                Rename command completed, but the updated name was not confirmed. Refresh without repeating the command.
+                <button type="button" disabled={lookup.isPending}
+                  onClick={() => lookup.mutate({ tenantId, profileId: profile.profileId })}>
+                  Refresh profile name
+                </button>
+              </div>}
+            </details>
+          )}
+          {owner && ['DRAFT', 'READY', 'SUSPENDED', 'QUARANTINED'].includes(profile.status) && (
+            <details>
+              <summary>Manage client association</summary>
+              <p>Client linkage is a business relationship; it does not grant profile access.</p>
+              <form className="stack-form" onSubmit={(event: FormEvent<HTMLFormElement>) => {
+                event.preventDefault();
+                if (relationship.isPending || rename.isPending || profileNameUnconfirmed || relationshipRefreshUnconfirmed
+                  || !clientIdDraft.trim() || !relationshipReason.trim()) return;
+                relationship.mutate({
+                  kind: 'attach', tenantId, profileId: profile.profileId,
+                  metadataVersion: profile.metadataVersion, clientId: clientIdDraft.trim(), reason: relationshipReason.trim(),
+                });
+              }}>
+                <label htmlFor="profile-client-association-id">Client ID</label>
+                <input id="profile-client-association-id" value={clientIdDraft} onChange={(event) => setClientIdDraft(event.currentTarget.value)} placeholder="client_..." required />
+                <label htmlFor="profile-client-association-reason">Reason</label>
+                <input id="profile-client-association-reason" value={relationshipReason} onChange={(event) => setRelationshipReason(event.currentTarget.value)} maxLength={500} required />
+                <button type="submit" disabled={relationship.isPending || rename.isPending || profileNameUnconfirmed || relationshipRefreshUnconfirmed || !clientIdDraft.trim() || !relationshipReason.trim() || clientIdDraft.trim() === profile.linkedClientId}>
+                  {profile.linkedClientId ? 'Change client' : 'Attach client'}
+                </button>
+              </form>
+              {profile.linkedClientId && (
+                <ConfirmAction
+                  label="Detach client"
+                  consequence="Remove only the Client/Profile relationship. Browser data and independent profile access remain unchanged."
+                  disabled={relationship.isPending || rename.isPending || profileNameUnconfirmed || relationshipRefreshUnconfirmed || !relationshipReason.trim()}
+                  onConfirm={() => relationship.mutateAsync({
+                    kind: 'detach', tenantId, profileId: profile.profileId,
+                    metadataVersion: profile.metadataVersion, reason: relationshipReason.trim(),
+                  }).then(() => undefined)}
+                />
+              )}
+              <StatusMessage state={relationship.error ?? (relationship.isPending ? 'Updating client relationship…' : null)} />
+              {relationshipRefreshUnconfirmed && (
+                <div role="alert">
+                  Relationship command completed, but the new metadata version was not confirmed. Refresh the read model; do not repeat the command.
+                  <button type="button" onClick={() => lookup.mutate({ tenantId, profileId: profile.profileId })} disabled={lookup.isPending}>Refresh relationship</button>
+                </div>
+              )}
+            </details>
+          )}
           <details>
             <summary>Technical identifiers</summary>
             <dl className="projection">
@@ -391,11 +593,15 @@ export function ProfilesWorkspace({
       {!selectedProfileId && <section className="panel">
         <span className="eyebrow">New browser profile</span>
         <h2>Create profile</h2>
-        <p>Create a profile, then choose Open browser. The application prepares the browser state and saves changes when you close it.</p>
+        <p>Name your profile, then choose Open browser. The application prepares the browser state and saves changes when you close it.</p>
         <form className="stack-form" onSubmit={(event) => {
           event.preventDefault();
-          create.mutate(field(new FormData(event.currentTarget), 'profileId') || `profile_${globalThis.crypto.randomUUID().replaceAll('-', '')}`);
+          const data = new FormData(event.currentTarget);
+          create.mutate({ profileId: field(data, 'profileId') || `profile_${globalThis.crypto.randomUUID().replaceAll('-', '')}`,
+            displayName: field(data, 'displayName') });
         }}>
+          <label htmlFor="profile-create-name">Profile name</label>
+          <input id="profile-create-name" name="displayName" minLength={1} maxLength={80} required disabled={!enabled} placeholder="For example, Sales mailbox" />
           <details><summary>Advanced: custom identifier</summary>
             <label htmlFor="profile-create-id">Profile ID</label>
             <input id="profile-create-id" name="profileId" placeholder="Generated automatically" disabled={!enabled} />
@@ -411,7 +617,7 @@ export function ProfilesWorkspace({
         <h2>Profile grant</h2>
         <ProfileGrantPanel
           disabled={!profileLoaded}
-          defaultVersion={profile?.version ?? 1}
+          defaultVersion={profile?.metadataVersion ?? 1}
           busy={grant.isPending}
           onGrant={(draft) => grant.mutate({ ...draft, revoke: false })}
           onRevoke={(draft) => grant.mutateAsync({ ...draft, revoke: true }).then(() => undefined)}
@@ -504,19 +710,19 @@ function ProfileGrantPanel({ disabled, defaultVersion, busy, onGrant, onRevoke }
   const [actorId, setActorId] = useState('');
   const [role, setRole] = useState<'PROFILE_VIEWER' | 'PROFILE_OPERATOR'>('PROFILE_VIEWER');
   const [reason, setReason] = useState('');
-  const [expectedProfileVersion, setExpectedVersion] = useState(defaultVersion);
+  const [expectedMetadataVersion, setExpectedVersion] = useState(defaultVersion);
 
   useEffect(() => {
     setExpectedVersion(defaultVersion);
   }, [defaultVersion]);
 
-  const draft = { actorId, role, reason, expectedProfileVersion };
+  const draft = { actorId, role, reason, expectedMetadataVersion };
   const unavailable = disabled || busy || !actorId || !reason;
   return (
     <div className="action-grid">
       <label>Actor ID<input value={actorId} onChange={(e) => setActorId(e.currentTarget.value)} disabled={disabled} /></label>
       <label>Role<select value={role} onChange={(e) => setRole(e.currentTarget.value as typeof role)} disabled={disabled}><option value="PROFILE_VIEWER">Viewer</option><option value="PROFILE_OPERATOR">Operator</option></select></label>
-      <label>Expected version<input type="number" min="1" value={expectedProfileVersion} onChange={(e) => setExpectedVersion(Number(e.currentTarget.value))} disabled={disabled} /></label>
+      <label>Expected metadata version<input type="number" min="1" value={expectedMetadataVersion} onChange={(e) => setExpectedVersion(Number(e.currentTarget.value))} disabled={disabled} /></label>
       <label className="wide">Reason<input value={reason} onChange={(e) => setReason(e.currentTarget.value)} disabled={disabled} /></label>
       <button type="button" disabled={unavailable} onClick={() => onGrant(draft)}>Apply grant</button>
       <ConfirmAction label="revoke profile grant" consequence="This removes explicit profile access. Client assignment is unaffected." disabled={unavailable} onConfirm={() => onRevoke(draft)} />

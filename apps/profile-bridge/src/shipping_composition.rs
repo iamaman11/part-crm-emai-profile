@@ -145,7 +145,7 @@ pub fn run_delivery_command(
 mod windows {
     use super::{ShippingCompositionError, ShippingDeliveryCommand};
     use crate::authoritative_generation::{
-        ensure_authoritative_current, prove_cold_current_restore,
+        ensure_authoritative_current_with_cold_evidence,
         reconcile_closed_draft_with_confirmed_current,
         reconcile_closed_ready_with_confirmed_current,
     };
@@ -478,6 +478,168 @@ mod windows {
         Ok(())
     }
 
+    /// A previous signed PUT could have failed after sealing the exact local
+    /// Prepared descriptor. An old CURRENT read alone is NEVER permission to
+    /// erase it: first acquire the same fresh Coordinator authority as a
+    /// normal READY Sync and obtain the existing affirmative D1 retry verdict.
+    /// Under native writer admission only the local pending marker is retired;
+    /// all Firefox bytes, fingerprint, base version and dirty evidence survive.
+    fn clear_prepared_pending_after_proven_nonapplication(
+        intent: &crate::generation_initialization::InitialProfileOpen,
+        binding: &WindowsDeviceApplicationBinding,
+        root: &MaterializationRoot,
+        origin: &str,
+        base: &profile_platform_primitives::GenerationId,
+        pending: &PendingSyncDescriptor,
+    ) -> Result<(), ClosedReadySyncError> {
+        use crate::browser_execution::browser_writer_locks_absent;
+        use crate::local_profile::BridgeWorkspaceLock;
+        use crate::shipping_generation_successor_control::request_prepared_pending_retry_decision;
+        use control_plane_contract::profile_generation_api::BridgeGenerationSuccessorRetryVerdict;
+        use std::fs;
+
+        if pending.is_committed() {
+            return Err(ClosedReadySyncError::VersionConflict);
+        }
+        let application = WindowsDeviceApplication::from_system(origin.to_owned(), binding.clone())
+            .map_err(|_| ClosedReadySyncError::Unconfirmed)?;
+        let mut transport = application.transport();
+        let actor = profile_platform_primitives::ActorContext::new(
+            profile_platform_primitives::TenantScope::new(intent.tenant_id.clone()),
+            intent.actor_id.clone(),
+            profile_platform_primitives::CorrelationId::parse("corr_pending_ready_retry")
+                .map_err(|_| ClosedReadySyncError::Unconfirmed)?,
+        );
+        let claim = reauthorize_current_ready_generation(
+            intent,
+            &actor,
+            binding.device_id(),
+            &mut transport,
+        )
+        .map_err(|error| match error {
+            crate::generation_initialization::InitialProfileError::LeaseConflict => {
+                ClosedReadySyncError::LeaseConflict
+            }
+            _ => ClosedReadySyncError::Unconfirmed,
+        })?;
+        let mut enrollment = ControlPlaneEnrollment::new(transport.clone());
+        let enrolled = enrollment
+            .redeem_claim(&claim, binding.device_id(), now().map_err(|_| ())?)
+            .map_err(|_| ClosedReadySyncError::Unconfirmed)?;
+        if enrolled.actor().actor_id() != actor.actor_id()
+            || enrolled.actor().tenant_scope().tenant_id() != actor.tenant_scope().tenant_id()
+            || enrolled.profile_id() != &intent.profile_id
+            || enrolled.generation_id() != base
+        {
+            return Err(ClosedReadySyncError::VersionConflict);
+        }
+        let mut coordinator =
+            SharedControlPlaneCoordinator::new(ControlPlaneCoordinator::new(transport.clone()));
+        let lease = coordinator
+            .claim_launch_intent(
+                enrolled.actor(),
+                &intent.profile_id,
+                binding.device_id(),
+                enrolled.launch_intent_id(),
+            )
+            .map_err(|error| match error {
+                ShippingControlPlaneError::LaunchLeaseConflict => {
+                    ClosedReadySyncError::LeaseConflict
+                }
+                _ => ClosedReadySyncError::Unconfirmed,
+            })?;
+        let outcome = (|| -> Result<(), ClosedReadySyncError> {
+            if request_prepared_pending_retry_decision(
+                &intent.tenant_id,
+                &intent.profile_id,
+                base,
+                pending,
+                &lease,
+                &mut transport,
+            )
+            .map_err(|_| ClosedReadySyncError::Unconfirmed)?
+                != BridgeGenerationSuccessorRetryVerdict::NotAppliedRetryable
+            {
+                // A registered, committed or foreign candidate is NEVER
+                // discarded as a retryable upload.
+                return Err(ClosedReadySyncError::VersionConflict);
+            }
+            let timing = coordinator
+                .runtime_timing()
+                .map_err(|_| ClosedReadySyncError::Unconfirmed)?;
+            if !safe_reconnect_writer_window(
+                timing.idle_expires_at_ms(),
+                timing.hard_expires_at_ms(),
+                now().map_err(|_| ClosedReadySyncError::Unconfirmed)?,
+            ) {
+                return Err(ClosedReadySyncError::Unconfirmed);
+            }
+            let workspace = root
+                .open_profile_current(&intent.tenant_id, &intent.profile_id)
+                .map_err(|_| ClosedReadySyncError::Unconfirmed)?;
+            if workspace.profile_version() != intent.expected_version
+                || workspace.base_generation_id() != Some(base)
+                || workspace.pending_sync() != Some(pending)
+                || fs::read(workspace.path().join(".local-unsynced"))
+                    .map_err(|_| ClosedReadySyncError::Unconfirmed)?
+                    != b"local-unsynced-v2"
+                || !matches!(browser_writer_locks_absent(&workspace), Ok(true))
+            {
+                return Err(ClosedReadySyncError::VersionConflict);
+            }
+            let guard = BridgeWorkspaceLock::acquire_or_recover_interrupted(
+                &workspace,
+                binding.device_id(),
+                now()
+                    .map_err(|_| ClosedReadySyncError::Unconfirmed)?
+                    .value(),
+            )
+            .map_err(|_| ClosedReadySyncError::Unconfirmed)?;
+            let mutation = (|| -> Result<(), ClosedReadySyncError> {
+                let active = root
+                    .open_profile_current(&intent.tenant_id, &intent.profile_id)
+                    .map_err(|_| ClosedReadySyncError::Unconfirmed)?;
+                if active.path() != workspace.path()
+                    || active.generation_id() != workspace.generation_id()
+                    || active.profile_version() != intent.expected_version
+                    || active.base_generation_id() != Some(base)
+                    || active.pending_sync() != Some(pending)
+                    || fs::read(active.path().join(".local-unsynced"))
+                        .map_err(|_| ClosedReadySyncError::Unconfirmed)?
+                        != b"local-unsynced-v2"
+                    || !matches!(browser_writer_locks_absent(&active), Ok(true))
+                {
+                    return Err(ClosedReadySyncError::VersionConflict);
+                }
+                let cleared = root
+                    .clear_profile_current_pending_sync(&active)
+                    .map_err(|_| ClosedReadySyncError::Unconfirmed)?;
+                if cleared.pending_sync().is_some()
+                    || cleared.profile_version() != intent.expected_version
+                    || cleared.base_generation_id() != Some(base)
+                    || fs::read(cleared.path().join(".local-unsynced"))
+                        .map_err(|_| ClosedReadySyncError::Unconfirmed)?
+                        != b"local-unsynced-v2"
+                {
+                    return Err(ClosedReadySyncError::Unconfirmed);
+                }
+                Ok(())
+            })();
+            let released = guard
+                .release()
+                .map_err(|_| ClosedReadySyncError::Unconfirmed);
+            mutation?;
+            released?;
+            Ok(())
+        })();
+        let close = coordinator
+            .close_lease(&lease)
+            .map_err(|_| ClosedReadySyncError::Unconfirmed);
+        outcome?;
+        close?;
+        eprintln!("BRIDGE_PENDING_RETRY_D1_NONAPPLIED_CONFIRMED;LOCAL_DIRTY_PRESERVED");
+        Ok(())
+    }
     fn sync_closed_ready_with_rebase(
         intent: &crate::generation_initialization::InitialProfileOpen,
         binding: &WindowsDeviceApplicationBinding,
@@ -537,7 +699,27 @@ mod windows {
             ) {
                 return Err(ClosedReadySyncError::VersionConflict);
             }
-            return Err(ClosedReadySyncError::Unconfirmed);
+            // A confirmed original CURRENT is not permission to retry:
+            // the signed PUT spool was lost at process exit. The existing
+            // D1 observer must prove that this exact candidate was not applied.
+            let base = workspace
+                .base_generation_id()
+                .ok_or(ClosedReadySyncError::VersionConflict)?;
+            if current.generation_id() != base {
+                return Err(ClosedReadySyncError::VersionConflict);
+            }
+            clear_prepared_pending_after_proven_nonapplication(
+                intent, binding, root, origin, base, &pending,
+            )?;
+            // Same READY Sync under the same ClosedSyncAdmission. No alternate
+            // upload path, cloud generation guess or local byte replacement.
+            return sync_closed_ready_with_rebase(
+                intent,
+                binding,
+                root,
+                origin,
+                allow_same_device_rebase,
+            );
         }
         let Some(base) = workspace.base_generation_id().cloned() else {
             // First DRAFT -> READY committed in D1, but our HTTP response or
@@ -957,74 +1139,48 @@ mod windows {
         }
     }
 
-    /// Non-critical retention admission runs only after the *normal* Sync
-    /// owner has confirmed CURRENT and cleared local dirty/pending evidence.
-    /// It performs the existing independent R2 GET/AEAD/native-byte proof,
-    /// then asks the existing D1 owner to freeze a delayed exact predecessor.
-    /// Its failure cannot turn a committed Save into an error or create a
-    /// competing browser writer, Sync owner, R2 DELETE or persistent retry.
-    fn try_retire_predecessor_after_clean_sync(
+    /// Retention is strictly optional and only follows a REAL cold Restore.
+    /// That Restore already read/decrypted/materialized signed R2 CURRENT;
+    /// no second 200-MiB GET or upload runs in the user's Sync hot path.
+    /// Worker D1 owns exact admission; existing cron owns the eventual DELETE.
+    /// If not admitted, keep old immutable R2 bytes; never delay local Open
+    /// or revoke VERIFIED CURRENT on an optional cleanup failure.
+    pub(super) fn try_admit_retirement_after_cold_restore(
         intent: &crate::generation_initialization::InitialProfileOpen,
         binding: &WindowsDeviceApplicationBinding,
-        root: &MaterializationRoot,
         origin: &str,
-    ) {
-        let result = (|| -> Result<(), ()> {
-            let workspace = root
-                .open_profile_current(&intent.tenant_id, &intent.profile_id)
-                .map_err(|_| ())?;
-            if workspace.pending_sync().is_some()
-                || !matches!(
-                    std::fs::symlink_metadata(workspace.path().join(".local-unsynced")),
-                    Err(ref error) if error.kind() == std::io::ErrorKind::NotFound
-                )
-            {
-                return Err(());
-            }
-            let generation = workspace.base_generation_id().ok_or(())?.clone();
-            let version = workspace.profile_version();
+        generation: &profile_platform_primitives::GenerationId,
+        version: u64,
+        digest: [u8; 32],
+        prelude: &[u8],
+    ) -> bool {
+        let result = (|| -> Result<bool, ()> {
             let application =
                 WindowsDeviceApplication::from_system(origin.to_owned(), binding.clone())
                     .map_err(|_| ())?;
             let mut control =
                 ControlPlaneCoordinator::for_local_current_restore(application.transport());
-            let reader = WindowsSignedGenerationObjectGet::from_system().map_err(|_| ())?;
-            let mut downloader = VerifiedGenerationObjectStreamDownloader::new(reader);
-            let (native_digest, metadata_prelude) = prove_cold_current_restore(
-                root,
-                &intent.tenant_id,
-                &intent.profile_id,
-                &generation,
-                version,
-                binding.device_id(),
-                now().map_err(|_| ())?.value(),
-                &mut control,
-                &mut downloader,
-            )
-            .map_err(|_| ())?;
-            admit_retirement_with_uncertain_retry(
+            let admitted = admit_retirement_with_uncertain_retry(
                 || {
                     control.admit_cold_current_retirement(
                         &intent.tenant_id,
                         &intent.profile_id,
-                        &generation,
+                        generation,
                         version,
-                        &metadata_prelude,
-                        native_digest,
+                        prelude,
+                        digest,
                     )
                 },
                 thread::sleep,
             )
             .map_err(|_| ())?;
-            Ok(())
+            Ok(admitted)
         })();
-        if result.is_err() {
-            // Bounded local evidence only. A missed admission retains old R2
-            // bytes, and is never represented as a Save/CURRENT failure.
+        if !matches!(result, Ok(true)) {
             eprintln!("BRIDGE_COLD_CURRENT_RETIREMENT_DEFERRED");
         }
+        matches!(result, Ok(true))
     }
-
     fn wait_for_native_writer_release<E>(
         mut probe: impl FnMut() -> Result<bool, E>,
         mut pause: impl FnMut(Duration),
@@ -1159,9 +1315,8 @@ mod windows {
                         Cause::None,
                         0,
                     );
-                    if intent.status == InitialProfileStatus::Ready {
-                        try_retire_predecessor_after_clean_sync(intent, binding, root, origin);
-                    }
+                    // Optional predecessor retirement waits for a future actual
+                    // cold Restore, not a redundant full R2 GET in Sync.
                 }
                 return Ok(());
             }
@@ -1675,17 +1830,14 @@ mod windows {
                 delivery.runtime_root(),
                 delivery_health_before_launch(delivery.pending_health_confirmation()),
                 |open_result| {
-                    // The browser's profile admission is still held here.
-                    // The SAME Rust process completes closed Sync before a
-                    // subsequent Open can touch browser bytes. No child launch
-                    // or OS-lock handoff exists in the normal lifecycle.
+                    // Firefox has already released its native writer.
+                    // Sync acquires a separate per-profile cloud admission;
+                    // this MUST NOT block a new local Open during offline or
+                    // slow network operations. A conflicting browser writer
+                    // prevents snapshot/seal or local receipt updates, and
+                    // the original .local-unsynced data survives unchanged.
                     if native_close_admits_automatic_sync(&open_result) {
-                        if let Err(error) = run_closed_sync_with_admission(
-                            intent,
-                            &binding,
-                            &root,
-                            &config.control_plane_origin,
-                        ) {
+                        if let Err(error) = run_closed_sync(intent) {
                             eprintln!(
                                 "BRIDGE_CLOUD_SYNC_UNCONFIRMED;error={error:?};NEXT_SAFE_STEP=PRESERVE_LOCAL_BYTES"
                             );
@@ -1714,7 +1866,7 @@ mod windows {
                     .map_err(|_| ShippingCompositionError::RestoreUnavailable)?;
                 let mut downloader = VerifiedGenerationObjectStreamDownloader::new(reader);
                 let epoch = now()?.value();
-                ensure_authoritative_current(
+                let cold_evidence = ensure_authoritative_current_with_cold_evidence(
                     &root,
                     &intent.tenant_id,
                     &intent.profile_id,
@@ -1726,6 +1878,17 @@ mod windows {
                     &mut downloader,
                 )
                 .map_err(|_| ShippingCompositionError::RestoreUnavailable)?;
+                if let Some((digest, prelude)) = cold_evidence {
+                    try_admit_retirement_after_cold_restore(
+                        intent,
+                        &binding,
+                        &config.control_plane_origin,
+                        selected.generation_id(),
+                        intent.expected_version,
+                        digest,
+                        &prelude,
+                    );
+                }
                 // Re-enter the same local Open with the same runtime and owners.
                 open_local()
             }
@@ -1859,6 +2022,185 @@ mod windows {
     }
 
     #[cfg(test)]
+    mod physical_staging_closed_sync {
+        use super::{
+            ClosedSyncAdmission, MaterializationRoot, WindowsDeviceApplicationBinding,
+            run_closed_sync_with_admission,
+        };
+        use crate::generation_initialization::{InitialProfileOpen, InitialProfileStatus};
+        use profile_platform_primitives::ProfileId;
+        use std::path::{Path, PathBuf};
+
+        fn is_opted_in_disposable_restore(root: &Path, profile: &str) -> bool {
+            root.is_absolute()
+                && root.starts_with(std::env::temp_dir())
+                && root != std::env::temp_dir()
+                && std::fs::read_to_string(root.join(".physical-staging-verified-restore"))
+                    .as_deref()
+                    .is_ok_and(|found| found == format!("restored-test-profile={profile}\n"))
+        }
+
+        #[test]
+        fn staging_sync_requires_matching_authenticated_restore_marker()
+        -> Result<(), Box<dyn std::error::Error>> {
+            let root = std::env::temp_dir().join(format!(
+                "profilebridge-physical-guard-{}-{}",
+                std::process::id(),
+                std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)?
+                    .as_nanos()
+            ));
+            std::fs::create_dir(&root)?;
+            assert!(!is_opted_in_disposable_restore(&root, "profile_example_a"));
+            std::fs::write(
+                root.join(".physical-staging-verified-restore"),
+                "restored-test-profile=profile_example_b\n",
+            )?;
+            assert!(!is_opted_in_disposable_restore(&root, "profile_example_a"));
+            assert!(is_opted_in_disposable_restore(&root, "profile_example_b"));
+            std::fs::remove_dir_all(root)?;
+            Ok(())
+        }
+
+        /// Test-only, explicitly opted-in transport-refusal fault. No staging
+        /// cloud host is reachable through this origin. The native profile
+        /// remains openable and its CURRENT base, fingerprint and dirty WAL
+        /// must be unchanged after the bounded Sync retry path fails.
+        #[test]
+        #[ignore = "requires previously restored disposable CURRENT and explicit loopback failure opt-in"]
+        fn network_refusal_does_not_erase_local_ready_profile()
+        -> Result<(), Box<dyn std::error::Error>> {
+            if std::env::var("PROFILE_BRIDGE_TEST_FORCE_NETWORK_REFUSAL").as_deref()
+                != Ok("YES_LOOPBACK_NO_CLOUD")
+            {
+                eprintln!("PHYSICAL_OFFLINE_SYNC_SKIPPED: no explicit fault opt-in");
+                return Ok(());
+            }
+            let root_path = PathBuf::from(
+                std::env::var_os("PROFILE_BRIDGE_TEST_CLOSED_SYNC_ROOT")
+                    .ok_or("missing disposable CURRENT fixture")?,
+            );
+            let profile = std::env::var("PROFILE_BRIDGE_TEST_CLOSED_SYNC_PROFILE")?;
+            if !is_opted_in_disposable_restore(&root_path, &profile) {
+                return Err("refuse non-restored or non-disposable profile root".into());
+            }
+            let binding_path = PathBuf::from(
+                std::env::var_os("PROFILE_BRIDGE_TEST_CLOSED_SYNC_BINDING")
+                    .ok_or("missing disposable test binding")?,
+            );
+            let binding = WindowsDeviceApplicationBinding::open(&binding_path)?;
+            let profile_id = ProfileId::parse(profile)?;
+            let expected_version =
+                std::env::var("PROFILE_BRIDGE_TEST_CLOSED_SYNC_VERSION")?.parse::<u64>()?;
+            let root = MaterializationRoot::open_or_create(&root_path)?;
+            let before = root.open_profile_current(binding.tenant_id(), &profile_id)?;
+            if before.profile_version() != expected_version
+                || before.base_generation_id().is_none()
+                || before.pending_sync().is_some()
+                || !crate::browser_execution::browser_writer_locks_absent(&before)?
+            {
+                return Err("fixture not a closed verified CURRENT".into());
+            }
+            let dirty_path = before.path().join(".local-unsynced");
+            let dirty_bytes = std::fs::read(&dirty_path)?;
+            if dirty_bytes != b"local-unsynced-v2" {
+                return Err("test requires prior successful GUI CleanClose".into());
+            }
+            let fingerprint_path = before.path().join("camoufox-config.json");
+            let fingerprint = std::fs::read(&fingerprint_path)?;
+            let current_base = before.base_generation_id().cloned();
+            let intent = InitialProfileOpen {
+                tenant_id: binding.tenant_id().clone(),
+                actor_id: binding.actor_id().clone(),
+                profile_id: profile_id.clone(),
+                expected_version,
+                status: InitialProfileStatus::Ready,
+            };
+            let _sync_owner = ClosedSyncAdmission::try_acquire(&before)?
+                .ok_or("another Sync owner already holds the fixture")?;
+            // Intentionally no D1/R2 route: refusal on local loopback. The
+            // exact production Sync owner, retry and local checkpoint remain.
+            eprintln!("R13_SCOPED_NETWORK_REFUSAL_STARTED");
+            let result =
+                run_closed_sync_with_admission(&intent, &binding, &root, "https://127.0.0.1:1");
+            assert!(
+                matches!(
+                    result,
+                    Err(super::ShippingCompositionError::SyncUnconfirmed)
+                ),
+                "offline Sync must refuse without granting a cloud receipt: {result:?}"
+            );
+            let after = root.open_profile_current(binding.tenant_id(), &profile_id)?;
+            assert_eq!(after.profile_version(), expected_version);
+            assert_eq!(after.base_generation_id(), current_base.as_ref());
+            assert!(after.pending_sync().is_none());
+            assert_eq!(std::fs::read(&dirty_path)?, dirty_bytes);
+            assert_eq!(std::fs::read(&fingerprint_path)?, fingerprint);
+            assert!(crate::browser_execution::browser_writer_locks_absent(
+                &after
+            )?);
+            eprintln!("R13_SCOPED_NETWORK_REFUSAL_DIRTY_PROFILE_PRESERVED_PASS");
+            Ok(())
+        }
+        /// Explicitly opted-in staging-only test. The original Rust Sync
+        /// owner, signed R2 PUT and exact D1 CURRENT are all used unchanged.
+        /// Only a separately restored/closed disposable scratch profile may
+        /// be used; never point this test at the installed profile root.
+        #[test]
+        #[ignore = "mutates one explicitly opted-in staging TEST profile only"]
+        fn authorized_test_profile_closed_sync_advances_exact_current()
+        -> Result<(), Box<dyn std::error::Error>> {
+            let Some(scratch) = std::env::var_os("PROFILE_BRIDGE_TEST_CLOSED_SYNC_ROOT") else {
+                eprintln!("PHYSICAL_STAGING_SYNC_SKIPPED: no mutation fixture");
+                return Ok(());
+            };
+            if std::env::var("PROFILE_BRIDGE_TEST_ALLOW_STAGING_MUTATION").as_deref()
+                != Ok("YES_SCOPED_DISPOSABLE_PROFILE")
+            {
+                return Err("explicit staging TEST mutation admission required".into());
+            }
+            let scratch = PathBuf::from(scratch);
+            let profile_text = std::env::var("PROFILE_BRIDGE_TEST_CLOSED_SYNC_PROFILE")?;
+            if !is_opted_in_disposable_restore(&scratch, &profile_text) {
+                return Err("refuse non-test or installed profile path".into());
+            }
+            let binding_path = std::env::var_os("PROFILE_BRIDGE_TEST_CLOSED_SYNC_BINDING")
+                .ok_or("missing test device binding")?;
+            let profile_id = ProfileId::parse(profile_text)?;
+            let version =
+                std::env::var("PROFILE_BRIDGE_TEST_CLOSED_SYNC_VERSION")?.parse::<u64>()?;
+            let binding = WindowsDeviceApplicationBinding::open(&PathBuf::from(binding_path))?;
+            let root = MaterializationRoot::open_or_create(&scratch)?;
+            let workspace = root.open_profile_current(binding.tenant_id(), &profile_id)?;
+            if workspace.profile_version() != version
+                || workspace.base_generation_id().is_none()
+                || std::fs::read(workspace.path().join(".local-unsynced"))? != b"local-unsynced-v2"
+                || !crate::browser_execution::browser_writer_locks_absent(&workspace)?
+            {
+                return Err("test profile not a closed dirty verified CURRENT".into());
+            }
+            let _cloud_owner = ClosedSyncAdmission::try_acquire(&workspace)?
+                .ok_or("another cloud Sync owner already active")?;
+            let intent = InitialProfileOpen {
+                tenant_id: binding.tenant_id().clone(),
+                actor_id: binding.actor_id().clone(),
+                profile_id: profile_id.clone(),
+                expected_version: version,
+                status: InitialProfileStatus::Ready,
+            };
+            eprintln!("R6_STAGING_EXACT_CLOSED_SYNC_STARTED");
+            run_closed_sync_with_admission(&intent, &binding, &root, "https://staging.alegria.by")?;
+            let after = root.open_profile_current(binding.tenant_id(), &profile_id)?;
+            assert_eq!(after.profile_version(), version + 1);
+            assert!(after.pending_sync().is_none());
+            assert!(!after.path().join(".local-unsynced").exists());
+            assert!(after.base_generation_id().is_some());
+            eprintln!("R6_STAGING_EXACT_CLOSED_SYNC_CLEAN_LOCAL_PASS");
+            Ok(())
+        }
+    }
+
+    #[cfg(test)]
     mod closed_sync_retry_tests {
         use super::{MAX_CLOSED_SYNC_ATTEMPTS, next_sync_retry_delay};
 
@@ -1897,6 +2239,171 @@ mod tests {
             run_closed_profile_sync(&intent),
             Err(ShippingCompositionError::UnsupportedPlatform)
         ));
+        Ok(())
+    }
+}
+
+// A physically run, read-only staging CURRENT acceptance probe.
+// No user profile, D1/R2 mutation or installed runtime is changed.
+#[cfg(all(windows, test))]
+mod physical_cloud_current_restore {
+    use crate::authoritative_generation::ensure_authoritative_current_with_cold_evidence;
+    use crate::generation_reopen::{
+        GenerationReopenControlPort, VerifiedGenerationObjectStreamDownloader,
+    };
+    use crate::local_profile::MaterializationRoot;
+    use crate::shipping_control_plane::ControlPlaneCoordinator;
+    use crate::windows_device_application::{
+        WindowsDeviceApplication, WindowsDeviceApplicationBinding,
+    };
+    use crate::windows_generation_get::WindowsSignedGenerationObjectGet;
+    use profile_platform_primitives::ProfileId;
+    use std::path::PathBuf;
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    #[test]
+    #[ignore = "requires a bound Windows device and a fresh disposable staging Restore root"]
+    fn staging_verified_current_cold_restore_to_scratch() -> Result<(), Box<dyn std::error::Error>>
+    {
+        let Some(root_path) = std::env::var_os("PROFILE_BRIDGE_TEST_COLD_RESTORE_ROOT") else {
+            eprintln!("PHYSICAL_STAGING_RESTORE_SKIPPED: no cloud fixture");
+            return Ok(());
+        };
+        let binding_path = std::env::var_os("PROFILE_BRIDGE_TEST_COLD_RESTORE_BINDING")
+            .ok_or("incomplete cloud fixture: binding")?;
+        let profile_id_text = std::env::var("PROFILE_BRIDGE_TEST_COLD_RESTORE_PROFILE")
+            .map_err(|_| "incomplete cloud fixture: profile")?;
+        let version = std::env::var("PROFILE_BRIDGE_TEST_COLD_RESTORE_VERSION")
+            .map_err(|_| "incomplete cloud fixture: version")?
+            .parse::<u64>()?;
+        let root_path = PathBuf::from(root_path);
+        if !root_path.is_absolute()
+            || !root_path.starts_with(std::env::temp_dir())
+            || !root_path.is_dir()
+            || std::fs::read_dir(&root_path)?.next().is_some()
+        {
+            return Err("refuse nonempty or nonscratch restore destination".into());
+        }
+        let binding = WindowsDeviceApplicationBinding::open(&PathBuf::from(binding_path))?;
+        let profile_id = ProfileId::parse(&profile_id_text)?;
+        let app =
+            WindowsDeviceApplication::from_system("https://staging.alegria.by", binding.clone())?;
+        let mut control = ControlPlaneCoordinator::for_local_current_restore(app.transport());
+        eprintln!("R5_STAGING_CURRENT_CAPABILITY_REQUESTED");
+        let current = control.download_capability(binding.tenant_id(), &profile_id)?;
+        eprintln!("R5_STAGING_CURRENT_CAPABILITY_CONFIRMED");
+        let mut downloader = VerifiedGenerationObjectStreamDownloader::new(
+            WindowsSignedGenerationObjectGet::from_system()?,
+        );
+        let root = MaterializationRoot::open_or_create(&root_path)?;
+        let epoch = u64::try_from(SystemTime::now().duration_since(UNIX_EPOCH)?.as_millis())?;
+        let cold_evidence = ensure_authoritative_current_with_cold_evidence(
+            &root,
+            binding.tenant_id(),
+            &profile_id,
+            current.generation_id(),
+            version,
+            binding.device_id(),
+            epoch,
+            &mut control,
+            &mut downloader,
+        )?;
+        let recovered = root.open_profile_current(binding.tenant_id(), &profile_id)?;
+        assert_eq!(recovered.profile_version(), version);
+        assert_eq!(
+            recovered.base_generation_id(),
+            Some(current.generation_id())
+        );
+        assert!(recovered.path().join("user_data").is_dir());
+        assert!(!recovered.path().join(".local-unsynced").exists());
+        let _ = recovered.inventory()?;
+        let (native_digest, prelude) =
+            cold_evidence.ok_or("authenticated cold Restore proof unavailable")?;
+        if std::env::var("PROFILE_BRIDGE_TEST_ALLOW_STAGING_MUTATION").as_deref()
+            == Ok("YES_SCOPED_DISPOSABLE_PROFILE")
+        {
+            let intent = crate::generation_initialization::InitialProfileOpen {
+                tenant_id: binding.tenant_id().clone(),
+                actor_id: binding.actor_id().clone(),
+                profile_id: profile_id.clone(),
+                expected_version: version,
+                status: crate::generation_initialization::InitialProfileStatus::Ready,
+            };
+            if !super::windows::try_admit_retirement_after_cold_restore(
+                &intent,
+                &binding,
+                "https://staging.alegria.by",
+                current.generation_id(),
+                version,
+                native_digest,
+                &prelude,
+            ) {
+                return Err("explicit staging cold retirement admission not confirmed".into());
+            }
+            eprintln!("STAGING_EXISTING_D1_COLD_RETIREMENT_ADMITTED");
+        }
+        // Only a successful, authenticated, disposable Restore arms the
+        // explicit opt-in physical staging Sync test for this profile.
+        std::fs::write(
+            root_path.join(".physical-staging-verified-restore"),
+            format!("restored-test-profile={profile_id_text}\n"),
+        )?;
+        eprintln!("R5_STAGING_CURRENT_AUTHENTICATED_COLD_RESTORE_PASS");
+        Ok(())
+    }
+
+    #[test]
+    #[ignore = "requires prior authenticated cold Restore and scoped GUI WM_CLOSE"]
+    fn staging_restored_current_reopens_in_real_camoufox() -> Result<(), Box<dyn std::error::Error>>
+    {
+        let Some(root_path) = std::env::var_os("PROFILE_BRIDGE_TEST_COLD_RESTORE_ROOT") else {
+            eprintln!("PHYSICAL_STAGING_GUI_SKIPPED: no Restore fixture");
+            return Ok(());
+        };
+        let binding_path = std::env::var_os("PROFILE_BRIDGE_TEST_COLD_RESTORE_BINDING")
+            .ok_or("incomplete restored GUI fixture: binding")?;
+        let runtime = std::env::var_os("PROFILE_BRIDGE_TEST_NATIVE_RUNTIME_ROOT")
+            .ok_or("incomplete restored GUI fixture: SDK runtime")?;
+        let profile_id =
+            ProfileId::parse(std::env::var("PROFILE_BRIDGE_TEST_COLD_RESTORE_PROFILE")?)?;
+        let version = std::env::var("PROFILE_BRIDGE_TEST_COLD_RESTORE_VERSION")?.parse::<u64>()?;
+        let root_path = PathBuf::from(root_path);
+        if !root_path.starts_with(std::env::temp_dir()) || !root_path.is_absolute() {
+            return Err("refuse nonscratch restored GUI root".into());
+        }
+        let binding = WindowsDeviceApplicationBinding::open(&PathBuf::from(binding_path))?;
+        let root = MaterializationRoot::open_or_create(&root_path)?;
+        let workspace = root.open_profile_current(binding.tenant_id(), &profile_id)?;
+        if workspace.profile_version() != version || workspace.base_generation_id().is_none() {
+            return Err("only previously restored verified CURRENT may be opened".into());
+        }
+        let config_path = workspace.path().join("camoufox-config.json");
+        let config_before = std::fs::read(&config_path)?;
+        let intent = crate::generation_initialization::InitialProfileOpen {
+            tenant_id: binding.tenant_id().clone(),
+            actor_id: binding.actor_id().clone(),
+            profile_id: profile_id.clone(),
+            expected_version: version,
+            status: crate::generation_initialization::InitialProfileStatus::Ready,
+        };
+        eprintln!("R5_STAGING_RESTORED_GUI_OPEN_STARTED");
+        assert_eq!(
+            crate::local_browser_open::open_with_before_launch(
+                &root,
+                &intent,
+                binding.device_id(),
+                &PathBuf::from(runtime),
+                None,
+            ),
+            Ok(()),
+            "real restored Camoufox must close Clean after external user-style WM_CLOSE"
+        );
+        assert_eq!(std::fs::read(&config_path)?, config_before);
+        assert!(workspace.path().join(".local-unsynced").is_file());
+        assert!(crate::browser_execution::browser_writer_locks_absent(
+            &workspace
+        )?);
+        eprintln!("R5_STAGING_RESTORED_GUI_CLEANCLOSE_PASS");
         Ok(())
     }
 }

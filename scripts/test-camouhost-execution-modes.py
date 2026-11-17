@@ -64,7 +64,8 @@ def verify_upstream_camoufox_config_is_final(runtime) -> None:
             "SAFE": "untouched",
         }
         assert base["firefox_user_prefs"] == {"official-webgl-setting": True}
-        assert "args" not in base
+        assert base["args"] == ["-new-tab", runtime.MANAGED_BOOTSTRAP_TAB_URL]
+        assert base["ignore_default_args"] == ["about:blank"]
         assert sdk_calls[0]["config"] == identity
         assert sdk_calls[0]["config"] is not identity
         assert sdk_calls[0]["user_data_dir"] == str(Path("/disposable/user_data"))
@@ -74,13 +75,15 @@ def verify_upstream_camoufox_config_is_final(runtime) -> None:
         assert identity == {"canvas:seed": 12345, "webGl:vendor": "test-gpu"}
 
         new = runtime.camoufox_launch_options({}, Path("/disposable"), identity, first_run=True)
-        assert new["args"] == ["-new-tab", "about:blank"]
+        assert new["args"] == ["-new-tab", runtime.MANAGED_BOOTSTRAP_TAB_URL]
+        assert new["ignore_default_args"] == ["about:blank"]
         assert new["env"]["CAMOU_CONFIG_1"] == "sdk-composed-identity"
         assert "get_env_vars" not in vars(fake_utils)
 
         isolated = runtime.camoufox_launch_options({}, Path("/disposable"), identity, isolated=True)
         assert isolated["offline"] is True
         assert isolated["args"] == ["-new-tab", runtime.MANAGED_BOOTSTRAP_TAB_URL]
+        assert isolated["ignore_default_args"] == ["about:blank"]
         assert isolated["env"]["CAMOU_CONFIG_1"] == "sdk-composed-identity"
 
 
@@ -354,10 +357,14 @@ def main() -> int:
     )[0]
     # Existing local CURRENT is always opened locally. The only cloud
     # boundary before Open is RestoreRequired for a missing local workspace.
-    assert "run_closed_sync_with_admission(" in run_initial
+    assert "run_closed_sync(intent)" in run_initial
+    assert "run_closed_sync_with_admission(" in composition
     assert "RestoreRequired" in run_initial
     assert "ensure_authoritative_current" in run_initial
-    assert "run_closed_sync(intent)" not in run_initial
+    # Network Sync follows a verified native Close, never local Open.
+    assert run_initial.index(
+        "if native_close_admits_automatic_sync(&open_result)"
+    ) < run_initial.index("run_closed_sync(intent)")
     assert "if dirty {" not in run_initial
     assert "crate::local_browser_open::LocalOpenError::StaleLocalWorkspace" not in run_initial
     # Automatic cloud Save needs a positively confirmed native close;

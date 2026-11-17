@@ -54,7 +54,7 @@ export function ClientProfilesPanel({
         {
           clientId,
           reason: input.reason,
-          expectedProfileVersion: profile.version,
+          expectedMetadataVersion: profile.metadataVersion,
         },
         idempotencyKey,
       );
@@ -64,13 +64,13 @@ export function ClientProfilesPanel({
 
   const detach = useLogicalCommandMutation(
     (
-      input: { profileId: string; expectedProfileVersion: number; reason: string },
+      input: { profileId: string; expectedMetadataVersion: number; reason: string },
       idempotencyKey,
     ) => detachProfile(
       tenantId,
       input.profileId,
       {
-        expectedProfileVersion: input.expectedProfileVersion,
+        expectedMetadataVersion: input.expectedMetadataVersion,
         reason: input.reason,
       },
       idempotencyKey,
@@ -120,7 +120,7 @@ export function ClientProfilesPanel({
                 <div>
                   <strong>{profile.profileId}</strong>
                   <div className="muted">
-                    {profile.status} · version {profile.version}
+                    {profile.status} · browser v{profile.version} · metadata v{profile.metadataVersion}
                   </div>
                 </div>
                 <div className="row-actions">
@@ -136,7 +136,7 @@ export function ClientProfilesPanel({
                     disabled={detach.isPending || detachReason.trim().length === 0}
                     onConfirm={() => detach.mutateAsync({
                       profileId: profile.profileId,
-                      expectedProfileVersion: profile.version,
+                      expectedMetadataVersion: profile.metadataVersion,
                       reason: detachReason.trim(),
                     }).then(() => undefined)}
                   />

@@ -6,6 +6,8 @@ pub mod browser_mail_query;
 pub mod browser_mail_runtime;
 #[cfg(any(test, feature = "synthetic-test-bin"))]
 pub mod browser_preflight;
+#[cfg(windows)]
+mod close_witness;
 pub mod device_pairing;
 pub mod dirty_close;
 pub mod dirty_generation;

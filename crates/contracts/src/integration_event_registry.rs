@@ -22,6 +22,7 @@ pub const FOUNDATION_EVENT_TYPES_V1: &[&str] = &[
     "profile.created.v1",
     "profile.generation_activated.v1",
     "profile.generation_deactivated.v1",
+    "profile.renamed.v1",
     "profile_coordinator.drain_started.v1",
     "profile_coordinator.heartbeat_accepted.v1",
     "profile_coordinator.launch_intent_expired.v1",
@@ -63,6 +64,7 @@ mod tests {
     fn registry_accepts_known_events_and_rejects_unknown_events() {
         assert!(is_foundation_event_type("client.created.v1"));
         assert!(is_foundation_event_type("profile.client_detached.v1"));
+        assert!(is_foundation_event_type("profile.renamed.v1"));
         assert!(is_foundation_event_type("profile_coordinator.timed_out.v1"));
         assert!(is_foundation_event_type("mailbox.job_auth_required.v1"));
         assert!(is_foundation_event_type("mailbox.job_suspended.v1"));

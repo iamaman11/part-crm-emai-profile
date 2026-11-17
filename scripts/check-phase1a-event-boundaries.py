@@ -192,6 +192,7 @@ def enforce_registry_covers_current_producers() -> None:
         "profile_coordinator.snapshot.v1",
         "mailbox.job_succeeded.v1",
         "profile_generation.registered.v1",
+        "profile.renamed.v1",
     }
     if not required.issubset(observed):
         raise SystemExit(f"expected current event producers are not observable: {sorted(required - observed)}")

@@ -2,19 +2,22 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { TenantProvider } from '../../app/TenantContext';
-import { changeGenerationActivation, deleteProfile, dispatchBrowserProfileDelete, dispatchBrowserProfileOpen, getCoordinator, getGeneration, getProfile } from './api';
+import { assignProfile, changeGenerationActivation, deleteProfile, detachProfile, dispatchBrowserProfileDelete, dispatchBrowserProfileOpen, getCoordinator, getGeneration, getProfile, renameProfile } from './api';
 import { ProfilesWorkspace } from './ProfilesWorkspace';
 
 vi.mock('./api', () => ({
   dispatchBrowserProfileOpen: vi.fn(),
   dispatchBrowserProfileDelete: vi.fn(),
+  assignProfile: vi.fn(),
   changeGenerationActivation: vi.fn(),
   commandCoordinator: vi.fn(),
   createProfile: vi.fn(),
   deleteProfile: vi.fn(),
+  detachProfile: vi.fn(),
   getCoordinator: vi.fn(),
   getGeneration: vi.fn(),
   getProfile: vi.fn(),
+  renameProfile: vi.fn(),
   quarantineGeneration: vi.fn(),
   registerGeneration: vi.fn(),
   setProfileGrant: vi.fn(),
@@ -30,10 +33,186 @@ const localDelete = vi.mocked(dispatchBrowserProfileDelete);
 const terminalDeletedText =
   'Cloud deletion confirmed. To discard the local browser copy, close Camoufox and click Remove local copy. Local removal has not been verified.';
 
+describe('Profile card client relationship (#870)', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    window.history.replaceState(null, '', '/profiles');
+  });
+
+  it('attaches and detaches through the existing typed, versioned commands with confirmed readback', async () => {
+    let current = {
+      profileId: 'profile_test', displayName: 'profile_test', status: 'READY', version: 7, metadataVersion: 7,
+      linkedClientId: null as string | null, canOperate: true,
+    };
+    vi.mocked(getProfile).mockImplementation(async () =>
+      ({ ...current }) as Awaited<ReturnType<typeof getProfile>>);
+    vi.mocked(assignProfile).mockImplementation(async (_tenant, _profileId, input, idempotencyKey) => {
+      expect(_tenant).toBe('tenant_test');
+      expect(_profileId).toBe('profile_test');
+      expect(input).toEqual({
+        clientId: 'client_test', reason: 'Verified relationship',
+        expectedMetadataVersion: 7,
+      });
+      expect(idempotencyKey.length).toBeGreaterThan(4);
+      current = { ...current, linkedClientId: input.clientId, metadataVersion: 8 };
+      return { resultCode: 'SUCCEEDED', resourceId: 'profile_test' } as Awaited<ReturnType<typeof assignProfile>>;
+    });
+    vi.mocked(detachProfile).mockImplementation(async (_tenant, _profileId, input, idempotencyKey) => {
+      expect(_tenant).toBe('tenant_test');
+      expect(_profileId).toBe('profile_test');
+      expect(input).toEqual({
+        reason: 'Verified detachment', expectedMetadataVersion: 8,
+      });
+      expect(idempotencyKey.length).toBeGreaterThan(4);
+      current = { ...current, linkedClientId: null, metadataVersion: 9 };
+      return { resultCode: 'SUCCEEDED', resourceId: 'profile_test' } as Awaited<ReturnType<typeof detachProfile>>;
+    });
+
+    const cache = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    render(
+      <QueryClientProvider client={cache}>
+        <TenantProvider loadTenantContexts={async () => ({
+          tenants: [{ tenantId: 'tenant_test', displayName: 'Test tenant', actorId: 'actor_test', role: 'TENANT_OWNER' }],
+        })}>
+          <ProfilesWorkspace selectedProfileId="profile_test" onProfileSelected={() => undefined} />
+        </TenantProvider>
+      </QueryClientProvider>,
+    );
+
+    expect(await screen.findByRole('heading', { name: 'profile_test' })).toBeTruthy();
+    fireEvent.click(await screen.findByText('Manage client association'));
+    fireEvent.change(screen.getByLabelText('Client ID'), { target: { value: 'client_test' } });
+    fireEvent.change(screen.getByLabelText('Reason', { selector: '#profile-client-association-reason' }), { target: { value: 'Verified relationship' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Attach client' }));
+    await waitFor(() => expect(assignProfile).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(screen.getByText('client_test')).toBeTruthy());
+
+    fireEvent.change(screen.getByLabelText('Reason', { selector: '#profile-client-association-reason' }), { target: { value: 'Verified detachment' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Detach client' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Confirm Detach client' }));
+    await waitFor(() => expect(detachProfile).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(screen.getByText('Not assigned')).toBeTruthy());
+    expect(current.version).toBe(7);
+    expect(current.metadataVersion).toBe(9);
+  });
+
+  it('refuses to infer an updated relationship from an old readback, without repeating the command', async () => {
+    let current = {
+      profileId: 'profile_test', displayName: 'profile_test', status: 'READY', version: 4, metadataVersion: 4,
+      linkedClientId: null as string | null, canOperate: true,
+    };
+    vi.mocked(getProfile).mockImplementation(async () => ({
+      ...current,
+    }) as Awaited<ReturnType<typeof getProfile>>);
+    vi.mocked(assignProfile).mockResolvedValue({
+      resultCode: 'SUCCEEDED', resourceId: 'profile_test',
+    } as Awaited<ReturnType<typeof assignProfile>>);
+    const cache = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    render(
+      <QueryClientProvider client={cache}>
+        <TenantProvider loadTenantContexts={async () => ({
+          tenants: [{ tenantId: 'tenant_test', displayName: 'Test tenant', actorId: 'actor_test', role: 'TENANT_OWNER' }],
+        })}>
+          <ProfilesWorkspace selectedProfileId="profile_test" onProfileSelected={() => undefined} />
+        </TenantProvider>
+      </QueryClientProvider>,
+    );
+    await screen.findByRole('heading', { name: 'profile_test' });
+    fireEvent.click(await screen.findByText('Manage client association'));
+    fireEvent.change(screen.getByLabelText('Client ID'), { target: { value: 'client_test' } });
+    fireEvent.change(screen.getByLabelText('Reason', { selector: '#profile-client-association-reason' }), { target: { value: 'Test assignment' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Attach client' }));
+    expect(await screen.findByText(/Relationship command completed, but the new metadata version was not confirmed/)).toBeTruthy();
+    expect((screen.getByRole('button', { name: 'Attach client' }) as HTMLButtonElement).disabled).toBe(true);
+    expect(assignProfile).toHaveBeenCalledTimes(1);
+    current = { ...current, metadataVersion: 5, linkedClientId: 'client_test' };
+    fireEvent.click(screen.getByRole('button', { name: 'Refresh relationship' }));
+    await waitFor(() => expect(screen.getByText('client_test')).toBeTruthy());
+    expect(screen.queryByText(/Relationship command completed, but the new metadata version was not confirmed/)).toBeNull();
+    expect(assignProfile).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('Profile names are D1-backed business metadata (#870)', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    window.history.replaceState(null, '', '/profiles');
+  });
+
+  it('renames through a versioned command and authoritative readback without touching browser launch', async () => {
+    let current = {
+      profileId: 'profile_test', displayName: 'First name',
+      status: 'READY', version: 4, metadataVersion: 4, linkedClientId: null, canOperate: true,
+    };
+    vi.mocked(getProfile).mockImplementation(async () => ({
+      ...current,
+    }) as Awaited<ReturnType<typeof getProfile>>);
+    vi.mocked(renameProfile).mockImplementation(async (tenant, profileId, body, idempotencyKey) => {
+      expect(tenant).toBe('tenant_test');
+      expect(profileId).toBe('profile_test');
+      expect(body).toEqual({ displayName: 'Updated name', expectedMetadataVersion: 4 });
+      expect(idempotencyKey.length).toBeGreaterThan(4);
+      current = { ...current, displayName: body.displayName, metadataVersion: 5 };
+      return { resultCode: 'renamed', resourceId: profileId, aggregateVersion: 5 };
+    });
+    const cache = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    render(
+      <QueryClientProvider client={cache}>
+        <TenantProvider loadTenantContexts={async () => ({
+          tenants: [{ tenantId: 'tenant_test', displayName: 'Test tenant', actorId: 'actor_test', role: 'TENANT_OWNER' }],
+        })}>
+          <ProfilesWorkspace selectedProfileId="profile_test" onProfileSelected={() => undefined} />
+        </TenantProvider>
+      </QueryClientProvider>,
+    );
+    await screen.findByRole('heading', { name: 'First name' });
+    fireEvent.click(screen.getByText('Rename profile'));
+    fireEvent.change(screen.getByLabelText('Profile name'), { target: { value: 'Updated name' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Save name' }));
+    await screen.findByRole('heading', { name: 'Updated name' });
+    expect(renameProfile).toHaveBeenCalledTimes(1);
+    expect(localOpen).not.toHaveBeenCalled();
+  });
+
+  it('keeps a rename unconfirmed after stale readback and refreshes without repeating it', async () => {
+    let current = {
+      profileId: 'profile_test', displayName: 'Before',
+      status: 'READY', version: 7, metadataVersion: 7, linkedClientId: null, canOperate: true,
+    };
+    vi.mocked(getProfile).mockImplementation(async () => ({
+      ...current,
+    }) as Awaited<ReturnType<typeof getProfile>>);
+    vi.mocked(renameProfile).mockResolvedValue({
+      resultCode: 'renamed', resourceId: 'profile_test', aggregateVersion: 8,
+    });
+    const cache = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    render(
+      <QueryClientProvider client={cache}>
+        <TenantProvider loadTenantContexts={async () => ({
+          tenants: [{ tenantId: 'tenant_test', displayName: 'Test tenant', actorId: 'actor_test', role: 'TENANT_OWNER' }],
+        })}>
+          <ProfilesWorkspace selectedProfileId="profile_test" onProfileSelected={() => undefined} />
+        </TenantProvider>
+      </QueryClientProvider>,
+    );
+    await screen.findByRole('heading', { name: 'Before' });
+    fireEvent.click(screen.getByText('Rename profile'));
+    fireEvent.change(screen.getByLabelText('Profile name'), { target: { value: 'After' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Save name' }));
+    expect(await screen.findByText(/Rename command completed, but the updated name was not confirmed/)).toBeTruthy();
+    expect((screen.getByRole('button', { name: 'Save name' }) as HTMLButtonElement).disabled).toBe(true);
+    expect(renameProfile).toHaveBeenCalledTimes(1);
+    current = { ...current, displayName: 'After', metadataVersion: 8 };
+    fireEvent.click(screen.getByRole('button', { name: 'Refresh profile name' }));
+    await screen.findByRole('heading', { name: 'After' });
+    expect(renameProfile).toHaveBeenCalledTimes(1);
+  });
+});
+
 describe('ProfilesWorkspace generation refresh (#802 F06)', () => {
   it('opens with the authenticated tenant and selected local profile without a Worker launch request', async () => {
     profileLookup.mockResolvedValue({
-      profileId: 'profile_test', status: 'READY', version: 7, linkedClientId: null, canOperate: true,
+      profileId: 'profile_test', displayName: 'profile_test', status: 'READY', version: 7, metadataVersion: 7, linkedClientId: null, canOperate: true,
       activeGenerationId: 'generation_current',
     } as Awaited<ReturnType<typeof getProfile>>);
     const cache = new QueryClient({ defaultOptions: { queries: { retry: false } } });
@@ -71,7 +250,7 @@ describe('ProfilesWorkspace generation refresh (#802 F06)', () => {
   });
 
   it('refreshes authoritative profile and generation after deactivate/reactivate without reload', async () => {
-    const profile = { profileId: 'profile_test', status: 'READY', version: 11, linkedClientId: null, canOperate: true, activeGenerationId: 'generation_test' as string | null };
+    const profile = { profileId: 'profile_test', displayName: 'profile_test', status: 'READY', version: 11, metadataVersion: 11, linkedClientId: null, canOperate: true, activeGenerationId: 'generation_test' as string | null };
     const generation = { generationId: 'generation_test', status: 'VERIFIED', version: 3, verificationReference: null };
     profileLookup.mockImplementation(async () => ({ ...profile }) as Awaited<ReturnType<typeof getProfile>>);
     generationLookup.mockImplementation(async () => ({ ...generation }) as Awaited<ReturnType<typeof getGeneration>>);
@@ -138,7 +317,7 @@ describe('ProfilesWorkspace generation refresh (#802 F06)', () => {
       finishOld = resolve;
     });
     profileLookup.mockImplementation(async (_tenant, id) => ({
-      profileId: id, status: 'READY', version: 11, linkedClientId: null, canOperate: true,
+      profileId: id, displayName: id, status: 'READY', version: 11, metadataVersion: 11, linkedClientId: null, canOperate: true,
       activeGenerationId: id === 'profile_old' ? 'generation_old' : null,
     }) as Awaited<ReturnType<typeof getProfile>>);
     generationLookup.mockResolvedValue({
@@ -178,13 +357,13 @@ describe('ProfilesWorkspace generation refresh (#802 F06)', () => {
 
   it('replaces a pending Delete receipt with terminal DELETED after Refresh', async () => {
     let current: Awaited<ReturnType<typeof getProfile>> = {
-      profileId: 'profile_disposable', status: 'READY', version: 2,
+      profileId: 'profile_disposable', displayName: 'profile_disposable', status: 'READY', version: 2, metadataVersion: 2,
       linkedClientId: null, canOperate: true,
     };
     profileLookup.mockImplementation(async () => ({ ...current! }));
     vi.mocked(deleteProfile).mockImplementation(async () => {
       current = { ...current!, status: 'DELETING', version: 3 };
-      return { profileId: 'profile_disposable', status: 'DELETING',
+      return { profileId: 'profile_disposable', displayName: 'profile_disposable', status: 'DELETING',
         pendingObjects: 0 } as Awaited<ReturnType<typeof deleteProfile>>;
     });
     const cache = new QueryClient({ defaultOptions: { queries: { retry: false } } });
@@ -212,7 +391,7 @@ describe('ProfilesWorkspace generation refresh (#802 F06)', () => {
 
   it('automatically reads terminal DELETED without replaying the cloud Delete command', async () => {
     let current: Awaited<ReturnType<typeof getProfile>> = {
-      profileId: 'profile_pending', status: 'DELETING', version: 3,
+      profileId: 'profile_pending', displayName: 'profile_pending', status: 'DELETING', version: 3, metadataVersion: 3,
       linkedClientId: null, canOperate: false,
     };
     profileLookup.mockImplementation(async () => ({ ...current! }));
@@ -250,7 +429,7 @@ describe('ProfilesWorkspace generation refresh (#802 F06)', () => {
     const oldRead = new Promise<Awaited<ReturnType<typeof getProfile>>>((resolve) => {
       resolveOld = resolve;
     });
-    const ready = { profileId: 'profile_same', status: 'READY', version: 2,
+    const ready = { profileId: 'profile_same', displayName: 'profile_same', status: 'READY', version: 2, metadataVersion: 2,
       linkedClientId: null, canOperate: true } as Awaited<ReturnType<typeof getProfile>>;
     const deleted = { ...ready, status: 'DELETED', version: 4,
       canOperate: false } as Awaited<ReturnType<typeof getProfile>>;
@@ -262,7 +441,7 @@ describe('ProfilesWorkspace generation refresh (#802 F06)', () => {
       return deleted;
     });
     vi.mocked(deleteProfile).mockResolvedValue({
-      profileId: 'profile_same', status: 'DELETED', pendingObjects: 0,
+      profileId: 'profile_same', displayName: 'profile_same', status: 'DELETED', pendingObjects: 0,
     } as Awaited<ReturnType<typeof deleteProfile>>);
     const cache = new QueryClient({ defaultOptions: { queries: { retry: false } } });
     render(
@@ -289,7 +468,7 @@ describe('ProfilesWorkspace generation refresh (#802 F06)', () => {
 
   it('shows why a DELETED profile cannot be reopened without calling the Bridge', async () => {
     profileLookup.mockResolvedValue({
-      profileId: 'profile_deleted', status: 'DELETED', version: 3,
+      profileId: 'profile_deleted', displayName: 'profile_deleted', status: 'DELETED', version: 3, metadataVersion: 3,
       activeGenerationId: null, linkedClientId: null, canOperate: true,
     } as Awaited<ReturnType<typeof getProfile>>);
     const cache = new QueryClient({ defaultOptions: { queries: { retry: false } } });
@@ -312,7 +491,7 @@ describe('ProfilesWorkspace generation refresh (#802 F06)', () => {
 
   it('never exposes native Open to an independently visible viewer-only profile', async () => {
     profileLookup.mockResolvedValue({
-      profileId: 'profile_viewer', status: 'READY', version: 7,
+      profileId: 'profile_viewer', displayName: 'profile_viewer', status: 'READY', version: 7, metadataVersion: 7,
       activeGenerationId: 'generation_current', linkedClientId: null,
       canOperate: false,
     } as Awaited<ReturnType<typeof getProfile>>);
@@ -342,7 +521,7 @@ describe('ProfilesWorkspace generation refresh (#802 F06)', () => {
     profileLookup.mockImplementation(async (_tenant, id) => {
       if (id === 'profile_old') return oldRead;
       return {
-        profileId: id, status: 'READY', version: 8, linkedClientId: null, canOperate: true,
+        profileId: id, displayName: id, status: 'READY', version: 8, metadataVersion: 8, linkedClientId: null, canOperate: true,
       } as Awaited<ReturnType<typeof getProfile>>;
     });
     const cache = new QueryClient({ defaultOptions: { queries: { retry: false } } });
@@ -361,7 +540,7 @@ describe('ProfilesWorkspace generation refresh (#802 F06)', () => {
     await screen.findByRole('heading', { name: 'profile_new' });
     await act(async () => {
       resolveOld({
-        profileId: 'profile_old', status: 'SUSPENDED', version: 18, linkedClientId: null, canOperate: true,
+        profileId: 'profile_old', displayName: 'profile_old', status: 'SUSPENDED', version: 18, metadataVersion: 18, linkedClientId: null, canOperate: true,
       } as Awaited<ReturnType<typeof getProfile>>);
       await oldRead;
     });
@@ -382,7 +561,7 @@ describe('ProfilesWorkspace generation refresh (#802 F06)', () => {
       resolveCoordinator = resolve;
     });
     profileLookup.mockImplementation(async (_tenant, id) => ({
-      profileId: id, status: 'READY', version: 9, linkedClientId: null, canOperate: true,
+      profileId: id, displayName: id, status: 'READY', version: 9, metadataVersion: 9, linkedClientId: null, canOperate: true,
     }) as Awaited<ReturnType<typeof getProfile>>);
     generationLookup.mockReturnValue(oldGeneration);
     coordinatorLookup.mockReturnValue(oldCoordinator);
@@ -425,8 +604,8 @@ describe('ProfilesWorkspace generation refresh (#802 F06)', () => {
   it('revalidates the same selected profile and the directory after returning from Camoufox', async () => {
     let version = 7;
     profileLookup.mockImplementation(async () => ({
-      profileId: 'profile_external_save', status: 'READY', version,
-      activeGenerationId: 'generation_current', linkedClientId: null, canOperate: true,
+      profileId: 'profile_external_save', displayName: 'profile_external_save', status: 'READY', version,
+      metadataVersion: 1, activeGenerationId: 'generation_current', linkedClientId: null, canOperate: true,
     }) as Awaited<ReturnType<typeof getProfile>>);
     const cache = new QueryClient({ defaultOptions: { queries: { retry: false } } });
     const directoryKey = ['operator-query', 'tenant_test', 'profiles'];
@@ -451,7 +630,7 @@ describe('ProfilesWorkspace generation refresh (#802 F06)', () => {
 
   it('explains a quarantined generation and never submits its invalid activation', async () => {
     profileLookup.mockResolvedValue({
-      profileId: 'profile_test', status: 'READY', version: 7, activeGenerationId: 'generation_current',
+      profileId: 'profile_test', displayName: 'profile_test', status: 'READY', version: 7, metadataVersion: 7, activeGenerationId: 'generation_current',
       linkedClientId: null, canOperate: true,
     } as Awaited<ReturnType<typeof getProfile>>);
     generationLookup.mockResolvedValue({

@@ -297,6 +297,11 @@ mod tests {
                 RouteClass::ProfileResourceApi,
             ),
             (
+                "PATCH",
+                "/api/v1/tenants/tenant_01/profiles/profile_01",
+                RouteClass::ProfileResourceApi,
+            ),
+            (
                 "POST",
                 "/api/v1/tenants/tenant_01/profiles/profile_01/launch",
                 RouteClass::ProfileLaunchApi,

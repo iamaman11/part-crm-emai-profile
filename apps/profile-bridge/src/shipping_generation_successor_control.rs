@@ -1417,6 +1417,47 @@ fn request_fresh_retry_decision_streamed<T: MachineHttpPort>(
     )
 }
 
+/// A Prepared CURRENT successor with an interrupted PUT cannot be replayed
+/// from the vanished upload spool. Ask the existing D1 observer for an exact
+/// nonapplication decision under a freshly acquired Coordinator lease.
+/// No cloud mutation, upload, Save receipt, or local byte cleanup occurs here.
+#[cfg(windows)]
+pub(crate) fn request_prepared_pending_retry_decision<T: MachineHttpPort>(
+    tenant_id: &TenantId,
+    profile_id: &ProfileId,
+    base: &GenerationId,
+    pending: &crate::local_profile::PendingSyncDescriptor,
+    fresh_lease: &ProfileLease,
+    transport: &mut T,
+) -> Result<BridgeGenerationSuccessorRetryVerdict, ShippingControlPlaneError> {
+    let descriptor = BridgeGenerationSuccessorObserveRequest {
+        base_generation_id: base.as_str().to_owned(),
+        generation_id: pending.candidate_generation_id().as_str().to_owned(),
+        object_key: encrypted_generation_domain::canonical_generation_object_key(
+            tenant_id,
+            profile_id,
+            pending.candidate_generation_id(),
+        ),
+        metadata_digest: pending
+            .metadata_digest()
+            .iter()
+            .map(|byte| format!("{byte:02x}"))
+            .collect(),
+        container_digest: pending
+            .container_digest()
+            .iter()
+            .map(|byte| format!("{byte:02x}"))
+            .collect(),
+        container_bytes: pending.container_bytes(),
+    };
+    request_fresh_retry_decision_for_descriptor(
+        tenant_id,
+        profile_id,
+        descriptor,
+        fresh_lease,
+        transport,
+    )
+}
 #[cfg(any(windows, test))]
 fn request_fresh_retry_decision_for_descriptor<T: MachineHttpPort>(
     tenant_id: &TenantId,

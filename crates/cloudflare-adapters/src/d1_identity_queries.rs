@@ -43,9 +43,11 @@ impl ClientProjection {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ProfileProjection {
     profile_id: ProfileId,
+    display_name: String,
     status: String,
     active_generation_id: Option<GenerationId>,
     version: u64,
+    metadata_version: u64,
     linked_client_id: Option<ClientId>,
 }
 
@@ -53,6 +55,9 @@ impl ProfileProjection {
     #[must_use]
     pub const fn profile_id(&self) -> &ProfileId {
         &self.profile_id
+    }
+    pub fn display_name(&self) -> &str {
+        &self.display_name
     }
 
     #[must_use]
@@ -68,6 +73,11 @@ impl ProfileProjection {
     #[must_use]
     pub const fn version(&self) -> u64 {
         self.version
+    }
+
+    #[must_use]
+    pub const fn metadata_version(&self) -> u64 {
+        self.metadata_version
     }
 
     #[must_use]
@@ -135,9 +145,11 @@ impl D1IdentityQueryRepository {
             r#"
             SELECT
                 profile.profile_id,
+                profile.display_name,
                 profile.status,
                 profile.active_generation_id,
                 profile.version,
+                profile.metadata_version,
                 assignment.client_id AS linked_client_id
             FROM browser_profiles AS profile
             LEFT JOIN profile_client_assignments AS assignment
@@ -180,9 +192,11 @@ struct ClientProjectionRow {
 #[derive(Deserialize)]
 struct ProfileProjectionRow {
     profile_id: String,
+    display_name: String,
     status: String,
     active_generation_id: Option<String>,
     version: i64,
+    metadata_version: i64,
     linked_client_id: Option<String>,
 }
 
@@ -199,6 +213,7 @@ fn client_projection(row: ClientProjectionRow) -> Result<ClientProjection> {
 fn profile_projection(row: ProfileProjectionRow) -> Result<ProfileProjection> {
     Ok(ProfileProjection {
         profile_id: ProfileId::parse(row.profile_id).map_err(identifier_error)?,
+        display_name: row.display_name,
         status: row.status,
         active_generation_id: row
             .active_generation_id
@@ -206,6 +221,7 @@ fn profile_projection(row: ProfileProjectionRow) -> Result<ProfileProjection> {
             .transpose()
             .map_err(identifier_error)?,
         version: positive_version(row.version)?,
+        metadata_version: positive_version(row.metadata_version)?,
         linked_client_id: row
             .linked_client_id
             .map(ClientId::parse)

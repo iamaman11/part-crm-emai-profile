@@ -479,6 +479,119 @@ def test_invitation_and_resource_guards(connection: sqlite3.Connection) -> None:
     ).fetchone()[0] == 3
 
 
+
+def test_profile_display_name_governance() -> None:
+    """Only metadata revision advances for governed rename; native CURRENT stays fixed."""
+    connection = database()
+    try:
+        # Exercise the additive successor-v2 schema without rewriting accepted legacy D1.
+        connection.executescript((ROOT / "migrations" / "d1-successor-v2" / "0045_profile_display_name.sql").read_text(encoding="utf-8"))
+        seed(connection)
+        with connection:
+            connection.execute(
+                """
+                INSERT INTO profile_create_commands (
+                    tenant_id, command_id, command_actor_id, profile_id, display_name, executed_at_ms
+                ) VALUES (?, 'command_new_named_profile', ?, 'profile_named_commands', 'New profile', 100)
+                """,
+                (TENANT, OWNER),
+            )
+        row = connection.execute(
+            "SELECT display_name, version, metadata_version FROM browser_profiles WHERE tenant_id=? AND profile_id='profile_named_commands'",
+            (TENANT,),
+        ).fetchone()
+        assert (row["display_name"], row["version"], row["metadata_version"]) == ("New profile", 1, 1)
+
+        with connection:
+            connection.execute(
+                """
+                INSERT INTO profile_rename_commands (
+                    tenant_id, command_id, command_actor_id, profile_id,
+                    display_name, expected_metadata_version, executed_at_ms
+                ) VALUES (?, 'command_rename_name', ?, 'profile_named_commands', 'Renamed profile', 1, 101)
+                """,
+                (TENANT, OWNER),
+            )
+        row = connection.execute(
+            "SELECT display_name, version, metadata_version FROM browser_profiles WHERE tenant_id=? AND profile_id='profile_named_commands'",
+            (TENANT,),
+        ).fetchone()
+        assert (row["display_name"], row["version"], row["metadata_version"]) == ("Renamed profile", 1, 2)
+
+        def rename(command: str, actor: str, version: int, name: str) -> None:
+            connection.execute(
+                """
+                INSERT INTO profile_rename_commands (
+                    tenant_id, command_id, command_actor_id, profile_id,
+                    display_name, expected_metadata_version, executed_at_ms
+                ) VALUES (?, ?, ?, 'profile_named_commands', ?, ?, 102)
+                """,
+                (TENANT, command, actor, name, version),
+            )
+
+        expect_abort(lambda: rename("command_non_owner_rename", MEMBER, 2, "Wrong owner"),
+                     "profile_rename_owner_required")
+        connection.rollback()
+        expect_abort(lambda: rename("command_stale_name", OWNER, 1, "Stale"),
+                     "profile_rename_version_mismatch")
+        connection.rollback()
+        expect_abort(lambda: rename("command_duplicate_name", OWNER, 2, "Renamed profile"),
+                     "profile_rename_version_mismatch")
+        connection.rollback()
+        row = connection.execute(
+            "SELECT display_name, version, metadata_version FROM browser_profiles WHERE tenant_id=? AND profile_id='profile_named_commands'",
+            (TENANT,),
+        ).fetchone()
+        assert (row["display_name"], row["version"], row["metadata_version"]) == ("Renamed profile", 1, 2)
+
+        # Independently governed profile ACL changes also leave native CURRENT
+        # unchanged and serialize only against metadata_version.
+        with connection:
+            connection.execute(
+                """
+                INSERT INTO profile_grant_commands (
+                    tenant_id, command_id, command_actor_id, target_actor_id,
+                    profile_id, operation, role, expected_metadata_version,
+                    reason, executed_at_ms
+                ) VALUES (?, 'command_named_profile_grant', ?, ?,
+                          'profile_named_commands', 'GRANT', 'PROFILE_VIEWER', 2,
+                          'metadata authorization', 103)
+                """,
+                (TENANT, OWNER, MEMBER),
+            )
+        row = connection.execute(
+            "SELECT version, metadata_version FROM browser_profiles "
+            "WHERE tenant_id=? AND profile_id='profile_named_commands'",
+            (TENANT,),
+        ).fetchone()
+        assert (row["version"], row["metadata_version"]) == (1, 3)
+
+        expect_abort(
+            lambda: connection.execute(
+                """
+                INSERT INTO profile_grant_commands (
+                    tenant_id, command_id, command_actor_id, target_actor_id,
+                    profile_id, operation, role, expected_metadata_version,
+                    reason, executed_at_ms
+                ) VALUES (?, 'command_named_profile_stale_grant', ?, ?,
+                          'profile_named_commands', 'REVOKE', 'PROFILE_VIEWER', 2,
+                          'stale metadata authorization', 104)
+                """,
+                (TENANT, OWNER, MEMBER),
+            ),
+            "profile_grant_version_mismatch",
+        )
+        connection.rollback()
+        row = connection.execute(
+            "SELECT version, metadata_version FROM browser_profiles "
+            "WHERE tenant_id=? AND profile_id='profile_named_commands'",
+            (TENANT,),
+        ).fetchone()
+        assert (row["version"], row["metadata_version"]) == (1, 3)
+    finally:
+        connection.close()
+
+
 def main() -> int:
     connection = database()
     try:
@@ -488,6 +601,7 @@ def main() -> int:
         test_concurrent_winner_allows_only_exact_live_replay(connection)
         test_last_owner_and_membership_version(connection)
         test_invitation_and_resource_guards(connection)
+        test_profile_display_name_governance()
         assert connection.execute("PRAGMA foreign_key_check").fetchall() == []
         assert connection.execute("PRAGMA integrity_check").fetchone()[0] == "ok"
     finally:

@@ -79,7 +79,9 @@ REQUIRED_CLIENT_ADAPTER_TOKENS = (
     ".revoke_client_grant(actor, mutation)",
 )
 REQUIRED_PROFILE_APPLICATION_TOKENS = (
-    'const PROFILE_CREATE_COMMAND: &str = "profile.create";', "decide_replay", "create_profile",
+    'const PROFILE_CREATE_COMMAND: &str = "profile.create";',
+    'const PROFILE_RENAME_COMMAND: &str = "profile.rename";',
+    "decide_replay", "create_profile", "port.rename_profile(actor, &write)",
     "ProfileReplayDecision::Conflict",
 )
 REQUIRED_PROFILE_ASSIGNMENT_APPLICATION_TOKENS = (
@@ -100,14 +102,16 @@ REQUIRED_PROFILE_ADAPTER_TOKENS = (
     "ProfileCreateGrantSpec", "map_profile_grant_role(write.creator_grant_role())",
     "write.creator_grant_reason()", ".create_profile(", ".assign_profile(actor, mutation)",
     ".detach_profile(actor, mutation)", ".grant_profile(actor, mutation)",
-    ".revoke_profile_grant(actor, mutation)",
+    ".revoke_profile_grant(actor, mutation)", ".rename_profile(actor, mutation)",
 )
 REQUIRED_GOVERNED_TOKENS = (
     "owner_transfer_commands", "membership_status_commands", "invitation_create_commands",
     "profile_create_commands", "PROFILE_CREATOR_GRANT", "creator_grant_role.database_value()",
     "creator_grant_reason", "profile_assignment_commands", '"profile.assign_client"',
     '"profile.detach_client"', '"profile.client_assigned.v1"', '"profile.client_detached.v1"',
-    "profile_grant_commands", "client_grant_commands", "self.database.batch(statements).await",
+    "profile_grant_commands", "client_grant_commands", "profile_rename_commands",
+    "PROFILE_RENAME_COMMAND", '"profile.rename"', '"profile.renamed.v1"',
+    "self.database.batch(statements).await",
 )
 REQUIRED_ACCEPTANCE_TOKENS = (
     "invitation_acceptances", "INSERT INTO memberships", "INSERT INTO idempotency_records",
@@ -281,9 +285,9 @@ def relationship_rows(database: sqlite3.Connection) -> list[tuple[str, str, int,
     ).fetchall()
 
 
-def profile_version(database: sqlite3.Connection) -> int:
+def profile_metadata_version(database: sqlite3.Connection) -> int:
     row = database.execute(
-        "SELECT version FROM browser_profiles WHERE tenant_id = ? AND profile_id = ?",
+        "SELECT metadata_version FROM browser_profiles WHERE tenant_id = ? AND profile_id = ?",
         ("tenant_p1_fixture", "profile_p1_fixture"),
     ).fetchone()
     if row is None:
@@ -314,7 +318,7 @@ def insert_relationship_command(
 ) -> None:
     columns = """
         tenant_id, command_id, command_actor_id, assignment_id, profile_id,
-        client_id, expected_profile_version, reason, executed_at_ms
+        client_id, expected_metadata_version, reason, executed_at_ms
     """
     values: tuple[object, ...] = (
         "tenant_p1_fixture",
@@ -398,9 +402,24 @@ def validate_profile_relationship_d1_behavior(errors: list[str]) -> None:
             return
 
         for migration in migrations:
-            database.executescript(migration.read_text(encoding="utf-8"))
+            # Current Catalog's canonical lineage substitutes the accepted
+            # PAS-2 expansion for the legacy 0027 SQL. The sealed 0035 contract
+            # requires its exact request_digest/payload_fingerprint triggers.
+            source = (
+                ROOT / "migrations" / "d1-successor" / "0027_pas2_payload_fingerprint_expand.sql"
+                if migration.name == "0027_pas2_payload_fingerprint.sql"
+                else migration
+            )
+            database.executescript(source.read_text(encoding="utf-8"))
             if migration.name == "0001_catalog.sql":
                 seed_profile_relationship_fixture(database)
+        # Preserve the frozen 0001..0031 source files, then test against the
+        # COMPLETE shipped successor-v2 schema. Migration 0045's assignment
+        # history guard references DELETE authority introduced by 0041.
+        # Testing 0045 against legacy-only tables would be a non-production schema.
+        successor = ROOT / "migrations" / "d1-successor-v2"
+        for migration in sorted(successor.glob("[0-9][0-9][0-9][0-9]_*.sql")):
+            database.executescript(migration.read_text(encoding="utf-8"))
 
         # Legacy callers omit operation; the additive migration must preserve ASSIGN as the default.
         insert_relationship_command(
@@ -414,7 +433,7 @@ def validate_profile_relationship_d1_behavior(errors: list[str]) -> None:
         )
         if relationship_rows(database) != [("assignment_a_p1_fixture", "client_a_p1_fixture", 10, None)]:
             errors.append("legacy ASSIGN no longer creates exactly one active Client/Profile relationship")
-        if profile_version(database) != 2:
+        if profile_metadata_version(database) != 2:
             errors.append("legacy ASSIGN must bump Profile version exactly once")
 
         # A failure after command + idempotency + audit + outbox inside one transaction must roll
@@ -477,7 +496,7 @@ def validate_profile_relationship_d1_behavior(errors: list[str]) -> None:
             database.rollback()
         if relationship_rows(database) != [("assignment_a_p1_fixture", "client_a_p1_fixture", 10, None)]:
             errors.append("failed reassign transaction changed relationship history")
-        if profile_version(database) != 2:
+        if profile_metadata_version(database) != 2:
             errors.append("failed reassign transaction changed Profile version")
         if database.execute(
             "SELECT COUNT(*) FROM profile_assignment_commands WHERE command_id = ?",
@@ -518,7 +537,7 @@ def validate_profile_relationship_d1_behavior(errors: list[str]) -> None:
             ("assignment_b_p1_fixture", "client_b_p1_fixture", 20, None),
         ]:
             errors.append("atomic reassign must close exactly the previous row and leave one active successor")
-        if profile_version(database) != 3:
+        if profile_metadata_version(database) != 3:
             errors.append("atomic reassign must bump Profile version exactly once")
 
         # Execute the exact production SQL from both read adapters. Relationship is only
@@ -554,7 +573,7 @@ def validate_profile_relationship_d1_behavior(errors: list[str]) -> None:
         command_insert = """
             INSERT INTO profile_assignment_commands (
                 tenant_id, command_id, command_actor_id, assignment_id, profile_id,
-                client_id, expected_profile_version, reason, executed_at_ms, operation
+                client_id, expected_metadata_version, reason, executed_at_ms, operation
             ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """
 
@@ -605,7 +624,7 @@ def validate_profile_relationship_d1_behavior(errors: list[str]) -> None:
             ("tenant_p1_fixture", "profile_concurrent_p1_fixture"),
         ).fetchall()
         concurrent_version = database.execute(
-            "SELECT version FROM browser_profiles WHERE tenant_id = ? AND profile_id = ?",
+            "SELECT metadata_version FROM browser_profiles WHERE tenant_id = ? AND profile_id = ?",
             ("tenant_p1_fixture", "profile_concurrent_p1_fixture"),
         ).fetchone()
         if concurrent_rows != [
@@ -666,7 +685,7 @@ def validate_profile_relationship_d1_behavior(errors: list[str]) -> None:
         if relationship_rows(database) != [
             ("assignment_a_p1_fixture", "client_a_p1_fixture", 10, 20),
             ("assignment_b_p1_fixture", "client_b_p1_fixture", 20, None),
-        ] or profile_version(database) != 3:
+        ] or profile_metadata_version(database) != 3:
             errors.append("failed detach preconditions changed the previous valid relationship")
 
         insert_relationship_command(
@@ -683,7 +702,7 @@ def validate_profile_relationship_d1_behavior(errors: list[str]) -> None:
             ("assignment_b_p1_fixture", "client_b_p1_fixture", 20, 30),
         ]:
             errors.append("DETACH must close only the exact active relationship and insert no successor")
-        if profile_version(database) != 4:
+        if profile_metadata_version(database) != 4:
             errors.append("DETACH must bump Profile version exactly once")
 
         expect_integrity_failure(
@@ -752,8 +771,20 @@ def validate_profile_relationship_d1_behavior(errors: list[str]) -> None:
             "client_a_p1_fixture",
             40,
             None,
-        ) or profile_version(database) != 5:
+        ) or profile_metadata_version(database) != 5:
             errors.append("history-guard negative proof corrupted the active relationship")
+        # CRM-only operations must not mutate the browser/CURRENT lifecycle version.
+        # A native ProfileBridge that closed against the original version can Sync.
+        native_versions = database.execute(
+            "SELECT profile_id, version FROM browser_profiles "
+            "WHERE tenant_id = ? AND profile_id IN (?, ?) ORDER BY profile_id",
+            ("tenant_p1_fixture", "profile_p1_fixture", "profile_concurrent_p1_fixture"),
+        ).fetchall()
+        if len(native_versions) != 2 or any(row[1] != 1 for row in native_versions):
+            errors.append(
+                "CRM assignments/detach changed native browser Profile version; "
+                "subsequent local CURRENT Sync would be version-conflicted"
+            )
     except (AssertionError, OSError, sqlite3.DatabaseError) as error:
         errors.append(f"P1 governed relationship D1 behavior proof failed: {error}")
     finally:
@@ -798,8 +829,8 @@ def main() -> int:
 
     if "part-crm:d1-command-journal:v1" not in command_identity:
         errors.append("D1 command journal IDs are missing their domain-separated identity tag")
-    if governed.count("let command_id = command_journal_id(") != 7 or governed.count("command_id.as_str(),") != 7:
-        errors.append("legacy governed command tables must use exactly seven actor-bound journal IDs")
+    if governed.count("let command_id = command_journal_id(") != 8 or governed.count("command_id.as_str(),") != 8:
+        errors.append("governed command tables must use exactly eight actor-bound journal IDs, including profile.rename")
     if generation.count("let command_id = command_journal_id(") != 5 or generation.count("command_id.as_str(),") != 5:
         errors.append("profile generation command tables must use exactly five actor-bound journal IDs")
 

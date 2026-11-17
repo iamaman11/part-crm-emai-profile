@@ -27,7 +27,7 @@ mod tests {
     use super::ProfileCreateGrantSpec;
     use crate::CommandExecutionEvidence;
     use crate::profiles::{ProfileCreateWrite, ProfileGrantRole};
-    use profile_domain::BrowserProfile;
+    use profile_domain::{BrowserProfile, ProfileName};
     use profile_platform_primitives::{
         AuditEventId, IdempotencyKey, OutboxEventId, PayloadFingerprint, ProfileId, TenantId,
         UnixMillis,
@@ -41,6 +41,7 @@ mod tests {
                 TenantId::parse("tenant_01JPROFILECREATOR")?,
                 ProfileId::parse("profile_01JPROFILECREATOR")?,
             ),
+            ProfileName::parse("Test profile")?,
             CommandExecutionEvidence::new(
                 IdempotencyKey::parse("idem_01JPROFILECREATOR")?,
                 PayloadFingerprint::parse(

@@ -630,7 +630,8 @@ fn real_d1_verdict_survives_release_projection_and_terminal_promotion()
             ("0041_profile_delete_exact_r2_receipts.sql", false),
             ("0042_profile_current_cold_retirement.sql", false),
             ("0043_profile_delete_assignment_lifecycle.sql", false),
-            ("0044_profile_delete_exact_upload_expiry.sql", true),
+            ("0044_profile_delete_exact_upload_expiry.sql", false),
+            ("0045_profile_display_name.sql", true),
         ] {
             let count = sources
                 .iter()

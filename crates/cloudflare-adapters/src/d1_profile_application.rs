@@ -8,7 +8,7 @@ use application_ports::profiles::{
     ProfileApplicationPort, ProfileAssignmentApplicationPort, ProfileAssignmentPortError,
     ProfileAssignmentPortErrorClass, ProfileAssignmentWrite, ProfileCreateWrite,
     ProfileDetachmentWrite, ProfileGrantApplicationPort, ProfileGrantPortError, ProfileGrantWrite,
-    ProfilePortError, ProfileReadModel, ProfileReplayDecision,
+    ProfilePortError, ProfileReadModel, ProfileRenameWrite, ProfileReplayDecision,
 };
 use client_domain::{ClientKind, ClientRecord, ClientStatus};
 use identity_access_domain::MembershipRole;
@@ -62,6 +62,14 @@ impl ProfileApplicationPort for D1ProfileApplicationBundle {
         write: &ProfileCreateWrite,
     ) -> Result<(), ProfilePortError> {
         self.profiles.create_profile(actor, write).await
+    }
+
+    async fn rename_profile(
+        &self,
+        actor: &ActorContext,
+        write: &ProfileRenameWrite,
+    ) -> Result<(), ProfilePortError> {
+        self.profiles.rename_profile(actor, write).await
     }
 
     async fn find_visible_profile(

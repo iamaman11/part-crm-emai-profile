@@ -6,14 +6,14 @@ use serde_json::{Value, json};
 pub struct ProfileAssignmentRequest {
     pub client_id: String,
     pub reason: String,
-    pub expected_profile_version: u64,
+    pub expected_metadata_version: u64,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ProfileDetachmentRequest {
     pub reason: String,
-    pub expected_profile_version: u64,
+    pub expected_metadata_version: u64,
 }
 
 #[must_use]
@@ -94,20 +94,20 @@ pub fn openapi_fragment() -> Value {
                 "AssignmentRequest": {
                     "type": "object",
                     "additionalProperties": false,
-                    "required": ["clientId", "reason", "expectedProfileVersion"],
+                    "required": ["clientId", "reason", "expectedMetadataVersion"],
                     "properties": {
                         "clientId": {"$ref": "#/components/schemas/OpaqueId"},
                         "reason": {"type": "string", "minLength": 1, "maxLength": 500},
-                        "expectedProfileVersion": {"$ref": "#/components/schemas/AggregateVersion"}
+                        "expectedMetadataVersion": {"$ref": "#/components/schemas/AggregateVersion"}
                     }
                 },
                 "ProfileDetachmentRequest": {
                     "type": "object",
                     "additionalProperties": false,
-                    "required": ["reason", "expectedProfileVersion"],
+                    "required": ["reason", "expectedMetadataVersion"],
                     "properties": {
                         "reason": {"type": "string", "minLength": 1, "maxLength": 500},
-                        "expectedProfileVersion": {"$ref": "#/components/schemas/AggregateVersion"}
+                        "expectedMetadataVersion": {"$ref": "#/components/schemas/AggregateVersion"}
                     }
                 }
             }
@@ -123,14 +123,14 @@ mod tests {
     fn assignment_request_is_strict_and_keeps_relation_identity_server_owned() {
         assert!(
             serde_json::from_str::<ProfileAssignmentRequest>(
-                r#"{"clientId":"client_01JTEST","reason":"operator assign","expectedProfileVersion":3}"#
+                r#"{"clientId":"client_01JTEST","reason":"operator assign","expectedMetadataVersion":3}"#
             )
             .is_ok()
         );
         for invalid in [
-            r#"{"clientId":"client_01JTEST","reason":"operator assign","expectedProfileVersion":3,"assignmentId":"assignment_01JTEST"}"#,
-            r#"{"clientId":"client_01JTEST","reason":"operator assign","expectedProfileVersion":3,"requestDigest":"legacy"}"#,
-            r#"{"clientId":"client_01JTEST","reason":"operator assign","expectedProfileVersion":3,"futureField":true}"#,
+            r#"{"clientId":"client_01JTEST","reason":"operator assign","expectedMetadataVersion":3,"assignmentId":"assignment_01JTEST"}"#,
+            r#"{"clientId":"client_01JTEST","reason":"operator assign","expectedMetadataVersion":3,"requestDigest":"legacy"}"#,
+            r#"{"clientId":"client_01JTEST","reason":"operator assign","expectedMetadataVersion":3,"futureField":true}"#,
         ] {
             assert!(serde_json::from_str::<ProfileAssignmentRequest>(invalid).is_err());
         }
@@ -140,15 +140,15 @@ mod tests {
     fn detachment_request_is_strict_and_keeps_relation_identity_server_owned() {
         assert!(
             serde_json::from_str::<ProfileDetachmentRequest>(
-                r#"{"reason":"operator detach","expectedProfileVersion":3}"#
+                r#"{"reason":"operator detach","expectedMetadataVersion":3}"#
             )
             .is_ok()
         );
         for invalid in [
-            r#"{"reason":"operator detach","expectedProfileVersion":3,"assignmentId":"assignment_01JTEST"}"#,
-            r#"{"reason":"operator detach","expectedProfileVersion":3,"clientId":"client_01JTEST"}"#,
-            r#"{"reason":"operator detach","expectedProfileVersion":3,"requestDigest":"legacy"}"#,
-            r#"{"reason":"operator detach","expectedProfileVersion":3,"futureField":true}"#,
+            r#"{"reason":"operator detach","expectedMetadataVersion":3,"assignmentId":"assignment_01JTEST"}"#,
+            r#"{"reason":"operator detach","expectedMetadataVersion":3,"clientId":"client_01JTEST"}"#,
+            r#"{"reason":"operator detach","expectedMetadataVersion":3,"requestDigest":"legacy"}"#,
+            r#"{"reason":"operator detach","expectedMetadataVersion":3,"futureField":true}"#,
         ] {
             assert!(serde_json::from_str::<ProfileDetachmentRequest>(invalid).is_err());
         }

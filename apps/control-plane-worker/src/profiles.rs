@@ -11,12 +11,14 @@ use crate::request_evidence;
 use application_ports::profiles::ProfileStatus;
 use control_plane_contract::RouteClass;
 use control_plane_contract::profile_generation_api::{
-    ProfileCreateRequest, ProfileGrantRequest, ProfileProjectionDto, ProfileStatusDto,
+    ProfileCreateRequest, ProfileGrantRequest, ProfileProjectionDto, ProfileRenameRequest,
+    ProfileStatusDto,
 };
 use control_plane_contract::profile_relationship_api::{
     ProfileAssignmentRequest, ProfileDetachmentRequest,
 };
 use control_plane_contract::public_api::MutationReceipt;
+use profile_domain::ProfileName;
 use profile_platform_primitives::{ActorId, AggregateVersion, ClientId, ProfileId};
 use use_cases::profile_assignments::{
     ExecuteAssignProfileCommand, ExecuteDetachProfileCommand, ProfileAssignmentOperationError,
@@ -28,8 +30,9 @@ use use_cases::profile_grants::{
     ProfileGrantOutcome, authorize_profile_grant, execute_profile_grant,
 };
 use use_cases::profiles::{
-    ExecuteCreateProfileCommand, ProfileDetails, ProfileMutationOutcome, ProfileOperationError,
-    authorize_profile_create, execute_create_profile, get_visible_profile,
+    ExecuteCreateProfileCommand, ExecuteRenameProfileCommand, ProfileDetails,
+    ProfileMutationOutcome, ProfileOperationError, authorize_profile_create,
+    execute_create_profile, execute_rename_profile, get_visible_profile,
 };
 use worker::{Env, Request, Response, Result};
 
@@ -56,6 +59,7 @@ pub async fn dispatch(route: RouteClass, request: &mut Request, env: &Env) -> Re
             let profile_id = segments.get(5).copied().unwrap_or_default();
             match request.method().as_ref() {
                 "GET" => get_profile(request, env, tenant_id, profile_id).await,
+                "PATCH" => rename_profile(request, env, tenant_id, profile_id).await,
                 "DELETE" => {
                     profile_deletion::delete_profile(request, env, tenant_id, profile_id).await
                 }
@@ -99,6 +103,10 @@ async fn create_profile(request: &mut Request, env: &Env, tenant_id: &str) -> Re
         Ok(value) => value,
         Err(_) => return invalid_request(actor.actor().correlation_id().as_str()),
     };
+    let display_name = match ProfileName::parse(&body.display_name) {
+        Ok(value) => value,
+        Err(_) => return invalid_request(actor.actor().correlation_id().as_str()),
+    };
     let evidence = match command_evidence::from_request(request, actor.actor(), &body) {
         Ok(value) => value,
         Err(_) => return invalid_request(actor.actor().correlation_id().as_str()),
@@ -108,11 +116,59 @@ async fn create_profile(request: &mut Request, env: &Env, tenant_id: &str) -> Re
         actor.actor(),
         role,
         &application,
-        ExecuteCreateProfileCommand::new(profile_id, evidence),
+        ExecuteCreateProfileCommand::new(profile_id, display_name, evidence),
     )
     .await
     {
         Ok(outcome) => mutation_receipt(&outcome),
+        Err(error) => operation_failure(actor.actor().correlation_id().as_str(), error),
+    }
+}
+
+async fn rename_profile(
+    request: &mut Request,
+    env: &Env,
+    tenant_id: &str,
+    profile_id: &str,
+) -> Result<Response> {
+    let Some(actor) = resolve_active_request_actor(request, env, Some(tenant_id)).await? else {
+        return neutral_not_found(&correlation_hint(request));
+    };
+    let profile_id = match ProfileId::parse(profile_id) {
+        Ok(value) => value,
+        Err(_) => return neutral_not_found(actor.actor().correlation_id().as_str()),
+    };
+    let body = match request.json::<ProfileRenameRequest>().await {
+        Ok(value) => value,
+        Err(_) => return invalid_request(actor.actor().correlation_id().as_str()),
+    };
+    let display_name = match ProfileName::parse(&body.display_name) {
+        Ok(value) => value,
+        Err(_) => return invalid_request(actor.actor().correlation_id().as_str()),
+    };
+    let version = match AggregateVersion::new(body.expected_metadata_version) {
+        Ok(value) => value,
+        Err(_) => return invalid_request(actor.actor().correlation_id().as_str()),
+    };
+    let evidence = match command_evidence::from_request(request, actor.actor(), &body) {
+        Ok(value) => value,
+        Err(_) => return invalid_request(actor.actor().correlation_id().as_str()),
+    };
+    let application = profile_application(env)?;
+    match execute_rename_profile(
+        actor.actor(),
+        membership_role(&actor),
+        &application,
+        ExecuteRenameProfileCommand {
+            profile_id,
+            display_name,
+            expected_metadata_version: version,
+            evidence,
+        },
+    )
+    .await
+    {
+        Ok(outcome) => rename_receipt(&outcome),
         Err(error) => operation_failure(actor.actor().correlation_id().as_str(), error),
     }
 }
@@ -189,11 +245,11 @@ async fn assign_profile(
         Ok(value) => value,
         Err(_) => return invalid_request(actor.actor().correlation_id().as_str()),
     };
-    let expected_profile_version = match AggregateVersion::new(body.expected_profile_version) {
+    let expected_metadata_version = match AggregateVersion::new(body.expected_metadata_version) {
         Ok(value) => value,
         Err(_) => return invalid_request(actor.actor().correlation_id().as_str()),
     };
-    if let Err(error) = next_profile_assignment_version(expected_profile_version) {
+    if let Err(error) = next_profile_assignment_version(expected_metadata_version) {
         return assignment_failure(actor.actor().correlation_id().as_str(), error);
     }
     let evidence = match command_evidence::from_request(request, actor.actor(), &body) {
@@ -217,7 +273,7 @@ async fn assign_profile(
             assignment_id,
             profile_id,
             client_id,
-            expected_profile_version,
+            expected_metadata_version,
             body.reason,
             evidence,
         ),
@@ -251,11 +307,11 @@ async fn detach_profile(
         Ok(value) => value,
         Err(_) => return invalid_request(actor.actor().correlation_id().as_str()),
     };
-    let expected_profile_version = match AggregateVersion::new(body.expected_profile_version) {
+    let expected_metadata_version = match AggregateVersion::new(body.expected_metadata_version) {
         Ok(value) => value,
         Err(_) => return invalid_request(actor.actor().correlation_id().as_str()),
     };
-    if let Err(error) = next_profile_assignment_version(expected_profile_version) {
+    if let Err(error) = next_profile_assignment_version(expected_metadata_version) {
         return assignment_failure(actor.actor().correlation_id().as_str(), error);
     }
     let evidence = match command_evidence::from_request(request, actor.actor(), &body) {
@@ -269,7 +325,7 @@ async fn detach_profile(
         &application,
         ExecuteDetachProfileCommand::new(
             profile_id,
-            expected_profile_version,
+            expected_metadata_version,
             body.reason,
             evidence,
         ),
@@ -308,7 +364,7 @@ async fn update_profile_grant(
         Ok(value) => value,
         Err(_) => return invalid_request(actor.actor().correlation_id().as_str()),
     };
-    let expected_profile_version = match AggregateVersion::new(body.expected_profile_version) {
+    let expected_metadata_version = match AggregateVersion::new(body.expected_metadata_version) {
         Ok(value) => value,
         Err(_) => return invalid_request(actor.actor().correlation_id().as_str()),
     };
@@ -330,7 +386,7 @@ async fn update_profile_grant(
         ExecuteProfileGrantCommand::new(
             target_actor_id,
             profile_id,
-            expected_profile_version,
+            expected_metadata_version,
             body.role,
             body.reason,
             evidence,
@@ -348,6 +404,9 @@ fn operation_failure(correlation_id: &str, error: ProfileOperationError) -> Resu
     match error {
         ProfileOperationError::NotFound => neutral_not_found(correlation_id),
         ProfileOperationError::Conflict => problem(correlation_id, 409, "conflict", "Conflict"),
+        ProfileOperationError::VersionConflict => {
+            problem(correlation_id, 409, "version_conflict", "Version Conflict")
+        }
         ProfileOperationError::IntegrityFailure => problem(
             correlation_id,
             500,
@@ -451,6 +510,15 @@ fn mutation_receipt(outcome: &ProfileMutationOutcome) -> Result<Response> {
     .map(|response| response.with_status(status))
 }
 
+fn rename_receipt(outcome: &ProfileMutationOutcome) -> Result<Response> {
+    Response::from_json(&MutationReceipt {
+        result_code: outcome.result_code().to_owned(),
+        resource_id: outcome.resource_id().to_owned(),
+        aggregate_version: outcome.aggregate_version().value(),
+    })
+    .map(|response| response.with_status(200))
+}
+
 fn assignment_receipt(outcome: &ProfileAssignmentOutcome) -> Result<Response> {
     Response::from_json(&MutationReceipt {
         result_code: outcome.result_code().to_owned(),
@@ -475,8 +543,10 @@ pub(crate) fn profile_projection(
 ) -> ProfileProjectionDto {
     ProfileProjectionDto {
         profile_id: profile.profile_id().as_str().to_owned(),
+        display_name: profile.display_name().to_owned(),
         status: profile_status(profile.status()),
         version: profile.version().value(),
+        metadata_version: profile.metadata_version().value(),
         linked_client_id: profile
             .linked_client_id()
             .map(|value| value.as_str().to_owned()),

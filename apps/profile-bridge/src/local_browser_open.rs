@@ -3,9 +3,7 @@
 #![forbid(unsafe_code)]
 
 use crate::generation_initialization::{InitialProfileOpen, InitialProfileStatus};
-use crate::local_profile::{
-    BridgeWorkspaceLock, ClosedSyncAdmission, LocalProfileError, MaterializationRoot,
-};
+use crate::local_profile::{BridgeWorkspaceLock, LocalProfileError, MaterializationRoot};
 use crate::user_diagnostics::report::{self, Cause, Cloud, Outcome, Stage};
 use profile_platform_primitives::{DeviceId, GenerationId};
 use sha2::{Digest, Sha256};
@@ -80,6 +78,7 @@ impl std::error::Error for LocalOpenError {}
 enum NativeBrowserCompletion {
     SdkClosed,
     NativeWriterReleased,
+    RecoveryRequired,
     LaunchFailed,
     LaunchUnconfirmed,
     CloseUnconfirmed,
@@ -448,6 +447,7 @@ fn await_adapter_or_native_release(
     folder: &Path,
     browser_ready: &AtomicBool,
     startup_proof_timeout: Duration,
+    current_run_reset: &AtomicBool,
 ) -> Result<(std::process::ExitStatus, bool), LocalOpenError> {
     let proof_started = Instant::now();
     let mut writer_was_observed = false;
@@ -471,6 +471,11 @@ fn await_adapter_or_native_release(
             match crate::browser_execution::browser_writer_locks_absent_at(folder) {
                 Ok(false) => {
                     writer_was_observed = true;
+                    // Only Rust observes Firefox's existing on-disk checkpoint,
+                    // while the actual Windows native writer is still active.
+                    if crate::close_witness::live_run_checkpoint_reset(folder) {
+                        current_run_reset.store(true, Ordering::Release);
+                    }
                     released_since = None;
                 }
                 Ok(true) if writer_was_observed => {
@@ -544,6 +549,8 @@ fn run_python_with_input(
     let ready_seen_by_reader = Arc::clone(&native_ready_seen);
 
     let native_started = Instant::now();
+    let native_started_wall = SystemTime::now();
+    let current_run_reset = AtomicBool::new(false);
     let mut child = crate::windows_native::background_command(executable)
         .arg("-B")
         .arg(runtime_root.join(ENTRYPOINT))
@@ -674,6 +681,7 @@ fn run_python_with_input(
             folder,
             &native_ready_seen,
             NATIVE_STARTUP_PROOF_TIMEOUT,
+            &current_run_reset,
         )?
     } else {
         (
@@ -707,14 +715,53 @@ fn run_python_with_input(
     } else {
         None
     };
-    Ok(classify_native_browser_completion(
+    let completion = classify_native_browser_completion(
         action,
         browser_ready,
         completed.success(),
         native_close_seen.load(Ordering::Acquire),
         native_adapter_released,
         native_writer_absent,
-    ))
+    );
+    if action != "--local-open"
+        || !matches!(
+            completion,
+            NativeBrowserCompletion::SdkClosed | NativeBrowserCompletion::NativeWriterReleased
+        )
+    {
+        return Ok(completion);
+    }
+    // A crashed Firefox produces the same SDK close event, Python exit=0,
+    // and released parent.lock as a graceful user Close. The sole Rust owner
+    // must independently prove an actual Firefox final state from THIS run.
+    let writer_released = (0..20).any(|attempt| {
+        match crate::browser_execution::browser_writer_locks_absent_at(folder) {
+            Ok(true) => true,
+            _ if attempt < 19 => {
+                std::thread::sleep(Duration::from_millis(50));
+                false
+            }
+            _ => false,
+        }
+    });
+    if !writer_released {
+        return Ok(NativeBrowserCompletion::CloseUnconfirmed);
+    }
+    Ok(
+        match crate::close_witness::verify_final_close(
+            folder,
+            native_started_wall,
+            current_run_reset.load(Ordering::Acquire),
+        ) {
+            crate::close_witness::CloseWitness::Clean => completion,
+            crate::close_witness::CloseWitness::RecoveryRequired => {
+                NativeBrowserCompletion::RecoveryRequired
+            }
+            crate::close_witness::CloseWitness::Unconfirmed => {
+                NativeBrowserCompletion::CloseUnconfirmed
+            }
+        },
+    )
 }
 
 fn mark_local_unsynced(folder: &Path) -> Result<(), LocalOpenError> {
@@ -774,9 +821,12 @@ pub(crate) fn open_with_before_launch(
     )
 }
 
-/// Retain the SAME native admission while the caller finishes the post-Close
-/// Sync. No OS lock handoff, second Sync process or browser manager is needed.
-/// This callback must not report a Save receipt until D1 confirms CURRENT.
+/// Local Firefox admission is independent of cloud Sync admission.
+/// The Bridge writer and inherited Windows launch handle exclude concurrent
+/// browser writers. Cloud Sync uses its own exclusive sync admission, but
+/// only touches browser bytes under the existing Bridge writer and native
+/// lock checks. No cloud wait may hold the local browser's startup gate.
+/// The callback must not report Saved until D1 confirms exact CURRENT.
 pub(crate) fn open_with_before_launch_and_after_close(
     root: &MaterializationRoot,
     intent: &InitialProfileOpen,
@@ -788,16 +838,12 @@ pub(crate) fn open_with_before_launch_and_after_close(
     let local_started = Instant::now();
     let generation = local_generation(intent)?;
     let workspace = open_or_create_workspace(root, intent, &generation)?;
-    // Keep the same profile-scoped OS gate from browser Open through native
-    // Close. A previous post-close Sync cannot run concurrently with a new
-    // Firefox session and commit a snapshot of changing browser bytes.
-    // Hold this guard through the inline post-Close Sync callback. A new
-    // Open cannot win between Firefox releasing its files and cloud Commit.
-    let _operation = match ClosedSyncAdmission::try_acquire(&workspace) {
-        Ok(Some(owner)) => owner,
-        Ok(None) => return Err(LocalOpenError::OperationInProgress),
-        Err(_) => return Err(LocalOpenError::InvalidLocalWorkspace),
-    };
+    // Do not acquire ClosedSyncAdmission here. That gate belongs exclusively
+    // to the CLOUD Sync worker; keeping it through remote HTTP/R2 attempts
+    // previously made an otherwise valid offline re-Open fail for minutes.
+    // The actual native browser writer and inherited Windows launch guard
+    // still protect local bytes while Firefox runs, and Sync must re-acquire
+    // that same writer around every inventory/seal/local-state mutation.
     let result = open_under_profile_admission(
         root,
         intent,
@@ -920,7 +966,19 @@ fn open_under_profile_admission(
             // Keep the durable writer admission: Firefox may still own bytes.
             return Err(LocalOpenError::LaunchConfirmation);
         }
-        NativeBrowserCompletion::CloseUnconfirmed => {
+        NativeBrowserCompletion::CloseUnconfirmed | NativeBrowserCompletion::RecoveryRequired => {
+            // A crashed Firefox has genuinely released its kernel file handle.
+            // Retain every original browser byte and .local-unsynced marker,
+            // but free the Bridge admission to permit the SAME profile to
+            // reopen/recover without a machine restart or manual deletion.
+            if matches!(
+                crate::browser_execution::browser_writer_locks_absent(&workspace),
+                Ok(true)
+            ) {
+                writer
+                    .release()
+                    .map_err(|_| LocalOpenError::InvalidLocalWorkspace)?;
+            }
             return Err(LocalOpenError::BrowserNotClosedCleanly);
         }
         NativeBrowserCompletion::SdkClosed | NativeBrowserCompletion::NativeWriterReleased => {}
@@ -1152,6 +1210,7 @@ mod tests {
             root.path(),
             &ready,
             Duration::from_secs(30),
+            &std::sync::atomic::AtomicBool::new(false),
         )?;
         released.join().expect("native writer release thread");
         assert!(
@@ -1182,6 +1241,7 @@ mod tests {
             root.path(),
             &ready,
             Duration::from_secs(30),
+            &std::sync::atomic::AtomicBool::new(false),
         )?;
         assert!(
             status.success(),
@@ -1199,6 +1259,7 @@ mod tests {
             root.path(),
             &ready,
             Duration::from_secs(30),
+            &std::sync::atomic::AtomicBool::new(false),
         )?;
         assert!(status.success());
         assert!(!stopped, "missing READY must not authorize stop");
@@ -1211,6 +1272,7 @@ mod tests {
             root.path(),
             &ready,
             Duration::from_secs(30),
+            &std::sync::atomic::AtomicBool::new(false),
         )?;
         assert!(status.success());
         assert!(!stopped, "unobserved writer must not authorize stop");
@@ -1344,6 +1406,7 @@ mod tests {
             directory.path(),
             &ready,
             Duration::from_millis(50),
+            &std::sync::atomic::AtomicBool::new(false),
         );
         assert_eq!(outcome, Err(LocalOpenError::LaunchConfirmation));
         assert!(
@@ -1379,6 +1442,7 @@ mod tests {
                 root.path(),
                 &ready,
                 Duration::from_millis(50),
+                &std::sync::atomic::AtomicBool::new(false),
             );
             assert_eq!(outcome, Err(LocalOpenError::LaunchConfirmation));
             assert!(
@@ -1440,6 +1504,7 @@ mod tests {
                 owner_workspace.path(),
                 &ready,
                 Duration::from_millis(50),
+                &std::sync::atomic::AtomicBool::new(false),
             );
             // Rust deliberately releases the profile admission on timeout.
             // The child, not this parent thread, retains kernel ownership.
@@ -1510,7 +1575,7 @@ mod tests {
     #[cfg(windows)]
     #[test]
     #[ignore = "requires PROFILE_BRIDGE_TEST_PYTHON"]
-    fn windows_python_missing_playwright_close_event_uses_native_release_gate()
+    fn windows_python_missing_playwright_close_event_does_not_certify_clean()
     -> Result<(), Box<dyn std::error::Error>> {
         use std::fs;
         use std::path::PathBuf;
@@ -1549,7 +1614,8 @@ time.sleep(15)
         let started = Instant::now();
         assert_eq!(
             run_python_with_executable(&python, &runtime_root, &folder, "--local-open", None,)?,
-            super::NativeBrowserCompletion::NativeWriterReleased
+            super::NativeBrowserCompletion::CloseUnconfirmed,
+            "native writer release must not forge a clean Firefox checkpoint"
         );
         assert!(started.elapsed() >= Duration::from_secs(2));
         assert!(started.elapsed() < Duration::from_secs(10));
@@ -1678,14 +1744,15 @@ sys.stderr.flush()
             Ok(Some(ready))
         });
         assert!(
-            run_python_with_executable(
+            !run_python_with_executable(
                 &python,
                 &runtime_root,
                 &folder,
                 "--local-open",
                 Some(before_launch),
             )?
-            .confirms_closed_profile()
+            .confirms_closed_profile(),
+            "delivery BrowserReady is not a clean Firefox session receipt"
         );
         assert!(
             crate::windows_delivery_runtime::tests::active_health_confirmed_for_test(&state_root,)?
@@ -1784,7 +1851,7 @@ sys.stderr.flush()
     }
 
     #[test]
-    fn open_rejects_live_closed_sync_before_touching_browser_bytes()
+    fn local_open_does_not_wait_for_active_cloud_sync_admission()
     -> Result<(), Box<dyn std::error::Error>> {
         use crate::local_profile::ClosedSyncAdmission;
         use profile_platform_primitives::DeviceId;
@@ -1799,11 +1866,12 @@ sys.stderr.flush()
         let device = DeviceId::parse("device_local_sync_open")?;
         assert_eq!(
             super::open_with_before_launch(&root, &intent, &device, directory.path(), None),
-            Err(LocalOpenError::OperationInProgress),
+            Err(LocalOpenError::RuntimeUnavailable),
+            "an offline Open must reach the native runtime even while cloud Sync is blocked"
         );
         assert!(
-            !current.path().join(".local-unsynced").exists(),
-            "an Open refused by active Sync must never dirty native browser bytes"
+            current.path().join(".local-unsynced").exists(),
+            "no cloud Sync outcome can erase the locally durable dirty marker"
         );
         assert!(!current.path().join("camoufox-config.json").exists());
         Ok(())
@@ -1811,8 +1879,7 @@ sys.stderr.flush()
 
     #[cfg(windows)]
     #[test]
-    fn post_close_sync_callback_cannot_lose_profile_gate() -> Result<(), Box<dyn std::error::Error>>
-    {
+    fn post_close_callback_uses_independent_sync_owner() -> Result<(), Box<dyn std::error::Error>> {
         use crate::local_profile::{ClosedSyncAdmission, MaterializationRoot};
         use profile_platform_primitives::DeviceId;
 
@@ -1822,9 +1889,9 @@ sys.stderr.flush()
         let device = DeviceId::parse("device_local_sync_open")?;
         let mut callback_ran = false;
 
-        // The fixture has no packaged Python. Browser initialization fails
-        // safely, but the same close/recovery callback still holds the native
-        // gate. Another Open cannot claim this profile in that interval.
+        // The fixture has no packaged Python. After the native Open attempt,
+        // the callback can claim the cloud-only Sync gate and must never
+        // retain the browser's admission across remote network operations.
         let result = super::open_with_before_launch_and_after_close(
             &root,
             &intent,
@@ -1836,12 +1903,21 @@ sys.stderr.flush()
                 let workspace = root
                     .open_profile_current(&intent.tenant_id, &intent.profile_id)
                     .expect("existing local profile");
+                let sync_only = ClosedSyncAdmission::try_acquire(&workspace)
+                    .expect("cloud Sync kernel admission")
+                    .expect("cloud owner is independent of local Open");
                 assert!(
                     ClosedSyncAdmission::try_acquire(&workspace)
-                        .expect("kernel admission")
+                        .expect("same profile Sync still exclusive")
                         .is_none(),
-                    "callback must execute before the profile admission is released"
+                    "two cloud Sync owners must never run concurrently"
                 );
+                assert_eq!(
+                    super::open_with_before_launch(&root, &intent, &device, directory.path(), None),
+                    Err(LocalOpenError::RuntimeUnavailable),
+                    "another Open must not wait for a concurrent network Sync"
+                );
+                drop(sync_only);
                 callback_ran = true;
             },
         );
@@ -1849,11 +1925,235 @@ sys.stderr.flush()
         assert!(callback_ran);
         let workspace = root.open_profile_current(&intent.tenant_id, &intent.profile_id)?;
         let _after = ClosedSyncAdmission::try_acquire(&workspace)?
-            .ok_or("the same profile gate did not release after callback")?;
+            .ok_or("cloud Sync admission was not released after callback")?;
         assert!(workspace.path().join(".local-unsynced").exists());
         Ok(())
     }
 
+    /// An actual independent Windows process holds the cloud Sync OS lock,
+    /// simulating an indefinitely slow HTTP/R2 call. Native Open must still
+    /// reach its browser runtime without awaiting or clearing that owner.
+    #[cfg(windows)]
+    #[test]
+    fn offline_open_reaches_native_runtime_while_another_process_holds_cloud_sync()
+    -> Result<(), Box<dyn std::error::Error>> {
+        use crate::local_profile::{ClosedSyncAdmission, MaterializationRoot};
+        use profile_platform_primitives::DeviceId;
+        use std::fs;
+        use std::process::{Command, Stdio};
+        use std::time::{Duration, Instant};
+
+        let directory = tempfile::tempdir()?;
+        let root = MaterializationRoot::open_or_create(directory.path())?;
+        let intent = intent();
+        let generation = local_generation(&intent)?;
+        let workspace = open_or_create_workspace(&root, &intent, &generation)?;
+        fs::create_dir_all(workspace.path().join("user_data"))?;
+        let original = workspace.path().join("user_data/cookies.sqlite");
+        fs::write(&original, b"original-cookies-must-survive-cloud-timeout")?;
+        let device = DeviceId::parse("device_offline_open")?;
+
+        let mut child = Command::new(std::env::current_exe()?)
+            .arg("native_closed_sync_admission_child")
+            .arg("--nocapture")
+            .env("PROFILE_BRIDGE_TEST_SYNC_ROOT", root.path())
+            .env("PROFILE_BRIDGE_TEST_SYNC_USE_CURRENT", "1")
+            .env("PROFILE_BRIDGE_TEST_SYNC_TENANT", intent.tenant_id.as_str())
+            .env(
+                "PROFILE_BRIDGE_TEST_SYNC_PROFILE",
+                intent.profile_id.as_str(),
+            )
+            .env(
+                "PROFILE_BRIDGE_TEST_SYNC_GENERATION",
+                workspace.generation_id().as_str(),
+            )
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()?;
+
+        let mut claimed = false;
+        for _ in 0..120 {
+            match ClosedSyncAdmission::try_acquire(&workspace)? {
+                None => {
+                    claimed = true;
+                    break;
+                }
+                Some(owner) => drop(owner),
+            }
+            if child.try_wait()?.is_some() {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(25));
+        }
+        if !claimed {
+            let _ = child.kill();
+            let _ = child.wait();
+            return Err("independent Windows child never claimed cloud Sync".into());
+        }
+
+        let start = Instant::now();
+        let opened = super::open_with_before_launch(
+            &root,
+            &intent,
+            &device,
+            directory.path(), // deliberately no packaged browser runtime
+            None,
+        );
+        let elapsed = start.elapsed();
+        let still_in_cloud = child.try_wait()?.is_none();
+        // Scope and stop only this disposable child on all result paths.
+        let _ = child.kill();
+        let _ = child.wait();
+
+        assert_eq!(
+            opened,
+            Err(LocalOpenError::RuntimeUnavailable),
+            "slow cloud Sync cannot block the native Open admission"
+        );
+        assert!(
+            still_in_cloud,
+            "the simulated cloud outage ended prematurely"
+        );
+        assert!(
+            elapsed < Duration::from_secs(5),
+            "native Open was delayed by cloud Sync for {elapsed:?}"
+        );
+        assert_eq!(
+            fs::read(original)?,
+            b"original-cookies-must-survive-cloud-timeout"
+        );
+        assert_eq!(
+            fs::read(workspace.path().join(".local-unsynced"))?,
+            b"local-unsynced-v2",
+            "unconfirmed cloud work must not clear local changes"
+        );
+        Ok(())
+    }
+
+    /// Disposable official Camoufox GUI while a cloud Sync OS lock is active.
+    /// CI runs the complete native-test filter without a physical GUI and
+    /// deliberately has no scratch SDK / fingerprint / WM_CLOSE controller.
+    /// Skip ONLY that absent-fixture case. A partial test configuration is
+    /// a setup error, never a false green physical acceptance.
+    #[cfg(windows)]
+    fn physical_gui_fixture() -> Result<
+        Option<(std::path::PathBuf, std::path::PathBuf, std::path::PathBuf)>,
+        Box<dyn std::error::Error>,
+    > {
+        let runtime = std::env::var_os("PROFILE_BRIDGE_TEST_NATIVE_RUNTIME_ROOT");
+        let fingerprint = std::env::var_os("PROFILE_BRIDGE_TEST_SAVED_FPGEN_CONFIG");
+        let scratch = std::env::var_os("PROFILE_BRIDGE_TEST_SCRATCH_ROOT");
+        match (runtime, fingerprint, scratch) {
+            (None, None, None) => {
+                eprintln!("PHYSICAL_GUI_SKIPPED: no isolated Windows GUI fixture");
+                Ok(None)
+            }
+            (Some(runtime), Some(fingerprint), Some(scratch)) => {
+                Ok(Some((runtime.into(), fingerprint.into(), scratch.into())))
+            }
+            _ => {
+                Err("incomplete physical GUI test fixture; require all three scratch paths".into())
+            }
+        }
+    }
+
+    /// Force-kill only this disposable Firefox GUI; then reopen the SAME
+    /// profile while the cloud Sync admission remains held continuously.
+    #[cfg(windows)]
+    #[test]
+    #[ignore = "requires scoped Firefox kill, then physical WM_CLOSE of recovered GUI"]
+    fn real_gui_crash_reopens_same_dirty_profile_during_cloud_outage()
+    -> Result<(), Box<dyn std::error::Error>> {
+        use crate::local_profile::{ClosedSyncAdmission, MaterializationRoot};
+        use profile_platform_primitives::DeviceId;
+        use std::fs;
+
+        let Some((runtime, fpgen, root_path)) = physical_gui_fixture()? else {
+            return Ok(());
+        };
+        let root = MaterializationRoot::open_or_create(&root_path)?;
+        let intent = intent();
+        let generation = local_generation(&intent)?;
+        let workspace = open_or_create_workspace(&root, &intent, &generation)?;
+        fs::create_dir_all(workspace.path().join("user_data"))?;
+        let config = workspace.path().join("camoufox-config.json");
+        fs::copy(fpgen, &config)?;
+        let saved = fs::read(&config)?;
+        let proof = workspace.path().join("user_data/r2-preserve-this-file.txt");
+        fs::write(&proof, b"same-local-profile-survives-firefox-crash")?;
+
+        let _cloud_sync = ClosedSyncAdmission::try_acquire(&workspace)?
+            .ok_or("test cloud Sync lock unavailable")?;
+        let device = DeviceId::parse("device_real_gui_crash_r2")?;
+        let crashed = super::open_with_before_launch(&root, &intent, &device, &runtime, None);
+        assert_eq!(
+            crashed,
+            Err(LocalOpenError::BrowserNotClosedCleanly),
+            "force-killed Firefox must NEVER be classified as Clean"
+        );
+        assert_eq!(fs::read(&config)?, saved);
+        assert_eq!(
+            fs::read(&proof)?,
+            b"same-local-profile-survives-firefox-crash"
+        );
+        assert_eq!(
+            fs::read(workspace.path().join(".local-unsynced"))?,
+            b"local-unsynced-v2"
+        );
+        eprintln!("R2_NATIVE_CRASH_RECOVERY_REOPEN_STARTED");
+        let recovered = super::open_with_before_launch(&root, &intent, &device, &runtime, None);
+        assert_eq!(
+            recovered,
+            Ok(()),
+            "same dirty profile must reopen and Close cleanly"
+        );
+        assert_eq!(fs::read(&config)?, saved);
+        assert_eq!(
+            fs::read(&proof)?,
+            b"same-local-profile-survives-firefox-crash"
+        );
+        assert_eq!(
+            fs::read(workspace.path().join(".local-unsynced"))?,
+            b"local-unsynced-v2",
+            "no cloud receipt was ever granted"
+        );
+        Ok(())
+    }
+    #[cfg(windows)]
+    #[test]
+    #[ignore = "requires test SDK runtime, saved fingerprint, and GUI WM_CLOSE"]
+    fn real_gui_open_and_close_work_while_cloud_sync_is_held()
+    -> Result<(), Box<dyn std::error::Error>> {
+        use crate::local_profile::{ClosedSyncAdmission, MaterializationRoot};
+        use profile_platform_primitives::DeviceId;
+        use std::fs;
+
+        let Some((runtime, fpgen, root_path)) = physical_gui_fixture()? else {
+            return Ok(());
+        };
+        let root = MaterializationRoot::open_or_create(&root_path)?;
+        let intent = intent();
+        let generation = local_generation(&intent)?;
+        let workspace = open_or_create_workspace(&root, &intent, &generation)?;
+        fs::create_dir_all(workspace.path().join("user_data"))?;
+        let config = workspace.path().join("camoufox-config.json");
+        fs::copy(fpgen, &config)?;
+        let saved_config = fs::read(&config)?;
+
+        let _cloud_sync = ClosedSyncAdmission::try_acquire(&workspace)?
+            .ok_or("could not acquire test cloud Sync lock")?;
+        let device = DeviceId::parse("device_real_gui_offline_r2")?;
+        let result = super::open_with_before_launch(&root, &intent, &device, &runtime, None);
+        assert_eq!(result, Ok(()), "real Firefox GUI must close Clean");
+        assert_eq!(fs::read(&config)?, saved_config);
+        assert_eq!(
+            fs::read(workspace.path().join(".local-unsynced"))?,
+            b"local-unsynced-v2",
+            "cloud outage must never erase local data"
+        );
+        Ok(())
+    }
     #[test]
     fn draft_without_local_copy_creates_one_local_workspace() {
         let directory = tempfile::tempdir().unwrap();
@@ -1970,5 +2270,151 @@ sys.stderr.flush()
             std::fs::read(workspace.path().join(".local-unsynced")).unwrap(),
             b"local-unsynced-v2"
         );
+    }
+    /// Reuse one native profile and exactly one SDK fingerprint through ten
+    /// independent real GUI runs while the cloud Sync owner stays occupied.
+    /// Requires a scoped external WM_CLOSE of each disposable Camoufox window.
+    #[cfg(windows)]
+    #[test]
+    #[ignore = "requires isolated SDK/fingerprint fixture and ten scoped GUI WM_CLOSE events"]
+    fn real_gui_ten_reopens_keep_identity_and_offline_admission()
+    -> Result<(), Box<dyn std::error::Error>> {
+        use crate::local_profile::{ClosedSyncAdmission, MaterializationRoot};
+        use profile_platform_primitives::DeviceId;
+        use std::fs;
+
+        let Some((runtime, fpgen, root_path)) = physical_gui_fixture()? else {
+            return Ok(());
+        };
+        let root = MaterializationRoot::open_or_create(&root_path)?;
+        let intent = intent();
+        let generation = local_generation(&intent)?;
+        let workspace = open_or_create_workspace(&root, &intent, &generation)?;
+        fs::create_dir_all(workspace.path().join("user_data"))?;
+        let config = workspace.path().join("camoufox-config.json");
+        fs::copy(fpgen, &config)?;
+        let saved_config = fs::read(&config)?;
+        let evidence = workspace.path().join("user_data/repeated-open-proof.txt");
+        fs::write(&evidence, b"one-local-profile-unchanged-through-ten-runs")?;
+        let _cloud_sync = ClosedSyncAdmission::try_acquire(&workspace)?
+            .ok_or("test cloud Sync owner unavailable")?;
+        let device = DeviceId::parse("device_real_gui_ten_reopens")?;
+
+        for cycle in 1..=10 {
+            eprintln!("R3_REAL_GUI_OPEN_STARTED cycle={cycle}");
+            assert_eq!(
+                super::open_with_before_launch(&root, &intent, &device, &runtime, None),
+                Ok(()),
+                "native GUI cycle {cycle} must finish with proven clean Firefox Close"
+            );
+            assert_eq!(
+                fs::read(&config)?,
+                saved_config,
+                "fingerprint changed on GUI cycle {cycle}"
+            );
+            assert_eq!(
+                fs::read(&evidence)?,
+                b"one-local-profile-unchanged-through-ten-runs",
+                "local test bytes changed on GUI cycle {cycle}"
+            );
+            assert_eq!(
+                fs::read(workspace.path().join(".local-unsynced"))?,
+                b"local-unsynced-v2",
+                "a cloud-owned stall cannot claim a Save receipt on cycle {cycle}"
+            );
+            assert!(
+                crate::browser_execution::browser_writer_locks_absent(&workspace)?,
+                "native Firefox lock retained after cycle {cycle}"
+            );
+            eprintln!("R3_REAL_GUI_CLEAN_DONE cycle={cycle}");
+        }
+        Ok(())
+    }
+    /// Three independently invoked Windows processes test the existing
+    /// production local Open owner, not a new browser manager:
+    /// start -> supervisor kills only this Rust test process after actual SDK
+    /// Ready while Firefox remains alive; probe -> still-live Firefox excludes
+    /// a new Open; recover -> user WM_CLOSE was delivered to orphaned Firefox,
+    /// and the same dirty folder can be reopened and closed normally.
+    #[cfg(windows)]
+    #[test]
+    #[ignore = "requires isolated SDK fixture, scoped Rust test process kill and two WM_CLOSE events"]
+    fn real_gui_bridge_process_death_preserves_browser_and_recovers()
+    -> Result<(), Box<dyn std::error::Error>> {
+        use crate::local_profile::MaterializationRoot;
+        use profile_platform_primitives::DeviceId;
+        use std::fs;
+        use std::io::ErrorKind;
+
+        let Some((runtime, fpgen, root_path)) = physical_gui_fixture()? else {
+            return Ok(());
+        };
+        let phase = std::env::var("PROFILE_BRIDGE_TEST_OWNER_CRASH_PHASE")
+            .map_err(|_| "PROFILE_BRIDGE_TEST_OWNER_CRASH_PHASE required with GUI fixture")?;
+        if !matches!(phase.as_str(), "start" | "probe" | "recover") {
+            return Err("invalid scoped owner-crash test phase".into());
+        }
+        let root = MaterializationRoot::open_or_create(&root_path)?;
+        let intent = intent();
+        let generation = local_generation(&intent)?;
+        let workspace = open_or_create_workspace(&root, &intent, &generation)?;
+        let config = workspace.path().join("camoufox-config.json");
+        let proof = workspace.path().join("user_data/owner-crash-proof.txt");
+        if phase == "start" {
+            fs::create_dir_all(workspace.path().join("user_data"))?;
+            if config.exists() || proof.exists() {
+                return Err("refuse to overwrite existing crash test identity".into());
+            }
+            fs::copy(&fpgen, &config)?;
+            fs::write(&proof, b"original-test-cookies-must-survive")?;
+        } else if !config.is_file() || !proof.is_file() {
+            return Err("original crash test identity or proof missing".into());
+        }
+        let initial_identity = fs::read(fpgen)?;
+        assert_eq!(fs::read(&config)?, initial_identity);
+        assert_eq!(fs::read(&proof)?, b"original-test-cookies-must-survive");
+        let device = DeviceId::parse("device_real_bridge_process_crash")?;
+
+        if phase == "start" {
+            eprintln!("R4_BRIDGE_OWNER_START_NATIVE_OPEN");
+            let outcome = super::open_with_before_launch(&root, &intent, &device, &runtime, None);
+            return Err(format!(
+                "the scoped external controller did not kill the Rust owner: {outcome:?}"
+            )
+            .into());
+        }
+
+        if phase == "probe" {
+            // Firefox still owns the original native parent.lock. The Rust
+            // admission from the killed parent cannot fabricate another owner.
+            eprintln!("R4_BRIDGE_OWNER_PROBE_WHILE_FIREFOX_LIVE");
+            assert_eq!(
+                super::open_with_before_launch(&root, &intent, &device, &runtime, None),
+                Err(LocalOpenError::ProfileBusy),
+                "new Open must be excluded while orphaned Firefox still owns profile files"
+            );
+        } else {
+            eprintln!("R4_BRIDGE_OWNER_RECOVER_OPEN_STARTED");
+            assert_eq!(
+                super::open_with_before_launch(&root, &intent, &device, &runtime, None),
+                Ok(()),
+                "same profile must reopen after orphaned Firefox was closed"
+            );
+            assert!(crate::browser_execution::browser_writer_locks_absent(
+                &workspace
+            )?);
+        }
+        assert_eq!(fs::read(&config)?, initial_identity);
+        assert_eq!(fs::read(&proof)?, b"original-test-cookies-must-survive");
+        assert_eq!(
+            fs::read(workspace.path().join(".local-unsynced"))?,
+            b"local-unsynced-v2"
+        );
+        assert!(!matches!(
+            fs::metadata(workspace.path().join(".local-unsynced")),
+            Err(ref error) if error.kind() == ErrorKind::NotFound
+        ));
+        eprintln!("R4_BRIDGE_OWNER_PHASE_PASS phase={phase}");
+        Ok(())
     }
 }

@@ -8,8 +8,10 @@ use profile_platform_primitives::{
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ProfileReadProjection {
     profile_id: ProfileId,
+    display_name: String,
     status: ProfileStatus,
     version: AggregateVersion,
+    metadata_version: AggregateVersion,
     linked_client_id: Option<ClientId>,
     active_generation_id: Option<GenerationId>,
 }
@@ -20,13 +22,17 @@ impl ProfileReadProjection {
         profile_id: ProfileId,
         status: ProfileStatus,
         version: AggregateVersion,
+        metadata_version: AggregateVersion,
         linked_client_id: Option<ClientId>,
         active_generation_id: Option<GenerationId>,
+        display_name: String,
     ) -> Self {
         Self {
             profile_id,
+            display_name,
             status,
             version,
+            metadata_version,
             linked_client_id,
             active_generation_id,
         }
@@ -37,6 +43,10 @@ impl ProfileReadProjection {
         &self.profile_id
     }
 
+    pub fn display_name(&self) -> &str {
+        &self.display_name
+    }
+
     #[must_use]
     pub const fn status(&self) -> ProfileStatus {
         self.status
@@ -45,6 +55,11 @@ impl ProfileReadProjection {
     #[must_use]
     pub const fn version(&self) -> AggregateVersion {
         self.version
+    }
+
+    #[must_use]
+    pub const fn metadata_version(&self) -> AggregateVersion {
+        self.metadata_version
     }
 
     #[must_use]

@@ -144,9 +144,17 @@ def check_sources(sources: dict[str, str]) -> list[str]:
 
     initial = function_body(shipping, "pub fn run_initial(")
     local_open = initial.find("crate::local_browser_open::open_with_before_launch_and_after_close(")
-    sync_handoff = initial.find("run_closed_sync_with_admission(", local_open)
-    if local_open < 0 or sync_handoff < local_open or "start_sync_after_close(" in initial:
-        failures.append("normal native Open must retain same-process gate through post-close Sync")
+    # Native Open has independent OS writer admission; cloud Save runs only
+    # after a current-run verified Clean close and acquires its OWN sync owner.
+    confirmation = initial.find("if native_close_admits_automatic_sync(&open_result)", local_open)
+    sync_handoff = initial.find("run_closed_sync(intent)", confirmation)
+    if (
+        local_open < 0
+        or confirmation < local_open
+        or sync_handoff < confirmation
+        or "start_sync_after_close(" in initial
+    ):
+        failures.append("normal native Open must sync only after verified Close")
     if "result.map_err(ShippingCompositionError::LocalOpen)" not in initial:
         failures.append("abnormal adapter exit must retain the same fail-closed Sync handoff")
 
@@ -174,8 +182,10 @@ def check_sources(sources: dict[str, str]) -> list[str]:
 
     opened = function_body(local, "fn open_under_profile_admission(")
     session = function_body(local, "pub(crate) fn open_with_before_launch_and_after_close(")
-    if "ClosedSyncAdmission::try_acquire(&workspace)" not in session or "after_close(result)" not in session:
-        failures.append("local browser operation must retain OS admission through post-close Sync callback")
+    if "ClosedSyncAdmission::try_acquire(&workspace)" in session or "after_close(result)" not in session:
+        failures.append("native Open must not inherit cloud Sync admission")
+    if "BridgeWorkspaceLock::acquire_or_recover_interrupted(&workspace" not in opened:
+        failures.append("native Open must retain exclusive browser writer while Firefox lives")
     marker = opened.find("mark_local_unsynced(workspace.path())")
     launch = opened.find("run_python(", marker)
     launch_call = opened[launch : launch + 256] if launch >= 0 else ""
@@ -316,7 +326,8 @@ def check_sources(sources: dict[str, str]) -> list[str]:
     ):
         failures.append("local Open must accept the latest valid local marker without a pre-Open cloud Sync")
     initial = function_body(shipping, "pub fn run_initial(")
-    if "run_closed_sync(intent)" in initial or "StaleLocalWorkspace" in initial:
+    before_open = initial.split("let open_local = ||", 1)[0]
+    if "run_closed_sync(intent)" in before_open or "StaleLocalWorkspace" in initial:
         failures.append("ordinary local Open must not trigger a pre-launch cloud Sync")
 
     for required in ('from playwright.async_api import async_playwright',
@@ -369,6 +380,11 @@ def self_test(sources: dict[str, str]) -> list[str]:
          "native file-release proof"),
         ("shipping", "ClosedSyncAdmission::try_acquire(&initial)", "no_sync_owner()",
          "one whole-operation per-profile OS Sync owner"),
+        ("shipping", "if native_close_admits_automatic_sync(&open_result)", "if true",
+         "normal native Open must sync only after verified Close"),
+        ("local", "    let result = open_under_profile_admission(",
+         "    let _operation = ClosedSyncAdmission::try_acquire(&workspace);\n    let result = open_under_profile_admission(",
+         "native Open must not inherit cloud Sync admission"),
         ("shipping", "attempt >= MAX_CLOSED_SYNC_ATTEMPTS", "false",
          "closed Sync must stop after bounded retries"),
         ("shipping",

@@ -458,9 +458,9 @@ def validate_d1_projection(payload: dict[str, Any]) -> None:
         fail("Catalog live successor migration root drifted")
     if catalog.get("migration_lineage") != "catalog-successor-v2":
         fail("Catalog successor lineage identity drifted")
-    if catalog.get("current_repository_revision") != "0044_profile_delete_exact_upload_expiry.sql":
+    if catalog.get("current_repository_revision") != "0045_profile_display_name.sql":
         fail("Catalog successor current repository revision drifted")
-    if catalog.get("migration_count") != 44 or catalog.get("post_epoch_migration_count") != 18:
+    if catalog.get("migration_count") != 45 or catalog.get("post_epoch_migration_count") != 19:
         fail("Catalog successor migration cardinality drifted")
     legacy = catalog.get("legacy_history")
     if legacy != {
@@ -483,11 +483,11 @@ def validate_d1_projection(payload: dict[str, Any]) -> None:
     if not isinstance(catalog_contract, dict):
         fail("Catalog successor release contract is missing")
     if (
-        catalog_contract.get("target_schema_revision") != "0044_profile_delete_exact_upload_expiry.sql"
-        or catalog_contract.get("supported_schema_min") != "0044_profile_delete_exact_upload_expiry.sql"
-        or catalog_contract.get("supported_schema_max") != "0044_profile_delete_exact_upload_expiry.sql"
+        catalog_contract.get("target_schema_revision") != "0045_profile_display_name.sql"
+        or catalog_contract.get("supported_schema_min") != "0045_profile_display_name.sql"
+        or catalog_contract.get("supported_schema_max") != "0045_profile_display_name.sql"
     ):
-        fail("Catalog successor exact schema0044 profile Delete signed upload expiry release window drifted")
+        fail("Catalog successor exact schema0045 profile display-name release window drifted")
 
 
 def validate(root: Path = ROOT) -> None:

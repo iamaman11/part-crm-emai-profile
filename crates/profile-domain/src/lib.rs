@@ -5,6 +5,35 @@ pub mod registry;
 use core::fmt;
 use profile_platform_primitives::{AggregateVersion, GenerationId, ProfileId, TenantId};
 
+/// Display metadata lives in D1; changing it never mutates a Firefox profile.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ProfileName(String);
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct InvalidProfileName;
+
+impl fmt::Display for InvalidProfileName {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str("profile name must contain 1-80 visible characters")
+    }
+}
+impl std::error::Error for InvalidProfileName {}
+
+impl ProfileName {
+    pub fn parse(input: impl AsRef<str>) -> Result<Self, InvalidProfileName> {
+        let value = input.as_ref().trim();
+        if value.is_empty() || value.chars().count() > 80 || value.chars().any(char::is_control) {
+            return Err(InvalidProfileName);
+        }
+        Ok(Self(value.to_owned()))
+    }
+
+    #[must_use]
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum ProfileStatus {
     Draft,
@@ -321,6 +350,26 @@ mod tests {
         );
         assert_eq!(profile.status(), ProfileStatus::Draft);
         assert_eq!(profile.version().value(), u64::MAX);
+        Ok(())
+    }
+}
+
+#[cfg(test)]
+mod profile_name_tests {
+    use super::ProfileName;
+
+    #[test]
+    fn profile_names_are_trimmed_and_bounded() -> Result<(), Box<dyn std::error::Error>> {
+        assert_eq!(
+            ProfileName::parse("  Sales account  ")?.as_str(),
+            "Sales account"
+        );
+        assert_eq!(ProfileName::parse("Европа")?.as_str(), "Европа");
+        for invalid in ["", "   ", "bad\u{0000}name", "bad\nname"] {
+            assert!(ProfileName::parse(invalid).is_err());
+        }
+        assert!(ProfileName::parse("x".repeat(81)).is_err());
+        assert!(ProfileName::parse("x".repeat(80)).is_ok());
         Ok(())
     }
 }

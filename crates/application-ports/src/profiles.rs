@@ -2,7 +2,7 @@ use crate::commands::CommandExecutionEvidence;
 use core::fmt;
 use identity_access_domain::MembershipRole;
 pub use profile_domain::ProfileStatus;
-use profile_domain::{BrowserProfile, ProfileGeneration};
+use profile_domain::{BrowserProfile, ProfileGeneration, ProfileName};
 use profile_platform_primitives::{
     ActorContext, ActorId, AggregateVersion, AssignmentId, ClientId, GenerationId, ProfileId,
     TenantScope,
@@ -33,6 +33,7 @@ pub trait ProfileRepository {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ProfileCreateWrite {
     profile: BrowserProfile,
+    display_name: ProfileName,
     evidence: CommandExecutionEvidence,
     event_payload_json: String,
 }
@@ -41,11 +42,13 @@ impl ProfileCreateWrite {
     #[must_use]
     pub fn new(
         profile: BrowserProfile,
+        display_name: ProfileName,
         evidence: CommandExecutionEvidence,
         event_payload_json: impl Into<String>,
     ) -> Self {
         Self {
             profile,
+            display_name,
             evidence,
             event_payload_json: event_payload_json.into(),
         }
@@ -54,6 +57,10 @@ impl ProfileCreateWrite {
     #[must_use]
     pub const fn profile(&self) -> &BrowserProfile {
         &self.profile
+    }
+
+    pub const fn display_name(&self) -> &ProfileName {
+        &self.display_name
     }
 
     #[must_use]
@@ -68,11 +75,53 @@ impl ProfileCreateWrite {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ProfileRenameWrite {
+    profile_id: ProfileId,
+    display_name: ProfileName,
+    expected_metadata_version: AggregateVersion,
+    evidence: CommandExecutionEvidence,
+    event_payload_json: String,
+}
+
+impl ProfileRenameWrite {
+    pub fn new(
+        profile_id: ProfileId,
+        display_name: ProfileName,
+        expected_metadata_version: AggregateVersion,
+        evidence: CommandExecutionEvidence,
+        event_payload_json: impl Into<String>,
+    ) -> Self {
+        Self {
+            profile_id,
+            display_name,
+            expected_metadata_version,
+            evidence,
+            event_payload_json: event_payload_json.into(),
+        }
+    }
+    pub const fn profile_id(&self) -> &ProfileId {
+        &self.profile_id
+    }
+    pub const fn display_name(&self) -> &ProfileName {
+        &self.display_name
+    }
+    pub const fn expected_metadata_version(&self) -> AggregateVersion {
+        self.expected_metadata_version
+    }
+    pub const fn evidence(&self) -> &CommandExecutionEvidence {
+        &self.evidence
+    }
+    pub fn event_payload_json(&self) -> &str {
+        &self.event_payload_json
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ProfileAssignmentWrite {
     assignment_id: AssignmentId,
     profile_id: ProfileId,
     client_id: ClientId,
-    expected_profile_version: AggregateVersion,
+    expected_metadata_version: AggregateVersion,
     reason: String,
     evidence: CommandExecutionEvidence,
     event_payload_json: String,
@@ -84,7 +133,7 @@ impl ProfileAssignmentWrite {
         assignment_id: AssignmentId,
         profile_id: ProfileId,
         client_id: ClientId,
-        expected_profile_version: AggregateVersion,
+        expected_metadata_version: AggregateVersion,
         reason: impl Into<String>,
         evidence: CommandExecutionEvidence,
         event_payload_json: impl Into<String>,
@@ -93,7 +142,7 @@ impl ProfileAssignmentWrite {
             assignment_id,
             profile_id,
             client_id,
-            expected_profile_version,
+            expected_metadata_version,
             reason: reason.into(),
             evidence,
             event_payload_json: event_payload_json.into(),
@@ -116,8 +165,8 @@ impl ProfileAssignmentWrite {
     }
 
     #[must_use]
-    pub const fn expected_profile_version(&self) -> AggregateVersion {
-        self.expected_profile_version
+    pub const fn expected_metadata_version(&self) -> AggregateVersion {
+        self.expected_metadata_version
     }
 
     #[must_use]
@@ -141,7 +190,7 @@ pub struct ProfileDetachmentWrite {
     assignment_id: AssignmentId,
     profile_id: ProfileId,
     client_id: ClientId,
-    expected_profile_version: AggregateVersion,
+    expected_metadata_version: AggregateVersion,
     reason: String,
     evidence: CommandExecutionEvidence,
     event_payload_json: String,
@@ -153,7 +202,7 @@ impl ProfileDetachmentWrite {
         assignment_id: AssignmentId,
         profile_id: ProfileId,
         client_id: ClientId,
-        expected_profile_version: AggregateVersion,
+        expected_metadata_version: AggregateVersion,
         reason: impl Into<String>,
         evidence: CommandExecutionEvidence,
         event_payload_json: impl Into<String>,
@@ -162,7 +211,7 @@ impl ProfileDetachmentWrite {
             assignment_id,
             profile_id,
             client_id,
-            expected_profile_version,
+            expected_metadata_version,
             reason: reason.into(),
             evidence,
             event_payload_json: event_payload_json.into(),
@@ -185,8 +234,8 @@ impl ProfileDetachmentWrite {
     }
 
     #[must_use]
-    pub const fn expected_profile_version(&self) -> AggregateVersion {
-        self.expected_profile_version
+    pub const fn expected_metadata_version(&self) -> AggregateVersion {
+        self.expected_metadata_version
     }
 
     #[must_use]
@@ -215,7 +264,7 @@ pub enum ProfileGrantRole {
 pub struct ProfileGrantWrite {
     target_actor_id: ActorId,
     profile_id: ProfileId,
-    expected_profile_version: AggregateVersion,
+    expected_metadata_version: AggregateVersion,
     role: ProfileGrantRole,
     reason: String,
     evidence: CommandExecutionEvidence,
@@ -227,7 +276,7 @@ impl ProfileGrantWrite {
     pub fn new(
         target_actor_id: ActorId,
         profile_id: ProfileId,
-        expected_profile_version: AggregateVersion,
+        expected_metadata_version: AggregateVersion,
         role: ProfileGrantRole,
         reason: impl Into<String>,
         evidence: CommandExecutionEvidence,
@@ -236,7 +285,7 @@ impl ProfileGrantWrite {
         Self {
             target_actor_id,
             profile_id,
-            expected_profile_version,
+            expected_metadata_version,
             role,
             reason: reason.into(),
             evidence,
@@ -255,8 +304,8 @@ impl ProfileGrantWrite {
     }
 
     #[must_use]
-    pub const fn expected_profile_version(&self) -> AggregateVersion {
-        self.expected_profile_version
+    pub const fn expected_metadata_version(&self) -> AggregateVersion {
+        self.expected_metadata_version
     }
 
     #[must_use]
@@ -316,6 +365,7 @@ pub enum ProfileReplayDecision {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum ProfilePortErrorClass {
     Conflict,
+    VersionConflict,
     IntegrityFailure,
     InternalFailure,
     DependencyUnavailable,
@@ -342,6 +392,7 @@ impl fmt::Display for ProfilePortError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter.write_str(match self.class {
             ProfilePortErrorClass::Conflict => "profile port conflict",
+            ProfilePortErrorClass::VersionConflict => "profile port version conflict",
             ProfilePortErrorClass::IntegrityFailure => "profile port integrity failure",
             ProfilePortErrorClass::InternalFailure => "profile port internal failure",
             ProfilePortErrorClass::DependencyUnavailable => "profile port dependency unavailable",
@@ -452,8 +503,10 @@ impl std::error::Error for ProfileGrantPortError {}
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ProfileReadModel {
     profile_id: ProfileId,
+    display_name: String,
     status: ProfileStatus,
     version: AggregateVersion,
+    metadata_version: AggregateVersion,
     linked_client_id: Option<ClientId>,
 }
 
@@ -463,12 +516,16 @@ impl ProfileReadModel {
         profile_id: ProfileId,
         status: ProfileStatus,
         version: AggregateVersion,
+        metadata_version: AggregateVersion,
         linked_client_id: Option<ClientId>,
+        display_name: String,
     ) -> Self {
         Self {
             profile_id,
+            display_name,
             status,
             version,
+            metadata_version,
             linked_client_id,
         }
     }
@@ -476,6 +533,10 @@ impl ProfileReadModel {
     #[must_use]
     pub const fn profile_id(&self) -> &ProfileId {
         &self.profile_id
+    }
+
+    pub fn display_name(&self) -> &str {
+        &self.display_name
     }
 
     #[must_use]
@@ -486,6 +547,11 @@ impl ProfileReadModel {
     #[must_use]
     pub const fn version(&self) -> AggregateVersion {
         self.version
+    }
+
+    #[must_use]
+    pub const fn metadata_version(&self) -> AggregateVersion {
+        self.metadata_version
     }
 
     #[must_use]
@@ -507,6 +573,12 @@ pub trait ProfileApplicationPort {
         &self,
         actor: &ActorContext,
         write: &ProfileCreateWrite,
+    ) -> Result<(), ProfilePortError>;
+
+    async fn rename_profile(
+        &self,
+        actor: &ActorContext,
+        write: &ProfileRenameWrite,
     ) -> Result<(), ProfilePortError>;
 
     async fn find_visible_profile(

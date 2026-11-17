@@ -26,7 +26,7 @@ pub struct ExecuteAssignProfileCommand {
     assignment_id: AssignmentId,
     profile_id: ProfileId,
     client_id: ClientId,
-    expected_profile_version: AggregateVersion,
+    expected_metadata_version: AggregateVersion,
     reason: String,
     evidence: CommandExecutionEvidence,
 }
@@ -37,7 +37,7 @@ impl ExecuteAssignProfileCommand {
         assignment_id: AssignmentId,
         profile_id: ProfileId,
         client_id: ClientId,
-        expected_profile_version: AggregateVersion,
+        expected_metadata_version: AggregateVersion,
         reason: impl Into<String>,
         evidence: CommandExecutionEvidence,
     ) -> Self {
@@ -45,7 +45,7 @@ impl ExecuteAssignProfileCommand {
             assignment_id,
             profile_id,
             client_id,
-            expected_profile_version,
+            expected_metadata_version,
             reason: reason.into(),
             evidence,
         }
@@ -55,7 +55,7 @@ impl ExecuteAssignProfileCommand {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ExecuteDetachProfileCommand {
     profile_id: ProfileId,
-    expected_profile_version: AggregateVersion,
+    expected_metadata_version: AggregateVersion,
     reason: String,
     evidence: CommandExecutionEvidence,
 }
@@ -64,13 +64,13 @@ impl ExecuteDetachProfileCommand {
     #[must_use]
     pub fn new(
         profile_id: ProfileId,
-        expected_profile_version: AggregateVersion,
+        expected_metadata_version: AggregateVersion,
         reason: impl Into<String>,
         evidence: CommandExecutionEvidence,
     ) -> Self {
         Self {
             profile_id,
-            expected_profile_version,
+            expected_metadata_version,
             reason: reason.into(),
             evidence,
         }
@@ -172,7 +172,7 @@ where
         ProfileReplayDecision::Replay(receipt) => {
             return Ok(replay_outcome(
                 &command.assignment_id,
-                next_profile_assignment_version(command.expected_profile_version)?,
+                next_profile_assignment_version(command.expected_metadata_version)?,
                 &receipt,
             ));
         }
@@ -189,7 +189,7 @@ where
         .map_err(map_port_error)?
         .ok_or(ProfileAssignmentOperationError::NotFound)?;
 
-    if context.profile_version() != command.expected_profile_version {
+    if context.profile_version() != command.expected_metadata_version {
         return Err(ProfileAssignmentOperationError::VersionConflict);
     }
 
@@ -257,7 +257,7 @@ where
 {
     authorize_profile_assignment(role)?;
     let reason = normalize_relationship_reason(command.reason)?;
-    let next_version = next_profile_assignment_version(command.expected_profile_version)?;
+    let next_version = next_profile_assignment_version(command.expected_metadata_version)?;
 
     match port
         .decide_assignment_replay(actor, PROFILE_DETACH_COMMAND, &command.evidence)
@@ -277,7 +277,7 @@ where
         .map_err(map_port_error)?
         .ok_or(ProfileAssignmentOperationError::NotFound)?;
 
-    if context.profile_version() != command.expected_profile_version {
+    if context.profile_version() != command.expected_metadata_version {
         return Err(ProfileAssignmentOperationError::VersionConflict);
     }
 
@@ -744,7 +744,7 @@ mod tests {
     }
 
     #[test]
-    fn stale_expected_profile_version_fails_before_write() -> Result<(), Box<dyn std::error::Error>>
+    fn stale_expected_metadata_version_fails_before_write() -> Result<(), Box<dyn std::error::Error>>
     {
         let port = FakePort::new(
             vec![ProfileReplayDecision::Miss],

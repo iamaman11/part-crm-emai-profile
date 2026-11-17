@@ -117,6 +117,7 @@ dependencies = [
  "device-domain",
  "encrypted-generation-domain",
  "identity-access-domain",
+ "profile-domain",
  "profile-platform-primitives",
  "serde",
  "serde_json",
@@ -672,6 +673,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "47d9d19d1d6efa0109d2f65ff4c85cddd50bd572e5a00127ab10987290bcefae"
 
 [[package]]
+name = "lz4_flex"
+version = "0.14.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ecbdfe44b1bd960b68170b417450a628c43f7cf56bb3c5317e61cb230ee7f226"
+dependencies = [
+ "twox-hash",
+]
+
+[[package]]
 name = "mailbox-domain"
 version = "0.1.0"
 dependencies = [
@@ -821,6 +831,7 @@ dependencies = [
  "device-domain",
  "encrypted-generation-domain",
  "flate2",
+ "lz4_flex",
  "profile-platform-primitives",
  "runtime-bundle-domain",
  "serde",
@@ -1100,6 +1111,12 @@ dependencies = [
  "bytes",
  "pin-project-lite",
 ]
+
+[[package]]
+name = "twox-hash"
+version = "2.1.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "86a801b3cea342a06d468c8710662aa29e5e05e4f5c0d62f00bbb7f2ad7941c2"
 
 [[package]]
 name = "typenum"
