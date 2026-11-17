@@ -146,7 +146,7 @@ async fn rename_profile(
         Ok(value) => value,
         Err(_) => return invalid_request(actor.actor().correlation_id().as_str()),
     };
-    let version = match AggregateVersion::new(body.expected_profile_version) {
+    let version = match AggregateVersion::new(body.expected_metadata_version) {
         Ok(value) => value,
         Err(_) => return invalid_request(actor.actor().correlation_id().as_str()),
     };
@@ -162,7 +162,7 @@ async fn rename_profile(
         ExecuteRenameProfileCommand {
             profile_id,
             display_name,
-            expected_profile_version: version,
+            expected_metadata_version: version,
             evidence,
         },
     )
@@ -245,11 +245,11 @@ async fn assign_profile(
         Ok(value) => value,
         Err(_) => return invalid_request(actor.actor().correlation_id().as_str()),
     };
-    let expected_profile_version = match AggregateVersion::new(body.expected_profile_version) {
+    let expected_metadata_version = match AggregateVersion::new(body.expected_metadata_version) {
         Ok(value) => value,
         Err(_) => return invalid_request(actor.actor().correlation_id().as_str()),
     };
-    if let Err(error) = next_profile_assignment_version(expected_profile_version) {
+    if let Err(error) = next_profile_assignment_version(expected_metadata_version) {
         return assignment_failure(actor.actor().correlation_id().as_str(), error);
     }
     let evidence = match command_evidence::from_request(request, actor.actor(), &body) {
@@ -273,7 +273,7 @@ async fn assign_profile(
             assignment_id,
             profile_id,
             client_id,
-            expected_profile_version,
+            expected_metadata_version,
             body.reason,
             evidence,
         ),
@@ -307,11 +307,11 @@ async fn detach_profile(
         Ok(value) => value,
         Err(_) => return invalid_request(actor.actor().correlation_id().as_str()),
     };
-    let expected_profile_version = match AggregateVersion::new(body.expected_profile_version) {
+    let expected_metadata_version = match AggregateVersion::new(body.expected_metadata_version) {
         Ok(value) => value,
         Err(_) => return invalid_request(actor.actor().correlation_id().as_str()),
     };
-    if let Err(error) = next_profile_assignment_version(expected_profile_version) {
+    if let Err(error) = next_profile_assignment_version(expected_metadata_version) {
         return assignment_failure(actor.actor().correlation_id().as_str(), error);
     }
     let evidence = match command_evidence::from_request(request, actor.actor(), &body) {
@@ -325,7 +325,7 @@ async fn detach_profile(
         &application,
         ExecuteDetachProfileCommand::new(
             profile_id,
-            expected_profile_version,
+            expected_metadata_version,
             body.reason,
             evidence,
         ),
@@ -364,7 +364,7 @@ async fn update_profile_grant(
         Ok(value) => value,
         Err(_) => return invalid_request(actor.actor().correlation_id().as_str()),
     };
-    let expected_profile_version = match AggregateVersion::new(body.expected_profile_version) {
+    let expected_metadata_version = match AggregateVersion::new(body.expected_metadata_version) {
         Ok(value) => value,
         Err(_) => return invalid_request(actor.actor().correlation_id().as_str()),
     };
@@ -386,7 +386,7 @@ async fn update_profile_grant(
         ExecuteProfileGrantCommand::new(
             target_actor_id,
             profile_id,
-            expected_profile_version,
+            expected_metadata_version,
             body.role,
             body.reason,
             evidence,
@@ -546,6 +546,7 @@ pub(crate) fn profile_projection(
         display_name: profile.display_name().to_owned(),
         status: profile_status(profile.status()),
         version: profile.version().value(),
+        metadata_version: profile.metadata_version().value(),
         linked_client_id: profile
             .linked_client_id()
             .map(|value| value.as_str().to_owned()),

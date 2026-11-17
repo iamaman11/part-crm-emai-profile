@@ -25,6 +25,7 @@ pub struct ProfileListItemDto {
     pub display_name: String,
     pub status: String,
     pub version: u64,
+    pub metadata_version: u64,
     pub linked_client_id: Option<String>,
     pub active_generation_id: Option<String>,
 }
@@ -94,12 +95,13 @@ pub fn openapi_fragment() -> Value {
                 "ProfileListItemDto": {
                     "type": "object",
                     "additionalProperties": false,
-                    "required": ["profileId", "displayName", "status", "version", "linkedClientId", "activeGenerationId"],
+                    "required": ["profileId", "displayName", "status", "version", "metadataVersion", "linkedClientId", "activeGenerationId"],
                     "properties": {
                         "profileId": {"type": "string", "minLength": 8, "maxLength": 96},
                         "displayName": {"type": "string", "minLength": 1, "maxLength": 80},
                         "status": schema_ref("OperatorProfileStatus"),
                         "version": {"type": "integer", "minimum": 1},
+                        "metadataVersion": {"type": "integer", "minimum": 1},
                         "linkedClientId": nullable_opaque_id_schema(),
                         "activeGenerationId": nullable_opaque_id_schema()
                     }

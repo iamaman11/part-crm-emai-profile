@@ -141,6 +141,7 @@ pub struct ProfileProjectionDto {
     pub display_name: String,
     pub status: ProfileStatusDto,
     pub version: u64,
+    pub metadata_version: u64,
     pub linked_client_id: Option<String>,
     /// Explicit profile Operate permission; View alone never authorizes Open.
     pub can_operate: bool,
@@ -157,7 +158,7 @@ pub struct ProfileCreateRequest {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ProfileRenameRequest {
     pub display_name: String,
-    pub expected_profile_version: u64,
+    pub expected_metadata_version: u64,
 }
 
 /// Strict, versioned user action; the D1 command is replay-safe for this exact
@@ -181,7 +182,7 @@ pub struct ProfileDeleteResponse {
 pub struct ProfileGrantRequest {
     pub role: String,
     pub reason: String,
-    pub expected_profile_version: u64,
+    pub expected_metadata_version: u64,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -384,12 +385,13 @@ pub fn openapi_fragment() -> Value {
                 "ProfileProjectionDto": {
                     "type": "object",
                     "additionalProperties": false,
-                    "required": ["profileId", "displayName", "status", "version", "linkedClientId"],
+                    "required": ["profileId", "displayName", "status", "version", "metadataVersion", "linkedClientId"],
                     "properties": {
                         "profileId": opaque_id_schema(),
                         "displayName": {"type": "string", "minLength": 1, "maxLength": 80},
                         "status": schema_ref("ProfileStatusDto"),
                         "version": positive_version_schema(),
+                        "metadataVersion": positive_version_schema(),
                         "linkedClientId": nullable_opaque_id_schema(),
                         "canOperate": {"type": "boolean"}
                     }
@@ -402,20 +404,20 @@ pub fn openapi_fragment() -> Value {
                 },
                 "ProfileRenameRequestDto": {
                     "type": "object", "additionalProperties": false,
-                    "required": ["displayName", "expectedProfileVersion"],
+                    "required": ["displayName", "expectedMetadataVersion"],
                     "properties": {
                         "displayName": {"type": "string", "minLength": 1, "maxLength": 80},
-                        "expectedProfileVersion": positive_version_schema()
+                        "expectedMetadataVersion": positive_version_schema()
                     }
                 },
                 "ProfileGrantRequestDto": {
                     "type": "object",
                     "additionalProperties": false,
-                    "required": ["role", "reason", "expectedProfileVersion"],
+                    "required": ["role", "reason", "expectedMetadataVersion"],
                     "properties": {
                         "role": schema_ref("ProfileGrantRoleDto"),
                         "reason": {"type": "string"},
-                        "expectedProfileVersion": positive_version_schema()
+                        "expectedMetadataVersion": positive_version_schema()
                     }
                 },
                 "GenerationProjectionDto": {
@@ -784,10 +786,12 @@ mod tests {
             display_name: "Test profile".to_owned(),
             status: ProfileStatusDto::DirtyLocal,
             version: 7,
+            metadata_version: 2,
             linked_client_id: None,
             can_operate: false,
         })?;
         assert_eq!(profile["status"], "DIRTY_LOCAL");
+        assert_eq!(profile["metadataVersion"], 2);
         assert!(profile.get("linkedClientId").is_some_and(Value::is_null));
         assert_eq!(profile["canOperate"], false);
         Ok(())
