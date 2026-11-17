@@ -402,7 +402,15 @@ def validate_profile_relationship_d1_behavior(errors: list[str]) -> None:
             return
 
         for migration in migrations:
-            database.executescript(migration.read_text(encoding="utf-8"))
+            # Current Catalog's canonical lineage substitutes the accepted
+            # PAS-2 expansion for the legacy 0027 SQL. The sealed 0035 contract
+            # requires its exact request_digest/payload_fingerprint triggers.
+            source = (
+                ROOT / "migrations" / "d1-successor" / "0027_pas2_payload_fingerprint_expand.sql"
+                if migration.name == "0027_pas2_payload_fingerprint.sql"
+                else migration
+            )
+            database.executescript(source.read_text(encoding="utf-8"))
             if migration.name == "0001_catalog.sql":
                 seed_profile_relationship_fixture(database)
         # Preserve the frozen 0001..0031 source files, then test against the
