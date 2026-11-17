@@ -605,7 +605,7 @@ describe('ProfilesWorkspace generation refresh (#802 F06)', () => {
     let version = 7;
     profileLookup.mockImplementation(async () => ({
       profileId: 'profile_external_save', displayName: 'profile_external_save', status: 'READY', version,
-      activeGenerationId: 'generation_current', linkedClientId: null, canOperate: true,
+      metadataVersion: 1, activeGenerationId: 'generation_current', linkedClientId: null, canOperate: true,
     }) as Awaited<ReturnType<typeof getProfile>>);
     const cache = new QueryClient({ defaultOptions: { queries: { retry: false } } });
     const directoryKey = ['operator-query', 'tenant_test', 'profiles'];

@@ -386,7 +386,7 @@ def validate_composition_surfaces() -> None:
                 "profile_grant_commands",
                 "pub async fn grant_profile",
                 "pub async fn revoke_profile_grant",
-                "expected_profile_version",
+                "expected_metadata_version",
                 '"profile.assign_client"',
                 '"profile.detach_client"',
             ),
