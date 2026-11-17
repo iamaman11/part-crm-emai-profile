@@ -544,7 +544,7 @@ mod tests {
         );
         for value in [
             r#"{"profileId":"profile_01JTEST","requestDigest":"legacy"}"#,
-            r#"{"role":"PROFILE_VIEWER","reason":"grant","expectedProfileVersion":1,"requestDigest":"legacy"}"#,
+            r#"{"role":"PROFILE_VIEWER","reason":"grant","expectedMetadataVersion":1,"requestDigest":"legacy"}"#,
         ] {
             assert!(serde_json::from_str::<serde_json::Value>(value).is_ok());
         }
@@ -554,12 +554,12 @@ mod tests {
             )
             .is_err()
         );
-        assert!(serde_json::from_str::<ProfileGrantRequest>(r#"{"role":"PROFILE_VIEWER","reason":"grant","expectedProfileVersion":1,"requestDigest":"legacy"}"#).is_err());
+        assert!(serde_json::from_str::<ProfileGrantRequest>(r#"{"role":"PROFILE_VIEWER","reason":"grant","expectedMetadataVersion":1,"requestDigest":"legacy"}"#).is_err());
     }
 
     #[test]
     fn profile_grant_role_remains_application_validated() {
-        let value = r#"{"role":"FUTURE_UNKNOWN","reason":"still reaches application validation","expectedProfileVersion":1}"#;
+        let value = r#"{"role":"FUTURE_UNKNOWN","reason":"still reaches application validation","expectedMetadataVersion":1}"#;
         assert!(serde_json::from_str::<ProfileGrantRequest>(value).is_ok());
     }
 

@@ -1386,7 +1386,8 @@
           "profileId",
           "status",
           "version",
-          "displayName"
+          "displayName",
+          "metadataVersion"
         ],
         "properties": {
           "profileId": {
@@ -1426,6 +1427,9 @@
             "type": "string",
             "minLength": 1,
             "maxLength": 80
+          },
+          "metadataVersion": {
+            "$ref": "#/components/schemas/AggregateVersion"
           }
         }
       },
@@ -1435,7 +1439,7 @@
         "required": [
           "role",
           "reason",
-          "expectedProfileVersion"
+          "expectedMetadataVersion"
         ],
         "properties": {
           "role": {
@@ -1450,7 +1454,7 @@
             "minLength": 1,
             "maxLength": 500
           },
-          "expectedProfileVersion": {
+          "expectedMetadataVersion": {
             "$ref": "#/components/schemas/AggregateVersion"
           }
         }
@@ -1538,7 +1542,7 @@
         "additionalProperties": false,
         "required": [
           "displayName",
-          "expectedProfileVersion"
+          "expectedMetadataVersion"
         ],
         "properties": {
           "displayName": {
@@ -1546,7 +1550,7 @@
             "minLength": 1,
             "maxLength": 80
           },
-          "expectedProfileVersion": {
+          "expectedMetadataVersion": {
             "$ref": "#/components/schemas/AggregateVersion"
           }
         }
