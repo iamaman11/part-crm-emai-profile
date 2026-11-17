@@ -285,9 +285,9 @@ def relationship_rows(database: sqlite3.Connection) -> list[tuple[str, str, int,
     ).fetchall()
 
 
-def profile_version(database: sqlite3.Connection) -> int:
+def profile_metadata_version(database: sqlite3.Connection) -> int:
     row = database.execute(
-        "SELECT version FROM browser_profiles WHERE tenant_id = ? AND profile_id = ?",
+        "SELECT metadata_version FROM browser_profiles WHERE tenant_id = ? AND profile_id = ?",
         ("tenant_p1_fixture", "profile_p1_fixture"),
     ).fetchone()
     if row is None:
@@ -318,7 +318,7 @@ def insert_relationship_command(
 ) -> None:
     columns = """
         tenant_id, command_id, command_actor_id, assignment_id, profile_id,
-        client_id, expected_profile_version, reason, executed_at_ms
+        client_id, expected_metadata_version, reason, executed_at_ms
     """
     values: tuple[object, ...] = (
         "tenant_p1_fixture",
@@ -424,7 +424,7 @@ def validate_profile_relationship_d1_behavior(errors: list[str]) -> None:
         )
         if relationship_rows(database) != [("assignment_a_p1_fixture", "client_a_p1_fixture", 10, None)]:
             errors.append("legacy ASSIGN no longer creates exactly one active Client/Profile relationship")
-        if profile_version(database) != 2:
+        if profile_metadata_version(database) != 2:
             errors.append("legacy ASSIGN must bump Profile version exactly once")
 
         # A failure after command + idempotency + audit + outbox inside one transaction must roll
@@ -487,7 +487,7 @@ def validate_profile_relationship_d1_behavior(errors: list[str]) -> None:
             database.rollback()
         if relationship_rows(database) != [("assignment_a_p1_fixture", "client_a_p1_fixture", 10, None)]:
             errors.append("failed reassign transaction changed relationship history")
-        if profile_version(database) != 2:
+        if profile_metadata_version(database) != 2:
             errors.append("failed reassign transaction changed Profile version")
         if database.execute(
             "SELECT COUNT(*) FROM profile_assignment_commands WHERE command_id = ?",
@@ -528,7 +528,7 @@ def validate_profile_relationship_d1_behavior(errors: list[str]) -> None:
             ("assignment_b_p1_fixture", "client_b_p1_fixture", 20, None),
         ]:
             errors.append("atomic reassign must close exactly the previous row and leave one active successor")
-        if profile_version(database) != 3:
+        if profile_metadata_version(database) != 3:
             errors.append("atomic reassign must bump Profile version exactly once")
 
         # Execute the exact production SQL from both read adapters. Relationship is only
@@ -564,7 +564,7 @@ def validate_profile_relationship_d1_behavior(errors: list[str]) -> None:
         command_insert = """
             INSERT INTO profile_assignment_commands (
                 tenant_id, command_id, command_actor_id, assignment_id, profile_id,
-                client_id, expected_profile_version, reason, executed_at_ms, operation
+                client_id, expected_metadata_version, reason, executed_at_ms, operation
             ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """
 
@@ -615,7 +615,7 @@ def validate_profile_relationship_d1_behavior(errors: list[str]) -> None:
             ("tenant_p1_fixture", "profile_concurrent_p1_fixture"),
         ).fetchall()
         concurrent_version = database.execute(
-            "SELECT version FROM browser_profiles WHERE tenant_id = ? AND profile_id = ?",
+            "SELECT metadata_version FROM browser_profiles WHERE tenant_id = ? AND profile_id = ?",
             ("tenant_p1_fixture", "profile_concurrent_p1_fixture"),
         ).fetchone()
         if concurrent_rows != [
@@ -676,7 +676,7 @@ def validate_profile_relationship_d1_behavior(errors: list[str]) -> None:
         if relationship_rows(database) != [
             ("assignment_a_p1_fixture", "client_a_p1_fixture", 10, 20),
             ("assignment_b_p1_fixture", "client_b_p1_fixture", 20, None),
-        ] or profile_version(database) != 3:
+        ] or profile_metadata_version(database) != 3:
             errors.append("failed detach preconditions changed the previous valid relationship")
 
         insert_relationship_command(
@@ -693,7 +693,7 @@ def validate_profile_relationship_d1_behavior(errors: list[str]) -> None:
             ("assignment_b_p1_fixture", "client_b_p1_fixture", 20, 30),
         ]:
             errors.append("DETACH must close only the exact active relationship and insert no successor")
-        if profile_version(database) != 4:
+        if profile_metadata_version(database) != 4:
             errors.append("DETACH must bump Profile version exactly once")
 
         expect_integrity_failure(
@@ -762,7 +762,7 @@ def validate_profile_relationship_d1_behavior(errors: list[str]) -> None:
             "client_a_p1_fixture",
             40,
             None,
-        ) or profile_version(database) != 5:
+        ) or profile_metadata_version(database) != 5:
             errors.append("history-guard negative proof corrupted the active relationship")
     except (AssertionError, OSError, sqlite3.DatabaseError) as error:
         errors.append(f"P1 governed relationship D1 behavior proof failed: {error}")

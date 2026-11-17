@@ -671,7 +671,7 @@ def snapshot():
  for table in ['tenants','memberships','clients','browser_profiles']:
   # Compare every predecessor column; the new display_name is checked separately.
   columns=[row[1] for row in db.execute('PRAGMA table_info('+table+')')
-           if not (table=='browser_profiles' and row[1]=='display_name')]
+           if not (table=='browser_profiles' and row[1] in ('display_name','metadata_version'))]
   preserved[table]=db.execute('SELECT '+','.join(columns)+' FROM '+table+' ORDER BY 1,2').fetchall()
  return preserved
 if initial:
@@ -703,6 +703,8 @@ assert json.loads((scratch/'before.json').read_text())==json.loads(json.dumps(sn
 if count==35:
  names=db.execute('SELECT display_name FROM browser_profiles').fetchall()
  assert names and all(row[0]=='Unnamed profile' for row in names),names
+ metadata=db.execute('SELECT metadata_version FROM browser_profiles').fetchall()
+ assert metadata and all(row[0]==1 for row in metadata),metadata
 assert db.execute('PRAGMA foreign_key_check').fetchall()==[]
 assert db.execute('PRAGMA quick_check').fetchone()==('ok',)
 assert 'request_digest' not in [r[1] for r in db.execute('PRAGMA table_info(idempotency_records)')]

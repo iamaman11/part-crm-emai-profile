@@ -481,7 +481,7 @@ def test_invitation_and_resource_guards(connection: sqlite3.Connection) -> None:
 
 
 def test_profile_display_name_governance() -> None:
-    """Create, rename, invalid actor, stale version and duplicate name use one D1 command path."""
+    """Only metadata revision advances for governed rename; native CURRENT stays fixed."""
     connection = database()
     try:
         # Exercise the additive successor-v2 schema without rewriting accepted legacy D1.
@@ -497,33 +497,33 @@ def test_profile_display_name_governance() -> None:
                 (TENANT, OWNER),
             )
         row = connection.execute(
-            "SELECT display_name, version FROM browser_profiles WHERE tenant_id=? AND profile_id='profile_named_commands'",
+            "SELECT display_name, version, metadata_version FROM browser_profiles WHERE tenant_id=? AND profile_id='profile_named_commands'",
             (TENANT,),
         ).fetchone()
-        assert (row["display_name"], row["version"]) == ("New profile", 1)
+        assert (row["display_name"], row["version"], row["metadata_version"]) == ("New profile", 1, 1)
 
         with connection:
             connection.execute(
                 """
                 INSERT INTO profile_rename_commands (
                     tenant_id, command_id, command_actor_id, profile_id,
-                    display_name, expected_profile_version, executed_at_ms
+                    display_name, expected_metadata_version, executed_at_ms
                 ) VALUES (?, 'command_rename_name', ?, 'profile_named_commands', 'Renamed profile', 1, 101)
                 """,
                 (TENANT, OWNER),
             )
         row = connection.execute(
-            "SELECT display_name, version FROM browser_profiles WHERE tenant_id=? AND profile_id='profile_named_commands'",
+            "SELECT display_name, version, metadata_version FROM browser_profiles WHERE tenant_id=? AND profile_id='profile_named_commands'",
             (TENANT,),
         ).fetchone()
-        assert (row["display_name"], row["version"]) == ("Renamed profile", 2)
+        assert (row["display_name"], row["version"], row["metadata_version"]) == ("Renamed profile", 1, 2)
 
         def rename(command: str, actor: str, version: int, name: str) -> None:
             connection.execute(
                 """
                 INSERT INTO profile_rename_commands (
                     tenant_id, command_id, command_actor_id, profile_id,
-                    display_name, expected_profile_version, executed_at_ms
+                    display_name, expected_metadata_version, executed_at_ms
                 ) VALUES (?, ?, ?, 'profile_named_commands', ?, ?, 102)
                 """,
                 (TENANT, command, actor, name, version),
@@ -539,10 +539,10 @@ def test_profile_display_name_governance() -> None:
                      "profile_rename_version_mismatch")
         connection.rollback()
         row = connection.execute(
-            "SELECT display_name, version FROM browser_profiles WHERE tenant_id=? AND profile_id='profile_named_commands'",
+            "SELECT display_name, version, metadata_version FROM browser_profiles WHERE tenant_id=? AND profile_id='profile_named_commands'",
             (TENANT,),
         ).fetchone()
-        assert (row["display_name"], row["version"]) == ("Renamed profile", 2)
+        assert (row["display_name"], row["version"], row["metadata_version"]) == ("Renamed profile", 1, 2)
     finally:
         connection.close()
 
