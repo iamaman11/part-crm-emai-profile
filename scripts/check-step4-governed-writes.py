@@ -405,12 +405,13 @@ def validate_profile_relationship_d1_behavior(errors: list[str]) -> None:
             database.executescript(migration.read_text(encoding="utf-8"))
             if migration.name == "0001_catalog.sql":
                 seed_profile_relationship_fixture(database)
-        # Verify accepted legacy history first, then apply the additive live successor
-        # required by the current profile read projection; no legacy SQL is rewritten.
-        database.executescript(
-            (ROOT / "migrations" / "d1-successor-v2" / "0045_profile_display_name.sql")
-            .read_text(encoding="utf-8")
-        )
+        # Preserve the frozen 0001..0031 source files, then test against the
+        # COMPLETE shipped successor-v2 schema. Migration 0045's assignment
+        # history guard references DELETE authority introduced by 0041.
+        # Testing 0045 against legacy-only tables would be a non-production schema.
+        successor = ROOT / "migrations" / "d1-successor-v2"
+        for migration in sorted(successor.glob("[0-9][0-9][0-9][0-9]_*.sql")):
+            database.executescript(migration.read_text(encoding="utf-8"))
 
         # Legacy callers omit operation; the additive migration must preserve ASSIGN as the default.
         insert_relationship_command(
