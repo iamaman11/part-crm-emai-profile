@@ -444,7 +444,7 @@ impl D1GovernedCommandRepository {
             outbox_statement(
                 &self.database,
                 tenant_id,
-                "profile",
+                "profile_metadata",
                 resource_id,
                 aggregate_version,
                 "profile.renamed.v1",
@@ -547,7 +547,7 @@ impl D1GovernedCommandRepository {
             outbox_statement(
                 &self.database,
                 tenant_id,
-                "profile",
+                "profile_metadata",
                 resource_id,
                 aggregate_version,
                 event_type,
@@ -648,7 +648,7 @@ impl D1GovernedCommandRepository {
             outbox_statement(
                 &self.database,
                 tenant_id,
-                "profile",
+                "profile_metadata",
                 resource_id,
                 aggregate_version,
                 event_type,
