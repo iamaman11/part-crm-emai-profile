@@ -459,6 +459,7 @@ mod client_profile_tests {
                         .map_err(|_| QueryPortError::new(QueryPortErrorClass::IntegrityFailure))?,
                     ProfileStatus::Draft,
                     AggregateVersion::INITIAL,
+                    AggregateVersion::INITIAL,
                     Some(self.expected_client_id.clone()),
                     None,
                     "Queried profile".to_owned(),
