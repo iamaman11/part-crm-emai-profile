@@ -154,7 +154,7 @@ impl ProfileAssignmentContextPort for D1ProfileApplicationBundle {
             &self.assignment_context_database,
             r#"
             SELECT
-                profile.version AS profile_version,
+                profile.metadata_version AS profile_metadata_version,
                 target.client_id AS target_client_id,
                 target.kind AS target_client_kind,
                 target.display_name AS target_client_display_name,
@@ -205,7 +205,7 @@ impl ProfileAssignmentContextPort for D1ProfileApplicationBundle {
             &self.assignment_context_database,
             r#"
             SELECT
-                profile.version AS profile_version,
+                profile.metadata_version AS profile_metadata_version,
                 assignment.assignment_id AS current_assignment_id,
                 current_client.client_id AS current_client_id,
                 current_client.kind AS current_client_kind,
@@ -242,7 +242,7 @@ impl ProfileAssignmentContextPort for D1ProfileApplicationBundle {
 
 #[derive(Deserialize)]
 struct ProfileAssignmentContextRow {
-    profile_version: i64,
+    profile_metadata_version: i64,
     target_client_id: String,
     target_client_kind: String,
     target_client_display_name: String,
@@ -261,7 +261,7 @@ struct ProfileAssignmentContextRow {
 
 #[derive(Deserialize)]
 struct ProfileDetachmentContextRow {
-    profile_version: i64,
+    profile_metadata_version: i64,
     current_assignment_id: Option<String>,
     current_client_id: Option<String>,
     current_client_kind: Option<String>,
@@ -277,7 +277,7 @@ fn map_assignment_context(
     tenant_id: &TenantId,
     row: ProfileAssignmentContextRow,
 ) -> Result<ProfileAssignmentContext, ProfileAssignmentPortError> {
-    let profile_version = aggregate_version(row.profile_version)?;
+    let profile_metadata_version = aggregate_version(row.profile_metadata_version)?;
     let target_client = client_record(
         tenant_id,
         row.target_client_id,
@@ -300,7 +300,7 @@ fn map_assignment_context(
     )?;
 
     Ok(ProfileAssignmentContext::new(
-        profile_version,
+        profile_metadata_version,
         target_client,
         current,
     ))
@@ -310,7 +310,7 @@ fn map_detachment_context(
     tenant_id: &TenantId,
     row: ProfileDetachmentContextRow,
 ) -> Result<ProfileDetachmentContext, ProfileAssignmentPortError> {
-    let profile_version = aggregate_version(row.profile_version)?;
+    let profile_metadata_version = aggregate_version(row.profile_metadata_version)?;
     let current = map_current_assignment(
         tenant_id,
         row.current_assignment_id,
@@ -323,7 +323,10 @@ fn map_detachment_context(
         row.current_assigned_at_ms,
         row.current_reason,
     )?;
-    Ok(ProfileDetachmentContext::new(profile_version, current))
+    Ok(ProfileDetachmentContext::new(
+        profile_metadata_version,
+        current,
+    ))
 }
 
 #[allow(clippy::too_many_arguments)]

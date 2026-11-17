@@ -1491,7 +1491,12 @@
               "not_found",
               "conflict",
               "invalid_state",
-              "internal_failure"
+              "internal_failure",
+              "version_conflict",
+              "lease_conflict",
+              "replay_rejected",
+              "dependency_unavailable",
+              "integrity_failure"
             ]
           },
           "correlation_id": {
