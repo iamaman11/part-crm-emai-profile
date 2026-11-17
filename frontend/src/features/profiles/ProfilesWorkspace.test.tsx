@@ -122,7 +122,7 @@ describe('Profile card client relationship (#870)', () => {
     fireEvent.change(screen.getByLabelText('Client ID'), { target: { value: 'client_test' } });
     fireEvent.change(screen.getByLabelText('Reason', { selector: '#profile-client-association-reason' }), { target: { value: 'Test assignment' } });
     fireEvent.click(screen.getByRole('button', { name: 'Attach client' }));
-    expect(await screen.findByText(/Relationship command completed, but the new profile version was not confirmed/)).toBeTruthy();
+    expect(await screen.findByText(/Relationship command completed, but the new metadata version was not confirmed/)).toBeTruthy();
     expect((screen.getByRole('button', { name: 'Attach client' }) as HTMLButtonElement).disabled).toBe(true);
     expect(assignProfile).toHaveBeenCalledTimes(1);
     current = { ...current, metadataVersion: 5, linkedClientId: 'client_test' };
