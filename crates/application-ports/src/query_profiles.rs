@@ -11,6 +11,7 @@ pub struct ProfileReadProjection {
     display_name: String,
     status: ProfileStatus,
     version: AggregateVersion,
+    metadata_version: AggregateVersion,
     linked_client_id: Option<ClientId>,
     active_generation_id: Option<GenerationId>,
 }
@@ -21,6 +22,7 @@ impl ProfileReadProjection {
         profile_id: ProfileId,
         status: ProfileStatus,
         version: AggregateVersion,
+        metadata_version: AggregateVersion,
         linked_client_id: Option<ClientId>,
         active_generation_id: Option<GenerationId>,
         display_name: String,
@@ -30,6 +32,7 @@ impl ProfileReadProjection {
             display_name,
             status,
             version,
+            metadata_version,
             linked_client_id,
             active_generation_id,
         }
@@ -52,6 +55,11 @@ impl ProfileReadProjection {
     #[must_use]
     pub const fn version(&self) -> AggregateVersion {
         self.version
+    }
+
+    #[must_use]
+    pub const fn metadata_version(&self) -> AggregateVersion {
+        self.metadata_version
     }
 
     #[must_use]

@@ -47,6 +47,7 @@ pub struct ProfileProjection {
     status: String,
     active_generation_id: Option<GenerationId>,
     version: u64,
+    metadata_version: u64,
     linked_client_id: Option<ClientId>,
 }
 
@@ -72,6 +73,11 @@ impl ProfileProjection {
     #[must_use]
     pub const fn version(&self) -> u64 {
         self.version
+    }
+
+    #[must_use]
+    pub const fn metadata_version(&self) -> u64 {
+        self.metadata_version
     }
 
     #[must_use]
@@ -143,6 +149,7 @@ impl D1IdentityQueryRepository {
                 profile.status,
                 profile.active_generation_id,
                 profile.version,
+                profile.metadata_version,
                 assignment.client_id AS linked_client_id
             FROM browser_profiles AS profile
             LEFT JOIN profile_client_assignments AS assignment
@@ -189,6 +196,7 @@ struct ProfileProjectionRow {
     status: String,
     active_generation_id: Option<String>,
     version: i64,
+    metadata_version: i64,
     linked_client_id: Option<String>,
 }
 
@@ -213,6 +221,7 @@ fn profile_projection(row: ProfileProjectionRow) -> Result<ProfileProjection> {
             .transpose()
             .map_err(identifier_error)?,
         version: positive_version(row.version)?,
+        metadata_version: positive_version(row.metadata_version)?,
         linked_client_id: row
             .linked_client_id
             .map(ClientId::parse)
