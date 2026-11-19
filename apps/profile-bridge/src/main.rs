@@ -8,7 +8,10 @@ use profile_bridge::device_pairing::{
 };
 use profile_bridge::generation_initialization::{INITIAL_OPEN_URI_PREFIX, InitialProfileOpen};
 use profile_bridge::installed_connection::ControlPlaneOrigin;
-use profile_bridge::local_profile_delete::{TERMINAL_DELETE_URI_PREFIX, TerminalProfileDelete};
+use profile_bridge::local_profile_delete::{
+    READY_LOCAL_COPY_URI_PREFIX, ReadyLocalCopyEviction, TERMINAL_DELETE_URI_PREFIX,
+    TerminalProfileDelete,
+};
 use profile_bridge::shipping_composition::run_closed_profile_sync;
 use profile_bridge::shipping_composition::{
     ShippingCompositionError, ShippingDeliveryCommand, run_delivery_command,
@@ -52,6 +55,16 @@ fn main() -> ExitCode {
     match run(env::args()) {
         Ok(()) => ExitCode::SUCCESS,
         Err(error) => {
+            if matches!(
+                error,
+                BridgeCliError::LaunchFailed(ShippingCompositionError::LocalDelete(
+                    profile_bridge::local_profile_delete::TerminalDeleteError::UserDeclined
+                ))
+            ) {
+                // The native default-NO dialog already received the user's
+                // decision. Do not show a second modal or claim a deletion.
+                return ExitCode::SUCCESS;
+            }
             // The optional one-shot cloud Sync must never open a desktop dialog
             // after a successful local Camoufox Close. The original dirty
             // marker survives all cloud failures.
@@ -87,7 +100,9 @@ where
         }
         BridgeCommand::InitialProfile(_) => Stage::OpenRequested,
         BridgeCommand::SyncClosed(_) => Stage::CloudSaveAttempt,
-        BridgeCommand::TerminalDelete(_) => Stage::LocalDelete,
+        BridgeCommand::TerminalDelete(_) | BridgeCommand::ReadyLocalCopyEviction(_) => {
+            Stage::LocalDelete
+        }
         BridgeCommand::PairingStart(_) | BridgeCommand::PairingComplete(_) => Stage::Pairing,
         BridgeCommand::DeliveryActivateStaged => Stage::InstallActivate,
         BridgeCommand::DeliveryInstallStaged(_) | BridgeCommand::DeliveryHandoffArrived => {
@@ -160,6 +175,10 @@ where
         }
         BridgeCommand::TerminalDelete(intent) => {
             profile_bridge::shipping_composition::run_terminal_profile_delete(&intent)
+                .map_err(BridgeCliError::LaunchFailed)
+        }
+        BridgeCommand::ReadyLocalCopyEviction(intent) => {
+            profile_bridge::shipping_composition::run_ready_local_copy_eviction(&intent)
                 .map_err(BridgeCliError::LaunchFailed)
         }
         BridgeCommand::PairingStart(uri) => {
@@ -249,6 +268,7 @@ enum BridgeCommand {
     InitialProfile(InitialProfileOpen),
     SyncClosed(InitialProfileOpen),
     TerminalDelete(TerminalProfileDelete),
+    ReadyLocalCopyEviction(ReadyLocalCopyEviction),
     PairingStart(DevicePairingStartUri),
     PairingComplete(DevicePairingCompleteUri),
     DeliveryActivateStaged,
@@ -343,6 +363,11 @@ where
         value if value.starts_with(TERMINAL_DELETE_URI_PREFIX) => {
             TerminalProfileDelete::parse(value)
                 .map(BridgeCommand::TerminalDelete)
+                .map_err(|_| BridgeCliError::InvalidClaimUri)
+        }
+        value if value.starts_with(READY_LOCAL_COPY_URI_PREFIX) => {
+            ReadyLocalCopyEviction::parse(value)
+                .map(BridgeCommand::ReadyLocalCopyEviction)
                 .map_err(|_| BridgeCliError::InvalidClaimUri)
         }
         value if value.starts_with(PAIRING_START_URI_PREFIX) => DevicePairingStartUri::parse(value)

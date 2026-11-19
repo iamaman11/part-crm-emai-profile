@@ -129,6 +129,35 @@ pub(super) fn show_report_copied() {
     }
 }
 
+pub(super) fn confirm_ready_local_copy_removal() -> bool {
+    const MB_YESNO_ICONWARNING_DEFAULT_NO: u32 = 0x0004 | 0x0030 | 0x0100;
+    const IDYES: i32 = 6;
+    let message: Vec<u16> = concat!(
+        "Remove the clean local browser profile copy on this computer?\n\n",
+        "This permanently discards local Firefox files and local crash recovery. ",
+        "The verified cloud generation remains unchanged.\n\n",
+        "Only continue if the browser is closed and Sync is complete. ",
+        "Profile Bridge will refuse any uncommitted, pending, busy or mismatched copy."
+    )
+    .encode_utf16()
+    .chain([0])
+    .collect();
+    let title: Vec<u16> = "Profile Bridge - confirm local removal"
+        .encode_utf16()
+        .chain([0])
+        .collect();
+    // SAFETY: Static, bounded UTF-16 strings are NUL terminated and remain
+    // live until the synchronous Windows dialog closes. No user bytes enter.
+    unsafe {
+        MessageBoxW(
+            ptr::null_mut(),
+            message.as_ptr(),
+            title.as_ptr(),
+            MB_YESNO_ICONWARNING_DEFAULT_NO,
+        ) == IDYES
+    }
+}
+
 #[link(name = "user32")]
 unsafe extern "system" {
     fn CreateWindowExW(

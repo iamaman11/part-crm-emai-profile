@@ -127,6 +127,22 @@ pub fn run_terminal_profile_delete(
     }
 }
 
+/// The READY path shares the exact local filesystem owner, but never invokes
+/// terminal deletion or changes the server generation.
+pub fn run_ready_local_copy_eviction(
+    intent: &crate::local_profile_delete::ReadyLocalCopyEviction,
+) -> Result<(), ShippingCompositionError> {
+    #[cfg(windows)]
+    {
+        windows::run_ready_local_copy_eviction(intent)
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = intent;
+        Err(ShippingCompositionError::UnsupportedPlatform)
+    }
+}
+
 pub fn run_delivery_command(
     command: ShippingDeliveryCommand,
 ) -> Result<(), ShippingCompositionError> {
@@ -1238,6 +1254,44 @@ mod windows {
                 )
             })?;
         crate::local_profile_delete::cleanup_confirmed_current(&root, intent)
+            .map_err(ShippingCompositionError::LocalDelete)
+    }
+
+    pub fn run_ready_local_copy_eviction(
+        intent: &crate::local_profile_delete::ReadyLocalCopyEviction,
+    ) -> Result<(), ShippingCompositionError> {
+        let config = ShippingConfig::from_installation()?;
+        let binding =
+            WindowsDeviceApplicationBinding::open(&config.device_application_binding_path)
+                .map_err(|_| ShippingCompositionError::Configuration)?;
+        if binding.tenant_id() != &intent.tenant_id || binding.actor_id() != &intent.actor_id {
+            return Err(ShippingCompositionError::LocalDelete(
+                crate::local_profile_delete::TerminalDeleteError::AuthorizationUnconfirmed,
+            ));
+        }
+        let application =
+            WindowsDeviceApplication::from_system(config.control_plane_origin, binding).map_err(
+                |_| {
+                    ShippingCompositionError::LocalDelete(
+                        crate::local_profile_delete::TerminalDeleteError::AuthorizationUnconfirmed,
+                    )
+                },
+            )?;
+        let mut transport = application.transport();
+        let current = crate::local_profile_delete::confirm_ready_local_copy(intent, &mut transport)
+            .map_err(ShippingCompositionError::LocalDelete)?;
+        if !windows_desktop_ui::confirm_ready_local_copy_removal() {
+            return Err(ShippingCompositionError::LocalDelete(
+                crate::local_profile_delete::TerminalDeleteError::UserDeclined,
+            ));
+        }
+        let root =
+            MaterializationRoot::open_or_create(&config.materialization_root).map_err(|_| {
+                ShippingCompositionError::LocalDelete(
+                    crate::local_profile_delete::TerminalDeleteError::LocalFilesystem,
+                )
+            })?;
+        crate::local_profile_delete::cleanup_clean_ready_current(&root, intent, &current)
             .map_err(ShippingCompositionError::LocalDelete)
     }
 

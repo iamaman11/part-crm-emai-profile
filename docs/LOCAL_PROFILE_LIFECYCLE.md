@@ -387,6 +387,22 @@ current shipping code, not permission to bypass existing fences.
 
 ## 10. Forgotten-Window And Quota Policy
 
+### Explicit READY local-copy removal for cold Restore (B0 / #870)
+
+A tenant owner may deliberately discard one **clean, closed** local READY CURRENT
+while retaining the original authenticated VERIFIED cloud generation. This is
+not automatic quota eviction, normal Open, terminal Profile deletion, or browser
+tab management. The CRM requires an explicit confirmation; the installed Windows
+Bridge independently requires a default-NO native confirmation, its bound actor/
+tenant and signed device-session readback of the **exact current READY version
+and VERIFIED generation**, and its existing exclusive root admission/native
+Firefox lock checks. The existing local marker must name that same generation
+as both CURRENT and base at the same version, with no pending Sync, dirty marker
+or unresolved Bridge writer. Any unknown/mismatched state preserves the files.
+The cloud generation and Profile status never change. A subsequent normal Open
+uses the already accepted cold Restore path. Terminal DELETED cleanup remains
+separate and retains its own semantics.
+
 Forgotten-window thresholds are strictly ordered and bounded. Clock regression fails closed. An active
 session progresses from no action to warning, drain and hard-stop decisions without inventing a second
 ownership authority.

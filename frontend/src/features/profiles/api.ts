@@ -1,5 +1,6 @@
 import {
   invokeProfileBridgeLaunch, localProfileOpenUri, invokeProfileBridgeDeletion, localProfileDeleteUri,
+  invokeReadyCopyEviction, localReadyCopyEvictionUri,
 } from './launchBridge';
 import {
   activateProfileGeneration as activateProfileGenerationOperation,
@@ -246,4 +247,10 @@ export function dispatchBrowserProfileDelete(
   tenantId: string, actorId: string, profileId: string, terminalVersion: number,
 ): void {
   invokeProfileBridgeDeletion(localProfileDeleteUri(tenantId, actorId, profileId, terminalVersion));
+}
+
+export function dispatchReadyLocalCopyEviction(
+  tenantId: string, actorId: string, profileId: string, readyVersion: number,
+): void {
+  invokeReadyCopyEviction(localReadyCopyEvictionUri(tenantId, actorId, profileId, readyVersion));
 }

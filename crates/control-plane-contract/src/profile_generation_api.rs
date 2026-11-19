@@ -18,6 +18,10 @@ pub const GENERATION_STATUSES: [&str; 3] = ["REGISTERED", "VERIFIED", "QUARANTIN
 /// existing ProfileBridge local file owner; never a browser-supplied delete grant.
 pub const BRIDGE_PROFILE_DELETE_READBACK_PATH_TEMPLATE: &str =
     "/bridge/v1/tenants/{tenantId}/profiles/{profileId}/delete-readback";
+/// Read-only machine-authorized confirmation of the exact active VERIFIED
+/// generation before an intentional clean local READY copy eviction.
+pub const BRIDGE_PROFILE_LOCAL_COPY_READBACK_PATH_TEMPLATE: &str =
+    "/bridge/v1/tenants/{tenantId}/profiles/{profileId}/local-copy-readback";
 pub const BRIDGE_PROFILE_GENERATION_UPLOAD_CAPABILITY_PATH_TEMPLATE: &str =
     "/bridge/v1/tenants/{tenantId}/profiles/{profileId}/generation-successor/upload-capability";
 pub const BRIDGE_PROFILE_GENERATION_COMMIT_PATH_TEMPLATE: &str =
@@ -145,6 +149,14 @@ pub struct ProfileProjectionDto {
     pub linked_client_id: Option<String>,
     /// Explicit profile Operate permission; View alone never authorizes Open.
     pub can_operate: bool,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct BridgeReadyLocalCopyReadback {
+    pub profile_id: String,
+    pub profile_version: u64,
+    pub generation_id: String,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]

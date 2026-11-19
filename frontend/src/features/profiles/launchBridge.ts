@@ -1,5 +1,6 @@
 const PROFILE_BRIDGE_OPEN = /^profilebridge:\/\/open\/v2\/[A-Za-z0-9_-]{8,96}\/[A-Za-z0-9_-]{8,96}\/[A-Za-z0-9_-]{8,96}\/[1-9][0-9]{0,18}\/(?:DRAFT|READY)$/;
 const PROFILE_BRIDGE_DELETE = /^profilebridge:\/\/delete\/v1\/[A-Za-z0-9_-]{8,96}\/[A-Za-z0-9_-]{8,96}\/[A-Za-z0-9_-]{8,96}\/[1-9][0-9]{0,18}$/;
+const PROFILE_BRIDGE_LOCAL_COPY = /^profilebridge:\/\/local-copy\/v1\/[A-Za-z0-9_-]{8,96}\/[A-Za-z0-9_-]{8,96}\/[A-Za-z0-9_-]{8,96}\/[1-9][0-9]{0,18}$/;
 
 /** One installed native Bridge URI, assembled from the already loaded
  * authenticated tenant context and selected CRM profile projection.
@@ -45,4 +46,23 @@ export function localProfileDeleteUri(
 export function invokeProfileBridgeDeletion(deleteUri: string): void {
   if (!PROFILE_BRIDGE_DELETE.test(deleteUri)) throw new Error('Profile Bridge Delete failed closed');
   globalThis.location.assign(deleteUri);
+}
+
+/** An explicit request, not a cloud authorization grant. The installed Bridge
+ * independently proves exact READY VERIFIED CURRENT and clean native bytes.
+ */
+export function localReadyCopyEvictionUri(
+  tenantId: string, actorId: string, profileId: string, readyVersion: number,
+): string {
+  if (!Number.isSafeInteger(readyVersion) || readyVersion <= 0) {
+    throw new Error('Invalid READY profile version');
+  }
+  const uri = `profilebridge://local-copy/v1/${tenantId}/${actorId}/${profileId}/${readyVersion}`;
+  if (!PROFILE_BRIDGE_LOCAL_COPY.test(uri)) throw new Error('Invalid READY local copy request');
+  return uri;
+}
+
+export function invokeReadyCopyEviction(uri: string): void {
+  if (!PROFILE_BRIDGE_LOCAL_COPY.test(uri)) throw new Error('Profile Bridge local copy request failed closed');
+  globalThis.location.assign(uri);
 }
