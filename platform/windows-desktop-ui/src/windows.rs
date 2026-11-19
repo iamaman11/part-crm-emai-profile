@@ -138,14 +138,21 @@ pub(super) fn confirm_ready_local_copy_removal() -> bool {
         "The verified cloud generation remains unchanged.\n\n",
         "Only continue if the browser is closed and Sync is complete. ",
         "Profile Bridge will refuse any uncommitted, pending, busy or mismatched copy."
-    ).encode_utf16().chain([0]).collect();
+    )
+    .encode_utf16()
+    .chain([0])
+    .collect();
     let title: Vec<u16> = "Profile Bridge - confirm local removal"
-        .encode_utf16().chain([0]).collect();
+        .encode_utf16()
+        .chain([0])
+        .collect();
     // SAFETY: Static, bounded UTF-16 strings are NUL terminated and remain
     // live until the synchronous Windows dialog closes. No user bytes enter.
     unsafe {
         MessageBoxW(
-            ptr::null_mut(), message.as_ptr(), title.as_ptr(),
+            ptr::null_mut(),
+            message.as_ptr(),
+            title.as_ptr(),
             MB_YESNO_ICONWARNING_DEFAULT_NO,
         ) == IDYES
     }

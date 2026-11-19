@@ -1271,9 +1271,11 @@ mod windows {
         }
         let application =
             WindowsDeviceApplication::from_system(config.control_plane_origin, binding).map_err(
-                |_| ShippingCompositionError::LocalDelete(
-                    crate::local_profile_delete::TerminalDeleteError::AuthorizationUnconfirmed,
-                ),
+                |_| {
+                    ShippingCompositionError::LocalDelete(
+                        crate::local_profile_delete::TerminalDeleteError::AuthorizationUnconfirmed,
+                    )
+                },
             )?;
         let mut transport = application.transport();
         let current = crate::local_profile_delete::confirm_ready_local_copy(intent, &mut transport)
@@ -1283,11 +1285,12 @@ mod windows {
                 crate::local_profile_delete::TerminalDeleteError::UserDeclined,
             ));
         }
-        let root = MaterializationRoot::open_or_create(&config.materialization_root).map_err(|_| {
-            ShippingCompositionError::LocalDelete(
-                crate::local_profile_delete::TerminalDeleteError::LocalFilesystem,
-            )
-        })?;
+        let root =
+            MaterializationRoot::open_or_create(&config.materialization_root).map_err(|_| {
+                ShippingCompositionError::LocalDelete(
+                    crate::local_profile_delete::TerminalDeleteError::LocalFilesystem,
+                )
+            })?;
         crate::local_profile_delete::cleanup_clean_ready_current(&root, intent, &current)
             .map_err(ShippingCompositionError::LocalDelete)
     }

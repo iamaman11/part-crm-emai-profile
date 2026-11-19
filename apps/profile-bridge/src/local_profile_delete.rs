@@ -15,16 +15,22 @@ pub const TERMINAL_DELETE_URI_PREFIX: &str = "profilebridge://delete/v1/";
 pub const READY_LOCAL_COPY_URI_PREFIX: &str = "profilebridge://local-copy/v1/";
 
 fn parse_local_uri(
-    uri: &str, prefix: &str,
+    uri: &str,
+    prefix: &str,
 ) -> Result<(TenantId, ActorId, ProfileId, u64), BridgePortError> {
-    let rest = uri.strip_prefix(prefix).ok_or(BridgePortError::InvalidResponse)?;
+    let rest = uri
+        .strip_prefix(prefix)
+        .ok_or(BridgePortError::InvalidResponse)?;
     let parts: Vec<_> = rest.split('/').collect();
-    if parts.len() != 4 || parts[3].starts_with('0')
+    if parts.len() != 4
+        || parts[3].starts_with('0')
         || !parts[3].bytes().all(|c| c.is_ascii_digit())
     {
         return Err(BridgePortError::InvalidResponse);
     }
-    let version = parts[3].parse::<u64>().map_err(|_| BridgePortError::InvalidResponse)?;
+    let version = parts[3]
+        .parse::<u64>()
+        .map_err(|_| BridgePortError::InvalidResponse)?;
     if version == 0 || version >= i64::MAX as u64 {
         return Err(BridgePortError::InvalidResponse);
     }
@@ -48,7 +54,12 @@ impl ReadyLocalCopyEviction {
     pub fn parse(uri: &str) -> Result<Self, BridgePortError> {
         let (tenant_id, actor_id, profile_id, expected_ready_version) =
             parse_local_uri(uri, READY_LOCAL_COPY_URI_PREFIX)?;
-        Ok(Self { tenant_id, actor_id, profile_id, expected_ready_version })
+        Ok(Self {
+            tenant_id,
+            actor_id,
+            profile_id,
+            expected_ready_version,
+        })
     }
 }
 
@@ -117,8 +128,9 @@ pub fn confirm_ready_local_copy<T: MachineHttpPort>(
         .duration_since(UNIX_EPOCH)
         .map_err(|_| TerminalDeleteError::AuthorizationUnconfirmed)?
         .as_millis();
-    let correlation = CorrelationId::parse(format!("corr_local_ready_{}_{}", std::process::id(), epoch))
-        .map_err(|_| TerminalDeleteError::AuthorizationUnconfirmed)?;
+    let correlation =
+        CorrelationId::parse(format!("corr_local_ready_{}_{}", std::process::id(), epoch))
+            .map_err(|_| TerminalDeleteError::AuthorizationUnconfirmed)?;
     let response = transport
         .request(MachineHttpMethod::Get, &path, &correlation, None)
         .map_err(|_| TerminalDeleteError::AuthorizationUnconfirmed)?;
@@ -143,8 +155,8 @@ pub fn cleanup_clean_ready_current(
 ) -> Result<(), TerminalDeleteError> {
     // Excludes other Bridge Opens/Syncs, inherited Camouhost launch guards,
     // native Firefox handles, and active generation admission locks.
-    let _guard = DeliveryActivationGuard::acquire(root)
-        .map_err(|_| TerminalDeleteError::LocalBusy)?;
+    let _guard =
+        DeliveryActivationGuard::acquire(root).map_err(|_| TerminalDeleteError::LocalBusy)?;
     let workspace = match root.open_profile_current(&intent.tenant_id, &intent.profile_id) {
         Ok(value) => value,
         Err(LocalProfileError::Io(std::io::ErrorKind::NotFound)) => return Ok(()),
@@ -166,7 +178,8 @@ pub fn cleanup_clean_ready_current(
             _ => return Err(TerminalDeleteError::LocalNotClean),
         }
     }
-    workspace.metadata_total_bytes()
+    workspace
+        .metadata_total_bytes()
         .map_err(|_| TerminalDeleteError::LocalFilesystem)?;
     fs::remove_dir_all(workspace.path()).map_err(|_| TerminalDeleteError::LocalFilesystem)?;
     Ok(())
@@ -316,28 +329,41 @@ mod tests {
         impl MachineHttpPort for ReadyReadback {
             type Error = ();
             fn request(
-                &mut self, method: MachineHttpMethod, path: &str,
-                _cid: &CorrelationId, body: Option<&[u8]>,
+                &mut self,
+                method: MachineHttpMethod,
+                path: &str,
+                _cid: &CorrelationId,
+                body: Option<&[u8]>,
             ) -> Result<MachineHttpResponse, Self::Error> {
                 assert_eq!(method, MachineHttpMethod::Get);
-                assert_eq!(path, "/bridge/v1/tenants/tenant_delete_test_01/profiles/profile_delete_test_01/local-copy-readback");
+                assert_eq!(
+                    path,
+                    "/bridge/v1/tenants/tenant_delete_test_01/profiles/profile_delete_test_01/local-copy-readback"
+                );
                 assert!(body.is_none());
                 Ok(MachineHttpResponse::new(self.0.status, self.0.body.clone()))
             }
         }
         let ready = ready_intent()?;
         let good_generation = "generation_delete_test_ready";
-        let confirmed = confirm_ready_local_copy(&ready, &mut ReadyReadback(ready_response(
-            "profile_delete_test_01", 4, good_generation,
-        )))?;
+        let confirmed = confirm_ready_local_copy(
+            &ready,
+            &mut ReadyReadback(ready_response("profile_delete_test_01", 4, good_generation)),
+        )?;
         assert_eq!(confirmed.as_str(), good_generation);
         for refused in [
             ready_response("profile_delete_other_01", 4, good_generation),
             ready_response("profile_delete_test_01", 3, good_generation),
             ready_response("profile_delete_test_01", 5, good_generation),
             ready_response("profile_delete_test_01", 4, "invalid/generation"),
-            Readback { status: 403, body: ready_response("profile_delete_test_01", 4, good_generation).body },
-            Readback { status: 200, body: b"{}".to_vec() },
+            Readback {
+                status: 403,
+                body: ready_response("profile_delete_test_01", 4, good_generation).body,
+            },
+            Readback {
+                status: 200,
+                body: b"{}".to_vec(),
+            },
         ] {
             assert_eq!(
                 confirm_ready_local_copy(&ready, &mut ReadyReadback(refused)),
@@ -356,32 +382,58 @@ mod tests {
         let ready = ready_intent()?;
         let generation = GenerationId::parse("generation_delete_test_ready")?;
         let other = ProfileId::parse("profile_ready_other_01")?;
-        let initial = root.create_profile_current(&ready.tenant_id, &ready.profile_id, &generation, 4)?;
+        let initial =
+            root.create_profile_current(&ready.tenant_id, &ready.profile_id, &generation, 4)?;
         let workspace = root.update_profile_current_sync_base(&initial, &generation, 4)?;
         let unrelated = root.create_profile_current(&ready.tenant_id, &other, &generation, 4)?;
         fs::create_dir(workspace.path().join("user_data"))?;
-        fs::write(workspace.path().join("user_data/cookies.sqlite"), b"must survive refused requests")?;
+        fs::write(
+            workspace.path().join("user_data/cookies.sqlite"),
+            b"must survive refused requests",
+        )?;
         fs::write(unrelated.path().join("keep.txt"), b"keep unrelated")?;
         let other_generation = GenerationId::parse("generation_ready_mismatch")?;
-        assert_eq!(cleanup_clean_ready_current(&root, &ready, &other_generation), Err(TerminalDeleteError::LocalNotClean));
+        assert_eq!(
+            cleanup_clean_ready_current(&root, &ready, &other_generation),
+            Err(TerminalDeleteError::LocalNotClean)
+        );
         assert!(workspace.path().join("user_data/cookies.sqlite").exists());
 
-        fs::write(workspace.path().join(".local-unsynced"), b"local-unsynced-v2")?;
-        assert_eq!(cleanup_clean_ready_current(&root, &ready, &generation), Err(TerminalDeleteError::LocalNotClean));
+        fs::write(
+            workspace.path().join(".local-unsynced"),
+            b"local-unsynced-v2",
+        )?;
+        assert_eq!(
+            cleanup_clean_ready_current(&root, &ready, &generation),
+            Err(TerminalDeleteError::LocalNotClean)
+        );
         fs::remove_file(workspace.path().join(".local-unsynced"))?;
 
         let candidate = GenerationId::parse("generation_delete_pending_ready")?;
-        let pending = PendingSyncDescriptor::new(candidate, [0x11; 32], [0x22; 32], 4096, [0x33; 32], 7)?;
+        let pending =
+            PendingSyncDescriptor::new(candidate, [0x11; 32], [0x22; 32], 4096, [0x33; 32], 7)?;
         let marked = root.set_profile_current_pending_sync(&workspace, pending)?;
-        assert_eq!(cleanup_clean_ready_current(&root, &ready, &generation), Err(TerminalDeleteError::LocalNotClean));
+        assert_eq!(
+            cleanup_clean_ready_current(&root, &ready, &generation),
+            Err(TerminalDeleteError::LocalNotClean)
+        );
         let workspace = root.clear_profile_current_pending_sync(&marked)?;
-        fs::write(workspace.path().join(".profile-platform.lock"), b"recovery evidence")?;
-        assert_eq!(cleanup_clean_ready_current(&root, &ready, &generation), Err(TerminalDeleteError::LocalNotClean));
+        fs::write(
+            workspace.path().join(".profile-platform.lock"),
+            b"recovery evidence",
+        )?;
+        assert_eq!(
+            cleanup_clean_ready_current(&root, &ready, &generation),
+            Err(TerminalDeleteError::LocalNotClean)
+        );
         fs::remove_file(workspace.path().join(".profile-platform.lock"))?;
 
         cleanup_clean_ready_current(&root, &ready, &generation)?;
         assert!(!workspace.path().exists());
-        assert_eq!(fs::read(unrelated.path().join("keep.txt"))?, b"keep unrelated");
+        assert_eq!(
+            fs::read(unrelated.path().join("keep.txt"))?,
+            b"keep unrelated"
+        );
         Ok(())
     }
 
@@ -394,13 +446,20 @@ mod tests {
         let root = MaterializationRoot::open_or_create(directory.path())?;
         let ready = ready_intent()?;
         let generation = GenerationId::parse("generation_delete_test_ready")?;
-        let initial = root.create_profile_current(&ready.tenant_id, &ready.profile_id, &generation, 4)?;
+        let initial =
+            root.create_profile_current(&ready.tenant_id, &ready.profile_id, &generation, 4)?;
         let workspace = root.update_profile_current_sync_base(&initial, &generation, 4)?;
         fs::create_dir(workspace.path().join("user_data"))?;
         let native_lock = workspace.path().join("user_data/parent.lock");
         fs::write(&native_lock, b"native-lock")?;
-        let handle = fs::OpenOptions::new().read(true).share_mode(0).open(&native_lock)?;
-        assert_eq!(cleanup_clean_ready_current(&root, &ready, &generation), Err(TerminalDeleteError::LocalBusy));
+        let handle = fs::OpenOptions::new()
+            .read(true)
+            .share_mode(0)
+            .open(&native_lock)?;
+        assert_eq!(
+            cleanup_clean_ready_current(&root, &ready, &generation),
+            Err(TerminalDeleteError::LocalBusy)
+        );
         assert!(workspace.path().exists());
         drop(handle);
         Ok(())

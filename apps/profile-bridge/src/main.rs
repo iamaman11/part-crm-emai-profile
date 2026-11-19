@@ -100,7 +100,9 @@ where
         }
         BridgeCommand::InitialProfile(_) => Stage::OpenRequested,
         BridgeCommand::SyncClosed(_) => Stage::CloudSaveAttempt,
-        BridgeCommand::TerminalDelete(_) | BridgeCommand::ReadyLocalCopyEviction(_) => Stage::LocalDelete,
+        BridgeCommand::TerminalDelete(_) | BridgeCommand::ReadyLocalCopyEviction(_) => {
+            Stage::LocalDelete
+        }
         BridgeCommand::PairingStart(_) | BridgeCommand::PairingComplete(_) => Stage::Pairing,
         BridgeCommand::DeliveryActivateStaged => Stage::InstallActivate,
         BridgeCommand::DeliveryInstallStaged(_) | BridgeCommand::DeliveryHandoffArrived => {
