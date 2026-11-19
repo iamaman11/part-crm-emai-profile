@@ -49,6 +49,20 @@ pub fn show_report_copied() {
     }
 }
 
+/// A URI can be invoked outside the CRM origin. An explicit, default-NO
+/// native decision is required before discarding a READY local working copy.
+/// Headless/non-Windows callers are never allowed to imply consent.
+pub fn confirm_ready_local_copy_removal() -> bool {
+    #[cfg(windows)]
+    {
+        windows::confirm_ready_local_copy_removal()
+    }
+    #[cfg(not(windows))]
+    {
+        false
+    }
+}
+
 #[cfg(any(windows, test))]
 fn redirected_file_type(file_type: u32) -> bool {
     // FILE_TYPE_REMOTE is an obsolete modifier, not a distinct destination type.

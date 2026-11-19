@@ -6,6 +6,8 @@ use application_ports::coordinator_ingress::{
     CoordinatorProjectionSnapshot, CoordinatorRuntimeOutcome, CoordinatorRuntimeResult,
 };
 use application_ports::identity::{ActiveMembershipPort, ActiveMembershipPortErrorClass};
+use application_ports::generation_objects::ActiveGenerationObjectReferencePort;
+use application_ports::{DeviceExecutionPreconditionPort, DeviceExecutionReadiness};
 use cloudflare_adapters::coordinator_ingress::{
     CloudflareCoordinatorClock, CloudflareCoordinatorIngressApplication,
 };
@@ -15,9 +17,13 @@ use control_plane_contract::coordinator_api::{
     CoordinatorProjectionDto, CoordinatorReleaseDispositionDto, CoordinatorResponseDto,
     CoordinatorStatusDto,
 };
-use control_plane_contract::profile_generation_api::BRIDGE_PROFILE_DELETE_READBACK_PATH_TEMPLATE;
+use control_plane_contract::profile_generation_api::{
+    BRIDGE_PROFILE_DELETE_READBACK_PATH_TEMPLATE,
+    BRIDGE_PROFILE_LOCAL_COPY_READBACK_PATH_TEMPLATE, BridgeReadyLocalCopyReadback,
+};
 use control_plane_contract::{D1_CATALOG_BINDING, PROFILE_COORDINATOR_BINDING};
 use identity_access_domain::MembershipRole;
+use device_domain::DeviceJobTarget;
 use profile_platform_primitives::{
     ActorContext, AggregateVersion, CorrelationId, DeviceId, FencingToken, IdempotencyKey,
     LaunchIntentId, ProfileId, SessionId, TenantId, TenantScope,
@@ -137,6 +143,53 @@ async fn dispatch_bridge(
             }
             _ => neutral_not_found(actor.correlation_id().as_str()),
         };
+    }
+
+
+    // This is a separate, read-only authority: READY must never be accepted by
+    // the terminal Delete route. The local machine discards bytes only after
+    // its own exact marker/dirty/native-lock checks under root OS admission.
+    let ready_path = BRIDGE_PROFILE_LOCAL_COPY_READBACK_PATH_TEMPLATE
+        .replace("{tenantId}", tenant_value)
+        .replace("{profileId}", profile_value);
+    if request.method() == Method::Get && request.path() == ready_path {
+        if role != MembershipRole::TenantOwner {
+            return neutral_not_found(actor.correlation_id().as_str());
+        }
+        let application = crate::composition::profile_application(env)?;
+        let profile = match use_cases::profiles::get_visible_profile(
+            &actor, role, &application, &profile_id,
+        ).await {
+            Ok(value) if value.status() == application_ports::profiles::ProfileStatus::Ready => value,
+            _ => return neutral_not_found(actor.correlation_id().as_str()),
+        };
+        let preconditions = crate::composition::device_execution_preconditions(env)?;
+        let reference = match preconditions
+            .load_active_verified_generation_object(actor.tenant_scope(), &profile_id)
+            .await
+        {
+            Ok(Some(value)) => value,
+            _ => return neutral_not_found(actor.correlation_id().as_str()),
+        };
+        let target = DeviceJobTarget::new(
+            actor.tenant_scope().tenant_id().clone(),
+            machine.device_id().clone(),
+            profile_id.clone(),
+            reference.generation_id().clone(),
+        );
+        if !matches!(
+            preconditions.evaluate_device_execution(&actor, &target).await,
+            Ok(DeviceExecutionReadiness::Ready)
+        ) {
+            return neutral_not_found(actor.correlation_id().as_str());
+        }
+        let mut response = Response::from_json(&BridgeReadyLocalCopyReadback {
+            profile_id: profile_id.as_str().to_owned(),
+            profile_version: profile.version().value(),
+            generation_id: reference.generation_id().as_str().to_owned(),
+        })?;
+        response.headers_mut().set("cache-control", "no-store")?;
+        return Ok(response);
     }
 
     execute_authorized(

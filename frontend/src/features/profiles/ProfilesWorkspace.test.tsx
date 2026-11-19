@@ -2,12 +2,13 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { TenantProvider } from '../../app/TenantContext';
-import { assignProfile, changeGenerationActivation, deleteProfile, detachProfile, dispatchBrowserProfileDelete, dispatchBrowserProfileOpen, getCoordinator, getGeneration, getProfile, renameProfile } from './api';
+import { assignProfile, changeGenerationActivation, deleteProfile, detachProfile, dispatchBrowserProfileDelete, dispatchBrowserProfileOpen, dispatchReadyLocalCopyEviction, getCoordinator, getGeneration, getProfile, renameProfile } from './api';
 import { ProfilesWorkspace } from './ProfilesWorkspace';
 
 vi.mock('./api', () => ({
   dispatchBrowserProfileOpen: vi.fn(),
   dispatchBrowserProfileDelete: vi.fn(),
+  dispatchReadyLocalCopyEviction: vi.fn(),
   assignProfile: vi.fn(),
   changeGenerationActivation: vi.fn(),
   commandCoordinator: vi.fn(),
@@ -30,6 +31,7 @@ const coordinatorLookup = vi.mocked(getCoordinator);
 const activation = vi.mocked(changeGenerationActivation);
 const localOpen = vi.mocked(dispatchBrowserProfileOpen);
 const localDelete = vi.mocked(dispatchBrowserProfileDelete);
+const readyLocalEviction = vi.mocked(dispatchReadyLocalCopyEviction);
 const terminalDeletedText =
   'Cloud deletion confirmed. To discard the local browser copy, close Camoufox and click Remove local copy. Local removal has not been verified.';
 
@@ -37,6 +39,30 @@ describe('Profile card client relationship (#870)', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     window.history.replaceState(null, '', '/profiles');
+  });
+
+  it('requires explicit confirmation before handing READY local eviction to the installed Bridge', async () => {
+    profileLookup.mockResolvedValue({
+      profileId: 'profile_clean_ready', displayName: 'Ready profile', status: 'READY',
+      version: 2, metadataVersion: 1, linkedClientId: null, canOperate: true,
+    });
+    const cache = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    render(
+      <QueryClientProvider client={cache}>
+        <TenantProvider loadTenantContexts={async () => ({ tenants: [{
+          tenantId: 'tenant_test', displayName: 'Test tenant', actorId: 'actor_test', role: 'TENANT_OWNER',
+        }] })}>
+          <ProfilesWorkspace selectedProfileId="profile_clean_ready" onProfileSelected={() => undefined} />
+        </TenantProvider>
+      </QueryClientProvider>,
+    );
+    const trigger = await screen.findByRole('button', { name: 'Remove clean local copy' });
+    expect(readyLocalEviction).not.toHaveBeenCalled();
+    fireEvent.click(trigger);
+    expect(readyLocalEviction).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole('button', { name: 'Confirm Remove clean local copy' }));
+    expect(readyLocalEviction).toHaveBeenCalledWith('tenant_test', 'actor_test', 'profile_clean_ready', 2);
+    expect(localDelete).not.toHaveBeenCalled();
   });
 
   it('attaches and detaches through the existing typed, versioned commands with confirmed readback', async () => {

@@ -1,4 +1,4 @@
-import { dispatchBrowserProfileDelete, dispatchBrowserProfileOpen } from './api';
+import { dispatchBrowserProfileDelete, dispatchBrowserProfileOpen, dispatchReadyLocalCopyEviction } from './api';
 import { newIdempotencyKey } from '../../shared/api/idempotency';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { useEffect, useRef, useState, type FormEvent } from 'react';
@@ -108,6 +108,18 @@ export function ProfilesWorkspace({
       );
     } catch {
       setLocalDeleteError(new Error('Installed Profile Bridge did not accept local cleanup.'));
+    }
+  };
+  const requestReadyLocalEviction = (ready: ProfileProjection) => {
+    if (!owner || !activeTenant || ready.status !== 'READY'
+      || ready.profileId !== profileId || generationRefreshUnconfirmed || lookup.isPending) return;
+    try {
+      setLocalDeleteError(null);
+      dispatchReadyLocalCopyEviction(
+        tenantId, activeTenant.actorId, ready.profileId, ready.version,
+      );
+    } catch {
+      setLocalDeleteError(new Error('Installed Profile Bridge did not accept the local copy request.'));
     }
   };
   const openSelectedProfile = () => {
@@ -500,6 +512,18 @@ export function ProfilesWorkspace({
               </button>
               <p>Cloud deletion is confirmed. This button asks installed Profile Bridge to
                 verify DELETED and native browser locks before removing local files. The browser does not receive a completion receipt.</p>
+              <StatusMessage state={localDeleteError} />
+            </div>
+          )}
+          {owner && profile.status === 'READY' && (
+            <div>
+              <ConfirmAction
+                label="Remove clean local copy"
+                consequence={<>This removes the browser files stored on this computer, including its local recovery state. Only use after Sync has completed and the browser is closed. The encrypted cloud generation stays READY. Profile Bridge will refuse dirty, pending, busy or mismatched local copies. The browser cannot receive a completion receipt.</>}
+                disabled={lookup.isPending || generationRefreshUnconfirmed}
+                onConfirm={() => requestReadyLocalEviction(profile)}
+              />
+              <p>After confirmed local removal, Open browser uses the existing cloud Restore path. This action does not touch tabs in an open browser.</p>
               <StatusMessage state={localDeleteError} />
             </div>
           )}

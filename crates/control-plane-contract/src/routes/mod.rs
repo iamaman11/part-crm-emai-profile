@@ -92,7 +92,7 @@ fn bridge_profile_coordinator_route(method: &str, path: &str) -> bool {
                 _,
                 "profiles",
                 _,
-                "delete-readback"
+                "delete-readback" | "local-copy-readback"
             ]
         ))
 }
@@ -205,15 +205,19 @@ mod tests {
 
     #[test]
     fn only_machine_delete_readback_get_is_routed() {
-        let path = "/bridge/v1/tenants/tenant_01/profiles/profile_01/delete-readback";
-        assert_eq!(classify("GET", path), RouteClass::ProfileCoordinatorApi);
-        for method in ["POST", "DELETE", "PUT"] {
-            assert_eq!(classify(method, path), RouteClass::BridgeDeniedByDefault);
+        for path in [
+            "/bridge/v1/tenants/tenant_01/profiles/profile_01/delete-readback",
+            "/bridge/v1/tenants/tenant_01/profiles/profile_01/local-copy-readback",
+        ] {
+            assert_eq!(classify("GET", path), RouteClass::ProfileCoordinatorApi);
+            for method in ["POST", "DELETE", "PUT"] {
+                assert_eq!(classify(method, path), RouteClass::BridgeDeniedByDefault);
+            }
+            assert_eq!(
+                classify("GET", &(path.to_owned() + "/extra")),
+                RouteClass::BridgeDeniedByDefault
+            );
         }
-        assert_eq!(
-            classify("GET", &(path.to_owned() + "/extra")),
-            RouteClass::BridgeDeniedByDefault
-        );
     }
 
     #[test]

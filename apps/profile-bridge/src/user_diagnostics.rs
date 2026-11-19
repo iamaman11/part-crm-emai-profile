@@ -439,6 +439,12 @@ impl UserDiagnostic {
                     crate::local_profile_delete::TerminalDeleteError::LocalFilesystem => {
                         "BRIDGE_LOCAL_DELETE_FAILED"
                     }
+                    crate::local_profile_delete::TerminalDeleteError::LocalNotClean => {
+                        "BRIDGE_LOCAL_COPY_UNSYNCED"
+                    }
+                    crate::local_profile_delete::TerminalDeleteError::UserDeclined => {
+                        "BRIDGE_LOCAL_COPY_CANCELLED"
+                    }
                 },
                 ShippingCompositionError::Operator(error) => operator_code(error),
                 ShippingCompositionError::ActiveSessionMissing => "BRIDGE_ACTIVE_SESSION_MISSING",
@@ -897,11 +903,15 @@ impl UserDiagnostic {
             }
             Self::Launch(Launch::LocalDelete(error)) => match error {
                 crate::local_profile_delete::TerminalDeleteError::AuthorizationUnconfirmed =>
-                    "Cloud DELETED was not confirmed by this connected Windows device. Local browser data was preserved. Refresh the Profile status and retry local cleanup.",
+                    "The required cloud Profile status and exact generation were not confirmed by this connected Windows device. Local browser data was preserved. Refresh the Profile status and retry local cleanup.",
                 crate::local_profile_delete::TerminalDeleteError::LocalBusy =>
                     "The native browser is still open or Windows cannot verify its writer lock. Close Camoufox before removing the local copy. Local profile files were preserved.",
                 crate::local_profile_delete::TerminalDeleteError::LocalFilesystem =>
-                    "Local profile cleanup failed safely. Cloud objects may already be deleted; check installed Profile Bridge diagnostics before retrying.",
+                    "Local profile cleanup was not fully verified. Check installed Profile Bridge diagnostics and the local copy before retrying.",
+                crate::local_profile_delete::TerminalDeleteError::LocalNotClean =>
+                    "The local browser profile has unsynced, pending or recovery evidence, or differs from the exact verified cloud generation. Local files were preserved; complete Sync or resolve recovery before removal.",
+                crate::local_profile_delete::TerminalDeleteError::UserDeclined =>
+                    "You cancelled local browser copy removal. All profile files were preserved.",
             },
             Self::Launch(Launch::SyncUnconfirmed) => {
                 "The browser closed locally and its files are intact, but cloud synchronization is not confirmed. Local pending-sync evidence was retained for a later exact retry."
