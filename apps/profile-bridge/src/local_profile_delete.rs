@@ -422,10 +422,14 @@ mod tests {
             workspace.path().join(".profile-platform.lock"),
             b"recovery evidence",
         )?;
-        assert_eq!(
+        // Linux root admission rejects the unresolved writer marker as Busy;
+        // Windows's native handle proof reaches the explicit recovery check.
+        // Both are fail-closed and must retain the original native bytes.
+        assert!(matches!(
             cleanup_clean_ready_current(&root, &ready, &generation),
-            Err(TerminalDeleteError::LocalNotClean)
-        );
+            Err(TerminalDeleteError::LocalBusy | TerminalDeleteError::LocalNotClean)
+        ));
+        assert!(workspace.path().join("user_data/cookies.sqlite").exists());
         fs::remove_file(workspace.path().join(".profile-platform.lock"))?;
 
         cleanup_clean_ready_current(&root, &ready, &generation)?;
