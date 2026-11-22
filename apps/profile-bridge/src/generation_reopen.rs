@@ -248,6 +248,8 @@ pub trait GenerationObjectDownloadPort {
     /// Additive spool path for cold 256/512 MiB restore. The default keeps
     /// old small-object adapters and synthetic tests exactly as before.
     /// Only the authoritative materialization owner supplies the pending path.
+    /// Implementations must retire their own create-new partial file on any
+    /// returned error; a preexisting or foreign file must remain untouched.
     fn download_generation_object_to_new_pending_file(
         &mut self,
         _capability: &GenerationDownloadCapability,
@@ -444,9 +446,9 @@ impl Write for BoundedGenerationGetWriter<'_> {
 
 impl<T: SignedGenerationObjectStreamGetPort> VerifiedGenerationObjectStreamDownloader<T> {
     /// Staging path must be absolute, on an existing trusted regular directory
-    /// and have a reserved .pending-* name. Create-new means even a failed
-    /// previous GET cannot silently be replaced. On every error staged bytes
-    /// remain unpublished, available for conservative crash diagnostics.
+    /// and have a reserved .pending-* name. Create-new never overwrites an
+    /// unknown previous owner; handled errors remove only this invocation's
+    /// newly created file. A process crash may still leave forensic evidence.
     pub fn download_to_new_pending_file(
         &mut self,
         capability: &GenerationDownloadCapability,
@@ -474,13 +476,18 @@ impl<T: SignedGenerationObjectStreamGetPort> VerifiedGenerationObjectStreamDownl
         let url = capability
             .signed_url()
             .ok_or(GenerationObjectDownloadError::InvalidCapability)?;
-        let mut output = OpenOptions::new()
+        let output = OpenOptions::new()
             .create_new(true)
             .write(true)
             .open(destination)
             .map_err(|_| GenerationObjectDownloadError::Transport)?;
+        // Only a successfully created file is ours. A transport/status/digest
+        // rejection must not strand a partial immutable-spool name and block
+        // the next authorized Restore; create_new never removes a foreign file.
+        let mut pending =
+            tempfile::NamedTempFile::from_parts(output, tempfile::TempPath::from_path(destination));
         let mut writer = BoundedGenerationGetWriter {
-            file: &mut output,
+            file: pending.as_file_mut(),
             expected_bytes: capability.container_bytes(),
             written: 0,
             hasher: Sha256::new(),
@@ -499,16 +506,21 @@ impl<T: SignedGenerationObjectStreamGetPort> VerifiedGenerationObjectStreamDownl
         if digest != capability.container_digest() {
             return Err(GenerationObjectDownloadError::DigestMismatch);
         }
-        output
+        pending
+            .as_file_mut()
             .sync_all()
             .map_err(|_| GenerationObjectDownloadError::Transport)?;
-        drop(output);
-        VerifiedGenerationObjectFile::open(
+        let verified = VerifiedGenerationObjectFile::open(
             destination,
             capability.container_bytes(),
             capability.container_digest(),
         )
-        .map_err(|_| GenerationObjectDownloadError::DigestMismatch)
+        .map_err(|_| GenerationObjectDownloadError::DigestMismatch)?;
+        let (output, _) = pending
+            .keep()
+            .map_err(|_| GenerationObjectDownloadError::Transport)?;
+        drop(output);
+        Ok(verified)
     }
 }
 
@@ -701,12 +713,45 @@ mod tests {
             let outcome = downloader.download_to_new_pending_file(&capability, &path);
             assert!(matches!(outcome, Err(reason) if reason == expected));
             assert!(
-                path.exists(),
-                "partial network data must not be quietly published"
+                !path.exists(),
+                "a failed exact create-new GET must retire its own partial bytes"
             );
+            // The same descriptor can be retried without manual deletion.
+            let mut retry = VerifiedGenerationObjectStreamDownloader::new(StreamGet {
+                status: 200,
+                bytes: len,
+                byte: 0x42,
+                fail_after: None,
+            });
+            let verified = retry.download_to_new_pending_file(&capability, &path)?;
+            drop(verified);
+            std::fs::remove_file(&path)?;
         }
         assert!(!dir.join("generation_stream_get_descriptor").exists());
         std::fs::remove_dir_all(dir)?;
+        Ok(())
+    }
+
+    #[test]
+    fn pending_download_refuses_foreign_create_new_file_without_deleting_it()
+    -> Result<(), Box<dyn std::error::Error>> {
+        use super::{GenerationObjectDownloadError, VerifiedGenerationObjectStreamDownloader};
+        let dir = tempfile::tempdir()?;
+        let path = dir.path().join(".pending-foreign-preserved");
+        std::fs::write(&path, b"unknown owner evidence")?;
+        let len = 65_537;
+        let capability = stream_capability(len, 0x42)?;
+        let mut downloader = VerifiedGenerationObjectStreamDownloader::new(StreamGet {
+            status: 200,
+            bytes: len,
+            byte: 0x42,
+            fail_after: None,
+        });
+        assert!(matches!(
+            downloader.download_to_new_pending_file(&capability, &path),
+            Err(GenerationObjectDownloadError::Transport)
+        ));
+        assert_eq!(std::fs::read(&path)?, b"unknown owner evidence");
         Ok(())
     }
 
