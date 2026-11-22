@@ -1285,13 +1285,14 @@ mod tests {
             drop(writer);
         });
         let started = Instant::now();
-        let (status, adapter_stopped) = super::await_adapter_or_native_release(
-            &mut child,
-            root.path(),
-            &ready,
-            Duration::from_secs(30),
-            &std::sync::atomic::AtomicBool::new(false),
-        )?;
+        let (status, adapter_stopped, pre_ready_writer_seen) =
+            super::await_adapter_or_native_release(
+                &mut child,
+                root.path(),
+                &ready,
+                Duration::from_secs(30),
+                &std::sync::atomic::AtomicBool::new(false),
+            )?;
         released.join().expect("native writer release thread");
         assert!(
             adapter_stopped,
@@ -1299,6 +1300,7 @@ mod tests {
         );
         assert!(!status.success(), "the sleeping adapter was terminated");
         assert!(started.elapsed() >= Duration::from_secs(2));
+        assert!(!pre_ready_writer_seen);
         assert!(crate::browser_execution::browser_writer_locks_absent_at(
             root.path()
         )?);
@@ -1316,7 +1318,7 @@ mod tests {
         let writer = hold_native_writer_lock(root.path())?;
         let mut child = spawn_native_adapter_fixture(400)?;
         let ready = AtomicBool::new(true);
-        let (status, stopped) = super::await_adapter_or_native_release(
+        let (status, stopped, pre_ready_writer_seen) = super::await_adapter_or_native_release(
             &mut child,
             root.path(),
             &ready,
@@ -1331,10 +1333,11 @@ mod tests {
             !stopped,
             "an active Firefox writer must never authorize stop"
         );
+        assert!(!pre_ready_writer_seen);
 
         let mut child = spawn_native_adapter_fixture(400)?;
         let ready = AtomicBool::new(false);
-        let (status, stopped) = super::await_adapter_or_native_release(
+        let (status, stopped, pre_ready_writer_seen) = super::await_adapter_or_native_release(
             &mut child,
             root.path(),
             &ready,
@@ -1343,11 +1346,15 @@ mod tests {
         )?;
         assert!(status.success());
         assert!(!stopped, "missing READY must not authorize stop");
+        assert!(
+            pre_ready_writer_seen,
+            "pre-Ready native lock must be observed"
+        );
         drop(writer);
 
         let mut child = spawn_native_adapter_fixture(400)?;
         let ready = AtomicBool::new(true);
-        let (status, stopped) = super::await_adapter_or_native_release(
+        let (status, stopped, pre_ready_writer_seen) = super::await_adapter_or_native_release(
             &mut child,
             root.path(),
             &ready,
@@ -1356,6 +1363,7 @@ mod tests {
         )?;
         assert!(status.success());
         assert!(!stopped, "unobserved writer must not authorize stop");
+        assert!(!pre_ready_writer_seen);
         Ok(())
     }
 
