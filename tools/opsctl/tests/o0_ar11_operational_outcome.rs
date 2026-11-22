@@ -348,7 +348,10 @@ fn ar11_workflow_terminalizes_after_owner_capture_and_before_final_assertion() -
         .and_then(|tail| tail.split("  mutate:\n").next())
         .ok_or_else(|| "manual resolve-verify job must exist".to_string())?;
     assert!(resolve.contains("environment: staging"));
-    assert!(resolve.contains("STAGING_CANDIDATE"));
+    assert!(resolve.contains("actions/artifacts?name=$ready_artifact_name"));
+    assert!(resolve.contains("needs: [route, resolve-preflight]"));
+    assert!(!resolve.contains("STAGING_CANDIDATE"));
+    assert!(!resolve.contains("issues/870"));
     let mutate = workflow
         .split("  mutate:\n")
         .nth(1)
