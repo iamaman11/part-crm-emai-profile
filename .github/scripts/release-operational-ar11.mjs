@@ -1,8 +1,10 @@
 #!/usr/bin/env node
 
-import { existsSync, readFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import path from 'node:path';
 import process from 'node:process';
+import { spawnSync } from 'node:child_process';
 
 const ROOT = process.cwd();
 const BUILD = '.github/workflows/release-set-build.yml';
@@ -290,7 +292,7 @@ function promotionErrors(promotion) {
   errors.push(...forbidMarkers(route, ['secrets.', 'wrangler deploy', 'environment: staging'], 'promotion invocation router'));
 
   errors.push(...requireMarkers(resolvePreflight, [
-    "if: needs.route.outputs.mode == 'preflight'",
+    "if: needs.route.outputs.mode == 'preflight' || needs.route.outputs.mode == 'promote'",
     'Resolve unique immutable Release Set for exact protected main',
     'test "$SOURCE_SHA" = "$main_sha"',
     'test "$(jq \'length\' "$RUNNER_TEMP/main-release-sets.json")" = 1',
@@ -369,10 +371,17 @@ function promotionErrors(promotion) {
   }
 
   errors.push(...requireMarkers(resolveAuthorized, [
-    "if: needs.route.outputs.mode == 'promote'",
+    "if: always() && needs.route.outputs.mode == 'promote'",
+    'needs: [route, resolve-preflight]',
     'environment: staging',
-    'Bind the explicit GitHub dispatch to the current staging candidate',
-    'STAGING_CANDIDATE',
+    'Bind the explicit GitHub dispatch to unique accepted-main READY evidence',
+    'SELECTED_MAIN_SHA:',
+    'SELECTED_RELEASE_SET_ID:',
+    'actions/artifacts?name=$ready_artifact_name',
+    '.total_count == 1 and (.artifacts | length) == 1',
+    '.artifacts[0].workflow_run.head_sha == $sha',
+    'candidate-ready-run.json',
+    'READY evidence does not match the exact accepted main and Release Set',
     'STAGING_PROMOTION_DISPATCH_INTENT',
     "'github.workflow_dispatch'",
     'READY_RUN_ID',
@@ -399,6 +408,7 @@ function promotionErrors(promotion) {
     'secrets.CLOUDFLARE_', 'wrangler deploy', 'promotion plan', 'promotion preflight',
     'SCOPED_EXCEPTION', 'AUTHORITY_COMMENT', 'WORKER_PROMOTION_AUTHORIZATION_V2',
     'authorization_comment_id', 'issues/comments/', 'branches/main',
+    'STAGING_CANDIDATE', 'issues/870', 'issues: read',
   ], 'dispatch READY binder'));
 
   errors.push(...requireMarkers(mutate, [
@@ -670,14 +680,69 @@ function selfTest(files) {
   }
   const missingOwnerGuard = files.promotion.replace("if: github.event_name != 'workflow_dispatch' || github.actor == github.repository_owner", "if: always()");
   if (!promotionErrors(missingOwnerGuard).some((error) => error.includes('promotion invocation router'))) throw new Error('missing owner access guard fixture passed');
-  const missingStagingEnvironment = files.promotion.replace('    environment: staging\n    permissions:\n      actions: read\n      contents: read\n      issues: read', '    permissions:\n      actions: read\n      contents: read\n      issues: read');
+  const missingStagingEnvironment = files.promotion.replace('    name: Bind this owner dispatch to the unique accepted-main READY evidence\n    needs: [route, resolve-preflight]\n    if: always() && needs.route.outputs.mode == \'promote\'\n    runs-on: ubuntu-latest\n    environment: staging', '    name: Bind this owner dispatch to the unique accepted-main READY evidence\n    needs: [route, resolve-preflight]\n    if: always() && needs.route.outputs.mode == \'promote\'\n    runs-on: ubuntu-latest');
   if (!promotionErrors(missingStagingEnvironment).some((error) => error.includes('dispatch READY binder'))) throw new Error('missing staging resolver Environment guard fixture passed');
   const missingMutationEnvironment = files.promotion.replace('    environment: staging\n    permissions:\n      actions: read\n      contents: read\n      deployments: write', '    permissions:\n      actions: read\n      contents: read\n      deployments: write');
   if (!promotionErrors(missingMutationEnvironment).some((error) => error.includes('protected mutation executor'))) throw new Error('missing staging mutation Environment guard fixture passed');
-  const missingCandidateBinding = files.promotion.replaceAll('STAGING_CANDIDATE', 'STAGING_TARGET_REMOVED');
-  if (!promotionErrors(missingCandidateBinding).some((error) => error.includes('dispatch READY binder'))) throw new Error('missing canonical staging candidate fixture passed');
-  const commentAuthorizationRestored = files.promotion.replace('STAGING_CANDIDATE', 'WORKER_PROMOTION_AUTHORIZATION_V2\\n          STAGING_CANDIDATE');
-  if (!promotionErrors(commentAuthorizationRestored).some((error) => error.includes('dispatch READY binder'))) throw new Error('comment-based authorization fixture passed');
+  const missingUniqueReady = files.promotion.replaceAll('.total_count == 1 and (.artifacts | length) == 1', 'true');
+  if (!promotionErrors(missingUniqueReady).some((error) => error.includes('dispatch READY binder'))) throw new Error('ambiguous READY artifact fixture passed');
+  const staleIssueSelector = files.promotion.replace('candidate-ready-run.json', 'candidate-ready-run.json\\n          gh api "repos/$GITHUB_REPOSITORY/issues/870"');
+  if (!promotionErrors(staleIssueSelector).some((error) => error.includes('dispatch READY binder'))) throw new Error('old Issue-body selector fixture passed');
+  const readyBinder = stepBlock(jobBlock(files.promotion, 'resolve-verify'), 'Bind the explicit GitHub dispatch to unique accepted-main READY evidence');
+  const pythonBlock = readyBinder.match(/<<'PY'\n([\s\S]*?)\n          PY/);
+  if (!pythonBlock) throw new Error('READY dispatch intent Python executable is missing');
+  const pythonSource = pythonBlock[1].split('\n').map((line) => {
+    if (!line.startsWith('          ')) throw new Error('READY dispatch intent Python indentation is invalid');
+    return line.slice(10);
+  }).join('\n');
+  const fixtureRoot = mkdtempSync(path.join(tmpdir(), 'ar11-ready-binder-'));
+  try {
+    const mainSha = 'a'.repeat(40);
+    const releaseId = 'release-set-v3-sha256-' + 'b'.repeat(64);
+    const currentId = 'release-set-v3-sha256-' + 'c'.repeat(64);
+    const readyArtifact = 'ar11-ready-to-mutate-' + releaseId + '-' + mainSha;
+    const readyPath = path.join(fixtureRoot, 'ready.json');
+    const intentPath = path.join(fixtureRoot, 'intent.json');
+    const ready = {
+      schema_version: 1, kind: 'AR11_READY_TO_MUTATE', ready: true, environment: 'staging',
+      source_sha: mainSha, release_set_id: releaseId, expected_current_release_set_id: currentId,
+      target_capability_profile_id: 'rehearsal-core-v2',
+      expected_current_capability_profile_id: 'rehearsal-core-v1',
+      credential_values_accessed: false, provider_mutation: false, production_mutation: false,
+    };
+    const runBinder = (candidate) => {
+      writeFileSync(readyPath, JSON.stringify(candidate));
+      return spawnSync('python', ['-c', pythonSource, readyPath, mainSha, releaseId, '12345', readyArtifact, 'd'.repeat(64), intentPath], {
+        encoding: 'utf8',
+        env: { ...process.env, GITHUB_ACTOR: 'owner', GITHUB_RUN_ID: '98765', GITHUB_REF: 'refs/heads/main' },
+      });
+    };
+    const valid = runBinder(ready);
+    if (valid.status !== 0) throw new Error('valid READY dispatch fixture failed: ' + valid.stderr);
+    const intent = JSON.parse(readFileSync(intentPath, 'utf8'));
+    if (intent.kind !== 'STAGING_PROMOTION_DISPATCH_INTENT' || intent.release_set_id !== releaseId
+        || intent.source_sha !== mainSha || intent.expected_current_release_set_id !== currentId
+        || intent.ready_run_id !== 12345 || intent.ready_artifact_name !== readyArtifact
+        || intent.ready_evidence_sha256 !== 'd'.repeat(64)
+        || intent.authorization.mechanism !== 'github.workflow_dispatch'
+        || intent.target_capability_profile_id !== ready.target_capability_profile_id
+        || intent.expected_current_capability_profile_id !== ready.expected_current_capability_profile_id) {
+      throw new Error('valid READY dispatch fixture failed to bind exact immutable evidence');
+    }
+    const rejected = [
+      ['source SHA drift', { ...ready, source_sha: 'e'.repeat(40) }],
+      ['target Release Set drift', { ...ready, release_set_id: 'release-set-v3-sha256-' + 'e'.repeat(64) }],
+      ['non-ready evidence', { ...ready, ready: false }],
+      ['provider effect before dispatch', { ...ready, provider_mutation: true }],
+      ['untyped current Release Set', { ...ready, expected_current_release_set_id: null }],
+      ['untyped capability profile', { ...ready, target_capability_profile_id: null }],
+    ];
+    for (const [label, candidate] of rejected) {
+      if (runBinder(candidate).status === 0) throw new Error('unsafe ' + label + ' READY dispatch fixture passed');
+    }
+  } finally {
+    rmSync(fixtureRoot, { recursive: true, force: true });
+  }
   const missingReadyBinding = files.promotion.replaceAll('READY_EVIDENCE_SHA256', 'READY_EVIDENCE_DIGEST_MISSING');
   if (promotionErrors(missingReadyBinding).length === 0) throw new Error('missing READY binding fixture passed');
   const missingReadyProfile = files.promotion.replace('target_capability_profile_id:$target_profile', 'target_capability_profile_id:null');
@@ -839,4 +904,4 @@ if (errors.length > 0) {
   process.exit(1);
 }
 if (process.argv.includes('--self-test')) selfTest(files);
-else console.log('AR-11 release operational authority passed: automatic read-only READY/BLOCKED terminalizes before the explicit owner workflow_dispatch; the canonical staging candidate and exact READY evidence bind to that dispatch; GitHub Environment restricts staging to main; exact-current Worker/D1 re-fence prevents replay after success; provider mutation remains behind the exact-bits dry-run and credential boundary; Camoufox PR replay is fail-closed and runtime-impact-aware.');
+else console.log('AR-11 release operational authority passed: automatic read-only READY/BLOCKED terminalizes before the explicit owner workflow_dispatch; unique accepted-main Release Set and immutable READY evidence bind to that dispatch; GitHub Environment restricts staging to main; exact-current Worker/D1 re-fence prevents replay after success; provider mutation remains behind the exact-bits dry-run and credential boundary; Camoufox PR replay is fail-closed and runtime-impact-aware.');

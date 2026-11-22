@@ -157,7 +157,7 @@ function promotionPolicyErrors(promotion) {
     'workflow_run:',
     '- Release Set Build',
     'AR11_READY_TO_MUTATE',
-    'STAGING_CANDIDATE',
+    'actions/artifacts?name=$ready_artifact_name',
     'STAGING_PROMOTION_DISPATCH_INTENT',
     "'github.workflow_dispatch'",
     'dispatch_digest',
@@ -172,7 +172,7 @@ function promotionPolicyErrors(promotion) {
   const preflightJob = promotion.indexOf('\n  preflight-ready:\n');
   const ready = promotion.indexOf('kind:"AR11_READY_TO_MUTATE"', preflightJob);
   const resolveVerifyJob = promotion.indexOf('\n  resolve-verify:\n');
-  const dispatchBinding = promotion.indexOf('Bind the explicit GitHub dispatch to the current staging candidate', resolveVerifyJob);
+  const dispatchBinding = promotion.indexOf('Bind the explicit GitHub dispatch to unique accepted-main READY evidence', resolveVerifyJob);
   const mutateJob = promotion.indexOf('\n  mutate:\n');
   const deployCredential = promotion.indexOf('DEPLOY_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}', mutateJob);
   const deploy = promotion.indexOf('Deploy exact Release Set v3 bits after all fences', mutateJob);
@@ -255,7 +255,8 @@ function selfTest() {
     if (promotionPolicyErrors(renamedPromotion).length !== 0) throw new Error('cosmetic AR11 label unexpectedly defines successor ordering');
   }
   const deployCredential = 'DEPLOY_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}';
-  const dispatchBinding = 'Bind the explicit GitHub dispatch to the current staging candidate';
+  const dispatchBinding = 'Bind the explicit GitHub dispatch to unique accepted-main READY evidence';
+  if (!promotion.includes(dispatchBinding)) throw new Error('owner dispatch READY binder fixture cannot locate its target');
   const withoutDeployCredential = promotion.replace(deployCredential, 'DEPLOY_TOKEN_REMOVED_FOR_ORDER_FIXTURE');
   const reorderedPromotion = withoutDeployCredential.replace(dispatchBinding, `${deployCredential}\\n      - name: ${dispatchBinding}`);
   if (!promotionPolicyErrors(reorderedPromotion).some((error) => error.includes('must order read-only READY'))) {
