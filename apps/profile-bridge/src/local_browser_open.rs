@@ -371,6 +371,7 @@ fn classify_native_browser_completion(
     process_success: bool,
     native_close_seen: bool,
     native_writer_released: bool,
+    native_writer_seen_before_ready: bool,
     native_writer_absent: Option<bool>,
 ) -> NativeBrowserCompletion {
     if native_writer_released {
@@ -384,10 +385,15 @@ fn classify_native_browser_completion(
         };
     }
     if action == "--local-open" {
-        return if native_writer_absent == Some(true) {
-            NativeBrowserCompletion::LaunchFailed
-        } else {
-            NativeBrowserCompletion::LaunchUnconfirmed
+        return match native_writer_absent {
+            // The native Firefox writer did run, even if its SDK Ready event
+            // never arrived. Its exit is unclean/unknown, not a failed spawn.
+            // This never licenses Sync without a current-run final witness.
+            Some(true) if native_writer_seen_before_ready => {
+                NativeBrowserCompletion::RecoveryRequired
+            }
+            Some(true) => NativeBrowserCompletion::LaunchFailed,
+            _ => NativeBrowserCompletion::LaunchUnconfirmed,
         };
     }
     NativeBrowserCompletion::CloseUnconfirmed
@@ -448,9 +454,10 @@ fn await_adapter_or_native_release(
     browser_ready: &AtomicBool,
     startup_proof_timeout: Duration,
     current_run_reset: &AtomicBool,
-) -> Result<(std::process::ExitStatus, bool), LocalOpenError> {
+) -> Result<(std::process::ExitStatus, bool, bool), LocalOpenError> {
     let proof_started = Instant::now();
     let mut writer_was_observed = false;
+    let mut writer_seen_before_ready = false;
     let mut released_since: Option<Instant> = None;
     loop {
         // An OS query failure is not evidence that this child exited: wait
@@ -464,7 +471,7 @@ fn await_adapter_or_native_release(
             ),
         };
         if let Some(status) = state {
-            return Ok((status, false));
+            return Ok((status, false, writer_seen_before_ready));
         }
         let ready = browser_ready.load(Ordering::Acquire);
         if ready {
@@ -487,7 +494,8 @@ fn await_adapter_or_native_release(
                     ) {
                         // Firefox already released the Windows writer lock.
                         // Never terminate or close the browser process here.
-                        return stop_stuck_native_adapter(child);
+                        return stop_stuck_native_adapter(child)
+                            .map(|(status, stopped)| (status, stopped, writer_seen_before_ready));
                     }
                 }
                 // An unreadable lock cannot certify native release. Continue
@@ -495,6 +503,14 @@ fn await_adapter_or_native_release(
                 Err(_) => released_since = None,
                 _ => released_since = None,
             }
+        } else if matches!(
+            crate::browser_execution::browser_writer_locks_absent_at(folder),
+            Ok(false)
+        ) {
+            // Reuse the existing OS file-handle observation during startup.
+            // Do not let this pre-Ready sighting authorize adapter shutdown,
+            // a clean-close receipt, or an automatic cloud Save.
+            writer_seen_before_ready = true;
         }
         // The child inherited its OWN Windows share-deny launch admission at
         // CreateProcess. It survives parent death and prevents another
@@ -675,7 +691,8 @@ fn run_python_with_input(
     }
     drop(stdin);
     #[cfg(windows)]
-    let (completed, native_adapter_released) = if action == "--local-open" {
+    let (completed, native_adapter_released, writer_seen_before_ready) = if action == "--local-open"
+    {
         await_adapter_or_native_release(
             &mut child,
             folder,
@@ -689,13 +706,15 @@ fn run_python_with_input(
                 .wait()
                 .map_err(|_| LocalOpenError::RuntimeUnavailable)?,
             false,
+            false,
         )
     };
     #[cfg(not(windows))]
-    let (completed, native_adapter_released) = (
+    let (completed, native_adapter_released, writer_seen_before_ready) = (
         child
             .wait()
             .map_err(|_| LocalOpenError::RuntimeUnavailable)?,
+        false,
         false,
     );
     if !native_adapter_released {
@@ -721,6 +740,7 @@ fn run_python_with_input(
         completed.success(),
         native_close_seen.load(Ordering::Acquire),
         native_adapter_released,
+        writer_seen_before_ready,
         native_writer_absent,
     );
     if action != "--local-open"
@@ -1037,6 +1057,7 @@ mod tests {
                 true,
                 false,
                 false,
+                false,
                 Some(true)
             ),
             Completion::LaunchFailed
@@ -1048,24 +1069,83 @@ mod tests {
                 false,
                 false,
                 false,
+                true,
+                Some(true)
+            ),
+            Completion::RecoveryRequired,
+            "a witnessed pre-Ready native writer is not a pure launch failure"
+        );
+        assert_eq!(
+            classify_native_browser_completion(
+                "--local-open",
+                false,
+                false,
+                false,
+                false,
+                true,
+                Some(false)
+            ),
+            Completion::LaunchUnconfirmed,
+            "a still-live writer must not be released or marked recovered"
+        );
+        assert_eq!(
+            classify_native_browser_completion(
+                "--local-open",
+                false,
+                false,
+                false,
+                false,
+                false,
                 Some(false)
             ),
             Completion::LaunchUnconfirmed
         );
         assert_eq!(
-            classify_native_browser_completion("--local-open", false, false, false, false, None),
+            classify_native_browser_completion(
+                "--local-open",
+                false,
+                false,
+                false,
+                false,
+                false,
+                None
+            ),
             Completion::LaunchUnconfirmed
         );
         assert_eq!(
-            classify_native_browser_completion("--local-open", true, false, false, false, None),
+            classify_native_browser_completion(
+                "--local-open",
+                true,
+                false,
+                false,
+                false,
+                false,
+                None
+            ),
             Completion::CloseUnconfirmed
         );
         assert_eq!(
-            classify_native_browser_completion("--local-open", true, true, false, false, None),
+            classify_native_browser_completion(
+                "--local-open",
+                true,
+                true,
+                false,
+                false,
+                false,
+                None
+            ),
             Completion::SdkClosed
         );
         assert_eq!(
-            classify_native_browser_completion("--local-open", true, false, false, true, None),
+            classify_native_browser_completion(
+                "--local-open",
+                true,
+                false,
+                false,
+                true,
+                false,
+                None
+            ),
             Completion::NativeWriterReleased
         );
     }
@@ -1205,13 +1285,14 @@ mod tests {
             drop(writer);
         });
         let started = Instant::now();
-        let (status, adapter_stopped) = super::await_adapter_or_native_release(
-            &mut child,
-            root.path(),
-            &ready,
-            Duration::from_secs(30),
-            &std::sync::atomic::AtomicBool::new(false),
-        )?;
+        let (status, adapter_stopped, pre_ready_writer_seen) =
+            super::await_adapter_or_native_release(
+                &mut child,
+                root.path(),
+                &ready,
+                Duration::from_secs(30),
+                &std::sync::atomic::AtomicBool::new(false),
+            )?;
         released.join().expect("native writer release thread");
         assert!(
             adapter_stopped,
@@ -1219,6 +1300,7 @@ mod tests {
         );
         assert!(!status.success(), "the sleeping adapter was terminated");
         assert!(started.elapsed() >= Duration::from_secs(2));
+        assert!(!pre_ready_writer_seen);
         assert!(crate::browser_execution::browser_writer_locks_absent_at(
             root.path()
         )?);
@@ -1236,7 +1318,7 @@ mod tests {
         let writer = hold_native_writer_lock(root.path())?;
         let mut child = spawn_native_adapter_fixture(400)?;
         let ready = AtomicBool::new(true);
-        let (status, stopped) = super::await_adapter_or_native_release(
+        let (status, stopped, pre_ready_writer_seen) = super::await_adapter_or_native_release(
             &mut child,
             root.path(),
             &ready,
@@ -1251,10 +1333,11 @@ mod tests {
             !stopped,
             "an active Firefox writer must never authorize stop"
         );
+        assert!(!pre_ready_writer_seen);
 
         let mut child = spawn_native_adapter_fixture(400)?;
         let ready = AtomicBool::new(false);
-        let (status, stopped) = super::await_adapter_or_native_release(
+        let (status, stopped, pre_ready_writer_seen) = super::await_adapter_or_native_release(
             &mut child,
             root.path(),
             &ready,
@@ -1263,11 +1346,15 @@ mod tests {
         )?;
         assert!(status.success());
         assert!(!stopped, "missing READY must not authorize stop");
+        assert!(
+            pre_ready_writer_seen,
+            "pre-Ready native lock must be observed"
+        );
         drop(writer);
 
         let mut child = spawn_native_adapter_fixture(400)?;
         let ready = AtomicBool::new(true);
-        let (status, stopped) = super::await_adapter_or_native_release(
+        let (status, stopped, pre_ready_writer_seen) = super::await_adapter_or_native_release(
             &mut child,
             root.path(),
             &ready,
@@ -1276,6 +1363,7 @@ mod tests {
         )?;
         assert!(status.success());
         assert!(!stopped, "unobserved writer must not authorize stop");
+        assert!(!pre_ready_writer_seen);
         Ok(())
     }
 
@@ -1569,6 +1657,47 @@ mod tests {
             super::NativeBrowserCompletion::LaunchFailed,
             "process exit before BrowserReady is a launch failure, not a Close failure"
         );
+        Ok(())
+    }
+
+    #[cfg(windows)]
+    #[test]
+    #[ignore = "requires PROFILE_BRIDGE_TEST_PYTHON"]
+    fn native_writer_exiting_before_sdk_ready_is_recovery_not_launch_failure()
+    -> Result<(), Box<dyn std::error::Error>> {
+        use std::fs;
+        use std::path::PathBuf;
+
+        let python = std::env::var_os("PROFILE_BRIDGE_TEST_PYTHON")
+            .map(PathBuf::from)
+            .ok_or("PROFILE_BRIDGE_TEST_PYTHON is required")?;
+        let directory = tempfile::tempdir()?;
+        let runtime_root = directory.path().join("runtime");
+        fs::create_dir_all(runtime_root.join("camouhost"))?;
+        fs::write(
+            runtime_root.join(ENTRYPOINT),
+            br#"import sys
+import time
+from pathlib import Path
+root = Path(sys.argv[2])
+lock = root / 'user_data' / 'parent.lock'
+lock.parent.mkdir(parents=True, exist_ok=True)
+with lock.open('ab', buffering=0):
+    time.sleep(1.0)
+# Native owner was observed, then released, without SDK Ready or a final
+# Firefox SessionStore checkpoint. Never fabricate an automatic Save.
+sys.exit(0)
+"#,
+        )?;
+        let folder = directory.path().join("profile");
+        fs::create_dir(&folder)?;
+        assert_eq!(
+            run_python_with_executable(&python, &runtime_root, &folder, "--local-open", None)?,
+            super::NativeBrowserCompletion::RecoveryRequired,
+        );
+        assert!(crate::browser_execution::browser_writer_locks_absent_at(
+            &folder
+        )?);
         Ok(())
     }
 

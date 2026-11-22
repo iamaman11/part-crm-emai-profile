@@ -245,6 +245,14 @@ fn diagnostic_cause(result: &Result<(), BridgeCliError>) -> Cause {
         Err(BridgeCliError::LaunchFailed(ShippingCompositionError::LocalOpen(
             profile_bridge::local_browser_open::LocalOpenError::ProfileBusy,
         ))) => Cause::BrowserProfileBusy,
+        #[cfg(windows)]
+        Err(BridgeCliError::LaunchFailed(ShippingCompositionError::LocalOpen(
+            profile_bridge::local_browser_open::LocalOpenError::BrowserNotClosedCleanly,
+        ))) => Cause::BrowserRecoveryRequired,
+        #[cfg(windows)]
+        Err(BridgeCliError::LaunchFailed(ShippingCompositionError::LocalOpen(
+            profile_bridge::local_browser_open::LocalOpenError::BrowserLaunchFailed,
+        ))) => Cause::BrowserRuntimeLaunchFailed,
         Err(BridgeCliError::LaunchFailed(_)) => Cause::BrowserUnavailable,
         Err(_) => Cause::OtherSafeFailure,
     }
@@ -472,11 +480,21 @@ mod tests {
             ))),
             Cause::BrowserProfileBusy,
         );
+        assert_eq!(
+            diagnostic_cause(&Err(BridgeCliError::LaunchFailed(
+                ShippingCompositionError::LocalOpen(LocalOpenError::BrowserNotClosedCleanly),
+            ))),
+            Cause::BrowserRecoveryRequired,
+        );
+        assert_eq!(
+            diagnostic_cause(&Err(BridgeCliError::LaunchFailed(
+                ShippingCompositionError::LocalOpen(LocalOpenError::BrowserLaunchFailed),
+            ))),
+            Cause::BrowserRuntimeLaunchFailed,
+        );
         for sibling in [
             LocalOpenError::OperationInProgress,
-            LocalOpenError::BrowserLaunchFailed,
             LocalOpenError::LaunchConfirmation,
-            LocalOpenError::BrowserNotClosedCleanly,
         ] {
             assert_eq!(
                 diagnostic_cause(&Err(BridgeCliError::LaunchFailed(
