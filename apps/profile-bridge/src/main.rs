@@ -241,6 +241,10 @@ fn diagnostic_cause(result: &Result<(), BridgeCliError>) -> Cause {
     match result {
         Ok(()) => Cause::None,
         Err(BridgeCliError::InstallationFailed(_)) => Cause::InstallBlocked,
+        #[cfg(windows)]
+        Err(BridgeCliError::LaunchFailed(ShippingCompositionError::LocalOpen(
+            profile_bridge::local_browser_open::LocalOpenError::ProfileBusy,
+        ))) => Cause::BrowserProfileBusy,
         Err(BridgeCliError::LaunchFailed(_)) => Cause::BrowserUnavailable,
         Err(_) => Cause::OtherSafeFailure,
     }
@@ -433,10 +437,56 @@ impl std::error::Error for BridgeCliError {}
 #[cfg(test)]
 mod tests {
     use super::FIRST_INSTALL_ARGUMENT;
-    use super::{BridgeCliError, BridgeCommand, parse_command};
+    use super::{BridgeCliError, BridgeCommand, diagnostic_cause, parse_command};
+    use profile_bridge::shipping_composition::ShippingCompositionError;
+    use profile_bridge::user_diagnostics::report::Cause;
     use profile_bridge::windows_delivery_handoff::{
         HANDOFF_ACTIVATE_ARGUMENT, HANDOFF_ARRIVAL_ARGUMENT,
     };
+
+    #[test]
+    fn diagnostic_projection_does_not_fabricate_a_profile_busy_failure() {
+        assert_eq!(diagnostic_cause(&Ok(())), Cause::None);
+        assert_eq!(
+            diagnostic_cause(&Err(BridgeCliError::LaunchFailed(
+                ShippingCompositionError::Configuration,
+            ))),
+            Cause::BrowserUnavailable,
+        );
+        assert_eq!(
+            diagnostic_cause(&Err(BridgeCliError::DeliveryFailed(
+                ShippingCompositionError::Configuration,
+            ))),
+            Cause::OtherSafeFailure,
+        );
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn exact_native_profile_busy_reaches_existing_typed_diagnostic() {
+        use profile_bridge::local_browser_open::LocalOpenError;
+
+        assert_eq!(
+            diagnostic_cause(&Err(BridgeCliError::LaunchFailed(
+                ShippingCompositionError::LocalOpen(LocalOpenError::ProfileBusy),
+            ))),
+            Cause::BrowserProfileBusy,
+        );
+        for sibling in [
+            LocalOpenError::OperationInProgress,
+            LocalOpenError::BrowserLaunchFailed,
+            LocalOpenError::LaunchConfirmation,
+            LocalOpenError::BrowserNotClosedCleanly,
+        ] {
+            assert_eq!(
+                diagnostic_cause(&Err(BridgeCliError::LaunchFailed(
+                    ShippingCompositionError::LocalOpen(sibling),
+                ))),
+                Cause::BrowserUnavailable,
+                "{sibling:?} is not a proven ProfileBusy refusal",
+            );
+        }
+    }
 
     #[test]
     fn one_shot_sync_admits_only_exact_v2_native_profile() {
