@@ -126,6 +126,9 @@ jobs:
       - name: Test local profile lifecycle
         run: cargo test --locked -p profile-bridge --features synthetic-test-bin local_profile
 
+      - name: Prove native Open diagnostic cause on Windows
+        run: cargo test --locked -p profile-bridge --bin profile-bridge
+
       - name: Prove READY v11-to-v12 lost-Commit recovery and dirty-byte refusal
         run: cargo test --locked -p profile-bridge --features synthetic-test-bin --lib lost_ready_commit_v11_to_v12
 
