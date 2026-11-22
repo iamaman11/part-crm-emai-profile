@@ -30,6 +30,17 @@ impl VerifiedGenerationObjectFile {
         Self::open_payload(path, 0, expected_bytes, expected_sha256)
     }
 
+    /// An OS-owned, unnamed Restore spool. The caller has created this file in
+    /// its trusted materialization root; retaining the handle avoids a second
+    /// path lookup and the OS removes the file after process death.
+    pub(crate) fn from_temporary_file(
+        file: File,
+        expected_bytes: u64,
+        expected_sha256: [u8; 32],
+    ) -> io::Result<Self> {
+        Self::open_file_payload(file, 0, expected_bytes, expected_sha256)
+    }
+
     /// Exact encrypted bytes inside a BPAT0001 checkpoint. The bounded
     /// header must be verified separately by the checkpoint's current owner.
     pub fn open_checkpoint_payload(
@@ -65,6 +76,18 @@ impl VerifiedGenerationObjectFile {
             return Err(invalid_source());
         }
         let file = File::open(path)?;
+        Self::open_file_payload(file, payload_offset, expected_bytes, expected_sha256)
+    }
+
+    fn open_file_payload(
+        file: File,
+        payload_offset: u64,
+        expected_bytes: u64,
+        expected_sha256: [u8; 32],
+    ) -> io::Result<Self> {
+        if expected_bytes == 0 || expected_bytes > MAX_STREAM_CONTAINER_BYTES {
+            return Err(invalid_source());
+        }
         if !file.metadata()?.is_file() {
             return Err(invalid_source());
         }
@@ -198,6 +221,38 @@ mod tests {
 
     fn fingerprint(bytes: &[u8]) -> [u8; 32] {
         Sha256::digest(bytes).into()
+    }
+
+    #[test]
+    fn os_owned_temporary_source_verifies_open_handle_and_retires_it()
+    -> Result<(), Box<dyn std::error::Error>> {
+        use std::io::Write;
+        let root = tempfile::tempdir()?;
+        let mut source = tempfile::tempfile_in(root.path())?;
+        source.write_all(b"exact encrypted transient source")?;
+        source.sync_all()?;
+        let mut verified = VerifiedGenerationObjectFile::from_temporary_file(
+            source,
+            32,
+            fingerprint(b"exact encrypted transient source"),
+        )?;
+        assert_eq!(verified.expected_bytes(), 32);
+        verified.recheck_and_rewind()?;
+        drop(verified);
+        assert!(fs::read_dir(root.path())?.next().is_none());
+
+        let mut changed = tempfile::tempfile_in(root.path())?;
+        changed.write_all(b"mismatched source")?;
+        assert!(
+            VerifiedGenerationObjectFile::from_temporary_file(
+                changed,
+                17,
+                fingerprint(b"different source"),
+            )
+            .is_err()
+        );
+        assert!(fs::read_dir(root.path())?.next().is_none());
+        Ok(())
     }
 
     #[test]

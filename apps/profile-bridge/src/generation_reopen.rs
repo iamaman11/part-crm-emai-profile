@@ -3,7 +3,7 @@ use encrypted_generation_domain::MAX_STREAM_CONTAINER_BYTES;
 use encrypted_generation_domain::{GenerationDek, MAX_GENERATION_CONTAINER_BYTES};
 use profile_platform_primitives::{GenerationId, ProfileId, TenantId};
 use sha2::{Digest, Sha256};
-use std::fs::{self, OpenOptions};
+use std::fs;
 use std::io::{self, Write};
 use std::path::Path;
 
@@ -245,15 +245,13 @@ pub trait GenerationObjectDownloadPort {
         capability: &GenerationDownloadCapability,
     ) -> Result<Vec<u8>, Self::Error>;
 
-    /// Additive spool path for cold 256/512 MiB restore. The default keeps
-    /// old small-object adapters and synthetic tests exactly as before.
-    /// Only the authoritative materialization owner supplies the pending path.
-    /// Implementations must retire their own create-new partial file on any
-    /// returned error; a preexisting or foreign file must remain untouched.
-    fn download_generation_object_to_new_pending_file(
+    /// Bounded, OS-owned scratch for cold 256/512 MiB Restore. The default
+    /// retains the in-memory port for callers that do not stream.
+    /// Only the authoritative materialization owner supplies the trusted root.
+    fn download_generation_object_to_temporary_file(
         &mut self,
         _capability: &GenerationDownloadCapability,
-        _destination: &Path,
+        _directory: &Path,
     ) -> Result<Option<VerifiedGenerationObjectFile>, Self::Error> {
         Ok(None)
     }
@@ -400,12 +398,12 @@ impl<T: SignedGenerationObjectStreamGetPort> GenerationObjectDownloadPort
         Ok(writer.bytes)
     }
 
-    fn download_generation_object_to_new_pending_file(
+    fn download_generation_object_to_temporary_file(
         &mut self,
         capability: &GenerationDownloadCapability,
-        destination: &Path,
+        directory: &Path,
     ) -> Result<Option<VerifiedGenerationObjectFile>, Self::Error> {
-        self.download_to_new_pending_file(capability, destination)
+        self.download_to_temporary_file(capability, directory)
             .map(Some)
     }
 }
@@ -445,49 +443,33 @@ impl Write for BoundedGenerationGetWriter<'_> {
 }
 
 impl<T: SignedGenerationObjectStreamGetPort> VerifiedGenerationObjectStreamDownloader<T> {
-    /// Staging path must be absolute, on an existing trusted regular directory
-    /// and have a reserved .pending-* name. Create-new never overwrites an
-    /// unknown previous owner; handled errors remove only this invocation's
-    /// newly created file. A process crash may still leave forensic evidence.
-    pub fn download_to_new_pending_file(
+    /// Restore scratch must remain inside an existing trusted directory.
+    /// The OS owns deletion of its unnamed file when the last handle closes,
+    /// including abnormal termination; no global pending-file cleaner exists.
+    pub fn download_to_temporary_file(
         &mut self,
         capability: &GenerationDownloadCapability,
-        destination: &Path,
+        directory: &Path,
     ) -> Result<VerifiedGenerationObjectFile, GenerationObjectDownloadError> {
-        if !destination.is_absolute()
-            || !destination
-                .file_name()
-                .and_then(|name| name.to_str())
-                .is_some_and(|name| name.starts_with(".pending-") && name.len() <= 128)
+        if !directory.is_absolute()
             || capability.container_bytes() == 0
             || capability.container_bytes() > MAX_STREAM_CONTAINER_BYTES
             || !(1..=300).contains(&capability.expires_seconds())
         {
             return Err(GenerationObjectDownloadError::InvalidCapability);
         }
-        let parent = destination
-            .parent()
-            .ok_or(GenerationObjectDownloadError::InvalidCapability)?;
-        let metadata =
-            fs::symlink_metadata(parent).map_err(|_| GenerationObjectDownloadError::Transport)?;
+        let metadata = fs::symlink_metadata(directory)
+            .map_err(|_| GenerationObjectDownloadError::Transport)?;
         if !metadata.is_dir() || metadata.file_type().is_symlink() {
             return Err(GenerationObjectDownloadError::InvalidCapability);
         }
         let url = capability
             .signed_url()
             .ok_or(GenerationObjectDownloadError::InvalidCapability)?;
-        let output = OpenOptions::new()
-            .create_new(true)
-            .write(true)
-            .open(destination)
+        let mut output = tempfile::tempfile_in(directory)
             .map_err(|_| GenerationObjectDownloadError::Transport)?;
-        // Only a successfully created file is ours. A transport/status/digest
-        // rejection must not strand a partial immutable-spool name and block
-        // the next authorized Restore; create_new never removes a foreign file.
-        let mut pending =
-            tempfile::NamedTempFile::from_parts(output, tempfile::TempPath::from_path(destination));
         let mut writer = BoundedGenerationGetWriter {
-            file: pending.as_file_mut(),
+            file: &mut output,
             expected_bytes: capability.container_bytes(),
             written: 0,
             hasher: Sha256::new(),
@@ -506,21 +488,15 @@ impl<T: SignedGenerationObjectStreamGetPort> VerifiedGenerationObjectStreamDownl
         if digest != capability.container_digest() {
             return Err(GenerationObjectDownloadError::DigestMismatch);
         }
-        pending
-            .as_file_mut()
+        output
             .sync_all()
             .map_err(|_| GenerationObjectDownloadError::Transport)?;
-        let verified = VerifiedGenerationObjectFile::open(
-            destination,
+        VerifiedGenerationObjectFile::from_temporary_file(
+            output,
             capability.container_bytes(),
             capability.container_digest(),
         )
-        .map_err(|_| GenerationObjectDownloadError::DigestMismatch)?;
-        let (output, _) = pending
-            .keep()
-            .map_err(|_| GenerationObjectDownloadError::Transport)?;
-        drop(output);
-        Ok(verified)
+        .map_err(|_| GenerationObjectDownloadError::DigestMismatch)
     }
 }
 
@@ -608,14 +584,13 @@ mod tests {
         std::fs::create_dir(&dir)?;
         let len = 2_500_031_u64;
         let capability = stream_capability(len, 0x72)?;
-        let path = dir.join(".pending-signed-get-valid");
         let mut download = VerifiedGenerationObjectStreamDownloader::new(StreamGet {
             status: 200,
             bytes: len,
             byte: 0x72,
             fail_after: None,
         });
-        let mut spool = download.download_to_new_pending_file(&capability, &path)?;
+        let mut spool = download.download_to_temporary_file(&capability, &dir)?;
         assert_eq!(spool.expected_bytes(), len);
         let mut buffer = [0_u8; 65_536];
         let mut total = 0_u64;
@@ -629,13 +604,12 @@ mod tests {
         }
         assert_eq!(total, len);
         spool.recheck_and_rewind()?;
-        // A crash/retry can never silently replace the first pending file.
-        assert!(
-            download
-                .download_to_new_pending_file(&capability, &path)
-                .is_err()
-        );
+        // Every request owns an independent OS-cleaned handle, not a global
+        // digest-named file that could be left behind by a dead process.
+        let second = download.download_to_temporary_file(&capability, &dir)?;
+        drop(second);
         drop(spool);
+        assert!(std::fs::read_dir(&dir)?.next().is_none());
         std::fs::remove_dir_all(dir)?;
         Ok(())
     }
@@ -656,7 +630,7 @@ mod tests {
         std::fs::create_dir(&dir)?;
         let len = 131_077_u64;
         let capability = stream_capability(len, 0x42)?;
-        for (index, simulated, expected) in [
+        for (_index, simulated, expected) in [
             (
                 0,
                 StreamGet {
@@ -708,13 +682,12 @@ mod tests {
                 Error::Transport,
             ),
         ] {
-            let path = dir.join(format!(".pending-untrusted-{index}"));
             let mut downloader = VerifiedGenerationObjectStreamDownloader::new(simulated);
-            let outcome = downloader.download_to_new_pending_file(&capability, &path);
+            let outcome = downloader.download_to_temporary_file(&capability, &dir);
             assert!(matches!(outcome, Err(reason) if reason == expected));
             assert!(
-                !path.exists(),
-                "a failed exact create-new GET must retire its own partial bytes"
+                std::fs::read_dir(&dir)?.next().is_none(),
+                "a failed exact GET must leave no named scratch bytes"
             );
             // The same descriptor can be retried without manual deletion.
             let mut retry = VerifiedGenerationObjectStreamDownloader::new(StreamGet {
@@ -723,9 +696,8 @@ mod tests {
                 byte: 0x42,
                 fail_after: None,
             });
-            let verified = retry.download_to_new_pending_file(&capability, &path)?;
+            let verified = retry.download_to_temporary_file(&capability, &dir)?;
             drop(verified);
-            std::fs::remove_file(&path)?;
         }
         assert!(!dir.join("generation_stream_get_descriptor").exists());
         std::fs::remove_dir_all(dir)?;
@@ -733,9 +705,9 @@ mod tests {
     }
 
     #[test]
-    fn pending_download_refuses_foreign_create_new_file_without_deleting_it()
+    fn temporary_download_does_not_touch_foreign_named_pending_file()
     -> Result<(), Box<dyn std::error::Error>> {
-        use super::{GenerationObjectDownloadError, VerifiedGenerationObjectStreamDownloader};
+        use super::VerifiedGenerationObjectStreamDownloader;
         let dir = tempfile::tempdir()?;
         let path = dir.path().join(".pending-foreign-preserved");
         std::fs::write(&path, b"unknown owner evidence")?;
@@ -747,10 +719,8 @@ mod tests {
             byte: 0x42,
             fail_after: None,
         });
-        assert!(matches!(
-            downloader.download_to_new_pending_file(&capability, &path),
-            Err(GenerationObjectDownloadError::Transport)
-        ));
+        let verified = downloader.download_to_temporary_file(&capability, dir.path())?;
+        drop(verified);
         assert_eq!(std::fs::read(&path)?, b"unknown owner evidence");
         Ok(())
     }
@@ -835,9 +805,8 @@ mod tests {
             "https://0123456789abcdef0123456789abcdef.r2.cloudflarestorage.com/bucket/object?X-Amz-Signature=SECRET".to_owned(),
             120,
         );
-        let pending = dir.join(".pending-network-ciphertext");
         let mut fetcher = VerifiedGenerationObjectStreamDownloader::new(StreamFileGet(original));
-        let mut object = fetcher.download_to_new_pending_file(&capability, &pending)?;
+        let mut object = fetcher.download_to_temporary_file(&capability, &dir)?;
         let prelude = object.read_descriptor_verified_metadata_prelude()?;
         let inspected = encrypted_generation_domain::inspect_generation_metadata_prelude(&prelude)?;
         assert_eq!(inspected.metadata_digest(), expected.metadata_digest());
@@ -999,6 +968,65 @@ mod tests {
                 Err(expected)
             );
         }
+        Ok(())
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_os_tempfile_child_fixture() -> Result<(), Box<dyn std::error::Error>> {
+        use std::io::Write;
+        let Some(root) = std::env::var_os("PROFILE_BRIDGE_TEST_CHILD_TEMP_ROOT") else {
+            return Ok(());
+        };
+        // The parent deliberately kills this process before either File drops.
+        let mut ciphertext = tempfile::tempfile_in(&root)?;
+        let mut plaintext = tempfile::tempfile_in(&root)?;
+        ciphertext.write_all(&[0x82; 4096])?;
+        plaintext.write_all(&[0x53; 4096])?;
+        ciphertext.sync_all()?;
+        plaintext.sync_all()?;
+        std::fs::write(std::path::Path::new(&root).join("child-ready"), b"ready")?;
+        loop {
+            std::thread::park();
+        }
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_process_death_retires_both_os_owned_restore_files()
+    -> Result<(), Box<dyn std::error::Error>> {
+        use std::process::{Command, Stdio};
+        use std::time::Duration;
+        let root = tempfile::tempdir()?;
+        let ready = root.path().join("child-ready");
+        let mut child = Command::new(std::env::current_exe()?)
+            .arg("--exact")
+            .arg("generation_reopen::tests::windows_os_tempfile_child_fixture")
+            .env("PROFILE_BRIDGE_TEST_CHILD_TEMP_ROOT", root.path())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()?;
+        let started = (0..100).any(|_| {
+            if ready.exists() {
+                return true;
+            }
+            if child.try_wait().ok().flatten().is_some() {
+                return false;
+            }
+            std::thread::sleep(Duration::from_millis(50));
+            false
+        });
+        if !started {
+            let _ = child.kill();
+            let _ = child.wait();
+            return Err("OS-owned scratch child did not hold both handles".into());
+        }
+        child.kill()?;
+        child.wait()?;
+        let remaining = std::fs::read_dir(root.path())?
+            .map(|entry| entry.map(|file| file.file_name()))
+            .collect::<Result<Vec<_>, _>>()?;
+        assert_eq!(remaining, vec![std::ffi::OsString::from("child-ready")]);
         Ok(())
     }
 }

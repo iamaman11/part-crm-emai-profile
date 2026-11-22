@@ -2357,10 +2357,8 @@ mod physical_cloud_current_restore {
         assert_eq!(fresh.container_bytes(), cap.container_bytes());
         assert!(fresh.signed_url() != cap.signed_url());
         let mut downloader = VerifiedGenerationObjectStreamDownloader::new(http);
-        let pending = root.join(".pending-expiry-proof.bpgc");
-        let verified = downloader.download_to_new_pending_file(&fresh, &pending)?;
+        let verified = downloader.download_to_temporary_file(&fresh, &root)?;
         drop(verified);
-        std::fs::remove_file(&pending)?;
         eprintln!("FRESH_SIGNED_GET_EXACT_DIGEST_PASS");
         Ok(())
     }
