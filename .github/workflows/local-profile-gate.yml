@@ -126,6 +126,9 @@ jobs:
       - name: Test local profile lifecycle
         run: cargo test --locked -p profile-bridge --features synthetic-test-bin local_profile
 
+      - name: Prove OS-owned Restore scratch cleanup after Windows process death
+        run: cargo test --locked -p profile-bridge --features synthetic-test-bin --lib generation_reopen::tests::windows_process_death_retires_both_os_owned_restore_files -- --exact
+
       - name: Prove native Open diagnostic cause on Windows
         run: cargo test --locked -p profile-bridge --bin profile-bridge
 

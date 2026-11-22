@@ -23,7 +23,7 @@ use encrypted_generation_domain::{
     open_generation_streaming,
 };
 use profile_platform_primitives::{DeviceId, GenerationId, ProfileId, TenantId};
-use std::fs::{self, OpenOptions};
+use std::fs;
 use std::io::{Seek, SeekFrom};
 
 const LOWER_HEX: &[u8; 16] = b"0123456789abcdef";
@@ -648,27 +648,17 @@ where
     }
     let source_container_sha256 = encode_sha256(capability.container_digest());
 
-    // The sole authoritative reopen owner selects the encrypted spool path.
-    // No caller controls the generation, object, digest, DEK or workspace.
-    // Same descriptor yields one deterministic no-replace pending file;
-    // interrupted/foreign evidence cannot silently be overwritten.
-    let staged_ciphertext_path = root.path().join(format!(
-        ".pending-r2-{}",
-        encode_sha256(capability.container_digest())
-    ));
-    // Stream the exact ciphertext also when the existing local workspace lacks
-    // only its host-local binding. Legacy Vec is reserved for non-stream ports.
+    // The exact Restore uses an OS-owned, unnamed file for immutable ciphertext.
+    // It is never CURRENT or a recovery checkpoint. The file handle stays with
+    // this invocation and the OS releases it even if the process terminates.
+    // Stream also when only the host-local binding is missing.
     let stream = downloader
-        .download_generation_object_to_new_pending_file(&capability, &staged_ciphertext_path)
+        .download_generation_object_to_temporary_file(&capability, root.path())
         .map_err(|error| {
             prewrite_refusal(AuthoritativeGenerationPreWriteError::Download(error.into()))
         })?;
     if let Some(ciphertext) = stream {
-        // The verified create-new download belongs to this Restore invocation.
-        // Close both file handles before removing its exact path, on success
-        // AND on every authenticated/opening/materialization failure.
-        let owned_ciphertext = tempfile::TempPath::from_path(staged_ciphertext_path);
-        let restored = materialize_streamed_authoritative_generation(
+        return materialize_streamed_authoritative_generation(
             root,
             tenant_id,
             profile_id,
@@ -682,13 +672,6 @@ where
             profile_version,
             expected_previous_base,
         );
-        let retired = owned_ciphertext
-            .close()
-            .map_err(|_| AuthoritativeGenerationMaterializationError::Local);
-        return match (restored, retired) {
-            (outcome, Ok(())) => outcome,
-            (_, Err(error)) => Err(error),
-        };
     }
 
     let container = downloader
@@ -882,23 +865,10 @@ where
     if key.key_id() != metadata.key_id() {
         return Err(prewrite(PreWrite::OpeningMaterialMismatch));
     }
-    let plaintext_path = root.path().join(format!(
-        ".pending-bpgw-{}",
-        encode_sha256(capability.container_digest())
-    ));
-    let plaintext = OpenOptions::new()
-        .create_new(true)
-        .read(true)
-        .write(true)
-        .open(&plaintext_path)
-        .map_err(|_| Error::Local)?;
-    // The temporary decrypted BPGW is never recovery authority. Its exact
-    // create-new ownership makes every early error path remove only OUR file.
-    let mut plaintext = tempfile::NamedTempFile::from_parts(
-        plaintext,
-        tempfile::TempPath::from_path(&plaintext_path),
-    );
-    let report = open_generation_streaming(ciphertext.reader(), &key, plaintext.as_file_mut())
+    // Never give disposable plaintext a durable pathname. The OS retires the
+    // underlying bytes on close/process death, independent of Rust Drop.
+    let mut plaintext = tempfile::tempfile_in(root.path()).map_err(|_| Error::Local)?;
+    let report = open_generation_streaming(ciphertext.reader(), &key, &mut plaintext)
         .map_err(|_| prewrite(PreWrite::Decryption))?;
     if report.metadata() != metadata
         || report.metadata_digest().bytes() != capability.metadata_digest()
@@ -910,21 +880,11 @@ where
     ciphertext
         .recheck_and_rewind()
         .map_err(|_| prewrite(PreWrite::Decryption))?;
-    plaintext
-        .as_file_mut()
-        .sync_all()
-        .map_err(|_| Error::Local)?;
-    if plaintext
-        .as_file()
-        .metadata()
-        .map_err(|_| Error::Local)?
-        .len()
-        != metadata.plaintext_bytes()
-    {
+    plaintext.sync_all().map_err(|_| Error::Local)?;
+    if plaintext.metadata().map_err(|_| Error::Local)?.len() != metadata.plaintext_bytes() {
         return Err(prewrite(PreWrite::Decryption));
     }
     plaintext
-        .as_file_mut()
         .seek(SeekFrom::Start(0))
         .map_err(|_| Error::Local)?;
     let digest = encode_sha256(capability.container_digest());
@@ -943,7 +903,7 @@ where
             }
             verify_workspace_matches_streamed_snapshot(
                 &workspace,
-                plaintext.as_file_mut(),
+                &mut plaintext,
                 StreamedWorkspaceSnapshot {
                     plaintext_bytes: metadata.plaintext_bytes(),
                     plaintext_digest: metadata.plaintext_digest().bytes(),
@@ -1000,7 +960,7 @@ where
                 profile_id,
                 generation_id,
                 version,
-                plaintext.as_file_mut(),
+                &mut plaintext,
                 expected,
                 bind,
             ),
@@ -1009,7 +969,7 @@ where
                 tenant_id,
                 profile_id,
                 generation_id,
-                plaintext.as_file_mut(),
+                &mut plaintext,
                 expected,
                 bind,
             ),
@@ -1020,9 +980,9 @@ where
             _ => Error::Snapshot,
         })?;
     }
-    // Success is not reported until decrypted bytes are removed. On any
-    // earlier error NamedTempFile drops after closing its owned handle.
-    plaintext.close().map_err(|_| Error::Local)?;
+    // Close the only transient plaintext handle. It is never a named,
+    // persistent recovery artifact; the OS owns removal on every exit path.
+    drop(plaintext);
     Ok(())
 }
 
@@ -1324,8 +1284,8 @@ mod tests {
         }
     }
 
-    /// Exercise the real owner through the additive file path, never the
-    /// legacy Vec download. The source is a previously sealed BPGC container.
+    /// Exercise the real owner through the OS-owned stream, never a Vec.
+    /// The source is a previously sealed BPGC container.
     struct FakeStreamDownloader {
         container: Vec<u8>,
         calls: u64,
@@ -1341,10 +1301,10 @@ mod tests {
             Err(GenerationObjectDownloadError::InvalidCapability)
         }
 
-        fn download_generation_object_to_new_pending_file(
+        fn download_generation_object_to_temporary_file(
             &mut self,
             capability: &GenerationDownloadCapability,
-            destination: &std::path::Path,
+            directory: &std::path::Path,
         ) -> Result<Option<crate::generation_object_spool::VerifiedGenerationObjectFile>, Self::Error>
         {
             if u64::try_from(self.container.len()).ok() != Some(capability.container_bytes())
@@ -1353,10 +1313,7 @@ mod tests {
             {
                 return Err(GenerationObjectDownloadError::DigestMismatch);
             }
-            let mut output = fs::OpenOptions::new()
-                .write(true)
-                .create_new(true)
-                .open(destination)
+            let mut output = tempfile::tempfile_in(directory)
                 .map_err(|_| GenerationObjectDownloadError::Transport)?;
             output
                 .write_all(&self.container)
@@ -1364,16 +1321,113 @@ mod tests {
             output
                 .sync_all()
                 .map_err(|_| GenerationObjectDownloadError::Transport)?;
-            drop(output);
             self.calls += 1;
-            let verified = crate::generation_object_spool::VerifiedGenerationObjectFile::open(
-                destination,
-                capability.container_bytes(),
-                capability.container_digest(),
-            )
-            .map_err(|_| GenerationObjectDownloadError::DigestMismatch)?;
+            let verified =
+                crate::generation_object_spool::VerifiedGenerationObjectFile::from_temporary_file(
+                    output,
+                    capability.container_bytes(),
+                    capability.container_digest(),
+                )
+                .map_err(|_| GenerationObjectDownloadError::DigestMismatch)?;
             Ok(Some(verified))
         }
+    }
+
+    struct ParallelStreamDownloader {
+        inner: FakeStreamDownloader,
+        both_downloaded: std::sync::Arc<std::sync::Barrier>,
+    }
+
+    impl GenerationObjectDownloadPort for ParallelStreamDownloader {
+        type Error = GenerationObjectDownloadError;
+
+        fn download_generation_object(
+            &mut self,
+            capability: &GenerationDownloadCapability,
+        ) -> Result<Vec<u8>, Self::Error> {
+            self.inner.download_generation_object(capability)
+        }
+
+        fn download_generation_object_to_temporary_file(
+            &mut self,
+            capability: &GenerationDownloadCapability,
+            directory: &std::path::Path,
+        ) -> Result<Option<crate::generation_object_spool::VerifiedGenerationObjectFile>, Self::Error>
+        {
+            let verified = self
+                .inner
+                .download_generation_object_to_temporary_file(capability, directory)?;
+            self.both_downloaded.wait();
+            Ok(verified)
+        }
+    }
+
+    #[test]
+    fn concurrent_same_descriptor_restores_keep_one_exact_generation()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let fixture = Fixture::new()?;
+        let both_downloaded = std::sync::Arc::new(std::sync::Barrier::new(2));
+        let devices = [
+            (1_u64, DeviceId::parse("device_concurrent_restore_0")?),
+            (2_u64, DeviceId::parse("device_concurrent_restore_1")?),
+        ];
+        let outcomes = std::thread::scope(|scope| {
+            let attempts = devices
+                .into_iter()
+                .map(|(epoch, device)| {
+                    let barrier = both_downloaded.clone();
+                    let reference = &fixture;
+                    scope.spawn(move || {
+                        let mut control = reference.control();
+                        let mut downloader = ParallelStreamDownloader {
+                            inner: FakeStreamDownloader {
+                                container: reference.container.clone(),
+                                calls: 0,
+                            },
+                            both_downloaded: barrier,
+                        };
+                        ensure_authoritative_generation(
+                            &reference.root,
+                            &reference.tenant_id,
+                            &reference.profile_id,
+                            &reference.generation_id,
+                            &device,
+                            epoch,
+                            &mut control,
+                            &mut downloader,
+                        )
+                    })
+                })
+                .collect::<Vec<_>>();
+            attempts
+                .into_iter()
+                .map(|attempt| {
+                    attempt
+                        .join()
+                        .map_err(|_| std::io::Error::other("restore worker panicked"))
+                })
+                .collect::<Result<Vec<_>, _>>()
+        })?;
+        assert_eq!(
+            outcomes.iter().filter(|outcome| outcome.is_ok()).count(),
+            1,
+            "only one concurrent Restore may publish the exact generation"
+        );
+        let published = fixture.root.open_generation(
+            &fixture.tenant_id,
+            &fixture.profile_id,
+            &fixture.generation_id,
+        )?;
+        assert_eq!(
+            fs::read(published.path().join("user_data/storage/state.bin"))?,
+            b"authoritative-state"
+        );
+        assert_eq!(
+            fs::read(published.path().join(BROWSER_IDENTITY_RECORD_FILE))?,
+            fixture.browser_identity_record
+        );
+        fixture.cleanup();
+        Ok(())
     }
 
     #[test]
@@ -2154,48 +2208,47 @@ mod tests {
     }
 
     #[test]
-    fn restore_keeps_unknown_plaintext_pending_and_retires_only_its_ciphertext()
+    fn restore_uses_unnamed_spools_without_touching_foreign_pending_files()
     -> Result<(), Box<dyn std::error::Error>> {
         let fixture = Fixture::new()?;
         let digest = encode_sha256(fixture.container_digest);
         let ciphertext_path = fixture.root.path().join(format!(".pending-r2-{digest}"));
         let plaintext_path = fixture.root.path().join(format!(".pending-bpgw-{digest}"));
-        fs::write(&plaintext_path, b"unknown pending owner")?;
+        fs::write(&ciphertext_path, b"unknown encrypted pending owner")?;
+        fs::write(&plaintext_path, b"unknown plaintext pending owner")?;
         let mut control = fixture.control();
         let mut downloader = FakeStreamDownloader {
             container: fixture.container.clone(),
             calls: 0,
         };
-        assert_eq!(
-            ensure_authoritative_generation(
-                &fixture.root,
-                &fixture.tenant_id,
-                &fixture.profile_id,
-                &fixture.generation_id,
-                &DeviceId::parse("device_foreign_plaintext")?,
-                3,
-                &mut control,
-                &mut downloader,
-            ),
-            Err(AuthoritativeGenerationMaterializationError::Local)
-        );
-        assert_eq!(fs::read(&plaintext_path)?, b"unknown pending owner");
-        assert!(!ciphertext_path.exists());
-        // Simulate an independent verified recovery/owner removing its own
-        // evidence; the same authorized Restore can now publish normally.
-        fs::remove_file(&plaintext_path)?;
         ensure_authoritative_generation(
             &fixture.root,
             &fixture.tenant_id,
             &fixture.profile_id,
             &fixture.generation_id,
             &DeviceId::parse("device_foreign_plaintext")?,
-            4,
+            3,
             &mut control,
             &mut downloader,
         )?;
-        assert!(!ciphertext_path.exists());
-        assert!(!plaintext_path.exists());
+        assert_eq!(
+            fs::read(&ciphertext_path)?,
+            b"unknown encrypted pending owner"
+        );
+        assert_eq!(
+            fs::read(&plaintext_path)?,
+            b"unknown plaintext pending owner"
+        );
+        assert!(
+            fixture
+                .root
+                .open_generation(
+                    &fixture.tenant_id,
+                    &fixture.profile_id,
+                    &fixture.generation_id
+                )
+                .is_ok()
+        );
         fixture.cleanup();
         Ok(())
     }
