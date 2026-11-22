@@ -664,7 +664,11 @@ where
             prewrite_refusal(AuthoritativeGenerationPreWriteError::Download(error.into()))
         })?;
     if let Some(ciphertext) = stream {
-        return materialize_streamed_authoritative_generation(
+        // The verified create-new download belongs to this Restore invocation.
+        // Close both file handles before removing its exact path, on success
+        // AND on every authenticated/opening/materialization failure.
+        let owned_ciphertext = tempfile::TempPath::from_path(staged_ciphertext_path);
+        let restored = materialize_streamed_authoritative_generation(
             root,
             tenant_id,
             profile_id,
@@ -674,11 +678,17 @@ where
             control,
             &capability,
             ciphertext,
-            &staged_ciphertext_path,
             incomplete_local,
             profile_version,
             expected_previous_base,
         );
+        let retired = owned_ciphertext
+            .close()
+            .map_err(|_| AuthoritativeGenerationMaterializationError::Local);
+        return match (restored, retired) {
+            (outcome, Ok(())) => outcome,
+            (_, Err(error)) => Err(error),
+        };
     }
 
     let container = downloader
@@ -823,7 +833,6 @@ fn materialize_streamed_authoritative_generation<C>(
     control: &mut C,
     capability: &crate::generation_reopen::GenerationDownloadCapability,
     mut ciphertext: VerifiedGenerationObjectFile,
-    ciphertext_path: &std::path::Path,
     incomplete_local: Option<GenerationWorkspace>,
     profile_version: Option<u64>,
     expected_previous_base: Option<&GenerationId>,
@@ -877,13 +886,19 @@ where
         ".pending-bpgw-{}",
         encode_sha256(capability.container_digest())
     ));
-    let mut plaintext = OpenOptions::new()
+    let plaintext = OpenOptions::new()
         .create_new(true)
         .read(true)
         .write(true)
         .open(&plaintext_path)
         .map_err(|_| Error::Local)?;
-    let report = open_generation_streaming(ciphertext.reader(), &key, &mut plaintext)
+    // The temporary decrypted BPGW is never recovery authority. Its exact
+    // create-new ownership makes every early error path remove only OUR file.
+    let mut plaintext = tempfile::NamedTempFile::from_parts(
+        plaintext,
+        tempfile::TempPath::from_path(&plaintext_path),
+    );
+    let report = open_generation_streaming(ciphertext.reader(), &key, plaintext.as_file_mut())
         .map_err(|_| prewrite(PreWrite::Decryption))?;
     if report.metadata() != metadata
         || report.metadata_digest().bytes() != capability.metadata_digest()
@@ -895,11 +910,21 @@ where
     ciphertext
         .recheck_and_rewind()
         .map_err(|_| prewrite(PreWrite::Decryption))?;
-    plaintext.sync_all().map_err(|_| Error::Local)?;
-    if plaintext.metadata().map_err(|_| Error::Local)?.len() != metadata.plaintext_bytes() {
+    plaintext
+        .as_file_mut()
+        .sync_all()
+        .map_err(|_| Error::Local)?;
+    if plaintext
+        .as_file()
+        .metadata()
+        .map_err(|_| Error::Local)?
+        .len()
+        != metadata.plaintext_bytes()
+    {
         return Err(prewrite(PreWrite::Decryption));
     }
     plaintext
+        .as_file_mut()
         .seek(SeekFrom::Start(0))
         .map_err(|_| Error::Local)?;
     let digest = encode_sha256(capability.container_digest());
@@ -918,7 +943,7 @@ where
             }
             verify_workspace_matches_streamed_snapshot(
                 &workspace,
-                &mut plaintext,
+                plaintext.as_file_mut(),
                 StreamedWorkspaceSnapshot {
                     plaintext_bytes: metadata.plaintext_bytes(),
                     plaintext_digest: metadata.plaintext_digest().bytes(),
@@ -947,19 +972,7 @@ where
             Ok(())
         })();
         let released = lock.release().map_err(|_| Error::InvalidLocalEvidence);
-        if let Err(reason) = verified {
-            if profile_version.is_some() {
-                // These two create-new temporary files belong to this exact
-                // read-only equality attempt. A changed local profile is an
-                // ordinary conflict, not a reason to block every future
-                // retry with an abandoned ciphertext spool.
-                drop(plaintext);
-                drop(ciphertext);
-                fs::remove_file(&plaintext_path).map_err(|_| Error::Local)?;
-                fs::remove_file(ciphertext_path).map_err(|_| Error::Local)?;
-            }
-            return Err(reason);
-        }
+        verified?;
         released?;
     } else {
         let expected = StreamedWorkspaceSnapshot {
@@ -987,7 +1000,7 @@ where
                 profile_id,
                 generation_id,
                 version,
-                &mut plaintext,
+                plaintext.as_file_mut(),
                 expected,
                 bind,
             ),
@@ -996,7 +1009,7 @@ where
                 tenant_id,
                 profile_id,
                 generation_id,
-                &mut plaintext,
+                plaintext.as_file_mut(),
                 expected,
                 bind,
             ),
@@ -1007,13 +1020,9 @@ where
             _ => Error::Snapshot,
         })?;
     }
-    // Only after the full AEAD tag + BPGW + browser binding are verified and
-    // the canonical workspace is published may the two owned scratch files
-    // be retired. Failure to remove one prevents a false Clean terminal.
-    drop(plaintext);
-    drop(ciphertext);
-    fs::remove_file(&plaintext_path).map_err(|_| Error::Local)?;
-    fs::remove_file(ciphertext_path).map_err(|_| Error::Local)?;
+    // Success is not reported until decrypted bytes are removed. On any
+    // earlier error NamedTempFile drops after closing its owned handle.
+    plaintext.close().map_err(|_| Error::Local)?;
     Ok(())
 }
 
@@ -2096,16 +2105,97 @@ mod tests {
                 std::io::ErrorKind::NotFound
             ))
         ));
+        let digest = encode_sha256(control.container_digest);
         assert!(
-            fixture
+            !fixture
                 .root
                 .path()
-                .join(format!(
-                    ".pending-r2-{}",
-                    encode_sha256(control.container_digest)
-                ))
+                .join(format!(".pending-r2-{digest}"))
                 .exists()
         );
+        assert!(
+            !fixture
+                .root
+                .path()
+                .join(format!(".pending-bpgw-{digest}"))
+                .exists()
+        );
+        // Same immutable descriptor, same typed AEAD failure, no stale spool
+        // conflict or early local publication on an authorized repeat.
+        let retry = ensure_authoritative_generation(
+            &fixture.root,
+            &fixture.tenant_id,
+            &fixture.profile_id,
+            &fixture.generation_id,
+            &DeviceId::parse("device_authgen_streamed_reject")?,
+            4,
+            &mut control,
+            &mut downloader,
+        );
+        assert_eq!(retry, outcome);
+        assert_eq!(control.opening_calls, 2);
+        assert_eq!(downloader.calls, 2);
+        assert!(
+            !fixture
+                .root
+                .path()
+                .join(format!(".pending-r2-{digest}"))
+                .exists()
+        );
+        assert!(
+            !fixture
+                .root
+                .path()
+                .join(format!(".pending-bpgw-{digest}"))
+                .exists()
+        );
+        fixture.cleanup();
+        Ok(())
+    }
+
+    #[test]
+    fn restore_keeps_unknown_plaintext_pending_and_retires_only_its_ciphertext()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let fixture = Fixture::new()?;
+        let digest = encode_sha256(fixture.container_digest);
+        let ciphertext_path = fixture.root.path().join(format!(".pending-r2-{digest}"));
+        let plaintext_path = fixture.root.path().join(format!(".pending-bpgw-{digest}"));
+        fs::write(&plaintext_path, b"unknown pending owner")?;
+        let mut control = fixture.control();
+        let mut downloader = FakeStreamDownloader {
+            container: fixture.container.clone(),
+            calls: 0,
+        };
+        assert_eq!(
+            ensure_authoritative_generation(
+                &fixture.root,
+                &fixture.tenant_id,
+                &fixture.profile_id,
+                &fixture.generation_id,
+                &DeviceId::parse("device_foreign_plaintext")?,
+                3,
+                &mut control,
+                &mut downloader,
+            ),
+            Err(AuthoritativeGenerationMaterializationError::Local)
+        );
+        assert_eq!(fs::read(&plaintext_path)?, b"unknown pending owner");
+        assert!(!ciphertext_path.exists());
+        // Simulate an independent verified recovery/owner removing its own
+        // evidence; the same authorized Restore can now publish normally.
+        fs::remove_file(&plaintext_path)?;
+        ensure_authoritative_generation(
+            &fixture.root,
+            &fixture.tenant_id,
+            &fixture.profile_id,
+            &fixture.generation_id,
+            &DeviceId::parse("device_foreign_plaintext")?,
+            4,
+            &mut control,
+            &mut downloader,
+        )?;
+        assert!(!ciphertext_path.exists());
+        assert!(!plaintext_path.exists());
         fixture.cleanup();
         Ok(())
     }
