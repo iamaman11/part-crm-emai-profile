@@ -2176,10 +2176,20 @@ mod windows {
         use std::path::{Path, PathBuf};
 
         pub(super) fn is_opted_in_disposable_restore(root: &Path, profile: &str) -> bool {
-            root.is_absolute()
-                && root.starts_with(std::env::temp_dir())
-                && root != std::env::temp_dir()
-                && std::fs::read_to_string(root.join(".physical-staging-verified-restore"))
+            if !root.is_absolute() {
+                return false;
+            }
+            // Windows canonicalize yields a verbatim \\?\ path, while temp_dir
+            // commonly uses a drive path. Compare the same path representation.
+            let Ok(temp) = std::fs::canonicalize(std::env::temp_dir()) else {
+                return false;
+            };
+            let Ok(scratch) = std::fs::canonicalize(root) else {
+                return false;
+            };
+            scratch.starts_with(&temp)
+                && scratch != temp
+                && std::fs::read_to_string(scratch.join(".physical-staging-verified-restore"))
                     .as_deref()
                     .is_ok_and(|found| found == format!("restored-test-profile={profile}\n"))
         }
@@ -2202,6 +2212,14 @@ mod windows {
             )?;
             assert!(!is_opted_in_disposable_restore(&root, "profile_example_a"));
             assert!(is_opted_in_disposable_restore(&root, "profile_example_b"));
+            let canonical = std::fs::canonicalize(&root)?;
+            assert!(!is_opted_in_disposable_restore(&canonical, "profile_example_a"));
+            assert!(is_opted_in_disposable_restore(&canonical, "profile_example_b"));
+            let canonical_temp = std::fs::canonicalize(std::env::temp_dir())?;
+            assert!(!is_opted_in_disposable_restore(
+                &canonical_temp,
+                "profile_example_b"
+            ));
             std::fs::remove_dir_all(root)?;
             Ok(())
         }
