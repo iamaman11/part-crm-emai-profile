@@ -2213,8 +2213,14 @@ mod windows {
             assert!(!is_opted_in_disposable_restore(&root, "profile_example_a"));
             assert!(is_opted_in_disposable_restore(&root, "profile_example_b"));
             let canonical = std::fs::canonicalize(&root)?;
-            assert!(!is_opted_in_disposable_restore(&canonical, "profile_example_a"));
-            assert!(is_opted_in_disposable_restore(&canonical, "profile_example_b"));
+            assert!(!is_opted_in_disposable_restore(
+                &canonical,
+                "profile_example_a"
+            ));
+            assert!(is_opted_in_disposable_restore(
+                &canonical,
+                "profile_example_b"
+            ));
             let canonical_temp = std::fs::canonicalize(std::env::temp_dir())?;
             assert!(!is_opted_in_disposable_restore(
                 &canonical_temp,
