@@ -685,8 +685,7 @@ mod windows {
         let Some(selected_root) = std::env::var_os("PROFILE_BRIDGE_TEST_CLOSED_SYNC_ROOT") else {
             return;
         };
-        if !std::fs::canonicalize(selected_root)
-            .is_ok_and(|selected| selected == root.path())
+        if !std::fs::canonicalize(selected_root).is_ok_and(|selected| selected == root.path())
             || !physical_staging_closed_sync::is_opted_in_disposable_restore(
                 root.path(),
                 intent.profile_id.as_str(),
@@ -711,7 +710,6 @@ mod windows {
         base: &profile_platform_primitives::GenerationId,
         _writer: &crate::local_profile::BridgeWorkspaceLock,
     ) -> Result<crate::local_profile::GenerationWorkspace, ()> {
-        use crate::browser_execution::browser_writer_locks_absent;
         use std::fs;
 
         let active = root
@@ -724,7 +722,6 @@ mod windows {
             || active.pending_sync().is_some()
             || fs::read(active.path().join(".local-unsynced")).map_err(|_| ())?
                 != b"local-unsynced-v2"
-            || !matches!(browser_writer_locks_absent(&active), Ok(true))
         {
             return Err(());
         }
@@ -887,11 +884,14 @@ mod windows {
         )
         .map_err(|_| ())?;
         let captured = (|| {
-            let active =
+            let workspace =
                 current_closed_ready_under_writer(root, intent, &workspace, &base, &lock)?;
-            let inventory = active.inventory().map_err(|_| ())?;
+            if !matches!(browser_writer_locks_absent(&workspace), Ok(true)) {
+                return Err(());
+            }
+            let inventory = workspace.inventory().map_err(|_| ())?;
             let (bytes, digest) =
-                digest_closed_workspace_streaming(&active, &inventory).map_err(|_| ())?;
+                digest_closed_workspace_streaming(&workspace, &inventory).map_err(|_| ())?;
             Ok((inventory, bytes, digest))
         })();
         let unlock = lock.release().map_err(|_| ());
@@ -1051,10 +1051,13 @@ mod windows {
             )
             .map_err(|_| ())?;
             let encrypted = (|| {
-                let active =
+                let workspace =
                     current_closed_ready_under_writer(root, intent, &workspace, &base, &lock)?;
+                if !matches!(browser_writer_locks_absent(&workspace), Ok(true)) {
+                    return Err(());
+                }
                 let encrypted = seal_closed_workspace_streaming(
-                    &active,
+                    &workspace,
                     &original_inventory,
                     &candidate,
                     Some(&base),
@@ -1072,7 +1075,7 @@ mod windows {
                     plaintext_bytes,
                 )
                 .map_err(|_| ())?;
-                root.set_profile_current_pending_sync(&active, pending.clone())
+                root.set_profile_current_pending_sync(&workspace, pending.clone())
                     .map_err(|_| ())?;
                 Ok((encrypted, pending))
             })();
@@ -2408,12 +2411,7 @@ mod windows {
                 expected_version: version,
                 status: InitialProfileStatus::Ready,
             };
-            run_closed_sync_with_admission(
-                &intent,
-                &binding,
-                &root,
-                "https://staging.alegria.by",
-            )?;
+            run_closed_sync_with_admission(&intent, &binding, &root, "https://staging.alegria.by")?;
             let after = root.open_profile_current(binding.tenant_id(), &profile_id)?;
             assert_eq!(after.profile_version(), version + 1);
             assert_eq!(after.base_generation_id(), Some(current.generation_id()));
