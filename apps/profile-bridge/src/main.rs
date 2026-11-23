@@ -478,7 +478,9 @@ mod tests {
 
         assert_eq!(
             diagnostic_cause(&Err(BridgeCliError::LaunchFailed(
-                ShippingCompositionError::LocalDelete(TerminalDeleteError::AuthorizationUnconfirmed),
+                ShippingCompositionError::LocalDelete(
+                    TerminalDeleteError::AuthorizationUnconfirmed
+                ),
             ))),
             Cause::LocalDeleteCloudUnconfirmed,
         );
