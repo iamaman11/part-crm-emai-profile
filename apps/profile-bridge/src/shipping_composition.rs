@@ -215,6 +215,13 @@ mod windows {
     const SAVE_RECONNECT_AUTHORITY_RESERVE_MS: u64 = 5_000;
     const SAVE_HEARTBEAT_PERIOD_MS: u64 = 5_000;
 
+    // Test observation only, confined to the invoking Sync/test thread. This
+    // cannot become a second retry or generation-state authority.
+    #[cfg(test)]
+    thread_local! {
+        static READY_SYNC_SNAPSHOT_STARTS: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+    }
+
     /// A scoped helper for the existing one-shot Sync's long native-seal/R2-PUT path.
     /// It shares that Sync's coordinator cursor; it creates no second writer or
     /// persisted state. Dropping the scope joins the heartbeat before exit.
@@ -656,6 +663,70 @@ mod windows {
         eprintln!("BRIDGE_PENDING_RETRY_D1_NONAPPLIED_CONFIRMED;LOCAL_DIRTY_PRESERVED");
         Ok(())
     }
+
+    /// Only the Rust test executable can stop at this physical boundary.
+    /// The normal installed Release contains no environment-triggered crash
+    /// path. A scratch fixture previously authenticated by cold Restore and
+    /// separately admitted for staging mutation is required before aborting.
+    #[cfg(test)]
+    fn test_only_abort_after_confirmed_commit(
+        root: &MaterializationRoot,
+        intent: &crate::generation_initialization::InitialProfileOpen,
+    ) {
+        if std::env::var("PROFILE_BRIDGE_TEST_ABORT_AFTER_CONFIRMED_COMMIT").as_deref()
+            != Ok("YES_ONE_DISPOSABLE_POSTCOMMIT")
+            || std::env::var("PROFILE_BRIDGE_TEST_ALLOW_STAGING_MUTATION").as_deref()
+                != Ok("YES_SCOPED_DISPOSABLE_PROFILE")
+            || std::env::var("PROFILE_BRIDGE_TEST_CLOSED_SYNC_PROFILE").as_deref()
+                != Ok(intent.profile_id.as_str())
+        {
+            return;
+        }
+        let Some(selected_root) = std::env::var_os("PROFILE_BRIDGE_TEST_CLOSED_SYNC_ROOT") else {
+            return;
+        };
+        if !std::fs::canonicalize(selected_root).is_ok_and(|selected| selected == root.path())
+            || !physical_staging_closed_sync::is_opted_in_disposable_restore(
+                root.path(),
+                intent.profile_id.as_str(),
+            )
+        {
+            return;
+        }
+        // D1 already confirmed the exact candidate, but the original local
+        // vN, dirty marker and fsynced Prepared descriptor have not advanced.
+        // The next independent Sync must observe CURRENT without PUT/Commit.
+        eprintln!("TEST_ONLY_POSTCOMMIT_LOCAL_RECEIPT_INTERRUPTION;CLOUD_COMMIT_CONFIRMED");
+        std::process::abort();
+    }
+
+    /// Both the digest and the later seal must use the SAME verified local
+    /// base/marker. Cloud waits do not block a new native Open, so the caller
+    /// supplies the held writer lock as a type-level admission witness.
+    fn current_closed_ready_under_writer(
+        root: &MaterializationRoot,
+        intent: &crate::generation_initialization::InitialProfileOpen,
+        original: &crate::local_profile::GenerationWorkspace,
+        base: &profile_platform_primitives::GenerationId,
+        _writer: &crate::local_profile::BridgeWorkspaceLock,
+    ) -> Result<crate::local_profile::GenerationWorkspace, ()> {
+        use std::fs;
+
+        let active = root
+            .open_profile_current(&intent.tenant_id, &intent.profile_id)
+            .map_err(|_| ())?;
+        if active.path() != original.path()
+            || active.generation_id() != original.generation_id()
+            || active.base_generation_id() != Some(base)
+            || active.profile_version() != original.profile_version()
+            || active.pending_sync().is_some()
+            || fs::read(active.path().join(".local-unsynced")).map_err(|_| ())?
+                != b"local-unsynced-v2"
+        {
+            return Err(());
+        }
+        Ok(active)
+    }
     fn sync_closed_ready_with_rebase(
         intent: &crate::generation_initialization::InitialProfileOpen,
         binding: &WindowsDeviceApplicationBinding,
@@ -780,8 +851,24 @@ mod windows {
             return Err(ClosedReadySyncError::Unconfirmed);
         }
         let device = binding.device_id();
+        // Authenticated CURRENT readback is the first potentially failing
+        // network request. Refuse offline/unauthorized Sync before hashing a
+        // potentially large Firefox directory on every bounded retry.
+        // This is the EXISTING readback, not an extra probe or R2 download.
+        // Local Open can proceed during this cloud wait, so re-read the local
+        // marker and hash the ACTUAL closed bytes under the native writer.
+        let application = WindowsDeviceApplication::from_system(origin.to_owned(), binding.clone())
+            .map_err(|_| ())?;
+        let mut read_only =
+            ControlPlaneCoordinator::for_local_current_restore(application.transport());
+        let current = read_only
+            .download_capability(&intent.tenant_id, &intent.profile_id)
+            .map_err(|_| ())?;
+
         // Retry diagnostics only: identify a native snapshot attempt without
         // granting any Sync or filesystem authority.
+        #[cfg(test)]
+        READY_SYNC_SNAPSHOT_STARTS.with(|count| count.set(count.get() + 1));
         report::record_current(
             Stage::SyncSnapshot,
             Outcome::Started,
@@ -797,6 +884,8 @@ mod windows {
         )
         .map_err(|_| ())?;
         let captured = (|| {
+            let workspace =
+                current_closed_ready_under_writer(root, intent, &workspace, &base, &lock)?;
             if !matches!(browser_writer_locks_absent(&workspace), Ok(true)) {
                 return Err(());
             }
@@ -817,16 +906,9 @@ mod windows {
         // An exact candidate is reconciled only after same-device D1 proof and
         // a full native-byte comparison. A different direct same-device
         // successor permits only a marker rebase before Syncing preserved bytes.
-        // Use one device-bound application session for CURRENT readback and
-        // the later authoritative Sync calls. Every request still receives
-        // its own signed proof and the server rechecks D1/Coordinator state.
-        let application = WindowsDeviceApplication::from_system(origin.to_owned(), binding.clone())
-            .map_err(|_| ())?;
-        let mut read_only =
-            ControlPlaneCoordinator::for_local_current_restore(application.transport());
-        let current = read_only
-            .download_capability(&intent.tenant_id, &intent.profile_id)
-            .map_err(|_| ())?;
+        // The same device-bound application session serves the readback above
+        // and later authoritative Sync calls. Server D1/Coordinator checks
+        // still reauthorize every write; this early CURRENT can be stale.
         if current.generation_id() == &candidate {
             // Even an exact local candidate is finalized only when the
             // current actor/device owns the exact direct D1 successor.
@@ -969,6 +1051,8 @@ mod windows {
             )
             .map_err(|_| ())?;
             let encrypted = (|| {
+                let workspace =
+                    current_closed_ready_under_writer(root, intent, &workspace, &base, &lock)?;
                 if !matches!(browser_writer_locks_absent(&workspace), Ok(true)) {
                     return Err(());
                 }
@@ -1016,6 +1100,8 @@ mod windows {
             )
             .map_err(|_| ())?;
             observe_sync_phase(Stage::SyncPublish, publish_started);
+            #[cfg(test)]
+            test_only_abort_after_confirmed_commit(root, intent);
             if !heartbeat.is_healthy() {
                 return Err(());
             }
@@ -2078,18 +2164,32 @@ mod windows {
     #[cfg(test)]
     mod physical_staging_closed_sync {
         use super::{
-            ClosedSyncAdmission, MaterializationRoot, WindowsDeviceApplicationBinding,
+            ClosedSyncAdmission, MaterializationRoot, READY_SYNC_SNAPSHOT_STARTS,
+            WindowsDeviceApplicationBinding, pending_descriptor_matches_current,
             run_closed_sync_with_admission,
         };
         use crate::generation_initialization::{InitialProfileOpen, InitialProfileStatus};
+        use crate::generation_reopen::GenerationReopenControlPort;
+        use crate::shipping_control_plane::ControlPlaneCoordinator;
+        use crate::windows_device_application::WindowsDeviceApplication;
         use profile_platform_primitives::ProfileId;
         use std::path::{Path, PathBuf};
 
-        fn is_opted_in_disposable_restore(root: &Path, profile: &str) -> bool {
-            root.is_absolute()
-                && root.starts_with(std::env::temp_dir())
-                && root != std::env::temp_dir()
-                && std::fs::read_to_string(root.join(".physical-staging-verified-restore"))
+        pub(super) fn is_opted_in_disposable_restore(root: &Path, profile: &str) -> bool {
+            if !root.is_absolute() {
+                return false;
+            }
+            // Windows canonicalize yields a verbatim \\?\ path, while temp_dir
+            // commonly uses a drive path. Compare the same path representation.
+            let Ok(temp) = std::fs::canonicalize(std::env::temp_dir()) else {
+                return false;
+            };
+            let Ok(scratch) = std::fs::canonicalize(root) else {
+                return false;
+            };
+            scratch.starts_with(&temp)
+                && scratch != temp
+                && std::fs::read_to_string(scratch.join(".physical-staging-verified-restore"))
                     .as_deref()
                     .is_ok_and(|found| found == format!("restored-test-profile={profile}\n"))
         }
@@ -2112,6 +2212,20 @@ mod windows {
             )?;
             assert!(!is_opted_in_disposable_restore(&root, "profile_example_a"));
             assert!(is_opted_in_disposable_restore(&root, "profile_example_b"));
+            let canonical = std::fs::canonicalize(&root)?;
+            assert!(!is_opted_in_disposable_restore(
+                &canonical,
+                "profile_example_a"
+            ));
+            assert!(is_opted_in_disposable_restore(
+                &canonical,
+                "profile_example_b"
+            ));
+            let canonical_temp = std::fs::canonicalize(std::env::temp_dir())?;
+            assert!(!is_opted_in_disposable_restore(
+                &canonical_temp,
+                "profile_example_b"
+            ));
             std::fs::remove_dir_all(root)?;
             Ok(())
         }
@@ -2172,6 +2286,7 @@ mod windows {
             };
             let _sync_owner = ClosedSyncAdmission::try_acquire(&before)?
                 .ok_or("another Sync owner already holds the fixture")?;
+            let snapshots_before = READY_SYNC_SNAPSHOT_STARTS.with(std::cell::Cell::get);
             // Intentionally no D1/R2 route: refusal on local loopback. The
             // exact production Sync owner, retry and local checkpoint remain.
             eprintln!("R13_SCOPED_NETWORK_REFUSAL_STARTED");
@@ -2183,6 +2298,11 @@ mod windows {
                     Err(super::ShippingCompositionError::SyncUnconfirmed)
                 ),
                 "offline Sync must refuse without granting a cloud receipt: {result:?}"
+            );
+            assert_eq!(
+                READY_SYNC_SNAPSHOT_STARTS.with(std::cell::Cell::get),
+                snapshots_before,
+                "three failed auth attempts must perform zero native snapshots"
             );
             let after = root.open_profile_current(binding.tenant_id(), &profile_id)?;
             assert_eq!(after.profile_version(), expected_version);
@@ -2250,6 +2370,82 @@ mod windows {
             assert!(!after.path().join(".local-unsynced").exists());
             assert!(after.base_generation_id().is_some());
             eprintln!("R6_STAGING_EXACT_CLOSED_SYNC_CLEAN_LOCAL_PASS");
+            Ok(())
+        }
+
+        /// Run only AFTER the separate ignored closed-Sync test was aborted
+        /// at TEST_ONLY_POSTCOMMIT_LOCAL_RECEIPT_INTERRUPTION. This proves
+        /// exact CURRENT adoption by the existing pending-only recovery path,
+        /// preserving the original fingerprint and producing no N+2.
+        #[test]
+        #[ignore = "requires explicitly authorized disposable staging scratch with a real post-Commit interrupted Prepared descriptor"]
+        fn authorized_test_profile_postcommit_exact_recovery()
+        -> Result<(), Box<dyn std::error::Error>> {
+            if std::env::var("PROFILE_BRIDGE_TEST_ALLOW_STAGING_MUTATION").as_deref()
+                != Ok("YES_SCOPED_DISPOSABLE_PROFILE")
+            {
+                return Err("explicit disposable test mutation admission required".into());
+            }
+            let scratch = PathBuf::from(
+                std::env::var_os("PROFILE_BRIDGE_TEST_CLOSED_SYNC_ROOT")
+                    .ok_or("missing disposable restored scratch root")?,
+            );
+            let profile_text = std::env::var("PROFILE_BRIDGE_TEST_CLOSED_SYNC_PROFILE")?;
+            if !is_opted_in_disposable_restore(&scratch, &profile_text) {
+                return Err("refuse non-restored or non-disposable profile".into());
+            }
+            let profile_id = ProfileId::parse(profile_text)?;
+            let version =
+                std::env::var("PROFILE_BRIDGE_TEST_CLOSED_SYNC_VERSION")?.parse::<u64>()?;
+            let binding = WindowsDeviceApplicationBinding::open(&PathBuf::from(
+                std::env::var_os("PROFILE_BRIDGE_TEST_CLOSED_SYNC_BINDING")
+                    .ok_or("missing exact test binding")?,
+            ))?;
+            let root = MaterializationRoot::open_or_create(&scratch)?;
+            let before = root.open_profile_current(binding.tenant_id(), &profile_id)?;
+            let pending = before
+                .pending_sync()
+                .ok_or("post-Commit abort must preserve Prepared descriptor")?
+                .clone();
+            if pending.is_committed()
+                || before.profile_version() != version
+                || before.base_generation_id().is_none()
+                || std::fs::read(before.path().join(".local-unsynced"))? != b"local-unsynced-v2"
+                || !crate::browser_execution::browser_writer_locks_absent(&before)?
+            {
+                return Err("fixture not an interrupted post-Commit local checkpoint".into());
+            }
+            let fingerprint = std::fs::read(before.path().join("camoufox-config.json"))?;
+            let application = WindowsDeviceApplication::from_system(
+                "https://staging.alegria.by",
+                binding.clone(),
+            )?;
+            let mut read_only =
+                ControlPlaneCoordinator::for_local_current_restore(application.transport());
+            let current = read_only.download_capability(binding.tenant_id(), &profile_id)?;
+            if !pending_descriptor_matches_current(&pending, &current) {
+                return Err("D1 CURRENT is not the exact interrupted candidate".into());
+            }
+            let _sync_owner = ClosedSyncAdmission::try_acquire(&before)?
+                .ok_or("another Sync process owns this profile")?;
+            let intent = InitialProfileOpen {
+                tenant_id: binding.tenant_id().clone(),
+                actor_id: binding.actor_id().clone(),
+                profile_id: profile_id.clone(),
+                expected_version: version,
+                status: InitialProfileStatus::Ready,
+            };
+            run_closed_sync_with_admission(&intent, &binding, &root, "https://staging.alegria.by")?;
+            let after = root.open_profile_current(binding.tenant_id(), &profile_id)?;
+            assert_eq!(after.profile_version(), version + 1);
+            assert_eq!(after.base_generation_id(), Some(current.generation_id()));
+            assert!(after.pending_sync().is_none());
+            assert!(!after.path().join(".local-unsynced").exists());
+            assert_eq!(
+                std::fs::read(after.path().join("camoufox-config.json"))?,
+                fingerprint
+            );
+            eprintln!("TEST_ONLY_POSTCOMMIT_EXACT_RECOVERY_NO_N_PLUS_TWO_PASS");
             Ok(())
         }
     }
