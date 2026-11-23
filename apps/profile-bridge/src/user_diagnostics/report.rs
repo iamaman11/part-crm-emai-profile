@@ -759,7 +759,10 @@ mod tests {
     -> Result<(), Box<dyn std::error::Error>> {
         let cases = [
             (Cause::NetworkConnectionReset, "NETWORK_CONNECTION_RESET"),
-            (Cause::NetworkConnectionAborted, "NETWORK_CONNECTION_ABORTED"),
+            (
+                Cause::NetworkConnectionAborted,
+                "NETWORK_CONNECTION_ABORTED",
+            ),
             (Cause::NetworkBrokenPipe, "NETWORK_BROKEN_PIPE"),
             (Cause::NetworkUnexpectedEof, "NETWORK_UNEXPECTED_EOF"),
         ];

@@ -255,14 +255,20 @@ mod tests {
     fn precise_native_disconnect_requires_a_real_io_cause_in_the_source_chain() {
         let samples = [
             (io::ErrorKind::ConnectionReset, HttpFailure::ConnectionReset),
-            (io::ErrorKind::ConnectionAborted, HttpFailure::ConnectionAborted),
+            (
+                io::ErrorKind::ConnectionAborted,
+                HttpFailure::ConnectionAborted,
+            ),
             (io::ErrorKind::BrokenPipe, HttpFailure::BrokenPipe),
             (io::ErrorKind::UnexpectedEof, HttpFailure::UnexpectedEof),
         ];
         for (kind, expected) in samples {
             let wrapped = io::Error::other(io::Error::from(kind));
             assert_eq!(classify_source_chain(&wrapped), Some(expected));
-            assert_eq!(BridgePortError::from(expected), BridgePortError::Unavailable);
+            assert_eq!(
+                BridgePortError::from(expected),
+                BridgePortError::Unavailable
+            );
         }
         assert_eq!(
             classify_io(&io::Error::from_raw_os_error(10054)),
