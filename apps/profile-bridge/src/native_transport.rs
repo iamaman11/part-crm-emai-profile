@@ -71,6 +71,12 @@ fn classify_source_chain(root: &(dyn Error + 'static)) -> Option<HttpFailure> {
             if let Some(kind) = classify_io(io) {
                 return Some(kind);
             }
+            // io::Error::source() can skip its custom payload and expose only
+            // that payload's source. Inspect the actual inner OS error first.
+            if let Some(inner) = io.get_ref() {
+                source = Some(inner);
+                continue;
+            }
         }
         source = value.source();
     }
