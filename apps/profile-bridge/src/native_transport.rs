@@ -23,6 +23,14 @@ pub(crate) enum HttpFailure {
     Size,
     #[error("LOCAL_IO")]
     Disk,
+    #[error("CONNECTION_RESET")]
+    ConnectionReset,
+    #[error("CONNECTION_ABORTED")]
+    ConnectionAborted,
+    #[error("BROKEN_PIPE")]
+    BrokenPipe,
+    #[error("UNEXPECTED_EOF")]
+    UnexpectedEof,
     #[error("UNCLASSIFIED_NETWORK")]
     Network,
 }
@@ -34,6 +42,41 @@ impl From<HttpFailure> for BridgePortError {
         }
     }
 }
+fn classify_io(error: &io::Error) -> Option<HttpFailure> {
+    // WinSock codes are reliable only when the OS actually exposes them.
+    // Never infer a peer reset from an unspecified reqwest/hyper send failure.
+    match error.raw_os_error() {
+        Some(11001..=11004) => return Some(HttpFailure::Dns),
+        Some(-2146762481 | -2146762495) => return Some(HttpFailure::Tls),
+        Some(10054) => return Some(HttpFailure::ConnectionReset),
+        Some(10053) => return Some(HttpFailure::ConnectionAborted),
+        _ => {}
+    }
+    match error.kind() {
+        io::ErrorKind::ConnectionReset => Some(HttpFailure::ConnectionReset),
+        io::ErrorKind::ConnectionAborted => Some(HttpFailure::ConnectionAborted),
+        io::ErrorKind::BrokenPipe => Some(HttpFailure::BrokenPipe),
+        io::ErrorKind::UnexpectedEof => Some(HttpFailure::UnexpectedEof),
+        _ => None,
+    }
+}
+
+fn classify_source_chain(root: &(dyn Error + 'static)) -> Option<HttpFailure> {
+    let mut source: Option<&(dyn Error + 'static)> = Some(root);
+    while let Some(value) = source {
+        if value.downcast_ref::<native_tls::Error>().is_some() {
+            return Some(HttpFailure::Tls);
+        }
+        if let Some(io) = value.downcast_ref::<io::Error>() {
+            if let Some(kind) = classify_io(io) {
+                return Some(kind);
+            }
+        }
+        source = value.source();
+    }
+    None
+}
+
 fn classify(error: &reqwest::Error) -> HttpFailure {
     if error.is_timeout() {
         return HttpFailure::Timeout;
@@ -41,20 +84,8 @@ fn classify(error: &reqwest::Error) -> HttpFailure {
     if error.is_redirect() {
         return HttpFailure::Redirect;
     }
-    let mut source: Option<&(dyn Error + 'static)> = Some(error);
-    while let Some(value) = source {
-        if value.downcast_ref::<native_tls::Error>().is_some() {
-            return HttpFailure::Tls;
-        }
-        if let Some(io) = value.downcast_ref::<io::Error>() {
-            if matches!(io.raw_os_error(), Some(11001..=11004)) {
-                return HttpFailure::Dns;
-            }
-            if matches!(io.raw_os_error(), Some(-2146762481 | -2146762495)) {
-                return HttpFailure::Tls;
-            }
-        }
-        source = value.source();
+    if let Some(kind) = classify_source_chain(error) {
+        return kind;
     }
     if error.is_connect() {
         HttpFailure::Connect
@@ -140,6 +171,10 @@ pub(crate) fn note_failure(
         HttpFailure::Redirect => Cause::NetworkRedirect,
         HttpFailure::Size => Cause::NetworkResponseSize,
         HttpFailure::Disk => Cause::NetworkLocalIo,
+        HttpFailure::ConnectionReset => Cause::NetworkConnectionReset,
+        HttpFailure::ConnectionAborted => Cause::NetworkConnectionAborted,
+        HttpFailure::BrokenPipe => Cause::NetworkBrokenPipe,
+        HttpFailure::UnexpectedEof => Cause::NetworkUnexpectedEof,
         HttpFailure::Network => Cause::NetworkUnclassified,
     };
     let elapsed_ms = started.elapsed().as_millis() as u64;
@@ -215,6 +250,32 @@ pub(crate) fn buffered(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn precise_native_disconnect_requires_a_real_io_cause_in_the_source_chain() {
+        let samples = [
+            (io::ErrorKind::ConnectionReset, HttpFailure::ConnectionReset),
+            (io::ErrorKind::ConnectionAborted, HttpFailure::ConnectionAborted),
+            (io::ErrorKind::BrokenPipe, HttpFailure::BrokenPipe),
+            (io::ErrorKind::UnexpectedEof, HttpFailure::UnexpectedEof),
+        ];
+        for (kind, expected) in samples {
+            let wrapped = io::Error::other(io::Error::from(kind));
+            assert_eq!(classify_source_chain(&wrapped), Some(expected));
+            assert_eq!(BridgePortError::from(expected), BridgePortError::Unavailable);
+        }
+        assert_eq!(
+            classify_io(&io::Error::from_raw_os_error(10054)),
+            Some(HttpFailure::ConnectionReset)
+        );
+        assert_eq!(
+            classify_io(&io::Error::from_raw_os_error(10053)),
+            Some(HttpFailure::ConnectionAborted)
+        );
+        assert_eq!(classify_source_chain(&io::Error::other("opaque")), None);
+        assert_eq!(classify_io(&io::Error::from(io::ErrorKind::Other)), None);
+    }
+
     #[test]
     fn transport_is_shared_and_delivery_policy_is_separate() -> Result<(), HttpFailure> {
         let a = shared()?;

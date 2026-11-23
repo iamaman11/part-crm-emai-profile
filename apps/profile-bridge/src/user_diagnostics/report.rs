@@ -110,6 +110,10 @@ pub enum Cause {
     NetworkResponseSize,
     NetworkLocalIo,
     NetworkHttp,
+    NetworkConnectionReset,
+    NetworkConnectionAborted,
+    NetworkBrokenPipe,
+    NetworkUnexpectedEof,
     NetworkUnclassified,
 }
 
@@ -745,6 +749,42 @@ mod tests {
         assert!(report.contains("CAUSE=NetworkDns"));
         assert!(report.contains("CLOUD=Unknown"));
         assert!(!report.contains("canary"));
+        assert!(!report.contains("EXACT_SAVED_BY_OWNER"));
+        fs::remove_dir_all(root)?;
+        Ok(())
+    }
+
+    #[test]
+    fn observed_native_disconnects_have_safe_distinct_transport_codes()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let cases = [
+            (Cause::NetworkConnectionReset, "NETWORK_CONNECTION_RESET"),
+            (Cause::NetworkConnectionAborted, "NETWORK_CONNECTION_ABORTED"),
+            (Cause::NetworkBrokenPipe, "NETWORK_BROKEN_PIPE"),
+            (Cause::NetworkUnexpectedEof, "NETWORK_UNEXPECTED_EOF"),
+        ];
+        for (cause, wire) in cases {
+            let json = serde_json::to_string(&cause)?;
+            assert_eq!(json, format!("\"{wire}\""));
+            assert_eq!(serde_json::from_str::<Cause>(&json)?, cause);
+        }
+        let root = test_root()?;
+        record_transport_failure_at(
+            &root,
+            TransportOperation::GenerationPut,
+            None,
+            None,
+            None,
+            Cause::NetworkConnectionReset,
+            3592,
+        );
+        let report = report_at(&root);
+        assert!(report.contains("CAUSE=NetworkConnectionReset"));
+        assert!(report.contains("HTTP_OPERATION=GenerationPut"));
+        assert!(report.contains(
+            "CORRELATION=NOT_AVAILABLE;STATUS=NOT_AVAILABLE;BYTES_OBSERVED=NOT_AVAILABLE"
+        ));
+        assert!(report.contains("CLOUD=Unknown"));
         assert!(!report.contains("EXACT_SAVED_BY_OWNER"));
         fs::remove_dir_all(root)?;
         Ok(())
