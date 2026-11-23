@@ -74,6 +74,7 @@ pub enum Cause {
     DownloadFailed,
     IntegrityFailed,
     LocalStateUncertain,
+    LocalDeleteCloudUnconfirmed,
     BrowserUnavailable,
     BrowserConfigMismatch,
     BrowserProfileBusy,
@@ -772,6 +773,33 @@ mod tests {
         assert!(report.contains("CoordinatorLeaseConflict"));
         assert!(report.contains("LOCAL_OBSERVATIONS_ONLY"));
         assert!(!report.contains(&root.to_string_lossy().to_string()));
+        fs::remove_dir_all(root)?;
+        Ok(())
+    }
+
+    #[test]
+    fn local_delete_cloud_refusal_has_one_safe_serialized_cause()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let serialized = serde_json::to_string(&Cause::LocalDeleteCloudUnconfirmed)?;
+        assert_eq!(serialized, "\"LOCAL_DELETE_CLOUD_UNCONFIRMED\"");
+        assert_eq!(
+            serde_json::from_str::<Cause>(&serialized)?,
+            Cause::LocalDeleteCloudUnconfirmed
+        );
+
+        let root = test_root()?;
+        record_at(
+            &root,
+            Stage::LocalDelete,
+            Outcome::Failed,
+            Cloud::Unknown,
+            Cause::LocalDeleteCloudUnconfirmed,
+            1,
+        );
+        let report = report_at(&root);
+        assert!(report.contains("LocalDeleteCloudUnconfirmed"));
+        assert!(!report.contains("BrowserUnavailable"));
+        assert!(report.contains("LOCAL_OBSERVATIONS_ONLY"));
         fs::remove_dir_all(root)?;
         Ok(())
     }
