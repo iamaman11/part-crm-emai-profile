@@ -253,6 +253,9 @@ fn diagnostic_cause(result: &Result<(), BridgeCliError>) -> Cause {
         Err(BridgeCliError::LaunchFailed(ShippingCompositionError::LocalOpen(
             profile_bridge::local_browser_open::LocalOpenError::BrowserLaunchFailed,
         ))) => Cause::BrowserRuntimeLaunchFailed,
+        Err(BridgeCliError::LaunchFailed(ShippingCompositionError::LocalDelete(
+            profile_bridge::local_profile_delete::TerminalDeleteError::AuthorizationUnconfirmed,
+        ))) => Cause::LocalDeleteCloudUnconfirmed,
         Err(BridgeCliError::LaunchFailed(_)) => Cause::BrowserUnavailable,
         Err(_) => Cause::OtherSafeFailure,
     }
@@ -467,6 +470,32 @@ mod tests {
             ))),
             Cause::OtherSafeFailure,
         );
+    }
+
+    #[test]
+    fn unconfirmed_local_delete_is_not_mislabeled_as_browser_unavailable() {
+        use profile_bridge::local_profile_delete::TerminalDeleteError;
+
+        assert_eq!(
+            diagnostic_cause(&Err(BridgeCliError::LaunchFailed(
+                ShippingCompositionError::LocalDelete(TerminalDeleteError::AuthorizationUnconfirmed),
+            ))),
+            Cause::LocalDeleteCloudUnconfirmed,
+        );
+        for other in [
+            TerminalDeleteError::LocalBusy,
+            TerminalDeleteError::LocalFilesystem,
+            TerminalDeleteError::LocalNotClean,
+            TerminalDeleteError::UserDeclined,
+        ] {
+            assert_ne!(
+                diagnostic_cause(&Err(BridgeCliError::LaunchFailed(
+                    ShippingCompositionError::LocalDelete(other),
+                ))),
+                Cause::LocalDeleteCloudUnconfirmed,
+                "{other:?} does not imply an unconfirmed cloud readback",
+            );
+        }
     }
 
     #[cfg(windows)]
