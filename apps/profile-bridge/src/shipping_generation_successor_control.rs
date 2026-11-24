@@ -2005,6 +2005,174 @@ mod tests {
         }
     }
 
+    /// Exercise the shipping streaming publisher, not the historical restart
+    /// helper. Only the Commit reply is lost; authorization and Observe still
+    /// use the ordinary typed machine port.
+    #[cfg(windows)]
+    struct CommitAckLost {
+        inner: Transport,
+        commit_count: usize,
+        commit_body: Option<serde_json::Value>,
+        observe_body: Option<serde_json::Value>,
+    }
+
+    #[cfg(windows)]
+    impl MachineHttpPort for CommitAckLost {
+        type Error = BridgePortError;
+
+        fn request(
+            &mut self,
+            method: MachineHttpMethod,
+            path: &str,
+            correlation_id: &CorrelationId,
+            body: Option<&[u8]>,
+        ) -> Result<MachineHttpResponse, Self::Error> {
+            if path.ends_with("/generation-successor/commit") {
+                assert_eq!(method, MachineHttpMethod::PostJson);
+                self.commit_body = Some(
+                    serde_json::from_slice(body.expect("Commit JSON")).expect("valid Commit JSON"),
+                );
+                self.commit_count += 1;
+                self.inner.paths.push(path.to_owned());
+                return Err(BridgePortError::Unavailable);
+            }
+            if path.ends_with("/generation-successor/observe") {
+                self.observe_body = Some(
+                    serde_json::from_slice(body.expect("Observe JSON"))
+                        .expect("valid Observe JSON"),
+                );
+            }
+            self.inner.request(method, path, correlation_id, body)
+        }
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn shipping_streamed_commit_lost_ack_requires_exact_active_observation_without_retry()
+    -> Result<(), Box<dyn std::error::Error>> {
+        use crate::generation_snapshot::{
+            digest_closed_workspace_streaming, seal_closed_workspace_streaming,
+        };
+
+        for active_exact in [true, false] {
+            let fixture = Fixture::new()?;
+            let root = MaterializationRoot::open_or_create(&fixture.root_path)?;
+            let workspace =
+                root.open_generation(&fixture.tenant, &fixture.profile, &fixture.base)?;
+            let candidate = fixture.prepared.candidate_workspace().generation_id().clone();
+            let inventory = workspace.inventory()?;
+            let (plain_bytes, plain_digest) =
+                digest_closed_workspace_streaming(&workspace, &inventory)?;
+            let mut sealer = Sealer;
+            let material = sealer.material_for(
+                &fixture.tenant,
+                &fixture.profile,
+                &fixture.base,
+                &candidate,
+                plain_digest,
+            )?;
+            let encrypted = seal_closed_workspace_streaming(
+                &workspace,
+                &inventory,
+                &candidate,
+                Some(&fixture.base),
+                material,
+                plain_bytes,
+                plain_digest,
+            )?;
+            let mut network = CommitAckLost {
+                inner: Transport {
+                    responses: VecDeque::from([
+                        MachineHttpResponse::new(
+                            200,
+                            br#"{"state":"uploadRequired","method":"PUT","url":"https://r2.example.test/exact","headers":[{"name":"x-amz-date","value":"20261026T000000Z"}],"expiresSeconds":120}"#.to_vec(),
+                        ),
+                        MachineHttpResponse::new(
+                            200,
+                            br#"{"state":"verified","method":null,"url":null,"headers":[],"expiresSeconds":null}"#.to_vec(),
+                        ),
+                        MachineHttpResponse::new(
+                            200,
+                            format!("{{\"activeExact\":{active_exact}}}").into_bytes(),
+                        ),
+                    ]),
+                    paths: Vec::new(),
+                },
+                commit_count: 0,
+                commit_body: None,
+                observe_body: None,
+            };
+            let mut upload = RecoveryPut::default();
+            let result = super::publish_closed_streamed_successor(
+                &fixture.tenant,
+                &fixture.profile,
+                &fixture.base,
+                &candidate,
+                &encrypted,
+                &fixture.lease,
+                &mut network,
+                &mut upload,
+            );
+            assert_eq!(
+                result,
+                if active_exact {
+                    Ok(())
+                } else {
+                    Err(ShippingControlPlaneError::HttpServerUncertain)
+                },
+                "ambiguous Commit can complete only on exact ACTIVE_EXACT"
+            );
+            assert_eq!(upload.calls, 1, "no second signed PUT after lost ACK");
+            assert_eq!(upload.exact_bytes.len() as u64, encrypted.container_bytes());
+            assert_eq!(network.commit_count, 1, "no second Commit after lost ACK");
+            let committed = network
+                .commit_body
+                .as_ref()
+                .ok_or("Commit was not attempted")?;
+            let observed = network.observe_body.as_ref().ok_or("no exact Observe")?;
+            for field in [
+                "baseGenerationId",
+                "generationId",
+                "objectKey",
+                "metadataDigest",
+                "containerDigest",
+                "containerBytes",
+            ] {
+                assert!(committed.get(field).is_some(), "Commit omitted {field}");
+                assert_eq!(
+                    committed.get(field),
+                    observed.get(field),
+                    "Observe changed {field}"
+                );
+            }
+            assert_eq!(committed["baseGenerationId"], fixture.base.as_str());
+            assert_eq!(committed["generationId"], candidate.as_str());
+            for lease_field in [
+                "coordinatorSessionId",
+                "coordinatorFencingToken",
+                "coordinatorEpoch",
+            ] {
+                assert!(
+                    observed.get(lease_field).is_none(),
+                    "Observe must be read-only"
+                );
+            }
+            assert_eq!(network.inner.paths.len(), 4);
+            for (path, suffix) in network.inner.paths.iter().zip([
+                "/generation-successor/upload-capability",
+                "/generation-successor/upload-capability",
+                "/generation-successor/commit",
+                "/generation-successor/observe",
+            ]) {
+                assert!(path.ends_with(suffix), "unexpected machine route");
+                assert!(path.contains(fixture.tenant.as_str()));
+                assert!(path.contains(fixture.profile.as_str()));
+            }
+            assert!(network.inner.responses.is_empty());
+        }
+        Ok(())
+    }
+
     #[derive(Default)]
     struct Sealer;
 
