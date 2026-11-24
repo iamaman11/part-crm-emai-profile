@@ -279,8 +279,8 @@ fn parse_profile_bridge_zip(
         if data_end > central_offset {
             return Err(WindowsDeliveryArchiveError::InvalidArchive);
         }
-        let identity = hash_and_crc_region(file, data_offset, u64::from(uncompressed_size))?;
-        if identity.crc32 != expected_crc32 {
+        let identity = hash_region(file, data_offset, u64::from(uncompressed_size), true)?;
+        if identity.crc32 != Some(expected_crc32) {
             return Err(WindowsDeliveryArchiveError::InvalidArchive);
         }
 
@@ -415,7 +415,9 @@ fn parse_runtime_pax_tar(
                 if relative_path.is_empty() {
                     return Err(WindowsDeliveryArchiveError::InvalidArchive);
                 }
-                let identity = hash_and_crc_region(file, data_offset, header_size)?;
+                // TAR has no per-file CRC32 field. The shipping manifest binds
+                // every payload to SHA-256, so a bitwise CRC pass adds no proof.
+                let identity = hash_region(file, data_offset, header_size, false)?;
                 parsed.push(ParsedArchiveEntry {
                     relative_path,
                     kind: DeliveryArchiveEntryKind::RegularFile,
@@ -640,19 +642,20 @@ fn ensure_zero_tail(
 
 struct RegionIdentity {
     sha256: String,
-    crc32: u32,
+    crc32: Option<u32>,
 }
 
-fn hash_and_crc_region(
+fn hash_region(
     file: &mut File,
     offset: u64,
     size: u64,
+    include_crc32: bool,
 ) -> Result<RegionIdentity, WindowsDeliveryArchiveError> {
     file.seek(SeekFrom::Start(offset))
         .map_err(|_| WindowsDeliveryArchiveError::Io)?;
     let mut remaining = size;
     let mut sha256 = Sha256::new();
-    let mut crc32 = 0xffff_ffff_u32;
+    let mut crc32 = include_crc32.then_some(0xffff_ffff_u32);
     let mut buffer = [0_u8; 64 * 1024];
     while remaining > 0 {
         let read_len = usize::try_from(remaining.min(buffer.len() as u64))
@@ -660,11 +663,13 @@ fn hash_and_crc_region(
         file.read_exact(&mut buffer[..read_len])
             .map_err(|_| WindowsDeliveryArchiveError::Io)?;
         sha256.update(&buffer[..read_len]);
-        for byte in &buffer[..read_len] {
-            crc32 ^= u32::from(*byte);
-            for _ in 0..8 {
-                let mask = (crc32 & 1).wrapping_neg();
-                crc32 = (crc32 >> 1) ^ (0xedb8_8320 & mask);
+        if let Some(checksum) = crc32.as_mut() {
+            for byte in &buffer[..read_len] {
+                *checksum ^= u32::from(*byte);
+                for _ in 0..8 {
+                    let mask = (*checksum & 1).wrapping_neg();
+                    *checksum = (*checksum >> 1) ^ (0xedb8_8320 & mask);
+                }
             }
         }
         remaining -=
@@ -672,7 +677,7 @@ fn hash_and_crc_region(
     }
     Ok(RegionIdentity {
         sha256: encode_lower_hex(sha256.finalize().as_slice()),
-        crc32: !crc32,
+        crc32: crc32.map(|checksum| !checksum),
     })
 }
 
@@ -1035,7 +1040,9 @@ mod tests {
         assert_eq!(runtime_entries.len(), 3);
         assert_eq!(runtime_entries[0].relative_path(), "runtime-manifest.json");
         assert_eq!(runtime_entries[1].relative_path(), "python/python.exe");
+        assert_eq!(runtime_entries[1].sha256(), sha256_hex(b"python-runtime"));
         assert_eq!(runtime_entries[2].relative_path(), long_path);
+        assert_eq!(runtime_entries[2].sha256(), sha256_hex(b"print('fixture')\n"));
 
         let mut bridge_bytes = Vec::new();
         reader.copy_regular_file(
@@ -1053,6 +1060,67 @@ mod tests {
             &mut runtime_bytes,
         )?;
         assert_eq!(runtime_bytes, b"print('fixture')\n");
+        Ok(())
+    }
+
+    #[test]
+    fn stored_bridge_zip_payload_crc_mismatch_still_fails_closed() -> TestResult {
+        let directory = TestDirectory::create("zip-crc")?;
+        let bridge = directory.0.join("profile-bridge.zip");
+        let executable = b"bridge-crc-sensitive-payload";
+        write_stored_zip(
+            &bridge,
+            &[ZipFixture {
+                name: "profile-bridge.exe",
+                content: executable,
+                mode: 0o100755,
+            }],
+        )?;
+        let mut archive = fs::read(&bridge)?;
+        let payload_start = archive
+            .windows(executable.len())
+            .position(|window| window == executable)
+            .ok_or_else(|| io::Error::other("ZIP fixture payload is missing"))?;
+        archive[payload_start] ^= 1; // Retain both original ZIP CRC fields.
+        fs::write(&bridge, archive)?;
+
+        let mut reader = WindowsDeliveryArchiveReader::new();
+        assert_eq!(
+            reader.entries(DeliveryComponentKind::ProfileBridge, &bridge),
+            Err(WindowsDeliveryArchiveError::InvalidArchive)
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn runtime_tar_content_change_changes_sha_without_per_file_crc() -> TestResult {
+        let directory = TestDirectory::create("tar-sha")?;
+        let runtime = directory.0.join("runtime-bundle.tar.gz");
+        write_runtime_tar(&runtime, false)?;
+
+        let mut unpacked = Vec::new();
+        GzDecoder::new(File::open(&runtime)?).read_to_end(&mut unpacked)?;
+        let original = b"python-runtime";
+        let payload_start = unpacked
+            .windows(original.len())
+            .position(|window| window == original)
+            .ok_or_else(|| io::Error::other("TAR fixture payload is missing"))?;
+        unpacked[payload_start] ^= 1; // Valid TAR headers; recompute gzip CRC.
+        let changed = &unpacked[payload_start..payload_start + original.len()];
+        let expected_changed_sha = sha256_hex(changed);
+        let mut gzip = GzEncoder::new(Vec::new(), Compression::default());
+        gzip.write_all(&unpacked)?;
+        fs::write(&runtime, gzip.finish()?)?;
+
+        let mut reader = WindowsDeliveryArchiveReader::new();
+        let entries = reader.entries(DeliveryComponentKind::RuntimeBundle, &runtime)?;
+        let observed_sha = entries
+            .iter()
+            .find(|entry| entry.relative_path() == "python/python.exe")
+            .ok_or_else(|| io::Error::other("TAR fixture entry is missing"))?
+            .sha256();
+        assert_eq!(observed_sha, expected_changed_sha);
+        assert_ne!(observed_sha, sha256_hex(original));
         Ok(())
     }
 
