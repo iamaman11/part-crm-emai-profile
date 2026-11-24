@@ -2687,7 +2687,7 @@ mod windows {
         use crate::windows_device_application::WindowsDeviceApplication;
         use profile_platform_primitives::ProfileId;
         use sha2::{Digest, Sha256};
-        use std::io::Read;
+        use std::io::{Read, Write};
         use std::path::{Path, PathBuf};
 
         pub(super) fn is_opted_in_disposable_restore(root: &Path, profile: &str) -> bool {
@@ -2888,62 +2888,274 @@ mod windows {
             Ok(())
         }
 
-        /// Read-only fingerprint of the externally prepared, allegedly native
-        /// Firefox/SQLite WAL. Header, size and nonzero-chunk coverage reject
-        /// the old sparse fixture, but DO NOT prove SQLite structural validity.
-        /// That and cold Restore/browser usability require separate physical
-        /// verification; this test only proves preservation of source bytes.
-        fn physical_wal_sha256(path: &Path) -> Result<[u8; 32], Box<dyn std::error::Error>> {
-            let mut file = std::fs::File::open(path)?;
-            if file.metadata()?.len() < 65 * 1024 * 1024 {
-                return Err("K1 requires a real Firefox WAL >=65 MiB".into());
+        /// Check every descendant component, not only the canonical staging
+        /// root: a Windows junction beneath TEMP must never redirect a native
+        /// SQLite read into an installed or user-owned profile.
+        fn require_disposable_regular_file(
+            root: &Path,
+            path: &Path,
+        ) -> Result<(), Box<dyn std::error::Error>> {
+            use std::os::windows::fs::MetadataExt;
+            let root_meta = std::fs::symlink_metadata(root)?;
+            if root_meta.file_type().is_symlink() || root_meta.file_attributes() & 0x0400 != 0 {
+                return Err("K1 refuses a redirected scratch root".into());
             }
+            let relative = path.strip_prefix(root)?;
+            let mut current = root.to_path_buf();
+            for component in relative.components() {
+                if !matches!(component, std::path::Component::Normal(_)) {
+                    return Err("K1 refuses a non-normal fixture path".into());
+                }
+                current.push(component.as_os_str());
+                let metadata = std::fs::symlink_metadata(&current)?;
+                if metadata.file_type().is_symlink() || metadata.file_attributes() & 0x0400 != 0 {
+                    return Err("K1 refuses a symlink or Windows reparse descendant".into());
+                }
+            }
+            if !std::fs::canonicalize(path)?.starts_with(std::fs::canonicalize(root)?)
+                || !std::fs::symlink_metadata(path)?.is_file()
+            {
+                return Err("K1 refuses a non-regular or escaped source file".into());
+            }
+            Ok(())
+        }
+
+        /// Bounded full-file SHA-256; callers hold the one read-only source
+        /// pathname and recheck it after all clone validation and Sync.
+        fn physical_file_sha256(
+            root: &Path,
+            path: &Path,
+        ) -> Result<(u64, [u8; 32]), Box<dyn std::error::Error>> {
+            require_disposable_regular_file(root, path)?;
+            let mut file = std::fs::File::open(path)?;
+            let bytes = file.metadata()?.len();
             let mut sha = Sha256::new();
             let mut buffer = [0_u8; 65_536];
-            let mut first_magic = [0_u8; 4];
-            file.read_exact(&mut first_magic)?;
-            if first_magic != [0x37, 0x7f, 0x06, 0x82] && first_magic != [0x37, 0x7f, 0x06, 0x83] {
-                return Err("K1 fixture is not a SQLite write-ahead log".into());
+            loop {
+                let read = file.read(&mut buffer)?;
+                if read == 0 {
+                    break;
+                }
+                sha.update(&buffer[..read]);
             }
-            use std::io::{Seek, SeekFrom};
-            file.seek(SeekFrom::Start(0))?;
-            let mut nonzero_chunks = 0_u64;
+            Ok((bytes, sha.finalize().into()))
+        }
+
+        /// Reject a magic-only/sparse substitute before a real SQLite engine
+        /// independently proves the exact DB+WAL pair on disposable COPIES.
+        fn require_populated_stress_wal(
+            root: &Path,
+            path: &Path,
+        ) -> Result<(u64, [u8; 32]), Box<dyn std::error::Error>> {
+            let fingerprint = physical_file_sha256(root, path)?;
+            if fingerprint.0 < 65 * 1024 * 1024 {
+                return Err("K1 SQLite stress WAL must contain >=65 MiB".into());
+            }
+            let mut file = std::fs::File::open(path)?;
+            let mut header = [0_u8; 32];
+            file.read_exact(&mut header)?;
+            if !matches!(
+                &header[..4],
+                [0x37, 0x7f, 0x06, 0x82] | [0x37, 0x7f, 0x06, 0x83]
+            ) || u32::from_be_bytes(header[4..8].try_into()?) != 3_007_000
+            {
+                return Err("K1 stress WAL has invalid SQLite header".into());
+            }
+            let page_size = u32::from_be_bytes(header[8..12].try_into()?);
+            if !matches!(page_size, 512..=65_536)
+                || !page_size.is_power_of_two()
+                || (fingerprint.0 - 32) % (u64::from(page_size) + 24) != 0
+            {
+                return Err("K1 stress WAL has invalid page/frame alignment".into());
+            }
+            let mut buffer = [0_u8; 65_536];
+            let mut populated = 0_u64;
             loop {
                 let read = file.read(&mut buffer)?;
                 if read == 0 {
                     break;
                 }
                 if buffer[..read].iter().any(|byte| *byte != 0) {
-                    nonzero_chunks += 1;
+                    populated += 1;
                 }
-                sha.update(&buffer[..read]);
             }
-            // One nonzero header followed by a 65 MiB sparse hole cannot
-            // impersonate a real populated WAL in this physical scenario.
-            if nonzero_chunks < 260 {
-                return Err("K1 WAL appears mostly sparse or unpopulated".into());
+            if populated < 260 {
+                return Err("K1 stress WAL is sparse or unpopulated".into());
             }
-            Ok(sha.finalize().into())
+            Ok(fingerprint)
         }
 
-        /// Runs the actual signed Windows Sync against ONE already authenticated,
-        /// CLOSED disposable staging profile. The real D1 Commit must apply
-        /// and return 2xx; the test-only typed port then loses ONLY that ACK.
-        /// The existing shipping publisher must observe exact ACTIVE_EXACT,
-        /// complete local N+1 in place, leave the original WAL bytes intact,
-        /// and perform a second clean Sync without creating N+2. No R2
-        /// decrypt/readback or browser usability is established here. This
-        /// ignored test is NOT deployment authorization or CI-only K1 GO.
         #[test]
-        #[ignore = "requires separately owner-authorized exact disposable staging WAL>=65MiB and real signed Commit"]
-        fn authorized_test_profile_k1_real_wal_lost_commit_ack_exact_current()
+        fn k1_split_rejects_bad_alignment_and_sparse_fake_wal_without_staging()
+        -> Result<(), Box<dyn std::error::Error>> {
+            let root = tempfile::tempdir()?;
+            let wal = root.path().join("k1-structured.sqlite-wal");
+            let mut file = std::fs::File::create(&wal)?;
+            let mut header = [0_u8; 32];
+            header[..4].copy_from_slice(&[0x37, 0x7f, 0x06, 0x82]);
+            header[4..8].copy_from_slice(&3_007_000_u32.to_be_bytes());
+            header[8..12].copy_from_slice(&4096_u32.to_be_bytes());
+            file.write_all(&header)?;
+            let minimum = 65_u64 * 1024 * 1024;
+            file.set_len(minimum)?;
+            file.sync_all()?;
+            drop(file);
+            assert!(
+                require_populated_stress_wal(root.path(), &wal).is_err(),
+                "an aligned-looking header with invalid frame boundary is refused"
+            );
+            let frame_bytes = 4096_u64 + 24;
+            let frames = (minimum - 32).div_ceil(frame_bytes);
+            let file = std::fs::OpenOptions::new().write(true).open(&wal)?;
+            file.set_len(32 + frames * frame_bytes)?;
+            file.sync_all()?;
+            drop(file);
+            assert!(
+                require_populated_stress_wal(root.path(), &wal).is_err(),
+                "a frame-aligned but sparse magic-only fake is refused"
+            );
+            Ok(())
+        }
+
+        fn sqlite_clone_readback(
+            sqlite_exe: &Path,
+            db: &Path,
+            query: &str,
+        ) -> Result<String, Box<dyn std::error::Error>> {
+            let result = std::process::Command::new(sqlite_exe)
+                .arg("-batch")
+                // Only a private temp clone is opened: SQLite may construct
+                // its -shm index/checkpoint here, never on the source pair.
+                .arg(db)
+                .arg(query)
+                .output()?;
+            if !result.status.success() || !result.stderr.is_empty() || result.stdout.len() > 4096 {
+                return Err("K1 SQLite clone validation failed".into());
+            }
+            Ok(String::from_utf8(result.stdout)?.trim().replace('\r', ""))
+        }
+
+        /// `k1-structured.sqlite` is an independent SQLite-engine-produced
+        /// stress database, NEVER a replacement for Firefox `cookies.sqlite`.
+        /// Its preexisting base contains an empty k1_wal_probe table. Exactly
+        /// 1152 x 65536-byte rows must be committed ONLY in the WAL: SQLite
+        /// must see none without the WAL, and all with it. This defeats a fake
+        /// magic header, invalid checksum/salt or an ignored/truncated WAL.
+        fn validate_sqlite_stress_pair(
+            root: &Path,
+            db: &Path,
+            wal: &Path,
+            sqlite_exe: &Path,
+        ) -> Result<((u64, [u8; 32]), (u64, [u8; 32])), Box<dyn std::error::Error>> {
+            let db_sha = physical_file_sha256(root, db)?;
+            let wal_sha = require_populated_stress_wal(root, wal)?;
+            let plain = tempfile::tempdir()?;
+            let paired = tempfile::tempdir()?;
+            let db_name = "k1-structured.sqlite";
+            let plain_db = plain.path().join(db_name);
+            let paired_db = paired.path().join(db_name);
+            std::fs::copy(db, &plain_db)?;
+            std::fs::copy(db, &paired_db)?;
+            std::fs::copy(wal, paired.path().join("k1-structured.sqlite-wal"))?;
+            let base = sqlite_clone_readback(
+                sqlite_exe,
+                &plain_db,
+                "PRAGMA integrity_check(1); SELECT count(*) FROM k1_wal_probe;",
+            )?;
+            let activated = sqlite_clone_readback(
+                sqlite_exe,
+                &paired_db,
+                "PRAGMA integrity_check(1); SELECT count(*), sum(length(payload)), sum(length(payload)!=65536) FROM k1_wal_probe;",
+            )?;
+            if base != "ok\n0" || activated != "ok\n1152|75497472|0" {
+                return Err("K1 SQLite WAL-only committed rows/integrity not verified".into());
+            }
+            if physical_file_sha256(root, db)? != db_sha
+                || physical_file_sha256(root, wal)? != wal_sha
+            {
+                return Err("K1 original SQLite source changed during clone inspection".into());
+            }
+            Ok((db_sha, wal_sha))
+        }
+
+        /// The real browser cookie database is a separate, naturally sized
+        /// source. Its WAL may legitimately be absent/empty after CleanClose.
+        /// An independent SQLite engine opens ONLY this disposable copy;
+        /// Firefox provenance/CleanClose remains a separately recorded GUI
+        /// acceptance, never inferred from a file name or magic header.
+        fn optional_native_wal_sha(
+            root: &Path,
+            wal: &Path,
+        ) -> Result<Option<(u64, [u8; 32])>, Box<dyn std::error::Error>> {
+            match std::fs::symlink_metadata(wal) {
+                Ok(_) => Ok(Some(physical_file_sha256(root, wal)?)),
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
+                Err(error) => Err(error.into()),
+            }
+        }
+
+        fn validate_native_cookie_pair(
+            root: &Path,
+            db: &Path,
+            wal: &Path,
+            sqlite_exe: &Path,
+        ) -> Result<((u64, [u8; 32]), Option<(u64, [u8; 32])>), Box<dyn std::error::Error>>
+        {
+            let db_sha = physical_file_sha256(root, db)?;
+            let wal_sha = optional_native_wal_sha(root, wal)?;
+            let clone = tempfile::tempdir()?;
+            let copied_db = clone.path().join("cookies.sqlite");
+            std::fs::copy(db, &copied_db)?;
+            if wal_sha.is_some() {
+                std::fs::copy(wal, clone.path().join("cookies.sqlite-wal"))?;
+            }
+            let observed = sqlite_clone_readback(
+                sqlite_exe,
+                &copied_db,
+                "PRAGMA integrity_check(1); SELECT count(*) FROM sqlite_master WHERE type='table' AND name='moz_cookies';",
+            )?;
+            if observed != "ok\n1" {
+                return Err("K1 native Firefox cookie DB clone failed SQLite validation".into());
+            }
+            if physical_file_sha256(root, db)? != db_sha
+                || optional_native_wal_sha(root, wal)? != wal_sha
+            {
+                return Err("K1 native cookie source changed during clone inspection".into());
+            }
+            Ok((db_sha, wal_sha))
+        }
+
+        /// ONE real signed Windows Sync on a closed disposable staging profile:
+        /// (1) natural Firefox cookie DB and optional WAL, never fabricated,
+        /// (2) separate SQLite-created >=65 MiB WAL stress pair whose WAL-only
+        /// committed rows are proved by SQLite on private clones. The real D1
+        /// Commit must apply with 2xx, lose ONLY its ACK and Observe ACTIVE_EXACT.
+        /// Exact N+1/no N+2 and source SHA are checked. Cold Restore/browser
+        /// semantics and Firefox producer receipt remain independent evidence;
+        /// this ignored test alone is NOT overall K1 GO or run authorization.
+        #[test]
+        #[ignore = "requires separately owner-authorized disposable Firefox+valid SQLite WAL fixture and real signed staging Commit"]
+        fn authorized_test_profile_k1_split_wal_lost_commit_ack_exact_current()
         -> Result<(), Box<dyn std::error::Error>> {
             if std::env::var("PROFILE_BRIDGE_TEST_ALLOW_STAGING_MUTATION").as_deref()
                 != Ok("YES_SCOPED_DISPOSABLE_PROFILE")
-                || std::env::var("PROFILE_BRIDGE_TEST_LOST_COMMIT_ACK_65MIB").as_deref()
+                || std::env::var("PROFILE_BRIDGE_TEST_LOST_COMMIT_ACK_STRUCTURED_WAL_65MIB")
+                    .as_deref()
                     != Ok("YES_ONE_DISPOSABLE_WAL_ACK_LOSS")
             {
                 return Err("separate exact disposable K1 staging authorization required".into());
+            }
+            // An older ignored fault may otherwise abort this process AFTER
+            // the real D1 Commit and before the new K1 receipt is persisted.
+            if std::env::var_os("PROFILE_BRIDGE_TEST_ABORT_AFTER_CONFIRMED_COMMIT").is_some() {
+                return Err("refuse conflicting inherited post-Commit abort switch".into());
+            }
+            let sqlite_exe = PathBuf::from(
+                std::env::var_os("PROFILE_BRIDGE_TEST_SQLITE3_EXE")
+                    .ok_or("missing exact disposable K1 SQLite validator executable")?,
+            );
+            if !sqlite_exe.is_absolute() || !sqlite_exe.is_file() {
+                return Err("K1 SQLite validator must be an existing absolute executable".into());
             }
             let scratch = PathBuf::from(
                 std::env::var_os("PROFILE_BRIDGE_TEST_CLOSED_SYNC_ROOT")
@@ -2974,8 +3186,22 @@ mod windows {
                 return Err("K1 fixture is not a closed dirty CURRENT".into());
             }
             let old_path = before.path().to_path_buf();
-            let wal = old_path.join("user_data/cookies.sqlite-wal");
-            let before_wal_sha = physical_wal_sha256(&wal)?;
+            let native_db = old_path.join("user_data/cookies.sqlite");
+            let native_wal = old_path.join("user_data/cookies.sqlite-wal");
+            // Preparer atomically renames a complete pair directory into
+            // user_data; a running snapshot can never see only one half.
+            let stress_db = old_path.join("user_data/k1-structured/k1-structured.sqlite");
+            let stress_wal = old_path.join("user_data/k1-structured/k1-structured.sqlite-wal");
+            let native_before =
+                validate_native_cookie_pair(root.path(), &native_db, &native_wal, &sqlite_exe)?;
+            let stress_before =
+                validate_sqlite_stress_pair(root.path(), &stress_db, &stress_wal, &sqlite_exe)?;
+            eprintln!(
+                "K1_SPLIT_NATIVE_COOKIE_WAL_OBSERVED;present={};bytes={};STRUCTURED_SQLITE_WAL_BYTES={}",
+                native_before.1.is_some(),
+                native_before.1.map_or(0, |entry| entry.0),
+                stress_before.1.0,
+            );
             let app = WindowsDeviceApplication::from_system(
                 "https://staging.alegria.by",
                 binding.clone(),
@@ -3019,7 +3245,22 @@ mod windows {
             );
             assert!(after.pending_sync().is_none(), "no unknown prepared N+2");
             assert!(!after.path().join(".local-unsynced").exists());
-            assert_eq!(physical_wal_sha256(&wal)?, before_wal_sha);
+            assert_eq!(
+                (
+                    physical_file_sha256(root.path(), &native_db)?,
+                    optional_native_wal_sha(root.path(), &native_wal)?
+                ),
+                native_before,
+                "natural Firefox cookie DB/WAL source bytes must remain identical"
+            );
+            assert_eq!(
+                (
+                    physical_file_sha256(root.path(), &stress_db)?,
+                    physical_file_sha256(root.path(), &stress_wal)?
+                ),
+                stress_before,
+                "independent valid SQLite stress DB/WAL source bytes must remain identical"
+            );
 
             // Re-enter the ACTUAL shipping Sync on clean CURRENT under the
             // same held admission. It must be a no-op, not a second Commit or
@@ -3046,8 +3287,23 @@ mod windows {
             assert_eq!(still_local.path(), old_path.as_path());
             assert!(still_local.pending_sync().is_none());
             assert!(!still_local.path().join(".local-unsynced").exists());
-            assert_eq!(physical_wal_sha256(&wal)?, before_wal_sha);
-            eprintln!("K1_REAL_WAL_65MIB_LOST_COMMIT_ACK_EXACT_CURRENT_N_PLUS_ONE_PASS");
+            assert_eq!(
+                (
+                    physical_file_sha256(root.path(), &native_db)?,
+                    optional_native_wal_sha(root.path(), &native_wal)?
+                ),
+                native_before
+            );
+            assert_eq!(
+                (
+                    physical_file_sha256(root.path(), &stress_db)?,
+                    physical_file_sha256(root.path(), &stress_wal)?
+                ),
+                stress_before
+            );
+            eprintln!(
+                "K1_SPLIT_NATIVE_COOKIE_AND_STRUCTURED_SQLITE_65MIB_LOST_ACK_EXACT_CURRENT_SOURCE_PASS;COLD_RESTORE_AND_BROWSER_UNPROVEN"
+            );
             Ok(())
         }
 
