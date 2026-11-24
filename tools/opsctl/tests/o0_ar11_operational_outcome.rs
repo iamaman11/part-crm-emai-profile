@@ -342,26 +342,49 @@ fn ar11_workflow_terminalizes_after_owner_capture_and_before_final_assertion() -
     assert!(workflow.contains("EXPECTED_CURRENT"));
     assert!(workflow.contains("exact-current-fence.json"));
 
-    let resolve = workflow
-        .split("  resolve-verify:\n")
+    let preflight = workflow
+        .split("  preflight-ready:\n")
         .nth(1)
-        .and_then(|tail| tail.split("  mutate:\n").next())
-        .ok_or_else(|| "manual resolve-verify job must exist".to_string())?;
-    assert!(resolve.contains("environment: staging"));
-    assert!(resolve.contains("actions/artifacts?name=$ready_artifact_name"));
-    assert!(resolve.contains("needs: [route, resolve-preflight]"));
-    assert!(!resolve.contains("STAGING_CANDIDATE"));
-    assert!(!resolve.contains("issues/870"));
-    let mutate = workflow
-        .split("  mutate:\n")
+        .and_then(|tail| tail.split("  promote:\n").next())
+        .ok_or_else(|| "single-runner read-only preflight job must exist".to_string())?;
+    assert!(preflight.contains("environment: staging"));
+    assert!(preflight.contains("release verify"));
+    assert!(preflight.contains("AR11_READY_TO_MUTATE"));
+    assert!(!preflight.contains("secrets.CLOUDFLARE_API_TOKEN"));
+
+    let promote = workflow
+        .split("  promote:\n")
         .nth(1)
-        .and_then(|tail| tail.split("  post-verify:\n").next())
-        .ok_or_else(|| "manual mutate job must exist".to_string())?;
-    assert!(mutate.contains("environment: staging"));
-    assert!(!resolve.contains("AUTHORITY_COMMENT"));
-    assert!(!resolve.contains("authorization_comment_id"));
-    assert!(!resolve.contains("issues/comments/"));
-    assert!(!resolve.contains("branches/main"));
+        .and_then(|tail| tail.split("  manual-outcome:\n").next())
+        .ok_or_else(|| "single-runner owner-authorized staging promotion job must exist".to_string())?;
+    assert!(promote.contains("environment: staging"));
+    assert!(promote.contains("actions/artifacts?name=$ready_artifact_name"));
+    assert!(promote.contains("needs: route"));
+    assert!(promote.contains("STAGING_PROMOTION_DISPATCH_INTENT"));
+    assert!(promote.contains("AR11_EXACT_CURRENT_FENCE"));
+    assert!(promote.contains("promotion verify"));
+    assert!(!promote.contains("STAGING_CANDIDATE"));
+    assert!(!promote.contains("issues/870"));
+    assert!(!promote.contains("AUTHORITY_COMMENT"));
+    assert!(!promote.contains("authorization_comment_id"));
+    assert!(!promote.contains("issues/comments/"));
+    for retired_job in ["resolve-preflight", "resolve-verify", "mutate", "post-verify"] {
+        assert!(
+            !workflow.contains(&format!("  {retired_job}:\n")),
+            "per-phase cold runner {retired_job} must not be retained"
+        );
+    }
+
+    let pre_deploy = promote
+        .find("Re-fence Worker identity and D1 head immediately before mutation")
+        .ok_or_else(|| "current Worker/D1 fence must remain in the promotion job".to_string())?;
+    let deploy_in_job = promote
+        .find("Deploy exact Release Set v3 bits after all fences")
+        .ok_or_else(|| "protected deploy step must remain in the promotion job".to_string())?;
+    let post_verify = promote
+        .find("Re-observe provider and capture promotion.verify natural-owner verdict")
+        .ok_or_else(|| "post-deploy semantic owner must run on the same verified candidate".to_string())?;
+    assert!(pre_deploy < deploy_in_job && deploy_in_job < post_verify);
     assert!(!workflow.contains("promotion-verify.json\" | jq -e '.verified == true"));
 
     let terminalize = workflow
