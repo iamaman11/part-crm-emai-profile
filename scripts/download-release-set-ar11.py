@@ -164,7 +164,15 @@ def self_test() -> None:
         / "workflows"
         / "release-set-promotion.yml"
     ).read_text(encoding="utf-8")
-    assert workflow.count("scripts/download-release-set-ar11.py") == 6
+    # A single workflow invocation has one materialization owner. Automatic
+    # preflight downloads the candidate and (when required) the distinct
+    # known-good predecessor; manual promotion downloads the candidate once.
+    ready = workflow.split("\n  preflight-ready:\n", 1)[1].split("\n  promote:\n", 1)[0]
+    promote = workflow.split("\n  promote:\n", 1)[1].split("\n  manual-outcome:\n", 1)[0]
+    downloader = "scripts/download-release-set-ar11.py"
+    assert ready.count(downloader) == 2
+    assert promote.count(downloader) == 1
+    assert workflow.count(downloader) == 3
     assert "gh release download" not in workflow
 
     print("AR11 Release Set GitHub CLI downloader self-test: PASS")

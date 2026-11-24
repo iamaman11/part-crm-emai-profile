@@ -20,9 +20,6 @@ const LEGACY_FILES = [
   'scripts/mailbox-secret-resolver-promotion.py',
   'scripts/_mailbox_secret_resolver_promotion_core.py',
 ];
-// Backward-compatible AR11-N-24 certification locator only. The guard below
-// validates the semantic READY->mutation byte-identity role, not this spelling.
-const AR11_N24_CERTIFICATION_LOCATOR = 'cmp --silent "$release_root/release-set.json" "$preflight_root/release-set.json"';
 
 function read(relative) {
   return readFileSync(path.join(ROOT, relative), 'utf8').replace(/\r\n?/g, '\n');
@@ -134,23 +131,27 @@ function immediateMutationFenceErrors(mutate) {
   return errors;
 }
 
-function deployCredentialBoundaryErrors(promotion, mutate) {
-  const token = 'DEPLOY_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}';
-  const readyBind = 'Download and bind prior READY evidence before provider credentials';
+function deployCredentialBoundaryErrors(promotion, promote) {
+  const token = 'CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}';
+  const readyBind = 'Bind previously verified READY evidence before provider credentials';
   const dryRun = 'Render mutation overlay and prove exact bits dry-run without deploy credential';
-  const activation = 'Activate deploy credential only after exact READY and dispatch binding';
   const promotionCount = promotion.split(token).length - 1;
-  const mutateCount = mutate.split(token).length - 1;
-  const readyIndex = mutate.indexOf(readyBind);
-  const dryRunIndex = mutate.indexOf(dryRun);
-  const activationIndex = mutate.indexOf(activation);
-  const tokenIndex = mutate.indexOf(token);
+  const promoteCount = promote.split(token).length - 1;
+  const readyIndex = promote.indexOf(readyBind);
+  const dryRunIndex = promote.indexOf(dryRun);
+  const fenceIndex = promote.indexOf('Re-fence Worker identity and D1 head immediately before mutation');
+  const deployIndex = promote.indexOf('Deploy exact Release Set v3 bits after all fences');
+  const deployStep = stepBlock(promote, 'Deploy exact Release Set v3 bits after all fences');
   const errors = [];
-  if (promotionCount !== 1 || mutateCount !== 1) {
-    errors.push(`deploy-capable credential must be referenced exactly once and only by the protected mutation executor; workflow=${promotionCount} mutate=${mutateCount}`);
+  if (promotionCount !== 1 || promoteCount !== 1 || !deployStep.includes(token)) {
+    errors.push(`deploy-capable credential must be referenced exactly once and only by the one deploy step; workflow=${promotionCount} promote=${promoteCount}`);
   }
-  if (!(readyIndex >= 0 && dryRunIndex > readyIndex && activationIndex > dryRunIndex && tokenIndex > activationIndex)) {
-    errors.push('deploy-capable credential must remain behind bound READY, exact-bits dry-run, and the explicit activation proof boundary');
+  if (!(readyIndex >= 0 && dryRunIndex > readyIndex && fenceIndex > dryRunIndex && deployIndex > fenceIndex)) {
+    errors.push('deploy-capable credential must remain behind bound READY, exact-bits dry-run and immediate predeploy fence');
+  }
+  const earlierSteps = promote.slice(0, deployIndex >= 0 ? deployIndex : promote.length);
+  if (earlierSteps.includes(token) || promote.includes('echo "CLOUDFLARE_API_TOKEN=$DEPLOY_TOKEN" >> "$GITHUB_ENV"')) {
+    errors.push('deploy credential must be scoped to deploy step, never persist across read-only observation or post-verification');
   }
   return errors;
 }
@@ -269,15 +270,15 @@ function promotionErrors(promotion) {
   ], 'Release Set promotion'));
 
   const route = jobBlock(promotion, 'route');
-  const resolvePreflight = jobBlock(promotion, 'resolve-preflight');
   const ready = jobBlock(promotion, 'preflight-ready');
-  const resolveAuthorized = jobBlock(promotion, 'resolve-verify');
-  const mutate = jobBlock(promotion, 'mutate');
-  const post = jobBlock(promotion, 'post-verify');
+  const promote = jobBlock(promotion, 'promote');
   const manualOutcome = jobBlock(promotion, 'manual-outcome');
   const rollback = jobBlock(promotion, 'rollback-negative-evidence');
-  for (const [name, block] of Object.entries({ route, 'resolve-preflight': resolvePreflight, 'preflight-ready': ready, 'resolve-verify': resolveAuthorized, mutate, 'post-verify': post, 'manual-outcome': manualOutcome, 'rollback-negative-evidence': rollback })) {
+  for (const [name, block] of Object.entries({ route, 'preflight-ready': ready, promote, 'manual-outcome': manualOutcome, 'rollback-negative-evidence': rollback })) {
     if (!block) errors.push(`Release Set promotion is missing structural job ${name}`);
+  }
+  for (const retired of ['resolve-preflight', 'resolve-verify', 'mutate', 'post-verify']) {
+    if (jobBlock(promotion, retired)) errors.push(`Release Set promotion retains redundant cold-runner job ${retired}`);
   }
   if (errors.some((error) => error.includes('missing structural job'))) return errors;
 
@@ -291,15 +292,14 @@ function promotionErrors(promotion) {
   ], 'promotion invocation router'));
   errors.push(...forbidMarkers(route, ['secrets.', 'wrangler deploy', 'environment: staging'], 'promotion invocation router'));
 
-  errors.push(...requireMarkers(resolvePreflight, [
-    "if: needs.route.outputs.mode == 'preflight' || needs.route.outputs.mode == 'promote'",
+  errors.push(...requireMarkers(ready, [
     'Resolve unique immutable Release Set for exact protected main',
     'test "$SOURCE_SHA" = "$main_sha"',
     'test "$(jq \'length\' "$RUNNER_TEMP/main-release-sets.json")" = 1',
     'Verify immutable target before any provider credential',
     'release verify',
   ], 'pre-authorization target resolver'));
-  errors.push(...forbidMarkers(resolvePreflight, ['issues: read', 'AUTHORITY_COMMENT', 'secrets.CLOUDFLARE_', 'wrangler deploy'], 'pre-authorization target resolver'));
+  errors.push(...forbidMarkers(ready, ['issues: read', 'AUTHORITY_COMMENT', 'secrets.CLOUDFLARE_API_TOKEN', 'wrangler deploy'], 'pre-authorization target resolver'));
 
   errors.push(...requireMarkers(ready, [
     "if: needs.route.outputs.mode == 'preflight'",
@@ -369,10 +369,15 @@ function promotionErrors(promotion) {
   if (!(readOnlyTerminalize >= 0 && readOnlyUpload > readOnlyTerminalize && readOnlyEnforce > readOnlyUpload)) {
     errors.push('read-only AR11 must terminalize -> publish evidence -> enforce final disposition');
   }
+  const preflightTerminal = stepBlock(ready, 'Terminalize one lossless AR11 OperationalOutcome');
+  errors.push(...requireMarkers(preflightTerminal, [
+    'steps.resolve.outcome',
+    'failed_boundary="ACCEPTED_MAIN_RELEASE_RESOLUTION"',
+    'steps.target_verify.outcome',
+    'failed_boundary="TARGET_RELEASE_VERIFY"',
+  ], 'pre-authorization failure localization'));
 
-  errors.push(...requireMarkers(resolveAuthorized, [
-    "if: always() && needs.route.outputs.mode == 'promote'",
-    'needs: [route, resolve-preflight]',
+  errors.push(...requireMarkers(promote, [
     'environment: staging',
     'Bind the explicit GitHub dispatch to unique accepted-main READY evidence',
     'SELECTED_MAIN_SHA:',
@@ -388,11 +393,11 @@ function promotionErrors(promotion) {
     'READY_ARTIFACT_NAME',
     'READY_EVIDENCE_SHA256',
     'dispatch_digest',
-    'Download and verify exact prior READY_TO_MUTATE evidence',
+    'Verify exact downloaded READY_TO_MUTATE evidence',
     'native_recovery="$(jq -er',
     '.recovery_strategy == $recovery',
     "jq -er '.promotion_preflight_sha256'",
-    'gh run download "$READY_RUN_ID"',
+    'gh run download "$ready_run_id"',
     'target_capability_profile_id',
     'expected_current_capability_profile_id',
     'target_profile="$(jq -er',
@@ -402,61 +407,91 @@ function promotionErrors(promotion) {
     'kind == "AR11_READY_TO_MUTATE"',
     'ready == true',
     'provider_mutation == false',
-    'Re-verify immutable target without provider credentials',
+    'Re-verify exact immutable Release Set before credentials',
   ], 'dispatch READY binder'));
-  errors.push(...forbidMarkers(resolveAuthorized, [
+  const readyBindStep = stepBlock(promote, 'Bind the explicit GitHub dispatch to unique accepted-main READY evidence');
+  const readyDownloadStep = stepBlock(promote, 'Verify exact downloaded READY_TO_MUTATE evidence');
+  errors.push(...forbidMarkers(`${readyBindStep}\n${readyDownloadStep}`, [
     'secrets.CLOUDFLARE_', 'wrangler deploy', 'promotion plan', 'promotion preflight',
     'SCOPED_EXCEPTION', 'AUTHORITY_COMMENT', 'WORKER_PROMOTION_AUTHORIZATION_V2',
     'authorization_comment_id', 'issues/comments/', 'branches/main',
     'STAGING_CANDIDATE', 'issues/870', 'issues: read',
   ], 'dispatch READY binder'));
+  const manualResolve = stepBlock(promote, 'Capture manual resolve phase state');
+  errors.push(...requireMarkers(manualResolve, [
+    'steps.resolve.outcome',
+    'failed_boundary="ACCEPTED_MAIN_RELEASE_RESOLUTION"',
+    'step_outcomes:{resolve:$resolve',
+  ], 'manual resolution failure localization'));
+  for (const [name, label] of [
+    ['Capture manual mutation phase state', 'mutation'],
+    ['Capture manual post-verify phase state', 'post-verify'],
+  ]) {
+    errors.push(...requireMarkers(stepBlock(promote, name), [
+      'test -n "$source_sha" || source_sha="$SOURCE_SHA"',
+      '--arg source_sha "$source_sha"',
+      '--arg dispatch_digest "${{ steps.intent.outputs.dispatch_digest }}"',
+      'release_set_id:(if $release_set_id=="" then null else $release_set_id end)',
+      'target_capability_profile_id:(if $target_profile=="" then null else $target_profile end)',
+      'dispatch_digest:(if $dispatch_digest=="" then null else $dispatch_digest end)',
+    ], `manual ${label} early-failure transport`));
+  }
 
-  errors.push(...requireMarkers(mutate, [
+  errors.push(...requireMarkers(promote, [
     'Execute exact candidate after owner dispatch and READY evidence',
     'environment: staging',
-    'TARGET_PROFILE: ${{ needs.resolve-verify.outputs.target_profile }}',
-    'EXPECTED_CURRENT_PROFILE: ${{ needs.resolve-verify.outputs.expected_current_profile }}',
-    'DISPATCH_DIGEST: ${{ needs.resolve-verify.outputs.dispatch_digest }}',
+    'TARGET_PROFILE',
+    'EXPECTED_CURRENT_PROFILE',
+    'DISPATCH_DIGEST',
     '[[ "$DISPATCH_DIGEST" =~ ^[0-9a-f]{64}$ ]]',
     'dispatch_digest:$dispatch_digest',
-    'Download and bind prior READY evidence before provider credentials',
+    'Bind previously verified READY evidence before provider credentials',
     'AR11_MUTATION_FENCE',
     'target_capability_profile_id:$target_profile',
     'expected_current_capability_profile_id:$expected_current_profile',
     'Re-verify exact immutable Release Set before credentials',
     'Render mutation overlay and prove exact bits dry-run without deploy credential',
-    'Activate deploy credential only after exact READY and dispatch binding',
-    'DEPLOY_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}',
+    'CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}',
     'Re-fence Worker identity and D1 head immediately before mutation',
     'cmp --silent "$RUNNER_TEMP/mutation-d1-names.json" "$RUNNER_TEMP/ready/d1-names-after.json"',
     'Deploy exact Release Set v3 bits after all fences',
     '--message "release_set=$RELEASE_SET_ID profile=$TARGET_PROFILE"',
   ], 'protected mutation executor'));
-  errors.push(...readyMutationByteIdentityErrors(mutate));
-  errors.push(...immediateMutationFenceErrors(mutate));
-  errors.push(...deployCredentialBoundaryErrors(promotion, mutate));
-  errors.push(...forbidMarkers(mutate, ['promotion plan', 'promotion preflight', 'release compatibility', 'materialize known-good-v2-v3', 'worker-build --release', 'cargo build', 'npm run build', 'profile=rehearsal-core-v2"'], 'protected mutation executor'));
+  errors.push(...readyMutationByteIdentityErrors(promote));
+  errors.push(...immediateMutationFenceErrors(promote));
+  errors.push(...deployCredentialBoundaryErrors(promotion, promote));
+  const currentMaterializations = (promote.match(/release-set-assets-ar11\.sh materialize current-v3/g) ?? []).length;
+  if (currentMaterializations !== 1) {
+    errors.push(`one-runner promotion must materialize the verified immutable target exactly once; observed=${currentMaterializations}`);
+  }
+  const releaseVerifications = (promote.match(/\brelease verify --release-set\b/g) ?? []).length;
+  if (releaseVerifications !== 1) {
+    errors.push(`one-runner promotion must verify exact release bits once before mutation; observed=${releaseVerifications}`);
+  }
+  errors.push(...forbidMarkers(promote, ['promotion plan', 'promotion preflight', 'release compatibility', 'materialize known-good-v2-v3', 'worker-build --release', 'cargo build', 'npm run build', 'profile=rehearsal-core-v2"'], 'protected mutation executor'));
   if ((promotion.match(/secrets\.CLOUDFLARE_API_TOKEN\s*}}/g) ?? []).length !== 1) {
     errors.push('deploy-capable Cloudflare token must be referenced exactly once in the whole promotion workflow');
   }
-  const readyBind = mutate.indexOf('Download and bind prior READY evidence before provider credentials');
-  const deployCredential = mutate.indexOf('DEPLOY_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}');
-  const refence = mutate.indexOf('Re-fence Worker identity and D1 head immediately before mutation');
-  const actualDeploy = mutate.indexOf('Deploy exact Release Set v3 bits after all fences');
-  if (!(readyBind >= 0 && deployCredential > readyBind && refence > deployCredential && actualDeploy > refence)) {
-    errors.push('mutation order must be READY binding -> deploy credential -> immediate re-fence -> deploy');
+  const readyBind = promote.indexOf('Bind previously verified READY evidence before provider credentials');
+  const deployCredential = promote.indexOf('CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}');
+  const refence = promote.indexOf('Re-fence Worker identity and D1 head immediately before mutation');
+  const actualDeploy = promote.indexOf('Deploy exact Release Set v3 bits after all fences');
+  if (!(readyBind >= 0 && refence > readyBind && actualDeploy > refence && deployCredential > actualDeploy)) {
+    errors.push('mutation order must be READY binding -> read-only immediate re-fence -> scoped deploy credential');
   }
 
-  errors.push(...requireMarkers(post, [
-    'TARGET_PROFILE: ${{ needs.resolve-verify.outputs.target_profile }}',
+  errors.push(...requireMarkers(promote, [
+    'TARGET_PROFILE',
     'secrets.CLOUDFLARE_OBSERVE_API_TOKEN',
+    "if: always() && steps.deploy.outcome == 'success'",
+    "if: always() && steps.deploy.outcome == 'success' && steps.target_prepare.outcome == 'success'",
     'Re-observe provider and capture promotion.verify natural-owner verdict',
     'promotion verify',
     '--profile "$TARGET_PROFILE"',
     '> "$RUNNER_TEMP/promotion-verify.json"',
     'decision="$(jq -er',
     '$RUNNER_TEMP/promotion-verify.json',
-    "if: steps.observe_verify.outputs.decision == 'VERIFIED'",
+    "if: always() && steps.observe_verify.outputs.decision == 'VERIFIED'",
     'Record authenticated human health handoff after promotion owner reports VERIFIED',
     'kind:"AR11_HUMAN_HEALTH_HANDOFF"',
     'decision:"DEFERRED_TO_V2_B7"',
@@ -464,7 +499,8 @@ function promotionErrors(promotion) {
     'authenticated_health_owner:"V2_B7_REAL_WINDOWS_HUMAN"',
     'human-health-handoff.json',
   ], 'post-deploy verifier'));
-  errors.push(...forbidMarkers(post, [
+  const postObservationStep = stepBlock(promote, 'Re-observe provider and capture promotion.verify natural-owner verdict');
+  errors.push(...forbidMarkers(postObservationStep, [
     'secrets.CLOUDFLARE_API_TOKEN }}',
     'wrangler deploy --',
     '--profile rehearsal-core-v2',
@@ -474,11 +510,11 @@ function promotionErrors(promotion) {
     'CF-Access-Client-Secret',
     'https://$custom_domain/api/v1/health',
   ], 'post-deploy verifier'));
-  errors.push(...secretObservationErrors(post, 'post-deploy verifier'));
+  errors.push(...secretObservationErrors(postObservationStep, 'post-deploy verifier'));
 
   errors.push(...requireMarkers(manualOutcome, [
     "if: always() && needs.route.outputs.mode == 'promote'",
-    'TARGET_PROFILE: ${{ needs.resolve-verify.outputs.target_profile }}',
+    'TARGET_PROFILE:',
     'Terminalize one lossless manual AR11 OperationalOutcome',
     '--mode manual',
     '--profile-id "$profile_id"',
@@ -663,7 +699,28 @@ function validateAll({ build, promotion, camoufox, camoufoxClassifier, authority
 }
 
 function selfTest(files) {
-  void AR11_N24_CERTIFICATION_LOCATOR;
+  const preflightTerminal = stepBlock(jobBlock(files.promotion, 'preflight-ready'), 'Terminalize one lossless AR11 OperationalOutcome');
+  for (const [marker, name] of [
+    ['failed_boundary="ACCEPTED_MAIN_RELEASE_RESOLUTION"', 'main resolution'],
+    ['failed_boundary="TARGET_RELEASE_VERIFY"', 'target immutable verify'],
+  ]) {
+    if (!preflightTerminal.includes(marker)) throw new Error(`preflight ${name} diagnostic fixture target is missing`);
+    const withoutDiagnostic = files.promotion.replace(preflightTerminal, preflightTerminal.replace(marker, 'failed_boundary="UNKNOWN_GATE"'));
+    if (!promotionErrors(withoutDiagnostic).some((error) => error.includes('pre-authorization failure localization'))) {
+      throw new Error(`read-only ${name} error localization removal unexpectedly passed`);
+    }
+  }
+  const manualResolve = stepBlock(jobBlock(files.promotion, 'promote'), 'Capture manual resolve phase state');
+  for (const [marker, name] of [
+    ['failed_boundary="ACCEPTED_MAIN_RELEASE_RESOLUTION"', 'main resolution'],
+    ['step_outcomes:{resolve:$resolve', 'resolve evidence'],
+  ]) {
+    if (!manualResolve.includes(marker)) throw new Error(`manual ${name} diagnostic fixture target is missing`);
+    const withoutDiagnostic = files.promotion.replace(manualResolve, manualResolve.replace(marker, 'diagnostic_was_removed'));
+    if (!promotionErrors(withoutDiagnostic).some((error) => error.includes('manual resolution failure localization'))) {
+      throw new Error(`manual ${name} error localization removal unexpectedly passed`);
+    }
+  }
   const missingRecovery = files.promotion.replace('.recovery_strategy == $recovery', 'true');
   if (!promotionErrors(missingRecovery).some((error) => error.includes('dispatch READY binder'))) {
     throw new Error('missing native recovery binding fixture passed');
@@ -682,15 +739,15 @@ function selfTest(files) {
   }
   const missingOwnerGuard = files.promotion.replace("if: github.event_name != 'workflow_dispatch' || github.actor == github.repository_owner", "if: always()");
   if (!promotionErrors(missingOwnerGuard).some((error) => error.includes('promotion invocation router'))) throw new Error('missing owner access guard fixture passed');
-  const missingStagingEnvironment = files.promotion.replace('    name: Bind this owner dispatch to the unique accepted-main READY evidence\n    needs: [route, resolve-preflight]\n    if: always() && needs.route.outputs.mode == \'promote\'\n    runs-on: ubuntu-latest\n    environment: staging', '    name: Bind this owner dispatch to the unique accepted-main READY evidence\n    needs: [route, resolve-preflight]\n    if: always() && needs.route.outputs.mode == \'promote\'\n    runs-on: ubuntu-latest');
+  const promoteJob = jobBlock(files.promotion, 'promote');
+  if (!promoteJob.includes('environment: staging')) throw new Error('staging promotion fixture cannot locate its Environment');
+  const missingStagingEnvironment = files.promotion.replace(promoteJob, promoteJob.replace('    environment: staging\n', ''));
   if (!promotionErrors(missingStagingEnvironment).some((error) => error.includes('dispatch READY binder'))) throw new Error('missing staging resolver Environment guard fixture passed');
-  const missingMutationEnvironment = files.promotion.replace('    environment: staging\n    permissions:\n      actions: read\n      contents: read\n      deployments: write', '    permissions:\n      actions: read\n      contents: read\n      deployments: write');
-  if (!promotionErrors(missingMutationEnvironment).some((error) => error.includes('protected mutation executor'))) throw new Error('missing staging mutation Environment guard fixture passed');
   const missingUniqueReady = files.promotion.replaceAll('.total_count == 1 and (.artifacts | length) == 1', 'true');
   if (!promotionErrors(missingUniqueReady).some((error) => error.includes('dispatch READY binder'))) throw new Error('ambiguous READY artifact fixture passed');
   const staleIssueSelector = files.promotion.replace('candidate-ready-run.json', 'candidate-ready-run.json\\n          gh api "repos/$GITHUB_REPOSITORY/issues/870"');
   if (!promotionErrors(staleIssueSelector).some((error) => error.includes('dispatch READY binder'))) throw new Error('old Issue-body selector fixture passed');
-  const readyBinder = stepBlock(jobBlock(files.promotion, 'resolve-verify'), 'Bind the explicit GitHub dispatch to unique accepted-main READY evidence');
+  const readyBinder = stepBlock(promoteJob, 'Bind the explicit GitHub dispatch to unique accepted-main READY evidence');
   const pythonBlock = readyBinder.match(/<<'PY'\n([\s\S]*?)\n          PY/);
   if (!pythonBlock) throw new Error('READY dispatch intent Python executable is missing');
   const pythonSource = pythonBlock[1].split('\n').map((line) => {
@@ -760,10 +817,22 @@ function selfTest(files) {
   }
   const rebuild = files.promotion.replace(
     'Deploy exact Release Set v3 bits after all fences',
+    'run: worker-build --release\n      - name: Deploy exact Release Set v3 bits after all fences',
+  );
+  if (!promotionErrors(rebuild).some((error) => error.includes('worker-build --release'))) throw new Error('promotion rebuild fixture unexpectedly passed');
+  const missingFailureCapture = files.promotion.replace(
+    'test -n "$source_sha" || source_sha="$SOURCE_SHA"',
+    'test -n "$source_sha" || source_sha=""',
+  );
+  if (!promotionErrors(missingFailureCapture).some((error) => error.includes('manual mutation early-failure transport'))) {
+    throw new Error('manual early-failure source identity fixture unexpectedly passed');
+  }
+  const cargoRebuild = files.promotion.replace(
+    'Deploy exact Release Set v3 bits after all fences',
     'run: cargo build --release\n      - name: Deploy exact Release Set v3 bits after all fences',
   );
-  if (!promotionErrors(rebuild).some((error) => error.includes('cargo build'))) throw new Error('promotion rebuild fixture unexpectedly passed');
-  const mutationBlock = jobBlock(files.promotion, 'mutate');
+  if (!promotionErrors(cargoRebuild).some((error) => error.includes('cargo build'))) throw new Error('promotion cargo-rebuild fixture unexpectedly passed');
+  const mutationBlock = jobBlock(files.promotion, 'promote');
   const brokenMutationBlock = mutationBlock.replace(
     'cmp --silent "$release_root/release-set.json" "$RUNNER_TEMP/ready/release-set.json"',
     'cp "$release_root/release-set.json" "$RUNNER_TEMP/ready/release-set.json"',
@@ -793,17 +862,17 @@ function selfTest(files) {
   if (!promotionErrors(hardcodedDeployProfile).some((error) => error.includes('protected mutation executor'))) {
     throw new Error('hard-coded mutation target capability-profile fixture unexpectedly passed');
   }
-  const deployToken = '          DEPLOY_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}';
-  const earlyCredentialAnchor = '      - name: Set up pinned Node before deploy credential';
-  let earlyDeployCredential = files.promotion.replace(deployToken, '          DEPLOY_TOKEN: inherited');
+  const deployToken = '          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}';
+  const earlyCredentialAnchor = '      - name: Render mutation overlay and prove exact bits dry-run without deploy credential';
+  let earlyDeployCredential = files.promotion.replace(deployToken, '          CLOUDFLARE_API_TOKEN: inherited');
   earlyDeployCredential = earlyDeployCredential.replace(
     earlyCredentialAnchor,
-    '      - name: Early deploy credential fixture\n        env:\n          DEPLOY_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}\n        run: echo early\n\n' + earlyCredentialAnchor,
+    '      - name: Early deploy credential fixture\n        env:\n          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}\n        run: echo early\n\n' + earlyCredentialAnchor,
   );
   if (earlyDeployCredential === files.promotion || !earlyDeployCredential.includes('Early deploy credential fixture')) {
     throw new Error('early deploy credential fixture setup failed');
   }
-  if (!promotionErrors(earlyDeployCredential).some((error) => error.includes('explicit activation proof boundary'))) {
+  if (!promotionErrors(earlyDeployCredential).some((error) => error.includes('deploy step'))) {
     throw new Error('early deploy credential fixture unexpectedly passed');
   }
   const mutationWithDeployRead = mutationBlock.replace(

@@ -22,6 +22,7 @@ from typing import Any
 
 SOURCE_SHA = re.compile(r"[0-9a-f]{40}")
 RELEASE_SET_ID = re.compile(r"release-set-v3-sha256-[0-9a-f]{64}")
+SHA256 = re.compile(r"[0-9a-f]{64}")
 CONTRACT = "PROMOTION_OPERATOR_OUTCOME_V1"
 READ_ONLY_PROCEDURE = "AR11_RELEASE_SET_PROMOTION_READ_ONLY"
 MANUAL_PROCEDURE = "AR11_RELEASE_SET_PROMOTION"
@@ -381,6 +382,8 @@ def compose(
 def valid_manual_state(value: dict[str, Any], phase: str, source_sha: str) -> bool:
     release_set_id = value.get("release_set_id")
     promotion_id = value.get("promotion_id")
+    dispatch_digest = value.get("dispatch_digest")
+    target_profile = value.get("target_capability_profile_id")
     failed_boundary = value.get("failed_boundary")
     step_outcomes = value.get("step_outcomes")
     return (
@@ -390,6 +393,8 @@ def valid_manual_state(value: dict[str, Any], phase: str, source_sha: str) -> bo
         and value.get("source_sha") == source_sha
         and (release_set_id is None or (isinstance(release_set_id, str) and RELEASE_SET_ID.fullmatch(release_set_id)))
         and (promotion_id is None or (isinstance(promotion_id, str) and bool(promotion_id)))
+        and (dispatch_digest is None or (isinstance(dispatch_digest, str) and SHA256.fullmatch(dispatch_digest)))
+        and (target_profile is None or (isinstance(target_profile, str) and bool(target_profile)))
         and isinstance(value.get("dispatch_authorized"), bool)
         and isinstance(value.get("provider_mutation_started"), bool)
         and isinstance(value.get("provider_mutation_executed"), bool)
@@ -401,7 +406,7 @@ def valid_manual_state(value: dict[str, Any], phase: str, source_sha: str) -> bo
 
 
 def valid_promotion_verify(
-    value: dict[str, Any], environment: str, profile_id: str, release_set_id: str | None
+    value: dict[str, Any], environment: str, profile_id: str, release_set_id: str
 ) -> bool:
     blockers = string_list(value.get("blockers"))
     decision = value.get("decision")
@@ -413,10 +418,11 @@ def valid_promotion_verify(
         and isinstance(verified, bool)
         and verified == (decision == "VERIFIED")
         and value.get("environment") == environment
-        and (release_set_id is None or value.get("target_release_set_id") == release_set_id)
+        and bool(RELEASE_SET_ID.fullmatch(release_set_id))
+        and value.get("target_release_set_id") == release_set_id
         and value.get("target_capability_profile_id") == profile_id
         and blockers is not None
-        and (verified or bool(blockers))
+        and ((verified and not blockers) or (not verified and bool(blockers)))
         and value.get("mutation_executed") is False
     )
 
@@ -491,7 +497,7 @@ def manual_recovery_required(
         "owner_diagnostic": diagnostic,
         "recovery_owner": "AR-14",
         "effect_state": effect_state,
-        "summary": f"Manual AR11 crossed the provider mutation boundary but did not prove terminal convergence at {phase}.",
+        "summary": f"Manual AR11 may have crossed the provider mutation boundary and did not prove terminal convergence at {phase}.",
         "remediation": "Use the existing AR-14 recovery inspect/plan/verify authority; preserve the captured provider/promotion evidence and do not perform automatic restore or blind deploy retry.",
         "exact_next_action": "Follow AR-14 read-only recovery inspection against the exact target/evidence before any separately authorized recovery or retry action.",
     }
@@ -530,11 +536,30 @@ def compose_manual_values(
     evidence_refs: dict[str, str],
     evidence_digests: dict[str, str],
 ) -> dict[str, Any]:
-    for key, phase in (("resolve", "RESOLVE_VERIFY"), ("mutation", "MUTATE"), ("post", "POST_VERIFY")):
-        value = {"resolve": resolve, "mutation": mutation, "post": post}[key]
+    # Missing or malformed transport cannot prove that the effect was never
+    # invoked. A complete, valid mutation-phase receipt explicitly recording
+    # pre-effect termination is the only such proof after a manual dispatch.
+    valid_mutation = mutation is not None and valid_manual_state(mutation, "MUTATE", source_sha)
+    valid_post = post is not None and valid_manual_state(post, "POST_VERIFY", source_sha)
+    observed_started = any(
+        value is not None and value.get("provider_mutation_started") is True
+        for value in (mutation if valid_mutation else None, post if valid_post else None)
+    )
+    observed_executed = any(
+        value is not None and value.get("provider_mutation_executed") is True
+        for value in (mutation if valid_mutation else None, post if valid_post else None)
+    )
+    pre_effect_proven = (
+        valid_mutation
+        and mutation is not None
+        and mutation["provider_mutation_started"] is False
+        and mutation["provider_mutation_executed"] is False
+        and not observed_started
+        and not observed_executed
+    )
+    phase_records = (("resolve", "RESOLVE_VERIFY", resolve), ("mutation", "MUTATE", mutation), ("post", "POST_VERIFY", post))
+    for key, phase, value in phase_records:
         if value is None or not valid_manual_state(value, phase, source_sha):
-            started = bool(mutation and mutation.get("provider_mutation_started") is True)
-            executed = bool(mutation and mutation.get("provider_mutation_executed") is True)
             base = manual_base(
                 source_sha=source_sha,
                 tree_sha=tree_sha,
@@ -542,22 +567,88 @@ def compose_manual_values(
                 promotion_id=None,
                 environment=environment,
                 profile_id=profile_id,
-                dispatch_authorized=False,
-                provider_mutation_started=started,
-                provider_mutation_executed=executed,
+                dispatch_authorized=any(
+                    isinstance(record, dict) and record.get("dispatch_authorized") is True
+                    for record in (resolve, mutation, post)
+                ),
+                provider_mutation_started=not pre_effect_proven,
+                provider_mutation_executed=observed_executed,
                 evidence_refs=evidence_refs,
                 evidence_digests=evidence_digests,
             )
-            if started:
-                return manual_recovery_required(base, f"{phase}_STATE", states[key])
-            return {
-                **manual_failed_no_effect(base, f"{phase}_STATE", states[key]),
-                "status": "INFRASTRUCTURE_FAILURE",
-            }
+            diagnostic = {"verdict_available": False, "transport": "TRANSPORT_UNVERIFIED", **states[key]}
+            if not pre_effect_proven:
+                # Preserve the independent owner's exact reason when remaining
+                # authenticated phase receipts still bind that verdict to one
+                # immutable target. Never infer a verified effect from an
+                # unbound owner JSON or incomplete mutation transport.
+                bound = [
+                    record for _, record_phase, record in phase_records
+                    if record is not None and valid_manual_state(record, record_phase, source_sha)
+                    and record.get("dispatch_authorized") is True
+                    and record.get("target_capability_profile_id") == profile_id
+                    and isinstance(record.get("release_set_id"), str)
+                    and isinstance(record.get("promotion_id"), str)
+                    and isinstance(record.get("dispatch_digest"), str)
+                ]
+                fields = ("release_set_id", "promotion_id", "dispatch_digest")
+                exact_bound = len(bound) >= 2 and all(len({record[field] for record in bound}) == 1 for field in fields)
+                bound_release = bound[0]["release_set_id"] if exact_bound else None
+                owner_valid = (
+                    verify is not None and bound_release is not None
+                    and valid_promotion_verify(verify, environment, profile_id, bound_release)
+                )
+                if owner_valid and verify is not None:
+                    diagnostic["verdict_available"] = True
+                    diagnostic["last_promotion_verify"] = verify
+                    return manual_recovery_required(
+                        base, f"{phase}_STATE_TRANSPORT_UNVERIFIED", diagnostic,
+                        owner="opsctl.promotion.verify",
+                        owner_contract="promotion.verify/v1",
+                        reason="VERIFIED" if verify["verified"] else first(verify["blockers"]),
+                    )
+                if verify is not None:
+                    diagnostic["unbound_promotion_verify"] = verify
+                return manual_recovery_required(base, f"{phase}_STATE_TRANSPORT_UNVERIFIED", diagnostic)
+            return {**manual_failed_no_effect(base, f"{phase}_STATE_TRANSPORT_UNVERIFIED", diagnostic),
+                    "status": "INFRASTRUCTURE_FAILURE"}
 
     assert resolve is not None and mutation is not None and post is not None
-    identities = [value.get("release_set_id") for value in (resolve, mutation, post) if value.get("release_set_id")]
-    if len(set(identities)) > 1:
+    if (
+        mutation["provider_mutation_started"] != post["provider_mutation_started"]
+        or mutation["provider_mutation_executed"] != post["provider_mutation_executed"]
+        or (not mutation["provider_mutation_started"] and mutation["provider_mutation_executed"])
+    ):
+        base = manual_base(
+            source_sha=source_sha,
+            tree_sha=tree_sha,
+            release_set_id=None,
+            promotion_id=None,
+            environment=environment,
+            profile_id=profile_id,
+            dispatch_authorized=resolve["dispatch_authorized"],
+            provider_mutation_started=True,
+            provider_mutation_executed=observed_executed,
+            evidence_refs=evidence_refs,
+            evidence_digests=evidence_digests,
+        )
+        return manual_recovery_required(
+            base,
+            "PHASE_EFFECT_CONTRADICTION",
+            {"verdict_available": False, "mutation": mutation, "post": post},
+        )
+    # A success receipt must prove the *same* source/Release Set, promotion,
+    # dispatch authorization, target profile and intent digest in every phase.
+    # Nullable fields are allowed for early pre-effect failures only.
+    identity_fields = ("release_set_id", "promotion_id", "dispatch_digest", "target_capability_profile_id")
+    identity_values = {field: [record.get(field) for record in (resolve, mutation, post)] for field in identity_fields}
+    identity_invalid = (
+        any(not all(isinstance(item, str) and item for item in values) or len(set(values)) != 1
+            for values in identity_values.values())
+        or any(record["dispatch_authorized"] is not True for record in (resolve, mutation, post))
+        or any(record.get("target_capability_profile_id") != profile_id for record in (resolve, mutation, post))
+    )
+    if identity_invalid:
         started = mutation["provider_mutation_started"]
         base = manual_base(
             source_sha=source_sha,
@@ -572,14 +663,19 @@ def compose_manual_values(
             evidence_refs=evidence_refs,
             evidence_digests=evidence_digests,
         )
-        detail = {"release_set_identities": identities, "verdict_available": False}
+        detail = {"phase_identities": identity_values, "verdict_available": False}
+        if verify is not None:
+            detail["unbound_promotion_verify"] = verify
         if started:
             return manual_recovery_required(base, "TARGET_IDENTITY_TRANSPORT", detail)
+        if resolve["failed_boundary"]:
+            return manual_failed_no_effect(base, resolve["failed_boundary"], resolve)
+        if mutation["failed_boundary"]:
+            return manual_failed_no_effect(base, mutation["failed_boundary"], mutation)
         return manual_failed_no_effect(base, "TARGET_IDENTITY_TRANSPORT", detail)
 
-    release_set_id = identities[0] if identities else None
-    promotion_ids = [value.get("promotion_id") for value in (resolve, mutation, post) if value.get("promotion_id")]
-    promotion_id = promotion_ids[0] if promotion_ids and len(set(promotion_ids)) == 1 else None
+    release_set_id = identity_values["release_set_id"][0]
+    promotion_id = identity_values["promotion_id"][0]
     base = manual_base(
         source_sha=source_sha,
         tree_sha=tree_sha,
@@ -595,6 +691,8 @@ def compose_manual_values(
     )
 
     if resolve["failed_boundary"]:
+        if mutation["provider_mutation_started"]:
+            return manual_recovery_required(base, "RESOLVE_EFFECT_CONTRADICTION", resolve)
         return manual_failed_no_effect(base, resolve["failed_boundary"], resolve)
     if mutation["failed_boundary"]:
         if not mutation["provider_mutation_started"]:
@@ -1035,6 +1133,7 @@ def self_test() -> None:
     manual_source = "a" * 40
     manual_release = "release-set-v3-sha256-" + "c" * 64
     manual_promotion = "b" * 64
+    manual_digest = "e" * 64
     resolve_state = {
         "schema_version": 1,
         "kind": "AR11_MANUAL_PHASE_STATE",
@@ -1042,6 +1141,8 @@ def self_test() -> None:
         "source_sha": manual_source,
         "release_set_id": manual_release,
         "promotion_id": manual_promotion,
+        "dispatch_digest": manual_digest,
+        "target_capability_profile_id": "rehearsal-core-v2",
         "dispatch_authorized": True,
         "provider_mutation_started": False,
         "provider_mutation_executed": False,
@@ -1056,6 +1157,8 @@ def self_test() -> None:
         "source_sha": manual_source,
         "release_set_id": manual_release,
         "promotion_id": manual_promotion,
+        "dispatch_digest": manual_digest,
+        "target_capability_profile_id": "rehearsal-core-v2",
         "dispatch_authorized": True,
         "provider_mutation_started": True,
         "provider_mutation_executed": True,
@@ -1070,6 +1173,8 @@ def self_test() -> None:
         "source_sha": manual_source,
         "release_set_id": manual_release,
         "promotion_id": manual_promotion,
+        "dispatch_digest": manual_digest,
+        "target_capability_profile_id": "rehearsal-core-v2",
         "dispatch_authorized": True,
         "provider_mutation_started": True,
         "provider_mutation_executed": True,
@@ -1088,9 +1193,8 @@ def self_test() -> None:
         "blockers": [],
         "mutation_executed": False,
     }
-    manual_states = {key: {"input": key, "input_state": "PRESENT", "input_error": None} for key in ("resolve", "mutation", "post", "verify")}
-
     def manual_case(resolve, mutation, post, verify):
+        records = {"resolve": resolve, "mutation": mutation, "post": post, "verify": verify}
         return compose_manual_values(
             source_sha=manual_source,
             tree_sha="d" * 40,
@@ -1100,7 +1204,10 @@ def self_test() -> None:
             mutation=mutation,
             post=post,
             verify=verify,
-            states=manual_states,
+            states={
+                key: {"input": key, "input_state": "MISSING" if value is None else "PRESENT", "input_error": None}
+                for key, value in records.items()
+            },
             evidence_refs={},
             evidence_digests={},
         )
@@ -1112,17 +1219,34 @@ def self_test() -> None:
     not_started["provider_mutation_started"] = False
     not_started["provider_mutation_executed"] = False
     not_started["failed_boundary"] = "MUTATE_SKIPPED"
-    outcome = manual_case(pre_effect, not_started, post_state, None)
+    post_skipped = dict(post_state)
+    post_skipped["provider_mutation_started"] = False
+    post_skipped["provider_mutation_executed"] = False
+    post_skipped["failed_boundary"] = "POST_VERIFY_SKIPPED"
+    outcome = manual_case(pre_effect, not_started, post_skipped, None)
     assert outcome["status"] == "FAILED_NO_EFFECT"
     assert outcome["phase"] == "CANDIDATE_BINDING"
     assert outcome["authorization_state"] == "GITHUB_WORKFLOW_DISPATCH"
     assert_zero_effect(outcome)
 
+    # The workflow must still publish three valid phase receipts if accepted-main,
+    # dispatch intent or READY binding fails before identifiers exist.
+    for early_boundary in ("ACCEPTED_MAIN_RELEASE_RESOLUTION", "CANDIDATE_BINDING", "READY_BINDING"):
+        early_phases = [dict(pre_effect), dict(not_started), dict(post_skipped)]
+        for phase in early_phases:
+            for field in ("release_set_id", "promotion_id", "dispatch_digest", "target_capability_profile_id"):
+                phase[field] = None
+        early_phases[0]["failed_boundary"] = early_boundary
+        early_outcome = manual_case(*early_phases, None)
+        assert early_outcome["status"] == "FAILED_NO_EFFECT", early_outcome
+        assert early_outcome["phase"] == early_boundary, early_outcome
+        assert_zero_effect(early_outcome)
+
     fence_fail = dict(mutation_state)
     fence_fail["provider_mutation_started"] = False
     fence_fail["provider_mutation_executed"] = False
     fence_fail["failed_boundary"] = "EXACT_CURRENT_FENCE"
-    outcome = manual_case(resolve_state, fence_fail, post_state, None)
+    outcome = manual_case(resolve_state, fence_fail, post_skipped, None)
     assert outcome["status"] == "FAILED_NO_EFFECT" and outcome["effect_state"] == "EXACT_NO_EFFECT"
 
     deploy_fail = dict(mutation_state)
@@ -1149,6 +1273,47 @@ def self_test() -> None:
     assert outcome["provider_mutation_started"] is True
     assert outcome["provider_mutation_executed"] is True
 
+    for malformed_owner in (
+        {**verified, "blockers": ["DEPLOYED_RELEASE_SET_MISMATCH"]},
+        {**verified, "target_release_set_id": "release-set-v3-sha256-" + "f" * 64},
+        {**verified, "decision": "DRIFTED", "verified": False, "blockers": []},
+    ):
+        outcome = manual_case(resolve_state, mutation_state, post_state, malformed_owner)
+        assert outcome["status"] == "RECOVERY_REQUIRED" and outcome["effect_state"] == "UNKNOWN"
+        assert outcome.get("owner_reason_code") is None
+
+    # A valid owner cannot turn an unbound/mismatched phase target into
+    # COMPLETED. The transport's source and all four independent identity
+    # fields must agree before accepting its exact-target VERIFIED decision.
+    for field, substituted in (
+        ("release_set_id", None),
+        ("release_set_id", "release-set-v3-sha256-" + "f" * 64),
+        ("promotion_id", None),
+        ("promotion_id", "f" * 64),
+        ("dispatch_digest", None),
+        ("dispatch_digest", "f" * 64),
+        ("target_capability_profile_id", None),
+        ("target_capability_profile_id", "some-other-profile"),
+    ):
+        phase_updates = (
+            ({**resolve_state, field: substituted}, mutation_state, post_state),
+            (resolve_state, {**mutation_state, field: substituted}, post_state),
+            (resolve_state, mutation_state, {**post_state, field: substituted}),
+        )
+        for changed_resolve, changed_mutation, changed_post in phase_updates:
+            outcome = manual_case(changed_resolve, changed_mutation, changed_post, verified)
+            assert outcome["status"] == "RECOVERY_REQUIRED", (field, substituted, outcome)
+            assert outcome["effect_state"] == "UNKNOWN", (field, substituted, outcome)
+            assert outcome.get("owner_reason_code") is None
+
+    for record in ({"release_set_id": None}, {"release_set_id": "release-set-v3-sha256-" + "f" * 64}):
+        unbound = [dict(resolve_state), dict(mutation_state), dict(post_state)]
+        for phase in unbound:
+            phase.update(record)
+        outcome = manual_case(*unbound, verified)
+        assert outcome["status"] == "RECOVERY_REQUIRED" and outcome["effect_state"] == "UNKNOWN"
+        assert outcome["status"] != "COMPLETED"
+
     health_fail = dict(post_state)
     health_fail["failed_boundary"] = "HEALTH_VERIFICATION"
     health_fail["step_outcomes"] = {**post_state["step_outcomes"], "health": "failure"}
@@ -1158,6 +1323,65 @@ def self_test() -> None:
     assert outcome["owner_reason_code"] is None
 
     outcome = manual_case(resolve_state, mutation_state, post_state, None)
+    assert outcome["status"] == "RECOVERY_REQUIRED" and outcome["effect_state"] == "UNKNOWN"
+
+    for missing_key in ("resolve", "mutation", "post"):
+        phases = {"resolve": resolve_state, "mutation": mutation_state, "post": post_state}
+        phases[missing_key] = None
+        outcome = manual_case(phases["resolve"], phases["mutation"], phases["post"], verified)
+        assert outcome["status"] == "RECOVERY_REQUIRED", (missing_key, outcome)
+        assert outcome["effect_state"] == "UNKNOWN", (missing_key, outcome)
+        assert outcome["provider_mutation_started"] is True, (missing_key, outcome)
+        assert outcome["phase"] == {"resolve": "RESOLVE_VERIFY", "mutation": "MUTATE", "post": "POST_VERIFY"}[missing_key] + "_STATE_TRANSPORT_UNVERIFIED"
+        assert outcome["owner"] == "opsctl.promotion.verify", (missing_key, outcome)
+        assert outcome["owner_reason_code"] == "VERIFIED", (missing_key, outcome)
+        assert outcome["owner_diagnostic"]["last_promotion_verify"] == verified, (missing_key, outcome)
+
+        malformed = dict(phases)
+        malformed[missing_key] = {"schema_version": 1, "kind": "AR11_PHASE_TRANSPORT_UNVERIFIED", "transport_state": "INVALID"}
+        outcome = manual_case(malformed["resolve"], malformed["mutation"], malformed["post"], verified)
+        assert outcome["status"] == "RECOVERY_REQUIRED" and outcome["effect_state"] == "UNKNOWN", (missing_key, outcome)
+        assert outcome["owner_reason_code"] == "VERIFIED", (missing_key, outcome)
+
+    # Preserve a DRIFTED natural-owner reason even when transport is incomplete,
+    # without upgrading uncertain provider effects into a semantic success.
+    outcome = manual_case(None, mutation_state, post_state, drifted)
+    assert outcome["status"] == "RECOVERY_REQUIRED" and outcome["effect_state"] == "UNKNOWN"
+    assert outcome["owner_reason_code"] == "DEPLOYED_RELEASE_SET_MISMATCH"
+    assert outcome["owner_diagnostic"]["last_promotion_verify"] == drifted
+    other_target_verified = {**verified, "target_release_set_id": "release-set-v3-sha256-" + "f" * 64}
+    outcome = manual_case(None, mutation_state, post_state, other_target_verified)
+    assert outcome["status"] == "RECOVERY_REQUIRED" and outcome["effect_state"] == "UNKNOWN"
+    assert outcome["owner"] is None and outcome["owner_reason_code"] is None
+    assert outcome["owner_diagnostic"]["unbound_promotion_verify"] == other_target_verified
+
+    # An intact, independently captured pre-invocation marker remains sufficient
+    # to establish zero effect, even if unrelated post-state transport is lost.
+    outcome = manual_case(resolve_state, not_started, None, None)
+    assert outcome["status"] == "INFRASTRUCTURE_FAILURE"
+    assert_zero_effect(outcome)
+
+    contradictory_resolution = dict(resolve_state)
+    contradictory_resolution["failed_boundary"] = "CANDIDATE_BINDING"
+    outcome = manual_case(contradictory_resolution, mutation_state, post_state, verified)
+    assert outcome["status"] == "RECOVERY_REQUIRED" and outcome["effect_state"] == "UNKNOWN"
+    assert outcome["phase"] == "RESOLVE_EFFECT_CONTRADICTION"
+
+    contradictory_post = dict(post_state)
+    contradictory_post["provider_mutation_started"] = False
+    contradictory_post["provider_mutation_executed"] = False
+    outcome = manual_case(resolve_state, mutation_state, contradictory_post, verified)
+    assert outcome["status"] == "RECOVERY_REQUIRED" and outcome["effect_state"] == "UNKNOWN"
+    assert outcome["phase"] == "PHASE_EFFECT_CONTRADICTION"
+
+    post_evidence_failed = dict(post_state)
+    post_evidence_failed["failed_boundary"] = "POST_EVIDENCE_PUBLICATION"
+    outcome = manual_case(resolve_state, mutation_state, post_evidence_failed, verified)
+    assert outcome["status"] == "INFRASTRUCTURE_FAILURE" and outcome["effect_state"] == "EFFECT_VERIFIED"
+
+    post_observation_failed = dict(post_state)
+    post_observation_failed["failed_boundary"] = "POST_PROVIDER_OBSERVATION"
+    outcome = manual_case(resolve_state, mutation_state, post_observation_failed, None)
     assert outcome["status"] == "RECOVERY_REQUIRED" and outcome["effect_state"] == "UNKNOWN"
 
     print("AR11 promotion OperationalOutcome fixture matrix passed.")

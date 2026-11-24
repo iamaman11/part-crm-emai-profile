@@ -171,12 +171,11 @@ function promotionPolicyErrors(promotion) {
 
   const preflightJob = promotion.indexOf('\n  preflight-ready:\n');
   const ready = promotion.indexOf('kind:"AR11_READY_TO_MUTATE"', preflightJob);
-  const resolveVerifyJob = promotion.indexOf('\n  resolve-verify:\n');
-  const dispatchBinding = promotion.indexOf('Bind the explicit GitHub dispatch to unique accepted-main READY evidence', resolveVerifyJob);
-  const mutateJob = promotion.indexOf('\n  mutate:\n');
-  const deployCredential = promotion.indexOf('DEPLOY_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}', mutateJob);
-  const deploy = promotion.indexOf('Deploy exact Release Set v3 bits after all fences', mutateJob);
-  if (!(preflightJob >= 0 && ready > preflightJob && resolveVerifyJob > ready && dispatchBinding > resolveVerifyJob && mutateJob > dispatchBinding && deployCredential > mutateJob && deploy > deployCredential)) {
+  const promoteJob = promotion.indexOf('\n  promote:\n');
+  const dispatchBinding = promotion.indexOf('Bind the explicit GitHub dispatch to unique accepted-main READY evidence', promoteJob);
+  const deploy = promotion.indexOf('Deploy exact Release Set v3 bits after all fences', promoteJob);
+  const deployCredential = promotion.indexOf('CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}', deploy);
+  if (!(preflightJob >= 0 && ready > preflightJob && promoteJob > ready && dispatchBinding > promoteJob && deploy > dispatchBinding && deployCredential > deploy)) {
     errors.push('release successor must order read-only READY -> owner workflow_dispatch/candidate binding -> deploy credential -> mutation');
   }
   return errors;
@@ -254,11 +253,13 @@ function selfTest() {
     const renamedPromotion = promotion.replace(cosmeticLabel, 'Cosmetic AR11 preflight label');
     if (promotionPolicyErrors(renamedPromotion).length !== 0) throw new Error('cosmetic AR11 label unexpectedly defines successor ordering');
   }
-  const deployCredential = 'DEPLOY_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}';
+  const deployCredential = 'CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}';
   const dispatchBinding = 'Bind the explicit GitHub dispatch to unique accepted-main READY evidence';
-  if (!promotion.includes(dispatchBinding)) throw new Error('owner dispatch READY binder fixture cannot locate its target');
-  const withoutDeployCredential = promotion.replace(deployCredential, 'DEPLOY_TOKEN_REMOVED_FOR_ORDER_FIXTURE');
-  const reorderedPromotion = withoutDeployCredential.replace(dispatchBinding, `${deployCredential}\\n      - name: ${dispatchBinding}`);
+  if (!promotion.includes(dispatchBinding) || !promotion.includes(deployCredential)) {
+    throw new Error('owner dispatch READY/deploy credential fixture cannot locate its targets');
+  }
+  const withoutDeployCredential = promotion.replace(deployCredential, 'SCOPED_DEPLOY_TOKEN_REMOVED_FOR_ORDER_FIXTURE');
+  const reorderedPromotion = withoutDeployCredential.replace(dispatchBinding, `${deployCredential}\n      - name: ${dispatchBinding}`);
   if (!promotionPolicyErrors(reorderedPromotion).some((error) => error.includes('must order read-only READY'))) {
     throw new Error('deploy-credential-before-dispatch-binding negative fixture passed');
   }
