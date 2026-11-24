@@ -74,6 +74,21 @@ async function loadRelatedMailboxes(
 
 export function ClientMailPanel({ clientId, outboundMailEnabled }: Props) {
   const { tenantId } = useTenant();
+  return (
+    <ClientMailSession
+      key={JSON.stringify([tenantId, clientId])}
+      tenantId={tenantId}
+      clientId={clientId}
+      outboundMailEnabled={outboundMailEnabled}
+    />
+  );
+}
+
+function ClientMailSession({
+  tenantId,
+  clientId,
+  outboundMailEnabled,
+}: Props & { tenantId: string }) {
   const [lastInput, setLastInput] = useState<ClientMailSearchInput | null>(null);
   const [composer, setComposer] = useState<ComposerState | null>(null);
   const mailboxQuery = useQuery({
