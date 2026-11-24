@@ -49,7 +49,7 @@ CRITICAL: dict[str, dict[str, tuple[str, ...]]] = {
             "Upload exact-head official runtime for downstream Windows proofs",
         ),
         "Rust shipping reader verifies exact compressed Windows runtime": (
-            "Run Windows Bridge library tests and production archive reader",
+            "Run production shipping archive reader",
         ),
         "Profile Bridge Windows regression": (
             "Run official Camoufox Playwright user Open and native file-lock proof through production Bridge crates",
