@@ -142,7 +142,7 @@ jobs:
           if ($env:GITHUB_REF -ne 'refs/heads/main') { throw 'Release Set build requires main' }
           if ((git rev-parse HEAD).Trim() -ne $env:SOURCE_SHA) { throw 'source SHA mismatch' }
 
-      - name: Reuse exact PR-compiled Bridge executable when independently verified
+      - name: Require exact PR-proven Bridge executable
         id: pr-build
         shell: pwsh
         env:
@@ -151,9 +151,12 @@ jobs:
         run: |
           python scripts/accepted-main-pr-reuse.py --release-component bridge --github-output "$env:GITHUB_OUTPUT"
 
-      - name: Build exact Profile Bridge executable
-        if: steps.pr-build.outputs.reuse != 'true'
-        run: cargo build --locked --release -p profile-bridge
+      - name: Refuse unsigned alternate Bridge compilation on main
+        shell: pwsh
+        run: |
+          if ('${{ steps.pr-build.outputs.reuse }}' -ne 'true') {
+            throw 'No exact PR-proven Bridge bytes: main cannot rebuild an untested alternate executable'
+          }
 
       - name: Create deterministic self-describing Profile Bridge v2 package
         shell: pwsh

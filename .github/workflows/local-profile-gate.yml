@@ -21,11 +21,14 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       reuse: ${{ steps.proof.outputs.reuse }}
+      native_unaffected: ${{ steps.native-prior.outputs.native_unaffected }}
     steps:
       - name: Checkout exact source
         uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a
         with:
           ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          fetch-depth: 0
+          filter: blob:none
           persist-credentials: false
       - name: Verify exact source checkout
         env:
@@ -35,6 +38,15 @@ jobs:
         run: |
           python -m py_compile scripts/accepted-main-pr-reuse.py
           python scripts/accepted-main-pr-reuse.py --self-test
+      - name: Prove frontend-only PR inherits exact FULL Windows physical proof
+        if: github.event_name == 'pull_request'
+        id: native-prior
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: python scripts/accepted-main-pr-reuse.py --pr-native-proof --github-output "$GITHUB_OUTPUT"
       - name: Bind accepted-main tree to completed PR checks or demand full proof
         id: proof
         env:
@@ -119,10 +131,22 @@ jobs:
         with:
           python-version: '3.12.10'
 
-      # Keep OS/toolchain/manifests/flags in the action's hashed key.
-      # The independent opsctl Cargo workspace is used by this job as well.
-      # Restored artifacts never substitute any check or exact-head test.
+      - name: Certify unchanged exact prior FULL native physical proof
+        if: github.event_name == 'pull_request' && needs.accepted-pr-proof.outputs.native_unaffected == 'true'
+        id: native-prior
+        continue-on-error: true
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: python scripts/accepted-main-pr-reuse.py --pr-native-certify
+
+      # The current FULL Windows path uses the existing exact compiler cache;
+      # prior FULL-proof reuse needs only the installed rustc version and the
+      # signed SHA-bound metadata. Avoid transferring 232 MiB on the fast path.
       - name: Restore versioned Rust dependencies and opsctl
+        if: steps.native-prior.outcome != 'success'
         uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2 (immutable)
         with:
           shared-key: profile-bridge-ci-v1
@@ -132,18 +156,23 @@ jobs:
           cache-on-failure: 'true'
 
       - name: Test local profile lifecycle
+        if: steps.native-prior.outcome != 'success'
         run: cargo test --locked -p profile-bridge --features synthetic-test-bin local_profile
 
       - name: Prove OS-owned Restore scratch cleanup after Windows process death
+        if: steps.native-prior.outcome != 'success'
         run: cargo test --locked -p profile-bridge --features synthetic-test-bin --lib generation_reopen::tests::windows_process_death_retires_both_os_owned_restore_files -- --exact
 
       - name: Prove native Open diagnostic cause on Windows
+        if: steps.native-prior.outcome != 'success'
         run: cargo test --locked -p profile-bridge --bin profile-bridge
 
       - name: Prove READY v11-to-v12 lost-Commit recovery and dirty-byte refusal
+        if: steps.native-prior.outcome != 'success'
         run: cargo test --locked -p profile-bridge --features synthetic-test-bin --lib lost_ready_commit_v11_to_v12
 
       - name: Prove Windows Playwright Ready health confirmation through native process stderr
+        if: steps.native-prior.outcome != 'success'
         shell: pwsh
         run: |
           $env:PROFILE_BRIDGE_TEST_PYTHON = (Get-Command python).Source
@@ -151,18 +180,23 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw 'native Playwright Ready health-confirmation tests failed' }
 
       - name: Prove K2 256/512 MiB file streaming on Windows with peak RAM and disk limits
+        if: steps.native-prior.outcome != 'success'
         run: python scripts/test-k2-large-native-streaming.py
 
       - name: Prove Windows release CMS verifier
+        if: steps.native-prior.outcome != 'success'
         run: cargo test --locked -p profile-bridge --test windows_delivery_signature_acceptance -- --exact production_verifier_accepts_only_exact_pinned_application_signature
 
       - name: Prove application delivery signing without OS certificate-store changes
+        if: steps.native-prior.outcome != 'success'
         run: ./tests/windows-delivery-signing.ps1
 
       - name: Build AR-6 opsctl on Windows
+        if: steps.native-prior.outcome != 'success'
         run: cargo build --locked --manifest-path tools/opsctl/Cargo.toml
 
       - name: Exercise AR-6 opsctl read-only commands on Windows
+        if: steps.native-prior.outcome != 'success'
         shell: pwsh
         run: |
           $bin = 'tools/opsctl/target/debug/opsctl.exe'
@@ -178,4 +212,33 @@ jobs:
           $status = ((& $bin --root . status --acceptance-evidence-json acceptance-evidence.json) -join "`n") | ConvertFrom-Json
           if ($LASTEXITCODE -ne 0 -or $status.accepted_checkpoint -ne 'AR-11' -or $status.current_slice -ne 'AR-12') {
             throw "opsctl status lost the typed lifecycle contract"
+          }
+
+      - name: Write FULL Local Windows runner identity receipt
+        if: github.event_name == 'pull_request' && steps.native-prior.outcome != 'success'
+        shell: pwsh
+        env:
+          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: python scripts/accepted-main-pr-reuse.py --native-runner-receipt local-profile --receipt-output "$env:RUNNER_TEMP/local-native-runner.json"
+
+      - name: Upload FULL Local Windows runner identity receipt
+        if: github.event_name == 'pull_request' && steps.native-prior.outcome != 'success'
+        id: native-runner-upload
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: local-native-runner.json
+          path: ${{ runner.temp }}/local-native-runner.json
+          archive: false
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Verify uploaded FULL Local runner identity digest
+        if: github.event_name == 'pull_request' && steps.native-prior.outcome != 'success'
+        shell: pwsh
+        env:
+          UPLOADED_DIGEST: ${{ steps.native-runner-upload.outputs.artifact-digest }}
+        run: |
+          $expected = (Get-FileHash -Algorithm SHA256 "$env:RUNNER_TEMP/local-native-runner.json").Hash.ToLowerInvariant()
+          if (-not $env:UPLOADED_DIGEST -or $env:UPLOADED_DIGEST -ne $expected) {
+            throw 'FULL Local Windows runner receipt upload SHA mismatch'
           }
