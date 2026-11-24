@@ -21,8 +21,8 @@ import tempfile
 import urllib.error
 import urllib.parse
 import urllib.request
-from collections.abc import Callable
-from datetime import datetime, timezone
+from collections.abc import Callable, Iterable
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
@@ -86,14 +86,27 @@ CRITICAL: dict[str, dict[str, tuple[str, ...]]] = {
             "Compile actual per-user installer and prove native signature rejection",
             "Upload disposable exact-head Windows Bridge candidate",
             "Verify uploaded Bridge artifact digest",
+            "Write FULL Quality Windows runner identity receipt",
+            "Upload FULL Quality Windows runner identity receipt",
+            "Verify uploaded FULL Quality runner identity digest",
         ),
     },
     "local-profile": {
         "Local Profile Linux": ("Test local profile lifecycle",),
         "Local Profile Windows": (
             "Test local profile lifecycle",
+            "Prove OS-owned Restore scratch cleanup after Windows process death",
+            "Prove native Open diagnostic cause on Windows",
+            "Prove READY v11-to-v12 lost-Commit recovery and dirty-byte refusal",
+            "Prove Windows Playwright Ready health confirmation through native process stderr",
             "Prove K2 256/512 MiB file streaming on Windows with peak RAM and disk limits",
             "Prove Windows release CMS verifier",
+            "Prove application delivery signing without OS certificate-store changes",
+            "Build AR-6 opsctl on Windows",
+            "Exercise AR-6 opsctl read-only commands on Windows",
+            "Write FULL Local Windows runner identity receipt",
+            "Upload FULL Local Windows runner identity receipt",
+            "Verify uploaded FULL Local runner identity digest",
         ),
     },
 }
@@ -101,6 +114,36 @@ WORKFLOW = {
     "camoufox": "Camoufox Runtime Gate",
     "quality": "Quality Gate",
     "local-profile": "Local Profile Gate",
+}
+
+# A native-unaffected PR is not allowed to present a green-only surrogate.
+# Its own Windows jobs must have executed the exact inherited-EXE verification,
+# installer and upload, or the source-safe prior-proof certification. The
+# expensive native test steps remain mandatory on every other PR.
+NATIVE_REUSED_CRITICAL: dict[str, dict[str, tuple[str, ...]]] = {
+    "quality": {
+        "Rust Linux and WASM": ("Test native crates",),
+        "Cloudflare Worker Release Build": CRITICAL["quality"]["Cloudflare Worker Release Build"],
+        "Rust Windows And Profile Bridge Artifact": (
+            "Verify exact source checkout",
+            "Reuse exact prior FULL-proof Profile Bridge executable",
+            "Compile actual per-user installer and prove native signature rejection",
+            "Upload disposable exact-head Windows Bridge candidate",
+            "Verify uploaded Bridge artifact digest",
+        ),
+    },
+    "local-profile": {
+        "Local Profile Linux": ("Test local profile lifecycle",),
+        "Local Profile Windows": (
+            "Verify exact source checkout",
+            "Certify unchanged exact prior FULL native physical proof",
+        ),
+    },
+}
+
+RUNNER_RECEIPT = {
+    "quality": ("quality-native-runner.json", "Rust Windows And Profile Bridge Artifact"),
+    "local-profile": ("local-native-runner.json", "Local Profile Windows"),
 }
 
 
@@ -145,7 +188,7 @@ def api_reader(token: str) -> Callable[[str], Any]:
 
 
 def prove(main_sha: str, gate: str, api: Callable[[str], Any],
-          *, require_steps: bool = True) -> str:
+          *, require_steps: bool = True, native_reused: bool = False) -> str:
     require(bool(SHA.fullmatch(main_sha)), "invalid main commit")
     require(gate in CRITICAL, "unknown gate")
     root = f"repos/{REPOSITORY}"
@@ -219,8 +262,11 @@ def prove(main_sha: str, gate: str, api: Callable[[str], Any],
     # candidate for a separately proven, unchanged prior-runtime receipt.
     # It must never be used as a standalone physical proof.
     if not require_steps:
+        require(not native_reused, "ambiguous combined proof-mode bypass")
         require(gate == "camoufox", "only Camoufox has unchanged-input proof reuse")
         return candidate
+    if native_reused:
+        require(gate in NATIVE_REUSED_CRITICAL, "native reuse not permitted for gate")
     source_run = latest[WORKFLOW[gate]]
     jobs = api(f"{root}/actions/runs/{source_run['id']}/jobs?per_page=100")
     require(
@@ -230,12 +276,13 @@ def prove(main_sha: str, gate: str, api: Callable[[str], Any],
         "incomplete PR job inventory",
     )
     by_name: dict[str, dict[str, Any]] = {}
+    expected_critical = NATIVE_REUSED_CRITICAL[gate] if native_reused else CRITICAL[gate]
     for job in jobs["jobs"]:
         name = job.get("name")
-        if name in CRITICAL[gate]:
+        if name in expected_critical:
             require(name not in by_name, f"duplicate required PR job: {name}")
             by_name[name] = job
-    for name, steps in CRITICAL[gate].items():
+    for name, steps in expected_critical.items():
         job = by_name.get(name, {})
         require(
             job.get("status") == "completed" and job.get("conclusion") == "success",
@@ -255,6 +302,16 @@ def prove(main_sha: str, gate: str, api: Callable[[str], Any],
             actual[label] = (step.get("status"), step.get("conclusion"))
         require(all(actual.get(step) == ("completed", "success") for step in steps),
                 f"required PR test skipped/missing: {name}")
+        if native_reused and name == RUNNER_RECEIPT[gate][1]:
+            # A continue-on-error step can report conclusion=success despite
+            # outcome=failure. The physical fallback must then run. Require
+            # every FULL-only step truly skipped before accepting inheritance;
+            # a mixed or green-only path is never a valid reused proof.
+            for full_step in CRITICAL[gate][name]:
+                if full_step in steps:
+                    continue  # Installer/upload are still physically executed.
+                require(actual.get(full_step) == ("completed", "skipped"),
+                        f"native inherited path executed/missed FULL step: {full_step}")
     return candidate
 
 
@@ -282,7 +339,7 @@ def prove_release_artifacts(main_sha: str, api: Callable[[str], Any]) -> dict[st
     A Quality run's artifact API does not expose run_attempt. Bound each artifact
     to the unique successful producer *job in that attempt* by creation time.
     """
-    candidate = prove(main_sha, "quality", api)
+    candidate, native_prior = prove_accepted_native_reuse(main_sha, "quality", api)
     root = f"repos/{REPOSITORY}"
     runs = api(f"{root}/actions/runs?head_sha={candidate}&event=pull_request&per_page=100")
     quality = max((run for run in runs["workflow_runs"] if run.get("name") == WORKFLOW["quality"]),
@@ -342,10 +399,20 @@ def prove_release_artifacts(main_sha: str, api: Callable[[str], Any]) -> dict[st
         }
     require(len({receipt["id"] for receipt in selected.values()}) == len(selected),
             "artifact IDs overlap")
+    if native_prior is not None:
+        # A current PR may upload an inherited Bridge only after its original
+        # FULL physical-proved producer and all transitive native inputs were
+        # revalidated. The current raw artifact must contain EXACTLY those
+        # previous bytes; a green installer/new upload is not proof alone.
+        prior_receipt = prove_release_artifacts(native_prior, api)
+        for field in ("sha256", "size"):
+            require(selected["bridge"][field] == prior_receipt["artifacts"]["bridge"][field],
+                    f"current inherited Bridge {field} differs from FULL proof")
     return {
         "candidate_sha": candidate,
         "quality_run_id": quality["id"],
         "quality_run_attempt": quality["run_attempt"],
+        "native_prior_main_sha": native_prior,
         "artifacts": selected,
     }
 
@@ -415,9 +482,147 @@ def download_raw_artifact(artifact: dict[str, Any], destination: Path, token: st
         require(remaining == 0, "raw artifact download truncated")
 
 
-def prepare_release_component(main_sha: str, component: str, api: Callable[[str], Any]) -> None:
-    """Prove all PR artifacts; download this component's exact compiler outputs.
+def current_windows_runner_identity() -> dict[str, str]:
+    """Bind a physical test to a specific hosted Windows image and compiler."""
+    image_os = os.environ.get("ImageOS", "")
+    image_version = os.environ.get("ImageVersion", "")
+    require(os.environ.get("RUNNER_OS") == "Windows"
+            and bool(image_os) and bool(image_version)
+            and len(image_os) <= 128 and len(image_version) <= 128,
+            "Windows runner image identity unavailable")
+    rustc = subprocess.check_output(["rustc", "-Vv"], text=True).strip()
+    require("host: x86_64-pc-windows-msvc" in rustc and len(rustc) <= 2048,
+            "native Windows Rust toolchain identity is unavailable")
+    return {"image_os": image_os, "image_version": image_version,
+            "rustc_vv": rustc}
 
+
+def write_full_runner_receipt(gate: str, output: Path) -> None:
+    require(gate in RUNNER_RECEIPT, "unknown physical Windows receipt owner")
+    head = os.environ.get("PR_HEAD_SHA", "")
+    run_id = os.environ.get("GITHUB_RUN_ID", "")
+    attempt = os.environ.get("GITHUB_RUN_ATTEMPT", "")
+    require(os.environ.get("GITHUB_EVENT_NAME") == "pull_request"
+            and os.environ.get("GITHUB_REPOSITORY") == REPOSITORY
+            and bool(SHA.fullmatch(head)) and run_id.isdecimal()
+            and attempt.isdecimal() and int(run_id) > 0 and int(attempt) > 0,
+            "FULL native runner receipt is not bound to an exact PR attempt")
+    require(subprocess.check_output(["git", "rev-parse", "HEAD"], text=True).strip() == head,
+            "FULL native runner source SHA drift")
+    require(not output.exists() and not output.is_symlink(),
+            "runner receipt output must be new")
+    receipt = {
+        "schema_version": 1,
+        "kind": "FULL_NATIVE_WINDOWS_RUNNER_IDENTITY",
+        "gate": gate,
+        "source_sha": head,
+        "run_id": int(run_id),
+        "run_attempt": int(attempt),
+        "job_name": RUNNER_RECEIPT[gate][1],
+        **current_windows_runner_identity(),
+    }
+    output.parent.mkdir(parents=True, exist_ok=True)
+    output.write_text(json.dumps(receipt, sort_keys=True) + "\n", encoding="utf-8")
+
+
+def select_full_runner_receipt(
+    prior_main: str, gate: str, api: Callable[[str], Any],
+    *, as_of: datetime | None = None,
+) -> dict[str, Any]:
+    """Select a unique raw receipt bound to the *executed* FULL Windows job."""
+    require(gate in RUNNER_RECEIPT, "unknown native runner receipt gate")
+    candidate = prove(prior_main, gate, api)
+    root = f"repos/{REPOSITORY}"
+    runs = api(f"{root}/actions/runs?head_sha={candidate}&event=pull_request&per_page=100")
+    require(isinstance(runs.get("workflow_runs"), list), "native run inventory missing")
+    actual = [run for run in runs["workflow_runs"]
+              if run.get("name") == WORKFLOW[gate]]
+    require(bool(actual), "native FULL source run missing")
+    source_run = max(actual, key=lambda run: run["id"])
+    jobs = api(f"{root}/actions/runs/{source_run['id']}/jobs?per_page=100")
+    require(isinstance(jobs.get("jobs"), list)
+            and type(jobs.get("total_count")) is int
+            and jobs["total_count"] <= 100,
+            "native Windows job inventory incomplete")
+    target_name = RUNNER_RECEIPT[gate][1]
+    producers = [job for job in jobs["jobs"] if job.get("name") == target_name]
+    require(len(producers) == 1, "native FULL Windows producer missing/ambiguous")
+    producer = producers[0]
+    require(producer.get("run_id") == source_run["id"]
+            and producer.get("run_attempt") == source_run["run_attempt"]
+            and producer.get("head_sha") == candidate
+            and producer.get("conclusion") == "success",
+            "native FULL producer attempt or source drift")
+    inventory = api(f"{root}/actions/runs/{source_run['id']}/artifacts?per_page=100")
+    require(isinstance(inventory.get("artifacts"), list)
+            and type(inventory.get("total_count")) is int
+            and inventory["total_count"] == len(inventory["artifacts"])
+            and inventory["total_count"] <= 100,
+            "native runner artifact inventory incomplete")
+    filename = RUNNER_RECEIPT[gate][0]
+    matches = [item for item in inventory["artifacts"] if item.get("name") == filename]
+    require(len(matches) == 1, "native runner exact receipt absent/ambiguous")
+    artifact = matches[0]
+    digest = artifact.get("digest")
+    created = github_time(artifact.get("created_at"))
+    expires = github_time(artifact.get("expires_at"))
+    now = as_of or datetime.now(timezone.utc)
+    workflow = artifact.get("workflow_run") or {}
+    require(type(artifact.get("id")) is int and artifact["id"] > 0
+            and type(artifact.get("size_in_bytes")) is int
+            and 1 <= artifact["size_in_bytes"] <= 4096
+            and isinstance(digest, str) and DIGEST.fullmatch(digest) is not None
+            and artifact.get("expired") is False and expires > now
+            and created >= now - timedelta(days=30)
+            and workflow.get("id") == source_run["id"]
+            and workflow.get("head_sha") == candidate
+            and workflow.get("head_branch") == source_run["head_branch"]
+            and github_time(producer.get("started_at")) <= created
+            <= github_time(producer.get("completed_at")),
+            "native runner receipt age/attempt/origin/digest mismatch")
+    return {
+        "id": artifact["id"], "name": filename,
+        "sha256": DIGEST.fullmatch(digest).group(1),
+        "size": artifact["size_in_bytes"],
+        "source_sha": candidate,
+        "run_id": source_run["id"],
+        "run_attempt": source_run["run_attempt"],
+        "job_name": target_name,
+        "gate": gate,
+    }
+
+
+def require_full_runner_identity(receipt: Any, artifact: dict[str, Any],
+                                 identity: dict[str, str]) -> None:
+    require(isinstance(receipt, dict)
+            and receipt.get("schema_version") == 1
+            and receipt.get("kind") == "FULL_NATIVE_WINDOWS_RUNNER_IDENTITY"
+            and receipt.get("source_sha") == artifact["source_sha"]
+            and receipt.get("run_id") == artifact["run_id"]
+            and receipt.get("run_attempt") == artifact["run_attempt"]
+            and receipt.get("gate") == artifact["gate"]
+            and receipt.get("job_name") == artifact["job_name"],
+            "native runner receipt not bound to FULL producer")
+    require(all(receipt.get(field) == identity[field] for field in identity),
+            "Windows image or compiler changed since FULL native physical proof")
+
+
+def verify_full_runner_receipt(artifact: dict[str, Any], token: str) -> None:
+    """No stale-image shortcut: compare today's physical runner and compiler."""
+    with tempfile.TemporaryDirectory(prefix="native-runner-proof-") as temporary:
+        directory = Path(temporary)
+        download_raw_artifact(artifact, directory / artifact["name"], token)
+        source = verify_downloaded_raw(directory, "native-runner", artifact)
+        receipt = json.loads(source.read_text(encoding="utf-8"))
+        require_full_runner_identity(receipt, artifact, current_windows_runner_identity())
+
+
+def prepare_release_component(main_sha: str, component: str, api: Callable[[str], Any]) -> None:
+    """Prove all PR artifacts; download exact native-equivalent compiler bytes.
+
+    For native-unaffected frontend PRs, Bridge bytes originate from an earlier
+    FULL-tested PR whose complete native input closure matches this PR; they
+    are never represented as newly compiled from this PR's unrelated UI tree.
     No PR review-candidate manifest or package is copied into main's release.
     The existing main-SHA packagers must recreate and verify final provenance.
     """
@@ -575,6 +780,209 @@ def prove_unchanged_prior_camoufox(
     raise Unconfirmed("no recent unchanged completed physical Camoufox proof")
 
 
+def native_unrelated(paths: list[str]) -> bool:
+    """Only isolated frontend source/public bytes can reuse native proofs.
+
+    This intentionally excludes all docs, generated contracts, package/tooling,
+    workflows, and source paths dynamically inspected by Rust tests. The
+    existing advisory classifier supplies path-grammar validation only;
+    this owner separately verifies live main, exact SHA and FULL proof history.
+    """
+    if not paths:
+        return True
+    valid_repo_path = runpy.run_path(
+        str(Path(__file__).with_name("classify-ci-impact.py"))
+    )["valid_repo_path"]
+    return all(valid_repo_path(path) and path.startswith("frontend/src/")
+               and path.endswith((".ts", ".tsx", ".css"))
+               for path in paths)
+
+
+def github_first_parent(base_sha: str, api: Callable[[str], Any]) -> Iterable[str]:
+    """Lazy bounded ancestry: a recent FULL proof costs only one GitHub read."""
+    require(bool(SHA.fullmatch(base_sha)), "invalid main ancestor")
+    root = f"repos/{REPOSITORY}"
+    current = base_sha
+    for _ in range(16):
+        commit = api(f"{root}/commits/{current}")
+        require(commit.get("sha") == current, "GitHub ancestor commit identity drift")
+        parents = commit.get("parents")
+        require(isinstance(parents, list) and len(parents) <= 2,
+                "invalid first-parent GitHub history")
+        parent = None
+        if parents:
+            parent = parents[0].get("sha")
+            require(isinstance(parent, str) and SHA.fullmatch(parent) is not None,
+                    "invalid GitHub first-parent SHA")
+        yield current
+        if not parents:
+            break
+        current = parent
+
+
+def github_changed_paths(old_sha: str, new_sha: str,
+                         api: Callable[[str], Any]) -> list[str]:
+    """Accept only an untruncated GitHub compare with proven ancestry.
+
+    The API exposes at most 300 files; >=300, renames, or unknown statuses
+    force a full physical replay. GitHub is also independently consulted on
+    the exact source and prior full job attempt, not merely a diff label.
+    """
+    require(bool(SHA.fullmatch(old_sha) and SHA.fullmatch(new_sha)),
+            "invalid GitHub compare SHA")
+    comparison = api(f"repos/{REPOSITORY}/compare/{old_sha}...{new_sha}")
+    require(comparison.get("base_commit", {}).get("sha") == old_sha
+            and comparison.get("merge_base_commit", {}).get("sha") == old_sha,
+            "GitHub compare ancestry mismatch")
+    require(comparison.get("status") in ("ahead", "identical")
+            and type(comparison.get("ahead_by")) is int
+            and 0 <= comparison["ahead_by"] <= 250,
+            "GitHub compare is not a bounded exact descendant")
+    commits = comparison.get("commits")
+    require(isinstance(commits, list)
+            and len(commits) == comparison["ahead_by"]
+            and (commits[-1].get("sha") == new_sha if commits else new_sha == old_sha),
+            "GitHub compare is truncated or lacks exact head commit")
+    files = comparison.get("files")
+    require(isinstance(files, list) and len(files) < 300,
+            "incomplete GitHub changed-file inventory")
+    paths = []
+    for item in files:
+        require(isinstance(item, dict)
+                and item.get("status") in ("added", "modified", "removed", "changed", "copied"),
+                "ambiguous GitHub changed-file status")
+        filename = item.get("filename")
+        require(isinstance(filename, str), "missing GitHub changed path")
+        paths.append(filename)
+    require(comparison["status"] != "identical" or not paths,
+            "identical GitHub compare contains changes")
+    return paths
+
+
+def prove_unchanged_prior_native(
+    source_sha: str,
+    base_sha: str,
+    api: Callable[[str], Any],
+    ancestors: Callable[[str], Iterable[str]],
+    changed: Callable[[str, str], list[str]],
+) -> str:
+    """Find one previously completed FULL Quality *and* Local proof source.
+
+    No transitive proof chaining: every accepted ancestor is verified against
+    both genuinely executed physical Windows jobs, 18 successful workflows,
+    exact original PR tree/run/attempt and native-independent tree diff.
+    """
+    require(bool(SHA.fullmatch(source_sha) and SHA.fullmatch(base_sha)),
+            "invalid native source/base")
+    count = 0
+    for prior in ancestors(base_sha):
+        count += 1
+        require(count <= 16 and (count != 1 or prior == base_sha),
+                "invalid bounded native first-parent history")
+        require(bool(SHA.fullmatch(prior)), "invalid prior native full-proof SHA")
+        if not native_unrelated(changed(prior, source_sha)):
+            break
+        try:
+            prove(prior, "quality", api)
+            prove(prior, "local-profile", api)
+            return prior
+        except (Unconfirmed, KeyError, ValueError, TypeError,
+                urllib.error.URLError, OSError):
+            continue
+    raise Unconfirmed("no unchanged FULL Quality and Local Windows physical proof")
+
+
+def prove_open_native_pr(api: Callable[[str], Any],
+                         *, graph_api_only: bool,
+                         as_of: datetime | None = None) -> tuple[str, dict[str, Any]]:
+    """Only same-repository current-main PRs with an inherited raw EXE qualify.
+
+    This is deliberately re-run by the Windows consumers before allowing a
+    physical-test skip. A transient API, ancestry or artifact failure cannot
+    accidentally result in success; the caller executes full proof instead.
+    """
+    require(os.environ.get("GITHUB_EVENT_NAME") == "pull_request"
+            and os.environ.get("GITHUB_REPOSITORY") == REPOSITORY,
+            "native proof reuse only permitted on canonical pull_request")
+    head = os.environ.get("PR_HEAD_SHA", "")
+    base = os.environ.get("PR_BASE_SHA", "")
+    number = os.environ.get("PR_NUMBER", "")
+    require(bool(SHA.fullmatch(head) and SHA.fullmatch(base))
+            and number.isdecimal() and int(number) > 0,
+            "invalid exact PR source/base/number")
+    require(subprocess.check_output(["git", "rev-parse", "HEAD"], text=True).strip() == head,
+            "native PR checkout changed after event")
+    root = f"repos/{REPOSITORY}"
+    current_main = api(f"{root}/git/ref/heads/main")
+    require(current_main.get("ref") == "refs/heads/main"
+            and current_main.get("object", {}).get("sha") == base,
+            "PR base is not current protected main")
+    pr = api(f"{root}/pulls/{int(number)}")
+    require(pr.get("state") == "open" and pr.get("merged_at") is None
+            and pr.get("head", {}).get("sha") == head
+            and pr.get("base", {}).get("sha") == base
+            and pr.get("base", {}).get("ref") == "main"
+            and pr.get("head", {}).get("repo", {}).get("full_name") == REPOSITORY
+            and pr.get("base", {}).get("repo", {}).get("full_name") == REPOSITORY,
+            "PR head/base/repository changed or foreign fork")
+    if graph_api_only:
+        own_changes = github_changed_paths(base, head, api)
+        ancestry = lambda sha: github_first_parent(sha, api)
+        changed = lambda old, new: github_changed_paths(old, new, api)
+    else:
+        require(subprocess.run(["git", "cat-file", "-e", f"{base}^{{commit}}"],
+                               capture_output=True, check=False).returncode == 0,
+                "PR checkout lacks exact protected-base history")
+        own_changes = git_changed_paths(base, head)
+        ancestry = git_first_parent
+        changed = git_changed_paths
+    require(bool(own_changes) and native_unrelated(own_changes),
+            "PR changes native inputs or cannot prove tracked diff")
+    prior = prove_unchanged_prior_native(
+        head, base, api, ancestry, changed,
+    )
+    artifacts = prove_release_artifacts(prior, api)
+    # First fast PR after this change must find prior FULL Windows image
+    # receipts; older proof logs without a machine-readable image identity
+    # cannot claim safe reuse on a potentially updated hosted runner.
+    select_full_runner_receipt(prior, "quality", api, as_of=as_of)
+    select_full_runner_receipt(prior, "local-profile", api, as_of=as_of)
+    require(artifacts.get("candidate_sha") != head
+            and artifacts.get("artifacts", {}).get("bridge", {}).get("sha256"),
+            "no independent inherited Bridge executable receipt")
+    return prior, artifacts
+
+
+def prove_accepted_native_reuse(main_sha: str, gate: str,
+                                api: Callable[[str], Any]) -> tuple[str, str | None]:
+    """Accept current FULL physical proof or independently validate inheritance.
+
+    The main checkout may be shallow; the GitHub commit/compare API provides
+    exact bounded first-parent and changed-byte provenance without a second
+    local compilation or a separate acceptance registry.
+    """
+    try:
+        return prove(main_sha, gate, api), None
+    except (Unconfirmed, KeyError, ValueError, TypeError,
+            urllib.error.URLError, OSError):
+        require(gate in NATIVE_REUSED_CRITICAL, "native reuse gate unsupported")
+    candidate = prove(main_sha, gate, api, native_reused=True)
+    root = f"repos/{REPOSITORY}"
+    accepted = api(f"{root}/commits/{main_sha}")
+    require(accepted.get("sha") == main_sha, "native accepted main SHA changed")
+    parents = accepted.get("parents")
+    require(isinstance(parents, list) and bool(parents)
+            and isinstance(parents[0].get("sha"), str)
+            and SHA.fullmatch(parents[0]["sha"]) is not None,
+            "invalid accepted-main base for native inheritance")
+    prior = prove_unchanged_prior_native(
+        main_sha, parents[0]["sha"], api,
+        lambda sha: github_first_parent(sha, api),
+        lambda old, new: github_changed_paths(old, new, api),
+    )
+    return candidate, prior
+
+
 def fixture(gate: str) -> tuple[dict[str, Any], Callable[[str], Any]]:
     main, base, head, tree = ("a" * 40, "b" * 40, "c" * 40, "d" * 40)
     root = f"repos/{REPOSITORY}"
@@ -624,6 +1032,18 @@ def fixture(gate: str) -> tuple[dict[str, Any], Callable[[str], Any]]:
              }}
             for index, name in enumerate(names.values())
         ]
+    if gate in RUNNER_RECEIPT:
+        artifact_inventory.append({
+            "id": 999, "name": RUNNER_RECEIPT[gate][0],
+            "size_in_bytes": 256, "digest": "sha256:" + "a" * 64,
+            "expired": False,
+            "created_at": "2026-10-31T00:05:00Z",
+            "expires_at": "2030-01-01T00:00:00Z",
+            "workflow_run": {
+                "id": gate_run["id"], "head_sha": head,
+                "head_branch": "codex/exact-pr-proof",
+            },
+        })
     pages: dict[str, Any] = {
         f"{root}/commits/{main}": {
             "sha": main, "parents": [{"sha": base}], "commit": {"tree": {"sha": tree}}
@@ -986,6 +1406,364 @@ def self_test() -> None:
     else:
         raise AssertionError("missing parent history passed")
 
+    # Native FAST is limited to isolated UI source. Documentation may be an
+    # input to dynamically loaded tests; lockfiles/scripts/native Rust are
+    # always a full physical run, even if the application already works.
+    assert native_unrelated(["frontend/src/app/router.tsx", "frontend/src/styles/root.css"])
+    for changed in (
+        ["docs/INSTALL.md"], ["README.md"], ["frontend/public/logo.svg"],
+        ["frontend/src/app/icon.svg"], ["Cargo.toml"], ["Cargo.lock"],
+        ["apps/profile-bridge/src/main.rs"],
+        [".github/workflows/quality-gate.yml"],
+        ["scripts/accepted-main-pr-reuse.py"],
+        ["frontend/src/router.tsx", "crates/contracts/src/lib.rs"],
+        ["frontend/src/../app/main.tsx"], ["frontend/src/foo\\bar.ts"],
+    ):
+        assert not native_unrelated(changed), f"unsafe native source scope accepted: {changed}"
+
+    old_sha, new_sha = "1" * 40, "2" * 40
+    valid_compare = {
+        "base_commit": {"sha": old_sha},
+        "merge_base_commit": {"sha": old_sha},
+        "status": "ahead", "ahead_by": 1,
+        "commits": [{"sha": new_sha}],
+        "files": [{"filename": "frontend/src/main.tsx", "status": "modified"}],
+    }
+    compare_url = f"repos/{REPOSITORY}/compare/{old_sha}...{new_sha}"
+    assert github_changed_paths(old_sha, new_sha,
+                                lambda url: {compare_url: valid_compare}[url]) == ["frontend/src/main.tsx"]
+    for fault in ("wrong-base", "wrong-merge-base", "wrong-head", "diverged",
+                  "truncated-files", "missing-commits", "renamed", "unknown-status",
+                  "unsafe-path", "unexpected-identical"):
+        case = json.loads(json.dumps(valid_compare))
+        if fault == "wrong-base":
+            case["base_commit"]["sha"] = "3" * 40
+        elif fault == "wrong-merge-base":
+            case["merge_base_commit"]["sha"] = "3" * 40
+        elif fault == "wrong-head":
+            case["commits"][0]["sha"] = "3" * 40
+        elif fault == "diverged":
+            case["status"] = "diverged"
+        elif fault == "truncated-files":
+            case["files"] *= 300
+        elif fault == "missing-commits":
+            case["commits"] = []
+        elif fault == "renamed":
+            case["files"][0]["status"] = "renamed"
+            case["files"][0]["previous_filename"] = "apps/profile-bridge/src/main.rs"
+        elif fault == "unknown-status":
+            case["files"][0]["status"] = "unsafe"
+        elif fault == "unsafe-path":
+            case["files"][0]["filename"] = "apps/profile-bridge/src/main.rs"
+        else:
+            case["status"] = "identical"
+        try:
+            paths = github_changed_paths(old_sha, new_sha,
+                                         lambda url: {compare_url: case}[url])
+            require(native_unrelated(paths), "native input changed in exact REST compare")
+        except Unconfirmed:
+            pass
+        else:
+            raise AssertionError(f"unsafe GitHub compare native proof accepted: {fault}")
+
+    fixture_now = datetime(2026, 11, 24, tzinfo=timezone.utc)
+    for gate in RUNNER_RECEIPT:
+        pages, read = fixture(gate)
+        receipt = select_full_runner_receipt("a" * 40, gate, read, as_of=fixture_now)
+        assert receipt["name"] == RUNNER_RECEIPT[gate][0]
+        content = {
+            "schema_version": 1, "kind": "FULL_NATIVE_WINDOWS_RUNNER_IDENTITY",
+            "source_sha": receipt["source_sha"], "run_id": receipt["run_id"],
+            "run_attempt": receipt["run_attempt"], "gate": gate,
+            "job_name": receipt["job_name"], "image_os": "win25",
+            "image_version": "20261117.1", "rustc_vv": "rustc version (stable)\nhost: x86_64-pc-windows-msvc",
+        }
+        identity = {field: content[field]
+                    for field in ("image_os", "image_version", "rustc_vv")}
+        require_full_runner_identity(content, receipt, identity)
+        for fault in ("source_sha", "run_id", "run_attempt", "gate", "job_name",
+                      "image_os", "image_version", "rustc_vv"):
+            broken = dict(content)
+            broken[fault] = "foreign" if isinstance(broken[fault], str) else 99
+            try:
+                require_full_runner_identity(broken, receipt, identity)
+            except Unconfirmed:
+                pass
+            else:
+                raise AssertionError(f"untrusted FULL native runner content accepted: {fault}")
+        artifact_path = next(key for key in pages if key.endswith("/artifacts?per_page=100"))
+        for fault in ("missing", "duplicate", "wrong-run", "wrong-head", "expired",
+                      "bad-digest", "oversized", "stale-created", "bad-attempt"):
+            case = json.loads(json.dumps(pages))
+            inventory = case[artifact_path]
+            target = next(item for item in inventory["artifacts"]
+                          if item["name"] == RUNNER_RECEIPT[gate][0])
+            if fault == "missing":
+                inventory["artifacts"].remove(target)
+                inventory["total_count"] -= 1
+            elif fault == "duplicate":
+                inventory["artifacts"].append(dict(target))
+                inventory["total_count"] += 1
+            elif fault == "wrong-run":
+                target["workflow_run"]["id"] += 1
+            elif fault == "wrong-head":
+                target["workflow_run"]["head_sha"] = "f" * 40
+            elif fault == "expired":
+                target["expired"] = True
+            elif fault == "bad-digest":
+                target["digest"] = "sha256:missing"
+            elif fault == "oversized":
+                target["size_in_bytes"] = 4097
+            elif fault == "stale-created":
+                target["created_at"] = "2026-01-01T00:05:00Z"
+            else:
+                jobs_path = next(key for key in case if key.endswith("/jobs?per_page=100"))
+                case[jobs_path]["jobs"][0]["run_attempt"] += 1
+            try:
+                select_full_runner_receipt("a" * 40, gate,
+                                           lambda path: case[path], as_of=fixture_now)
+            except Unconfirmed:
+                pass
+            else:
+                raise AssertionError(f"untrusted native runner artifact accepted: {gate}/{fault}")
+
+    # Two previous required Windows workflows must have executed on ONE
+    # accepted source. A green Quality-only or Local-only proof is insufficient.
+    quality_pages, _ = fixture("quality")
+    local_pages, _ = fixture("local-profile")
+    two_full = dict(quality_pages)
+    for key, value in local_pages.items():
+        if key.endswith("/jobs?per_page=100") or key.endswith("/artifacts?per_page=100"):
+            two_full[key] = value
+    full_api = lambda key: two_full[key]
+    assert prove_unchanged_prior_native(
+        "a" * 40, "a" * 40, full_api,
+        lambda base: [base],
+        lambda old, head: ["frontend/src/app/router.tsx"],
+    ) == "a" * 40
+    for gate, missing_step in (("quality", "Check and test native crates"),
+                               ("local-profile", "Prove K2 256/512 MiB file streaming on Windows with peak RAM and disk limits")):
+        case = json.loads(json.dumps(two_full))
+        workflow_name = WORKFLOW[gate]
+        original_runs = case[f"repos/{REPOSITORY}/actions/runs?head_sha={'c'*40}&event=pull_request&per_page=100"]["workflow_runs"]
+        run_id = next(run["id"] for run in original_runs if run["name"] == workflow_name)
+        jobs_path = f"repos/{REPOSITORY}/actions/runs/{run_id}/jobs?per_page=100"
+        for job in case[jobs_path]["jobs"]:
+            for step in job["steps"]:
+                if step["name"] == missing_step:
+                    step["conclusion"] = "skipped"
+        try:
+            prove_unchanged_prior_native(
+                "a" * 40, "a" * 40, lambda key: case[key],
+                lambda base: [base],
+                lambda old, head: ["frontend/src/app/router.tsx"],
+            )
+        except Unconfirmed:
+            pass
+        else:
+            raise AssertionError(f"prior FULL native proof missing physical {gate}/{missing_step}")
+
+    # Simulate the *next* frontend PR merged after a prior FULL Quality+Local
+    # run. Its current Windows jobs have no K1/K2, but must have run all the
+    # listed SHA-bound inheritance/installer steps and upload the identical
+    # original Bridge bytes. This tests main's shallow-checkout REST proof.
+    new_main, new_head, new_tree = "6" * 40, "7" * 40, "8" * 40
+    prior_main = "a" * 40
+    shared_run_path = f"repos/{REPOSITORY}/actions/runs?head_sha={'c'*40}&event=pull_request&per_page=100"
+    current_runs = json.loads(json.dumps(two_full[shared_run_path]))
+    for run in current_runs["workflow_runs"]:
+        run["id"] += 1000
+        run["head_sha"] = new_head
+        run["head_branch"] = "codex/native-unaffected-ui"
+    new_pages = dict(two_full)
+    new_pages[f"repos/{REPOSITORY}/commits/{new_main}"] = {
+        "sha": new_main, "parents": [{"sha": prior_main}],
+        "commit": {"tree": {"sha": new_tree}},
+    }
+    new_pages[f"repos/{REPOSITORY}/commits/{new_main}/pulls"] = [{
+        "state": "closed", "merged_at": "2026-11-01T01:00:00Z",
+        "merge_commit_sha": new_main,
+        "base": {"sha": prior_main, "ref": "main", "repo": {"full_name": REPOSITORY}},
+        "head": {"sha": new_head, "ref": "codex/native-unaffected-ui",
+                 "repo": {"full_name": REPOSITORY}},
+    }]
+    new_pages[f"repos/{REPOSITORY}/commits/{new_head}"] = {
+        "sha": new_head, "commit": {"tree": {"sha": new_tree}},
+    }
+    new_pages[f"repos/{REPOSITORY}/commits/{'b'*40}"] = {
+        "sha": "b" * 40, "parents": [], "commit": {"tree": {"sha": "0" * 40}},
+    }
+    new_pages[f"repos/{REPOSITORY}/actions/runs?head_sha={new_head}&event=pull_request&per_page=100"] = current_runs
+    native_compare_url = f"repos/{REPOSITORY}/compare/{prior_main}...{new_main}"
+    new_pages[native_compare_url] = {
+        "base_commit": {"sha": prior_main},
+        "merge_base_commit": {"sha": prior_main},
+        "status": "ahead", "ahead_by": 1,
+        "commits": [{"sha": new_main}],
+        "files": [{"filename": "frontend/src/app/main.tsx", "status": "modified"}],
+    }
+    for gate in NATIVE_REUSED_CRITICAL:
+        name = WORKFLOW[gate]
+        run = next(row for row in current_runs["workflow_runs"] if row["name"] == name)
+        current_jobs = []
+        for job_name, required_steps in NATIVE_REUSED_CRITICAL[gate].items():
+            steps = [{"name": label, "status": "completed", "conclusion": "success"}
+                     for label in required_steps]
+            if job_name == RUNNER_RECEIPT[gate][1]:
+                steps.extend({"name": label, "status": "completed", "conclusion": "skipped"}
+                             for label in CRITICAL[gate][job_name]
+                             if label not in required_steps)
+            current_jobs.append({
+                "name": job_name, "status": "completed", "conclusion": "success",
+                "run_id": run["id"], "run_attempt": 1,
+                "head_sha": new_head, "workflow_name": name,
+                "started_at": "2026-10-31T00:00:00Z",
+                "completed_at": "2026-10-31T00:10:00Z", "steps": steps,
+            })
+        new_pages[f"repos/{REPOSITORY}/actions/runs/{run['id']}/jobs?per_page=100"] = {
+            "total_count": len(current_jobs), "jobs": current_jobs,
+        }
+        if gate == "quality":
+            old_inventory = two_full[f"repos/{REPOSITORY}/actions/runs/{run['id'] - 1000}/artifacts?per_page=100"]
+            copied_inventory = json.loads(json.dumps(old_inventory))
+            for artifact in copied_inventory["artifacts"]:
+                artifact["id"] += 1000
+                artifact["workflow_run"].update({
+                    "id": run["id"], "head_sha": new_head,
+                    "head_branch": "codex/native-unaffected-ui",
+                })
+            new_pages[f"repos/{REPOSITORY}/actions/runs/{run['id']}/artifacts?per_page=100"] = copied_inventory
+    require(prove_accepted_native_reuse(new_main, "quality", lambda key: new_pages[key])
+            == (new_head, prior_main), "exact new PR inherited Quality proof rejected")
+    require(prove_accepted_native_reuse(new_main, "local-profile", lambda key: new_pages[key])
+            == (new_head, prior_main), "exact new PR inherited Local proof rejected")
+    verified_inherited = prove_release_artifacts(new_main, lambda key: new_pages[key])
+    require(verified_inherited["native_prior_main_sha"] == prior_main,
+            "new PR raw Bridge inherited source not preserved")
+    for fault in ("current-bridge-sha", "current-bridge-size", "fake-continue-on-error",
+                  "missing-prior-k1", "missing-prior-k2", "native-changed", "compare-truncated"):
+        case = json.loads(json.dumps(new_pages))
+        quality_run = next(run for run in current_runs["workflow_runs"]
+                           if run["name"] == WORKFLOW["quality"])
+        local_run = next(run for run in current_runs["workflow_runs"]
+                         if run["name"] == WORKFLOW["local-profile"])
+        quality_artifacts = case[f"repos/{REPOSITORY}/actions/runs/{quality_run['id']}/artifacts?per_page=100"]["artifacts"]
+        current_bridge = next(item for item in quality_artifacts if item["name"] == "profile-bridge.exe")
+        if fault == "current-bridge-sha":
+            current_bridge["digest"] = "sha256:" + "f" * 64
+        elif fault == "current-bridge-size":
+            current_bridge["size_in_bytes"] += 1
+        elif fault == "fake-continue-on-error":
+            jobs = case[f"repos/{REPOSITORY}/actions/runs/{quality_run['id']}/jobs?per_page=100"]["jobs"]
+            windows = next(job for job in jobs if job["name"] == RUNNER_RECEIPT["quality"][1])
+            next(step for step in windows["steps"]
+                 if step["name"] == "Check and test native crates")["conclusion"] = "failure"
+        elif fault in ("missing-prior-k1", "missing-prior-k2"):
+            original_id = quality_run["id"] - 1000 if fault == "missing-prior-k1" else local_run["id"] - 1000
+            jobs = case[f"repos/{REPOSITORY}/actions/runs/{original_id}/jobs?per_page=100"]["jobs"]
+            target_step = "Check and test native crates" if fault == "missing-prior-k1" else "Prove K2 256/512 MiB file streaming on Windows with peak RAM and disk limits"
+            for job in jobs:
+                for step in job["steps"]:
+                    if step["name"] == target_step:
+                        step["conclusion"] = "skipped"
+        elif fault == "native-changed":
+            case[native_compare_url]["files"][0]["filename"] = "Cargo.lock"
+        else:
+            case[native_compare_url]["files"] *= 300
+        try:
+            prove_release_artifacts(new_main, lambda key: case[key])
+        except (Unconfirmed, KeyError):
+            pass
+        else:
+            raise AssertionError(f"unsafe inherited main Bridge proof accepted: {fault}")
+
+    # The PR-side gate must reject stale base/head, foreign forks and bad
+    # ancestry before a Windows consumer can skip any physical K1/K2.
+    actual_checkout = subprocess.check_output(["git", "rev-parse", "HEAD"],
+                                              text=True).strip()
+    require(SHA.fullmatch(actual_checkout) is not None,
+            "self-test checkout SHA unavailable")
+    pr_api = dict(two_full)
+    pr_api[f"repos/{REPOSITORY}/commits/{'b'*40}"] = {
+        "sha": "b" * 40, "parents": [], "commit": {"tree": {"sha": "0" * 40}},
+    }
+    pr_api[f"repos/{REPOSITORY}/git/ref/heads/main"] = {
+        "ref": "refs/heads/main", "object": {"sha": prior_main},
+    }
+    pr_api[f"repos/{REPOSITORY}/pulls/42"] = {
+        "state": "open", "merged_at": None,
+        "head": {"sha": actual_checkout, "repo": {"full_name": REPOSITORY}},
+        "base": {"sha": prior_main, "ref": "main",
+                 "repo": {"full_name": REPOSITORY}},
+    }
+    pr_compare_url = f"repos/{REPOSITORY}/compare/{prior_main}...{actual_checkout}"
+    pr_api[pr_compare_url] = {
+        "base_commit": {"sha": prior_main},
+        "merge_base_commit": {"sha": prior_main},
+        "status": "ahead", "ahead_by": 1,
+        "commits": [{"sha": actual_checkout}],
+        "files": [{"filename": "frontend/src/app/router.tsx", "status": "modified"}],
+    }
+    pr_environment = {
+        "GITHUB_EVENT_NAME": "pull_request", "GITHUB_REPOSITORY": REPOSITORY,
+        "PR_HEAD_SHA": actual_checkout, "PR_BASE_SHA": prior_main,
+        "PR_NUMBER": "42",
+    }
+    original_environment = {key: os.environ.get(key) for key in pr_environment}
+    try:
+        os.environ.update(pr_environment)
+        assert prove_open_native_pr(lambda path: pr_api[path], graph_api_only=True,
+                                    as_of=fixture_now)[0] == prior_main
+        for fault in ("stale-main", "stale-pr-head", "stale-pr-base",
+                      "foreign-head-repo", "foreign-base-repo", "closed-pr",
+                      "native-source", "incomplete-pr-compare", "invalid-event"):
+            case = json.loads(json.dumps(pr_api))
+            if fault == "stale-main":
+                case[f"repos/{REPOSITORY}/git/ref/heads/main"]["object"]["sha"] = "9" * 40
+            elif fault == "stale-pr-head":
+                case[f"repos/{REPOSITORY}/pulls/42"]["head"]["sha"] = "9" * 40
+            elif fault == "stale-pr-base":
+                case[f"repos/{REPOSITORY}/pulls/42"]["base"]["sha"] = "9" * 40
+            elif fault == "foreign-head-repo":
+                case[f"repos/{REPOSITORY}/pulls/42"]["head"]["repo"]["full_name"] = "other/repo"
+            elif fault == "foreign-base-repo":
+                case[f"repos/{REPOSITORY}/pulls/42"]["base"]["repo"]["full_name"] = "other/repo"
+            elif fault == "closed-pr":
+                case[f"repos/{REPOSITORY}/pulls/42"]["state"] = "closed"
+            elif fault == "native-source":
+                case[pr_compare_url]["files"][0]["filename"] = "apps/profile-bridge/src/main.rs"
+            elif fault == "incomplete-pr-compare":
+                case[pr_compare_url]["files"] *= 300
+            else:
+                os.environ["GITHUB_EVENT_NAME"] = "push"
+            try:
+                prove_open_native_pr(lambda path: case[path], graph_api_only=True,
+                                     as_of=fixture_now)
+            except (Unconfirmed, KeyError):
+                pass
+            else:
+                raise AssertionError(f"unsafe current PR native proof accepted: {fault}")
+            finally:
+                os.environ["GITHUB_EVENT_NAME"] = "pull_request"
+    finally:
+        for key, value in original_environment.items():
+            if value is None:
+                os.environ.pop(key, None)
+            else:
+                os.environ[key] = value
+
+    # A missing accepted-PR Bridge receipt may mean current K1/K2 were safely
+    # inherited, not executed. Main must NEVER compile a replacement EXE that
+    # has received neither the exact current nor the inherited physical proof.
+    no_token = dict(os.environ)
+    no_token.update({"GITHUB_EVENT_NAME": "push", "GITHUB_REF": "refs/heads/main"})
+    no_token.pop("GITHUB_TOKEN", None)
+    process = subprocess.run(
+        [sys.executable, str(Path(__file__).resolve()), "--release-component", "bridge"],
+        env=no_token, capture_output=True, text=True, check=False,
+    )
+    assert process.returncode != 0 and "BRIDGE_RELEASE_REUSE_NOT_PROVEN" in process.stderr
+
     print("Accepted-main exact PR proof: positive and negative fixtures PASS")
 
 
@@ -993,15 +1771,81 @@ def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--gate", choices=sorted(CRITICAL))
     parser.add_argument("--release-component", choices=("cloud", "bridge"))
+    parser.add_argument("--pr-native-proof", action="store_true")
+    parser.add_argument("--pr-native-certify", action="store_true")
+    parser.add_argument("--pr-native-bridge", type=Path)
+    parser.add_argument("--native-runner-receipt", choices=sorted(RUNNER_RECEIPT))
+    parser.add_argument("--receipt-output", type=Path)
     parser.add_argument("--github-output", type=Path)
     parser.add_argument("--self-test", action="store_true")
     args = parser.parse_args()
     if args.self_test:
         self_test()
-    if args.gate is None and args.release_component is None:
-        return 0 if args.self_test else parser.error("--gate or --release-component is required")
-    if args.gate is not None and args.release_component is not None:
-        parser.error("choose only one reusable evidence route")
+    routes = sum((args.gate is not None, args.release_component is not None,
+                  args.pr_native_proof, args.pr_native_certify,
+                  args.pr_native_bridge is not None,
+                  args.native_runner_receipt is not None))
+    if routes == 0:
+        return 0 if args.self_test else parser.error("one evidence route is required")
+    if routes != 1:
+        parser.error("choose exactly one evidence route")
+    if args.native_runner_receipt is not None:
+        if args.receipt_output is None:
+            parser.error("--native-runner-receipt requires --receipt-output")
+        write_full_runner_receipt(args.native_runner_receipt, args.receipt_output)
+        print(f"FULL {args.native_runner_receipt} Windows runner identity receipt ready")
+        return 0
+    if args.pr_native_proof or args.pr_native_certify or args.pr_native_bridge is not None:
+        verified = False
+        try:
+            token = os.environ.get("GITHUB_TOKEN")
+            require(bool(token), "native PR proof needs read-only GitHub API authority")
+            api = api_reader(token)
+            prior, receipt = prove_open_native_pr(
+                api, graph_api_only=not args.pr_native_proof,
+            )
+            bridge = receipt["artifacts"]["bridge"]
+            if not args.pr_native_proof:
+                gate = "quality" if args.pr_native_bridge is not None else "local-profile"
+                verify_full_runner_receipt(select_full_runner_receipt(prior, gate, api), token)
+            if args.pr_native_bridge is not None:
+                destination = args.pr_native_bridge.absolute()
+                require(not destination.exists() and not destination.is_symlink(),
+                        "inherited Bridge destination is not clean")
+                destination.parent.mkdir(parents=True, exist_ok=True)
+                with tempfile.TemporaryDirectory(prefix="prior-physical-bridge-") as temporary:
+                    directory = Path(temporary)
+                    raw = directory / bridge["name"]
+                    download_raw_artifact(bridge, raw, token)
+                    verified_source = verify_downloaded_raw(directory, "bridge", bridge)
+                    with verified_source.open("rb") as executable:
+                        require(bridge["size"] > 100_000 and executable.read(2) == b"MZ",
+                                "previous FULL-proven Bridge EXE has invalid Windows shape")
+                    try:
+                        shutil.copyfile(verified_source, destination)
+                        require(destination.stat().st_size == bridge["size"],
+                                "inherited Bridge copy size mismatch")
+                        require(hashlib.sha256(destination.read_bytes()).hexdigest() == bridge["sha256"],
+                                "inherited Bridge copy SHA-256 mismatch")
+                    except Exception:
+                        destination.unlink(missing_ok=True)
+                        raise
+            print(f"Certified unchanged native input graph: PR_HEAD={os.environ['PR_HEAD_SHA']} "
+                  f"prior_FULL_main={prior} previous_bridge_sha256={bridge['sha256']} "
+                  f"prior_quality_run={receipt['quality_run_id']} "
+                  f"attempt={receipt['quality_run_attempt']}")
+            verified = True
+        except (Unconfirmed, KeyError, ValueError, TypeError, AssertionError,
+                urllib.error.URLError, OSError, subprocess.SubprocessError,
+                UnicodeError) as error:
+            print(f"No valid inherited native proof ({type(error).__name__}): {error}; "
+                  "full native execution required")
+        if args.pr_native_proof:
+            if args.github_output is not None:
+                with args.github_output.open("a", encoding="utf-8") as output:
+                    output.write(f"native_unaffected={'true' if verified else 'false'}\n")
+            return 0  # Any error explicitly selects FULL native proof.
+        return 0 if verified else 1  # Windows falls back on failed inheritance.
     reuse = False
     if os.environ.get("GITHUB_EVENT_NAME") == "push" and os.environ.get("GITHUB_REF") == "refs/heads/main":
         token = os.environ.get("GITHUB_TOKEN")
@@ -1010,8 +1854,16 @@ def main() -> int:
             try:
                 api = api_reader(token)
                 if args.release_component is None:
-                    candidate = prove(main_sha, args.gate, api)
-                    print(f"Reuse verified PR test evidence from exact tree {candidate}")
+                    if args.gate in NATIVE_REUSED_CRITICAL:
+                        candidate, prior = prove_accepted_native_reuse(main_sha, args.gate, api)
+                        if prior is None:
+                            print(f"Reuse verified current PR FULL native proof from exact tree {candidate}")
+                        else:
+                            print(f"Reuse current exact-tree PR {candidate} and prior FULL "
+                                  f"native proof at accepted main {prior}; native inputs unchanged")
+                    else:
+                        candidate = prove(main_sha, args.gate, api)
+                        print(f"Reuse verified PR test evidence from exact tree {candidate}")
                 else:
                     prepare_release_component(main_sha, args.release_component, api)
                 reuse = True
@@ -1048,6 +1900,10 @@ def main() -> int:
             print("No GitHub API authority; run full main gate")
     else:
         print("Not an accepted-main push; full PR test is mandatory")
+    if args.release_component == "bridge" and not reuse:
+        print("BRIDGE_RELEASE_REUSE_NOT_PROVEN: exact physically proven PR Bridge "
+              "artifact missing; refusing untested main recompilation", file=sys.stderr)
+        return 1
     if args.github_output is not None:
         with args.github_output.open("a", encoding="utf-8") as handle:
             handle.write(f"reuse={'true' if reuse else 'false'}\n")

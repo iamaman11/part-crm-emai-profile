@@ -21,11 +21,14 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       reuse: ${{ steps.proof.outputs.reuse }}
+      native_unaffected: ${{ steps.native-prior.outputs.native_unaffected }}
     steps:
       - name: Checkout exact source
         uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a
         with:
           ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          fetch-depth: 0
+          filter: blob:none
           persist-credentials: false
       - name: Verify exact source checkout
         env:
@@ -35,6 +38,15 @@ jobs:
         run: |
           python -m py_compile scripts/accepted-main-pr-reuse.py
           python scripts/accepted-main-pr-reuse.py --self-test
+      - name: Prove frontend-only PR inherits exact FULL Windows physical proof
+        if: github.event_name == 'pull_request'
+        id: native-prior
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: python scripts/accepted-main-pr-reuse.py --pr-native-proof --github-output "$GITHUB_OUTPUT"
       - name: Bind accepted-main tree to completed PR checks or demand full proof
         id: proof
         env:
@@ -635,11 +647,22 @@ jobs:
       - name: Show pinned toolchain
         run: rustup show active-toolchain
 
-      # Keep OS/toolchain/manifests/flags in the action's hashed key.
-      # Restored artifacts never substitute any check or exact-head test.
-      # Include the standalone opsctl workspace only for the proven warm cache
-      # identity; its fmt/clippy/test belong to Linux Quality, not this job.
+      - name: Reuse exact prior FULL-proof Profile Bridge executable
+        if: github.event_name == 'pull_request' && needs.accepted-pr-proof.outputs.native_unaffected == 'true'
+        id: native-bridge
+        continue-on-error: true
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: python scripts/accepted-main-pr-reuse.py --pr-native-bridge target/release/profile-bridge.exe
+
+      # Full native tests need the warm toolchain cache; an already verified
+      # exact previous EXE does not. Keep this after the trusted attempt, but
+      # before the fallback cleanup/build so stale cache binaries cannot leak.
       - name: Restore versioned Rust dependencies
+        if: steps.native-bridge.outcome != 'success'
         uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2 (immutable)
         with:
           shared-key: profile-bridge-ci-v1
@@ -648,13 +671,22 @@ jobs:
             tools/opsctl -> target
           cache-on-failure: 'true'
 
+      - name: Remove untrusted inherited executable before FULL native fallback
+        if: steps.native-bridge.outcome != 'success'
+        shell: pwsh
+        run: |
+          $exe = 'target/release/profile-bridge.exe'
+          if (Test-Path -LiteralPath $exe) { Remove-Item -LiteralPath $exe -Force -ErrorAction Stop }
+
       - name: Check and test native crates
+        if: steps.native-bridge.outcome != 'success'
         run: >-
           cargo test --locked --workspace --all-targets
           --exclude browser-profile-control-plane-worker
           --exclude cloudflare-adapters
 
       - name: Build release Profile Bridge executable
+        if: steps.native-bridge.outcome != 'success'
         run: cargo build --locked --release -p profile-bridge
 
       - name: Compile actual per-user installer and prove native signature rejection
@@ -703,4 +735,33 @@ jobs:
           $expected = (Get-FileHash -Algorithm SHA256 target/release/profile-bridge.exe).Hash.ToLowerInvariant()
           if (-not $env:UPLOADED_DIGEST -or $env:UPLOADED_DIGEST -ne $expected) {
             throw 'PR Bridge raw release executable upload digest mismatch'
+          }
+
+      - name: Write FULL Quality Windows runner identity receipt
+        if: github.event_name == 'pull_request' && steps.native-bridge.outcome != 'success'
+        shell: pwsh
+        env:
+          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: python scripts/accepted-main-pr-reuse.py --native-runner-receipt quality --receipt-output "$env:RUNNER_TEMP/quality-native-runner.json"
+
+      - name: Upload FULL Quality Windows runner identity receipt
+        if: github.event_name == 'pull_request' && steps.native-bridge.outcome != 'success'
+        id: native-runner-upload
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: quality-native-runner.json
+          path: ${{ runner.temp }}/quality-native-runner.json
+          archive: false
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Verify uploaded FULL Quality runner identity digest
+        if: github.event_name == 'pull_request' && steps.native-bridge.outcome != 'success'
+        shell: pwsh
+        env:
+          UPLOADED_DIGEST: ${{ steps.native-runner-upload.outputs.artifact-digest }}
+        run: |
+          $expected = (Get-FileHash -Algorithm SHA256 "$env:RUNNER_TEMP/quality-native-runner.json").Hash.ToLowerInvariant()
+          if (-not $env:UPLOADED_DIGEST -or $env:UPLOADED_DIGEST -ne $expected) {
+            throw 'FULL Quality Windows runner receipt upload SHA mismatch'
           }
