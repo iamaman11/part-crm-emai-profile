@@ -10,8 +10,10 @@ published release is accepted only when its complete asset inventory is exact.
 from __future__ import annotations
 
 import argparse
+import contextlib
 import hashlib
 import http.client
+import io
 import json
 import os
 import re
@@ -237,20 +239,37 @@ def run_gh(
     *,
     timeout_seconds: int,
     capture: bool = False,
+    operation: str = "release_api",
 ) -> subprocess.CompletedProcess[str]:
     command = ["gh", *args]
+    started = time.monotonic()
+    result_code = "error"
     try:
-        return subprocess.run(
+        result = subprocess.run(
             command,
             check=False,
             text=True,
             capture_output=capture,
             timeout=timeout_seconds,
         )
+        result_code = "success" if result.returncode == 0 else "api_error"
+        return result
     except subprocess.TimeoutExpired:
+        result_code = "timeout"
         fail(f"GitHub CLI command timed out after {timeout_seconds}s: {' '.join(command[:3])}")
     except OSError as error:
+        result_code = "execution_error"
         raise PublicationError(f"cannot execute GitHub CLI: {error}") from error
+    finally:
+        # Labels are source-owned constants: never log CLI arguments, token,
+        # headers, response bodies, asset paths or release notes.
+        elapsed_ms = round((time.monotonic() - started) * 1_000)
+        print(
+            f"release_api_timing operation={operation} "
+            f"elapsed_ms={elapsed_ms} outcome={result_code}",
+            file=sys.stderr,
+            flush=True,
+        )
 
 
 def get_release(repository: str, release_tag: str) -> dict[str, Any] | None:
@@ -260,6 +279,7 @@ def get_release(repository: str, release_tag: str) -> dict[str, Any] | None:
         ["api", f"repos/{repository}/releases/tags/{release_tag}"],
         timeout_seconds=API_TIMEOUT_SECONDS,
         capture=True,
+        operation="published_lookup",
     )
     if published.returncode == 0:
         try:
@@ -287,6 +307,7 @@ def get_release(repository: str, release_tag: str) -> dict[str, Any] | None:
         ],
         timeout_seconds=API_TIMEOUT_SECONDS,
         capture=True,
+        operation="draft_list",
     )
     if result.returncode != 0:
         fail(
@@ -323,6 +344,7 @@ def get_release_by_id(
         ["api", f"repos/{repository}/releases/{release_id}"],
         timeout_seconds=API_TIMEOUT_SECONDS,
         capture=True,
+        operation="exact_release_lookup",
     )
     if result.returncode == 0:
         try:
@@ -345,9 +367,26 @@ def get_release_by_id(
     )
 
 
-def delete_starter_asset(repository: str, asset: RemoteAsset) -> None:
+def delete_starter_asset(
+    repository: str,
+    release_tag: str,
+    release_id: int,
+    asset: RemoteAsset,
+    expected_names: set[str],
+) -> None:
     if asset.state == "uploaded":
         fail(f"refusing to delete uploaded release asset: {asset.name}")
+    # The inventory that selected this starter can be stale. Recheck the same
+    # exact release and asset immediately before DELETE. This is not an atomic
+    # GitHub compare-and-delete, so external writers must still be excluded by
+    # the owning publication policy.
+    current = get_release_by_id(repository, release_id)
+    if current is None or current.get("draft") is not True:
+        fail("refusing to delete incomplete asset outside the exact draft")
+    analysis = analyze_release(current, release_tag, expected_names)
+    fresh = [a for a in analysis.assets if a.name == asset.name]
+    if len(fresh) != 1 or fresh[0] != asset:
+        fail(f"refusing to delete changed or uploaded draft asset: {asset.name}")
     result = run_gh(
         [
             "api",
@@ -357,6 +396,7 @@ def delete_starter_asset(repository: str, asset: RemoteAsset) -> None:
         ],
         timeout_seconds=API_TIMEOUT_SECONDS,
         capture=True,
+        operation="delete_incomplete_asset",
     )
     if result.returncode != 0:
         fail(
@@ -409,7 +449,8 @@ def _upload_asset(
         timeout=UPLOAD_SOCKET_TIMEOUT_SECONDS,
         context=ssl.create_default_context(),
     )
-    deadline = time.monotonic() + UPLOAD_TIMEOUT_SECONDS
+    started = time.monotonic()
+    deadline = started + UPLOAD_TIMEOUT_SECONDS
     sent = 0
     next_progress = UPLOAD_PROGRESS_BYTES
     try:
@@ -458,6 +499,12 @@ def _upload_asset(
         return None, None, f"{type(error).__name__}: {error}"
     finally:
         connection.close()
+        print(
+            f"release_upload_timing elapsed_ms={round((time.monotonic() - started) * 1_000)} "
+            f"sent_bytes={sent}",
+            file=sys.stderr,
+            flush=True,
+        )
 
 
 def upload_one(
@@ -536,6 +583,7 @@ def ensure_draft_release(
         ],
         timeout_seconds=API_TIMEOUT_SECONDS,
         capture=True,
+        operation="create_draft",
     )
     if result.returncode != 0:
         release = get_release(repository, release_tag)
@@ -568,18 +616,8 @@ def publish(
     assets: dict[str, LocalAsset],
 ) -> str:
     expected_names = set(assets)
-    observed = get_release(repository, release_tag)
-    if observed is not None:
-        analysis = analyze_release(observed, release_tag, expected_names)
-        if analysis.state == "reuse":
-            assert_complete_exact(
-                observed,
-                release_tag,
-                assets,
-                require_published=True,
-            )
-            return "reused"
-
+    # A single discovery is enough for both exact published replay and draft
+    # creation/resumption. A failed create still uses exact recovery discovery.
     release = ensure_draft_release(repository, release_tag, target, title, notes)
     analysis = analyze_release(release, release_tag, expected_names)
     if analysis.state == "reuse":
@@ -604,9 +642,14 @@ def publish(
             assert_remote_matches_local(remote, local)
             continue
         if remote is not None:
-            delete_starter_asset(repository, remote)
+            delete_starter_asset(
+                repository, release_tag, transaction_release_id, remote,
+                expected_names,
+            )
         upload_one(repository, release_tag, release, local, expected_names)
 
+        # GitHub's published releases may be mutable. Observe between uploads
+        # to avoid POSTing another asset after a peer publishes a partial draft.
         current = get_release_by_id(repository, transaction_release_id)
         if current is None:
             fail("draft release disappeared before asset verification")
@@ -624,6 +667,8 @@ def publish(
             fail(f"uploaded release asset cannot be observed: {name}")
         assert_remote_matches_local(exact, local)
 
+    # Keep a distinct fresh read immediately before PATCH. The published
+    # release is mutable, so a peer can change assets after the last upload.
     completed_draft = get_release_by_id(repository, transaction_release_id)
     if completed_draft is None:
         fail("completed draft release cannot be observed")
@@ -659,6 +704,7 @@ def publish(
         ],
         timeout_seconds=API_TIMEOUT_SECONDS,
         capture=True,
+        operation="publish_draft",
     )
     if edit.returncode != 0:
         final = get_release_by_id(repository, completed_release_id)
@@ -763,10 +809,12 @@ def self_test() -> None:
         *,
         timeout_seconds: int,
         capture: bool = False,
+        operation: str = "release_api",
     ) -> subprocess.CompletedProcess[str]:
         if args != ["api", "repos/owner/repo/releases/10"]:
             fail(f"unexpected exact release lookup command in self-test: {args}")
-        if timeout_seconds != API_TIMEOUT_SECONDS or capture is not True:
+        if (timeout_seconds != API_TIMEOUT_SECONDS or capture is not True
+                or operation != "exact_release_lookup"):
             fail("exact release lookup self-test command options changed")
         return subprocess.CompletedProcess(
             ["gh", *args],
@@ -863,7 +911,284 @@ def self_test() -> None:
     else:
         fail("asset conflict negative self-test unexpectedly passed")
 
+    self_test_publication_protocol()
     print("GitHub Release publication self-test passed.")
+
+
+def self_test_publication_protocol() -> None:
+    """Exercise the real publisher against a closed, mutable fake GitHub API.
+
+    No network, credentials, uploads or filesystem writes are used. Changing
+    the publication path must retain these exact transitions and refusals.
+    """
+    release_tag = "release-set-v3-sha256-" + "a" * 64
+    repository, target, title, notes = "owner/repo", "b" * 40, release_tag, "test release"
+    assets = {
+        name: LocalAsset(name, Path(name), size, "sha256:" + digest * 64)
+        for name, size, digest in (("first.bin", 10, "1"), ("second.bin", 20, "2"))
+    }
+
+    class FakeGithub:
+        def __init__(self, scenario: str) -> None:
+            self.scenario = scenario
+            self.release: dict[str, Any] | None = None
+            self.calls: list[str] = []
+            self.uploads = 0
+            self.exact_reads = 0
+            if scenario in ("replay", "published_conflict"):
+                self.create_draft()
+                assert self.release is not None
+                self.release["draft"] = False
+                self.release["assets"] = [
+                    self.remote(local) for local in assets.values()
+                ]
+                if scenario == "published_conflict":
+                    self.release["assets"][0]["digest"] = "sha256:" + "f" * 64
+            if scenario in ("resume_starter", "starter_race"):
+                self.create_draft()
+                assert self.release is not None
+                starter = self.remote(assets["first.bin"])
+                starter.update(state="starter", size=0, digest=None)
+                self.release["assets"] = [starter]
+
+        def create_draft(self) -> None:
+            self.release = {
+                "id": 10, "tag_name": release_tag, "name": title,
+                "body": notes, "draft": True, "prerelease": False,
+                "upload_url": (
+                    "https://uploads.github.com/repos/owner/repo/releases/10/assets"
+                    "{?name,label}"
+                ),
+                "assets": [],
+            }
+
+        def remote(self, local: LocalAsset) -> dict[str, Any]:
+            return {
+                "id": 20 if local.name == "first.bin" else 21,
+                "name": local.name, "state": "uploaded",
+                "size": local.size, "digest": local.digest,
+            }
+
+        def cli(self, args: list[str], *, timeout_seconds: int,
+                capture: bool = False,
+                operation: str = "release_api") -> subprocess.CompletedProcess[str]:
+            if timeout_seconds != API_TIMEOUT_SECONDS or not capture:
+                fail("publication self-test received unexpected CLI parameters")
+            self.calls.append(operation)
+            if self.scenario == "api_timeout" and operation == "exact_release_lookup":
+                fail("simulated GitHub API timeout")
+            release = self.release
+            if operation == "published_lookup":
+                payload = release if release is not None and not release["draft"] else None
+            elif operation == "draft_list":
+                payload = [[release]] if release is not None and release["draft"] else [[]]
+            elif operation == "exact_release_lookup":
+                self.exact_reads += 1
+                if release is not None and self.scenario == "starter_race":
+                    # A peer completed an earlier starter before DELETE.
+                    release["assets"][0].update(
+                        state="uploaded", size=assets["first.bin"].size,
+                        digest=assets["first.bin"].digest,
+                    )
+                if (release is not None and self.scenario == "peer_inject_prepatch"
+                        and self.exact_reads == 3):
+                    # Changes between the last post-upload GET and the
+                    # separate, immediately pre-PATCH GET must block publish.
+                    release["assets"].append({
+                        "id": 99, "name": "foreign.bin", "state": "uploaded",
+                        "size": 3, "digest": "sha256:" + "3" * 64,
+                    })
+                if (release is not None and self.scenario == "postpatch_tamper"
+                        and release["draft"] is False):
+                    release["assets"][0]["digest"] = "sha256:" + "e" * 64
+                payload = release
+                if payload is not None and self.scenario == "foreign_release_id":
+                    payload = dict(payload, id=11)
+                if self.scenario == "release_disappeared":
+                    payload = None
+            elif operation == "create_draft":
+                if release is not None:
+                    fail("duplicate draft creation in publication self-test")
+                if self.scenario == "create_failed":
+                    return subprocess.CompletedProcess(args, 1, "", "HTTP 503")
+                self.create_draft()
+                if self.scenario == "create_peer_collision":
+                    assert self.release is not None
+                    self.release["body"] = "a conflicting publisher's draft"
+                if self.scenario in ("create_ack_lost", "create_peer_collision"):
+                    return subprocess.CompletedProcess(args, 1, "", "timeout or HTTP 409")
+                payload = self.release
+            elif operation == "delete_incomplete_asset":
+                if release is None or release["draft"] is not True:
+                    fail("attempted to delete a published release asset")
+                asset_id = int(args[3].rsplit("/", 1)[1])
+                release["assets"] = [
+                    asset for asset in release["assets"] if asset["id"] != asset_id
+                ]
+                payload = {}
+            elif operation == "publish_draft":
+                if release is None or not release["draft"]:
+                    fail("attempted to publish a non-draft release")
+                release["draft"] = False
+                if self.scenario == "publish_ack_lost":
+                    return subprocess.CompletedProcess(args, 1, "", "timeout")
+                payload = release
+            else:
+                fail(f"unexpected self-test GitHub API operation: {operation}")
+            if payload is None:
+                return subprocess.CompletedProcess(args, 1, "", "HTTP 404: Not Found")
+            return subprocess.CompletedProcess(args, 0, json.dumps(payload), "")
+
+        def upload(self, repository_arg: str, release: dict[str, Any],
+                   local: LocalAsset) -> tuple[int | None, RemoteAsset | None, str]:
+            if repository_arg != repository or release.get("id") != 10:
+                fail("wrong publication upload identity in self-test")
+            self.uploads += 1
+            if self.release is None:
+                fail("upload before release creation in self-test")
+            if not self.release["draft"] and self.scenario == "peer_incomplete":
+                # Real GitHub releases can be mutable (immutable=false). If
+                # publisher posts after the peer's early publication, this
+                # mock intentionally permits the unsafe mutation.
+                self.release["assets"].append(self.remote(local))
+                return 201, _remote_assets({"assets": [self.remote(local)]})[0], ""
+            if not self.release["draft"]:
+                return 422, None, "already published"
+            remote = self.remote(local)
+            self.release["assets"].append(remote)
+            if self.scenario == "wrong_upload_digest" and self.uploads == 1:
+                bad = dict(remote, digest="sha256:" + "e" * 64)
+                return 201, _remote_assets({"assets": [bad]})[0], ""
+            if self.scenario == "wrong_upload_name" and self.uploads == 1:
+                bad = dict(remote, name="wrong.bin")
+                return 201, _remote_assets({"assets": [bad]})[0], ""
+            if self.scenario == "wrong_upload_size" and self.uploads == 1:
+                bad = dict(remote, size=local.size + 1)
+                return 201, _remote_assets({"assets": [bad]})[0], ""
+            if self.scenario == "lost_upload_ack" and self.uploads == 1:
+                return None, None, "connection reset after durable upload"
+            if self.scenario == "starter_ack_lost" and self.uploads == 1:
+                remote.update(state="starter", size=0, digest=None)
+                return None, None, "connection reset with starter residue"
+            if self.scenario in ("peer_complete", "peer_incomplete") and self.uploads == 1:
+                if self.scenario == "peer_complete":
+                    self.release["assets"] = [self.remote(item) for item in assets.values()]
+                self.release["draft"] = False
+            if self.scenario == "extra_asset" and self.uploads == 2:
+                self.release["assets"].append({
+                    "id": 99, "name": "foreign.bin", "state": "uploaded",
+                    "size": 3, "digest": "sha256:" + "3" * 64,
+                })
+            if self.scenario == "duplicate_asset" and self.uploads == 2:
+                self.release["assets"].append(dict(remote, id=98))
+            if self.scenario == "tampered_asset" and self.uploads == 2:
+                self.release["assets"][0]["digest"] = "sha256:" + "e" * 64
+            if self.scenario == "missing_asset" and self.uploads == 2:
+                self.release["assets"].pop(0)
+            return 201, _remote_assets({"assets": [remote]})[0], ""
+
+    original_run_gh = globals()["run_gh"]
+    original_upload = globals()["_upload_asset"]
+    cases = {
+        "initial": ("published", 2),
+        "replay": ("reused", 0),
+        "resume_starter": ("published", 2),
+        "create_ack_lost": ("published", 2),
+        "create_peer_collision": (None, 0),
+        "lost_upload_ack": ("published", 2),
+        "peer_complete": ("published-by-peer", 1),
+        "publish_ack_lost": ("published-by-peer", 2),
+        "wrong_upload_digest": (None, 1),
+        "wrong_upload_name": (None, 1),
+        "wrong_upload_size": (None, 1),
+        "starter_ack_lost": (None, 1),
+        "starter_race": (None, 0),
+        "create_failed": (None, 0),
+        "api_timeout": (None, 1),
+        "peer_incomplete": (None, 1),
+        "foreign_release_id": (None, 1),
+        "release_disappeared": (None, 1),
+        "extra_asset": (None, 2),
+        "peer_inject_prepatch": (None, 2),
+        "postpatch_tamper": (None, 2),
+        "duplicate_asset": (None, 2),
+        "tampered_asset": (None, 2),
+        "missing_asset": (None, 2),
+        "published_conflict": (None, 0),
+    }
+    try:
+        for scenario, (outcome, upload_count) in cases.items():
+            fake = FakeGithub(scenario)
+            globals()["run_gh"] = fake.cli
+            globals()["_upload_asset"] = fake.upload
+            try:
+                result = publish(
+                    repository=repository, release_tag=release_tag,
+                    target=target, title=title, notes=notes, assets=assets,
+                )
+            except PublicationError:
+                if outcome is not None:
+                    fail(f"publication positive self-test failed: {scenario}")
+            else:
+                if result != outcome:
+                    fail(f"publication negative/replay self-test failed: {scenario}")
+            if fake.uploads != upload_count:
+                fail(f"publication uploaded unexpected number of times: {scenario}")
+            own_patches = fake.calls.count("publish_draft")
+            expected_patches = int(
+                outcome == "published"
+                or scenario in ("publish_ack_lost", "postpatch_tamper")
+            )
+            if own_patches != expected_patches:
+                fail(f"publication performed unexpected PATCH: {scenario}")
+            if scenario == "initial" and (
+                fake.calls.count("published_lookup") != 1
+                or fake.calls.count("draft_list") != 1
+                or fake.calls.count("exact_release_lookup") != 4
+                or fake.calls.count("publish_draft") != 1
+            ):
+                fail("publication success path made redundant GitHub API requests")
+            if scenario == "lost_upload_ack" and (
+                fake.calls.count("exact_release_lookup") != 5
+            ):
+                fail("lost upload ACK did not require one exact recovery lookup")
+            if scenario == "replay" and fake.calls != ["published_lookup"]:
+                fail("published exact replay performed a mutation or extra lookup")
+            if scenario == "resume_starter" and (
+                fake.calls.count("delete_incomplete_asset") != 1
+            ):
+                fail("partial draft did not retire the incomplete starter asset")
+            if scenario == "starter_race" and (
+                fake.calls.count("delete_incomplete_asset") != 0
+            ):
+                fail("starter race deleted an uploaded peer asset")
+    finally:
+        globals()["run_gh"] = original_run_gh
+        globals()["_upload_asset"] = original_upload
+
+    original_subprocess_run = subprocess.run
+
+    def simulate_cli_timeout(*args: Any, **kwargs: Any) -> Any:
+        raise subprocess.TimeoutExpired(args[0], kwargs["timeout"])
+
+    try:
+        subprocess.run = simulate_cli_timeout
+        timer_log = io.StringIO()
+        with contextlib.redirect_stderr(timer_log):
+            try:
+                run_gh(
+                    ["api", "repos/owner/repo/releases/10"],
+                    timeout_seconds=1, capture=True, operation="exact_release_lookup",
+                )
+            except PublicationError as error:
+                if "timed out" not in str(error):
+                    fail("real subprocess timeout was misclassified")
+            else:
+                fail("real subprocess timeout did not fail closed")
+        if "outcome=timeout" not in timer_log.getvalue():
+            fail("timeout API telemetry was not reported")
+    finally:
+        subprocess.run = original_subprocess_run
 
 
 def parser() -> argparse.ArgumentParser:
