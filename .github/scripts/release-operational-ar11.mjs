@@ -948,6 +948,19 @@ function camoufoxErrors(workflow, classifier) {
       }
     }
   }
+  const publishedAcquisition = stepBlock(windows, 'Materialize official browser and verified offline fpgen model');
+  errors.push(...requireMarkers(publishedAcquisition, [
+    '$assetCandidates = @($assets | Where-Object',
+    '$assetCandidates.Count -ne 1',
+    '$assetCandidates[0].digest -notmatch',
+    '(Get-Item -LiteralPath $path).Length -ne $assetCandidates[0].size',
+    '$assetCandidates[0].digest -cne "sha256:$actual"',
+  ], 'Camoufox published-runtime candidate SHA and size verification'));
+  // PowerShell variables are case-insensitive: $matches would alias the
+  // automatic $Matches dictionary mutated by -match/-notmatch on digest.
+  if (/\$matches\s*=/i.test(publishedAcquisition)) {
+    errors.push('Camoufox published-runtime proof shadows PowerShell automatic $Matches');
+  }
   for (const [jobName, name, command] of CAMOUFOX_ACTIVE_PHYSICAL_COMMANDS) {
     errors.push(...requireActiveShellCommand(
       stepBlock(windows, name), command, `Windows physical proof step ${name}`,
@@ -1384,6 +1397,12 @@ function selfTest(files) {
     }
   };
   const windowsProof = jobBlock(files.camoufox, 'runtime-package-windows');
+  const unsafeAutomaticMatches = windowsProof.replaceAll('$assetCandidates', '$matches');
+  assertCamoufoxRejected(
+    files.camoufox.replace(windowsProof, () => unsafeAutomaticMatches),
+    'PowerShell automatic Matches shadows downloaded asset inventory',
+    'Camoufox published-runtime proof shadows PowerShell automatic $Matches',
+  );
   const protectedRunnerSelection = "runs-on: ${{ needs.scope.outputs.heavy == 'true' && 'windows-2025' || 'ubuntu-24.04' }}";
   for (const [kind, replacement] of [
     ['HEAVY wrongly runs on Ubuntu', "runs-on: ${{ needs.scope.outputs.heavy == 'true' && 'ubuntu-24.04' || 'ubuntu-24.04' }}"],
