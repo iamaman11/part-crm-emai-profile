@@ -37,25 +37,41 @@ jobs:
           node .github/scripts/release-architecture-ar11.mjs
           python scripts/accepted-source-evidence-ar11.py --self-test
 
+      - name: Reuse exact PR-compiled cloud and resolver bytes when independently verified
+        id: pr-build
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          python scripts/accepted-main-pr-reuse.py \
+            --release-component cloud --github-output "$GITHUB_OUTPUT"
+
       - name: Set up pinned Node runtime
+        if: steps.pr-build.outputs.reuse != 'true'
         uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e
         with:
           node-version: '24.19.0'
           package-manager-cache: false
 
       - name: Install exact frontend dependency graph
+        if: steps.pr-build.outputs.reuse != 'true'
         working-directory: frontend
         run: |
           npm install --global npm@11.17.0
           test "$(npm --version)" = 11.17.0
           npm ci
 
-      - name: Build immutable control-plane bits
+      - name: Compile cloud binaries on main when PR receipt cannot be verified
+        if: steps.pr-build.outputs.reuse != 'true'
         run: |
           set -euo pipefail
           cargo install worker-build --version 0.8.5 --locked
           (cd apps/control-plane-worker && worker-build --release)
           (cd frontend && npm run build)
+
+      - name: Package exact accepted-main control-plane bytes
+        run: |
+          set -euo pipefail
           python scripts/cloudflare-release.py build \
             --source-sha "$SOURCE_SHA" \
             --repository "$GITHUB_REPOSITORY" \
@@ -63,10 +79,15 @@ jobs:
             --source-event push \
             --authority accepted-main
 
-      - name: Build immutable resolver bits
+      - name: Compile resolver binary on main when PR receipt cannot be verified
+        if: steps.pr-build.outputs.reuse != 'true'
         run: |
           set -euo pipefail
           (cd apps/mailbox-secret-resolver-worker && worker-build --release)
+
+      - name: Package exact accepted-main resolver bytes
+        run: |
+          set -euo pipefail
           python scripts/mailbox-secret-resolver-release.py build \
             --source-sha "$SOURCE_SHA" \
             --repository "$GITHUB_REPOSITORY"
@@ -121,7 +142,17 @@ jobs:
           if ($env:GITHUB_REF -ne 'refs/heads/main') { throw 'Release Set build requires main' }
           if ((git rev-parse HEAD).Trim() -ne $env:SOURCE_SHA) { throw 'source SHA mismatch' }
 
+      - name: Reuse exact PR-compiled Bridge executable when independently verified
+        id: pr-build
+        shell: pwsh
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          python scripts/accepted-main-pr-reuse.py --release-component bridge --github-output "$env:GITHUB_OUTPUT"
+
       - name: Build exact Profile Bridge executable
+        if: steps.pr-build.outputs.reuse != 'true'
         run: cargo build --locked --release -p profile-bridge
 
       - name: Create deterministic self-describing Profile Bridge v2 package

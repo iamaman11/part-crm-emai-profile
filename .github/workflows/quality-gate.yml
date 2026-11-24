@@ -573,6 +573,43 @@ jobs:
           test "$UPLOADED_DIGEST" = "$EXPECTED_DIGEST"
           echo "Verified immutable release artifact ${UPLOADED_DIGEST} for ${SOURCE_SHA}."
 
+      # Build the other cloud release component while the pinned worker-build
+      # compiler is already present. Main only repackages these exact bytes.
+      - name: Build immutable Resolver Worker artifact
+        run: |
+          set -euo pipefail
+          (cd apps/mailbox-secret-resolver-worker && "$RUNNER_TEMP/worker-build-install/bin/worker-build" --release)
+          python scripts/mailbox-secret-resolver-release.py build \
+            --source-sha "$SOURCE_SHA" --repository "$GITHUB_REPOSITORY"
+
+      - name: Verify immutable Resolver archive against exact source
+        id: resolver
+        run: |
+          set -euo pipefail
+          mapfile -t archives < <(find artifacts/mailbox-secret-resolver-release -maxdepth 1 -type f -name '*.tar' -print)
+          test "${#archives[@]}" -eq 1
+          python scripts/mailbox-secret-resolver-release.py verify-archive \
+            --archive "${archives[0]}" --expected-source-sha "$SOURCE_SHA"
+          echo "archive=${archives[0]}" >> "$GITHUB_OUTPUT"
+          echo "archive_sha256=$(sha256sum "${archives[0]}" | cut -d' ' -f1)" >> "$GITHUB_OUTPUT"
+
+      - name: Upload exact immutable Resolver tar
+        id: resolver-upload
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          path: ${{ steps.resolver.outputs.archive }}
+          archive: false
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Verify uploaded Resolver artifact digest
+        env:
+          EXPECTED_DIGEST: ${{ steps.resolver.outputs.archive_sha256 }}
+          UPLOADED_DIGEST: ${{ steps.resolver-upload.outputs.artifact-digest }}
+        run: |
+          test -n "$UPLOADED_DIGEST"
+          test "$UPLOADED_DIGEST" = "$EXPECTED_DIGEST"
+
   rust-windows:
     needs: accepted-pr-proof
     if: always() && (github.event_name == 'pull_request' || needs.accepted-pr-proof.result != 'success' || needs.accepted-pr-proof.outputs.reuse != 'true')
@@ -651,11 +688,25 @@ jobs:
 
       # Source-only PR test transport; not a signed installer or approved Release Set.
       # No production enrollment, trust mutation or deployment is possible here.
+      # Raw archive:false uses the source basename `profile-bridge.exe` as its
+      # artifact identity; the accepted-main proof binds it to one PR run/HEAD.
       - name: Upload disposable exact-head Windows Bridge candidate
         if: github.event_name == 'pull_request'
+        id: bridge-upload
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
-          name: p2-disposable-bridge-${{ github.event.pull_request.head.sha }}
           path: target/release/profile-bridge.exe
+          archive: false
           if-no-files-found: error
-          retention-days: 7
+          retention-days: 30
+
+      - name: Verify uploaded Bridge artifact digest
+        if: github.event_name == 'pull_request'
+        shell: pwsh
+        env:
+          UPLOADED_DIGEST: ${{ steps.bridge-upload.outputs.artifact-digest }}
+        run: |
+          $expected = (Get-FileHash -Algorithm SHA256 target/release/profile-bridge.exe).Hash.ToLowerInvariant()
+          if (-not $env:UPLOADED_DIGEST -or $env:UPLOADED_DIGEST -ne $expected) {
+            throw 'PR Bridge raw release executable upload digest mismatch'
+          }

@@ -8,14 +8,21 @@ The accepted-main Release Set is still built and signed from exact main.
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
 import re
 import runpy
+import shutil
 import subprocess
+import sys
+import tarfile
+import tempfile
 import urllib.error
+import urllib.parse
 import urllib.request
 from collections.abc import Callable
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -61,9 +68,25 @@ CRITICAL: dict[str, dict[str, tuple[str, ...]]] = {
     },
     "quality": {
         "Rust Linux and WASM": ("Test native crates",),
+        "Cloudflare Worker Release Build": (
+            "Build release Worker artifact",
+            "Verify Worker artifact",
+            "Build release Static Assets artifact",
+            "Build immutable release package",
+            "Verify immutable release archive against exact source",
+            "Upload exact immutable release tar",
+            "Verify uploaded artifact digest",
+            "Build immutable Resolver Worker artifact",
+            "Verify immutable Resolver archive against exact source",
+            "Upload exact immutable Resolver tar",
+            "Verify uploaded Resolver artifact digest",
+        ),
         "Rust Windows And Profile Bridge Artifact": (
             "Check and test native crates",
+            "Build release Profile Bridge executable",
             "Compile actual per-user installer and prove native signature rejection",
+            "Upload disposable exact-head Windows Bridge candidate",
+            "Verify uploaded Bridge artifact digest",
         ),
     },
     "local-profile": {
@@ -207,7 +230,12 @@ def prove(main_sha: str, gate: str, api: Callable[[str], Any],
         and jobs["total_count"] <= 100,
         "incomplete PR job inventory",
     )
-    by_name = {job.get("name"): job for job in jobs["jobs"]}
+    by_name: dict[str, dict[str, Any]] = {}
+    for job in jobs["jobs"]:
+        name = job.get("name")
+        if name in CRITICAL[gate]:
+            require(name not in by_name, f"duplicate required PR job: {name}")
+            by_name[name] = job
     for name, steps in CRITICAL[gate].items():
         job = by_name.get(name, {})
         require(
@@ -221,10 +249,268 @@ def prove(main_sha: str, gate: str, api: Callable[[str], Any],
             and job.get("workflow_name") == WORKFLOW[gate],
             f"required PR job run/attempt/head mismatch: {name}",
         )
-        actual = {s.get("name"): s.get("conclusion") for s in job.get("steps", [])}
+        actual: dict[str, str] = {}
+        for step in job.get("steps", []):
+            label = step.get("name")
+            require(label not in actual, f"duplicate PR step: {name}/{label}")
+            actual[label] = step.get("conclusion")
         require(all(actual.get(step) == "success" for step in steps),
                 f"required PR test skipped/missing: {name}")
     return candidate
+
+
+RELEASE_ARTIFACTS = {
+    "cloud": re.compile(r"cloudflare-v1-sha256-[0-9a-f]{64}\.tar\Z"),
+    "resolver": re.compile(r"mailbox-secret-resolver-v1-sha256-[0-9a-f]{64}\.tar\Z"),
+    "bridge": re.compile(r"profile-bridge\.exe\Z"),
+}
+RELEASE_PRODUCERS = {
+    "cloud": "Cloudflare Worker Release Build",
+    "resolver": "Cloudflare Worker Release Build",
+    "bridge": "Rust Windows And Profile Bridge Artifact",
+}
+DIGEST = re.compile(r"sha256:([0-9a-f]{64})\Z")
+
+
+def github_time(value: str) -> datetime:
+    require(isinstance(value, str) and value.endswith("Z"), "missing UTC receipt time")
+    return datetime.fromisoformat(value.replace("Z", "+00:00"))
+
+
+def prove_release_artifacts(main_sha: str, api: Callable[[str], Any]) -> dict[str, Any]:
+    """Bind the actual PR binaries to exact tree, Quality attempt and producers.
+
+    A Quality run's artifact API does not expose run_attempt. Bound each artifact
+    to the unique successful producer *job in that attempt* by creation time.
+    """
+    candidate = prove(main_sha, "quality", api)
+    root = f"repos/{REPOSITORY}"
+    runs = api(f"{root}/actions/runs?head_sha={candidate}&event=pull_request&per_page=100")
+    quality = max((run for run in runs["workflow_runs"] if run.get("name") == WORKFLOW["quality"]),
+                  key=lambda run: run["id"])
+    # GitHub may return an empty pull_requests list even on a real PR run.
+    # Bind to the unique merged PR through SHA, branch, tree and completed time
+    # instead; never accept a post-merge rerun as pre-merge quality evidence.
+    merged_pr = api(f"{root}/commits/{main_sha}/pulls")[0]
+    require(github_time(quality.get("created_at"))
+            <= github_time(quality.get("updated_at"))
+            <= github_time(merged_pr.get("merged_at")),
+            "PR Quality attempt was not completed before merge")
+    jobs = api(f"{root}/actions/runs/{quality['id']}/jobs?per_page=100")["jobs"]
+    producers: dict[str, dict[str, Any]] = {}
+    for job in jobs:
+        if job.get("name") in RELEASE_PRODUCERS.values():
+            require(job["name"] not in producers, "duplicate release artifact producer")
+            require(job.get("run_id") == quality["id"]
+                    and job.get("run_attempt") == quality["run_attempt"]
+                    and job.get("conclusion") == "success", "producer attempt drift")
+            producers[job["name"]] = job
+    require(set(producers) == set(RELEASE_PRODUCERS.values()), "release producer missing")
+    inventory = api(f"{root}/actions/runs/{quality['id']}/artifacts?per_page=100")
+    require(isinstance(inventory.get("artifacts"), list)
+            and type(inventory.get("total_count")) is int
+            and inventory["total_count"] <= 100
+            and inventory["total_count"] == len(inventory["artifacts"]),
+            "incomplete release artifact inventory")
+    selected: dict[str, dict[str, Any]] = {}
+    for component, pattern in RELEASE_ARTIFACTS.items():
+        name_matches = [a for a in inventory["artifacts"]
+                        if isinstance(a.get("name"), str) and pattern.fullmatch(a["name"])]
+        require(len(name_matches) == 1, f"ambiguous/missing PR {component} artifact")
+        artifact = name_matches[0]
+        producer = producers[RELEASE_PRODUCERS[component]]
+        workflow = artifact.get("workflow_run") or {}
+        digest = artifact.get("digest")
+        started = github_time(producer.get("started_at"))
+        completed = github_time(producer.get("completed_at"))
+        created = github_time(artifact.get("created_at"))
+        expires = github_time(artifact.get("expires_at"))
+        require(
+            type(artifact.get("id")) is int and artifact["id"] > 0
+            and type(artifact.get("size_in_bytes")) is int and artifact["size_in_bytes"] > 0
+            and isinstance(digest, str) and DIGEST.fullmatch(digest) is not None
+            and artifact.get("expired") is False and expires > datetime.now(timezone.utc)
+            and workflow.get("id") == quality["id"]
+            and workflow.get("head_sha") == candidate
+            and workflow.get("head_branch") == quality["head_branch"]
+            and started <= created <= completed,
+            f"unbound PR {component} artifact identity/attempt/digest",
+        )
+        selected[component] = {
+            "id": artifact["id"], "name": artifact["name"],
+            "sha256": DIGEST.fullmatch(digest).group(1),
+            "size": artifact["size_in_bytes"],
+        }
+    require(len({receipt["id"] for receipt in selected.values()}) == len(selected),
+            "artifact IDs overlap")
+    return {
+        "candidate_sha": candidate,
+        "quality_run_id": quality["id"],
+        "quality_run_attempt": quality["run_attempt"],
+        "artifacts": selected,
+    }
+
+
+def verify_downloaded_raw(destination: Path, kind: str, artifact: dict[str, Any]) -> Path:
+    allowed_names = {artifact["name"]}
+    files = list(destination.iterdir())
+    require(len(files) == 1 and files[0].is_file() and not files[0].is_symlink()
+            and files[0].name in allowed_names, "downloaded artifact shape mismatch")
+    actual = files[0]
+    require(actual.stat().st_size == artifact["size"], "artifact byte count mismatch")
+    digest = hashlib.sha256()
+    with actual.open("rb") as source:
+        for chunk in iter(lambda: source.read(1024 * 1024), b""):
+            digest.update(chunk)
+    require(digest.hexdigest() == artifact["sha256"], "artifact byte digest mismatch")
+    return actual
+
+
+def signed_artifact_url(value: str) -> str:
+    """Accept only an HTTPS object-store redirect; never forward the API token."""
+    require(isinstance(value, str), "missing signed artifact URL")
+    parts = urllib.parse.urlsplit(value)
+    host = parts.hostname or ""
+    require(parts.scheme == "https" and parts.username is None
+            and parts.password is None and parts.port in (None, 443)
+            and (host.endswith(".blob.core.windows.net")
+                 or host.endswith(".githubusercontent.com")
+                 or host.endswith(".amazonaws.com")),
+            "unexpected artifact redirect origin")
+    return value
+
+
+def download_raw_artifact(artifact: dict[str, Any], destination: Path, token: str) -> None:
+    """GitHub raw artifacts are NOT ZIP: `gh run download` cannot read them.
+
+    The artifact-ID endpoint returns a short-lived, signed object-store URL.
+    The first API request carries the GitHub token; the subsequent raw byte
+    request carries no credentials. Size and digest are checked afterwards.
+    """
+    class NoRedirect(urllib.request.HTTPRedirectHandler):
+        def redirect_request(self, req, fp, code, msg, headers, newurl):
+            return None
+
+    endpoint = f"https://api.github.com/repos/{REPOSITORY}/actions/artifacts/{artifact['id']}/zip"
+    request = urllib.request.Request(endpoint, headers={
+        "Accept": "application/vnd.github+json",
+        "Authorization": f"Bearer {token}",
+        "X-GitHub-Api-Version": "2022-11-28",
+    })
+    try:
+        with urllib.request.build_opener(NoRedirect).open(request, timeout=20):
+            raise Unconfirmed("artifact API did not return a signed raw redirect")
+    except urllib.error.HTTPError as response:
+        require(response.code in (302, 303, 307),
+                f"artifact API rejected raw download: HTTP {response.code}")
+        url = signed_artifact_url(response.headers.get("Location"))
+    with urllib.request.urlopen(url, timeout=35) as payload, destination.open("wb") as output:
+        remaining = artifact["size"]
+        while True:
+            chunk = payload.read(min(1024 * 1024, remaining + 1))
+            if not chunk:
+                break
+            require(len(chunk) <= remaining, "raw artifact exceeds expected byte count")
+            output.write(chunk)
+            remaining -= len(chunk)
+        require(remaining == 0, "raw artifact download truncated")
+
+
+def prepare_release_component(main_sha: str, component: str, api: Callable[[str], Any]) -> None:
+    """Prove all PR artifacts; download this component's exact compiler outputs.
+
+    No PR review-candidate manifest or package is copied into main's release.
+    The existing main-SHA packagers must recreate and verify final provenance.
+    """
+    receipt = prove_release_artifacts(main_sha, api)
+    checkout = Path(__file__).resolve().parents[1]
+    require(subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=checkout,
+                                    text=True).strip() == main_sha, "main checkout identity drift")
+    with tempfile.TemporaryDirectory(prefix="accepted-main-pr-binaries-") as temporary:
+        scratch = Path(temporary)
+        downloaded = {}
+        requested = ("cloud", "resolver") if component == "cloud" else ("bridge",)
+        require(component in ("cloud", "bridge"), "unknown release component")
+        for kind in requested:
+            artifact = receipt["artifacts"][kind]
+            destination = scratch / kind
+            destination.mkdir()
+            download_raw_artifact(artifact, destination / artifact["name"],
+                                  os.environ["GITHUB_TOKEN"])
+            downloaded[kind] = verify_downloaded_raw(destination, kind, artifact)
+            print(f"Verified PR binary origin: main={main_sha} "
+                  f"PR_HEAD={receipt['candidate_sha']} run={receipt['quality_run_id']} "
+                  f"attempt={receipt['quality_run_attempt']} component={kind} "
+                  f"artifact_id={artifact['id']} sha256={artifact['sha256']}")
+
+        if component == "cloud":
+            sys.path.insert(0, str(checkout / "scripts"))
+            cloud = runpy.run_path(str(checkout / "scripts/cloudflare-release.py"))
+            resolver = runpy.run_path(str(checkout / "scripts/mailbox-secret-resolver-release.py"))
+            candidate = receipt["candidate_sha"]
+            # The exact checked-out main tree equals the PR tree, so using the
+            # original strict verifier with check_git=False still validates
+            # all source, migration, source-authority and immutable byte hashes.
+            cloud_manifest = cloud["verify_archive"](
+                checkout, downloaded["cloud"], expected_source_sha=candidate,
+                expected_repository=REPOSITORY, expected_authority="review-candidate",
+                check_git=False,
+            )
+            require(cloud_manifest["source"]["event"] == "pull_request",
+                    "PR cloud producer was not a review candidate")
+            resolver_manifest = resolver["verify_archive"](checkout, downloaded["resolver"], candidate)
+            require(resolver_manifest["source_commit_sha"] == candidate,
+                    "PR resolver candidate source drift")
+            extracted = scratch / "extracted"
+            extracted.mkdir()
+            # The original archive readers reject links, traversal and
+            # duplicate paths before any binary moves into the main checkout.
+            with tarfile.open(downloaded["cloud"], "r:") as tar:
+                for member in cloud["safe_archive_members"](tar):
+                    target = extracted / member.name
+                    if member.isdir():
+                        target.mkdir(parents=True, exist_ok=True)
+                    else:
+                        target.parent.mkdir(parents=True, exist_ok=True)
+                        with tar.extractfile(member) as source, target.open("wb") as output:
+                            shutil.copyfileobj(source, output)
+            resolver_extracted = resolver["safe_extract"](downloaded["resolver"], extracted)
+            cloud_root = extracted / "cloudflare-release" / cloud_manifest["release_id"]
+            require(cloud_root.is_dir() and not cloud_root.is_symlink(), "PR cloud tree missing")
+            copies = (
+                (cloud_root / "frontend", "frontend/dist"),
+                (cloud_root / "worker", "apps/control-plane-worker/build"),
+                (resolver_extracted / "worker", "apps/mailbox-secret-resolver-worker/build"),
+            )
+            for source, relative in copies:
+                target = checkout / relative
+                require(not target.exists(), f"unexpected prior compiled output: {relative}")
+            created: list[Path] = []
+            try:
+                for source, relative in copies:
+                    target = checkout / relative
+                    created.append(target)
+                    shutil.copytree(source, target, symlinks=False)
+            except Exception:
+                for target in created:
+                    shutil.rmtree(target, ignore_errors=True)
+                raise
+        else:
+            bridge = downloaded["bridge"]
+            with bridge.open("rb") as binary:
+                require(bridge.stat().st_size > 100_000 and binary.read(2) == b"MZ",
+                        "PR bridge EXE shape drift")
+            destination = checkout / "target/release/profile-bridge.exe"
+            require(not destination.exists(), "unexpected prior Bridge executable")
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            try:
+                shutil.copyfile(bridge, destination)
+            except Exception:
+                destination.unlink(missing_ok=True)
+                raise
+    print(f"Reused verified PR-built {component} bytes from Quality run "
+          f"{receipt['quality_run_id']}/attempt {receipt['quality_run_attempt']}; "
+          "accepted-main packages will be recreated under main SHA")
 
 
 def git_changed_paths(old_sha: str, new_sha: str) -> list[str]:
@@ -295,7 +581,7 @@ def fixture(gate: str) -> tuple[dict[str, Any], Callable[[str], Any]]:
     root = f"repos/{REPOSITORY}"
     paths = required_workflow_paths()
     pr = {
-        "state": "closed", "merged_at": "2026-10-31T00:00:00Z",
+        "state": "closed", "merged_at": "2026-10-31T01:00:00Z",
         "merge_commit_sha": main,
         "base": {"sha": base, "ref": "main", "repo": {"full_name": REPOSITORY}},
         "head": {"sha": head, "ref": "codex/exact-pr-proof",
@@ -307,7 +593,8 @@ def fixture(gate: str) -> tuple[dict[str, Any], Callable[[str], Any]]:
          "path": paths[name],
          "head_branch": "codex/exact-pr-proof",
          "repository": {"full_name": REPOSITORY},
-         "head_repository": {"full_name": REPOSITORY}, "run_attempt": 1}
+         "head_repository": {"full_name": REPOSITORY}, "run_attempt": 1,
+         "created_at": "2026-10-31T00:00:00Z", "updated_at": "2026-10-31T00:10:00Z"}
         for i, name in enumerate(sorted(REQUIRED))
     ]
     gate_run = next(run for run in runs if run["name"] == WORKFLOW[gate])
@@ -315,9 +602,28 @@ def fixture(gate: str) -> tuple[dict[str, Any], Callable[[str], Any]]:
         {"name": name, "status": "completed", "conclusion": "success",
          "run_id": gate_run["id"], "run_attempt": gate_run["run_attempt"],
          "head_sha": head, "workflow_name": WORKFLOW[gate],
+         "started_at": "2026-10-31T00:00:00Z", "completed_at": "2026-10-31T00:10:00Z",
          "steps": [{"name": step, "conclusion": "success"} for step in steps]}
         for name, steps in CRITICAL[gate].items()
     ]
+    artifact_inventory = []
+    if gate == "quality":
+        names = {
+            "cloud": f"cloudflare-v1-sha256-{'1'*64}.tar",
+            "resolver": f"mailbox-secret-resolver-v1-sha256-{'2'*64}.tar",
+            "bridge": "profile-bridge.exe",
+        }
+        artifact_inventory = [
+            {"id": index + 100, "name": name, "size_in_bytes": 2048,
+             "digest": f"sha256:{str(index + 1)*64}", "expired": False,
+             "created_at": "2026-10-31T00:05:00Z",
+             "expires_at": "2030-01-01T00:00:00Z",
+             "workflow_run": {
+                 "id": gate_run["id"], "head_sha": head,
+                 "head_branch": "codex/exact-pr-proof",
+             }}
+            for index, name in enumerate(names.values())
+        ]
     pages: dict[str, Any] = {
         f"{root}/commits/{main}": {
             "sha": main, "parents": [{"sha": base}], "commit": {"tree": {"sha": tree}}
@@ -330,11 +636,109 @@ def fixture(gate: str) -> tuple[dict[str, Any], Callable[[str], Any]]:
             {"total_count": len(runs), "workflow_runs": runs},
         f"{root}/actions/runs/{gate_run['id']}/jobs?per_page=100":
             {"total_count": len(jobs), "jobs": jobs},
+        f"{root}/actions/runs/{gate_run['id']}/artifacts?per_page=100":
+            {"total_count": len(artifact_inventory), "artifacts": artifact_inventory},
     }
     return pages, lambda path: pages[path]
 
 
 def self_test() -> None:
+    for unsafe in ("http://raw.blob.core.windows.net/example",
+                   "https://blob.core.windows.net.evil.example/raw",
+                   "https://evil.example/raw", "https://user:pass@host.githubusercontent.com/raw",
+                   "file:///etc/passwd", "https://api.github.com/artifacts/raw"):
+        try:
+            signed_artifact_url(unsafe)
+        except Unconfirmed:
+            pass
+        else:
+            raise AssertionError(f"untrusted signed artifact origin accepted: {unsafe}")
+    require(signed_artifact_url("https://results.blob.core.windows.net/x?signature=1")
+            == "https://results.blob.core.windows.net/x?signature=1",
+            "valid signed raw artifact origin rejected")
+    with tempfile.TemporaryDirectory(prefix="accepted-main-artifact-fixture-") as temporary:
+        base = Path(temporary)
+        target = base / "profile-bridge.exe"
+        target.write_bytes(b"MZ" + b"verified-pr-binary")
+        identity = {"name": "profile-bridge.exe", "size": target.stat().st_size,
+                    "sha256": hashlib.sha256(target.read_bytes()).hexdigest()}
+        require(verify_downloaded_raw(base, "bridge", identity) == target,
+                "verified PR Bridge binary rejected")
+        for fault in ("tamper", "wrong-size", "wrong-digest", "extra-file", "symlink"):
+            case = dict(identity)
+            if fault == "tamper":
+                target.write_bytes(b"MZ" + b"unverified-binary")
+            elif fault == "wrong-size":
+                case["size"] += 1
+            elif fault == "wrong-digest":
+                case["sha256"] = "f" * 64
+            elif fault == "extra-file":
+                (base / "other.bin").write_bytes(b"extra")
+            else:
+                target.unlink()
+                target.symlink_to(base / "other.bin")
+            try:
+                verify_downloaded_raw(base, "bridge", case)
+            except Unconfirmed:
+                pass
+            else:
+                raise AssertionError(f"unverified PR binary accepted: {fault}")
+            if target.is_symlink():
+                target.unlink()
+            (base / "other.bin").unlink(missing_ok=True)
+            target.write_bytes(b"MZ" + b"verified-pr-binary")
+    release_pages, release_read = fixture("quality")
+    valid_release = prove_release_artifacts("a" * 40, release_read)
+    require(set(valid_release["artifacts"]) == set(RELEASE_ARTIFACTS),
+            "valid PR release bytes rejected")
+    release_job_path = next(key for key in release_pages if key.endswith("/jobs?per_page=100"))
+    release_artifact_path = next(key for key in release_pages if key.endswith("/artifacts?per_page=100"))
+    for failure in (
+        "duplicate-job", "duplicate-step", "missing-artifact", "duplicate-artifact",
+        "wrong-archive-name", "wrong-artifact-head", "wrong-artifact-run", "post-merge-rerun",
+        "bad-digest", "missing-size", "expired", "stale-created", "future-created",
+    ):
+        case = json.loads(json.dumps(release_pages))
+        jobs = case[release_job_path]["jobs"]
+        inventory = case[release_artifact_path]
+        target = inventory["artifacts"][0]
+        if failure == "duplicate-job":
+            jobs.append(dict(jobs[0]))
+            case[release_job_path]["total_count"] += 1
+        elif failure == "duplicate-step":
+            jobs[0]["steps"].append(dict(jobs[0]["steps"][0]))
+        elif failure == "missing-artifact":
+            inventory["artifacts"].pop(0)
+            inventory["total_count"] -= 1
+        elif failure == "duplicate-artifact":
+            inventory["artifacts"].append(dict(target))
+            inventory["total_count"] += 1
+        elif failure == "wrong-archive-name":
+            target["name"] = "unsafe-cloud.tar"
+        elif failure == "wrong-artifact-head":
+            target["workflow_run"]["head_sha"] = "e" * 40
+        elif failure == "wrong-artifact-run":
+            target["workflow_run"]["id"] += 1
+        elif failure == "post-merge-rerun":
+            run_path = next(key for key in case if key.endswith("&event=pull_request&per_page=100"))
+            next(run for run in case[run_path]["workflow_runs"] if run["name"] == "Quality Gate")[
+                "updated_at"] = "2026-11-01T00:00:00Z"
+        elif failure == "bad-digest":
+            target["digest"] = "sha256:missing"
+        elif failure == "missing-size":
+            target["size_in_bytes"] = 0
+        elif failure == "expired":
+            target["expired"] = True
+        elif failure == "stale-created":
+            target["created_at"] = "2026-10-30T00:00:00Z"
+        elif failure == "future-created":
+            target["created_at"] = "2026-11-01T00:00:00Z"
+        try:
+            prove_release_artifacts("a" * 40, lambda path: case[path])
+        except Unconfirmed:
+            pass
+        else:
+            raise AssertionError(f"unsafe PR compiled release reuse accepted: {failure}")
     for gate in CRITICAL:
         pages, read = fixture(gate)
         require(prove("a" * 40, gate, read) == "c" * 40, "valid squash receipt rejected")
@@ -583,13 +987,16 @@ def self_test() -> None:
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--gate", choices=sorted(CRITICAL))
+    parser.add_argument("--release-component", choices=("cloud", "bridge"))
     parser.add_argument("--github-output", type=Path)
     parser.add_argument("--self-test", action="store_true")
     args = parser.parse_args()
     if args.self_test:
         self_test()
-    if args.gate is None:
-        return 0 if args.self_test else parser.error("--gate is required")
+    if args.gate is None and args.release_component is None:
+        return 0 if args.self_test else parser.error("--gate or --release-component is required")
+    if args.gate is not None and args.release_component is not None:
+        parser.error("choose only one reusable evidence route")
     reuse = False
     if os.environ.get("GITHUB_EVENT_NAME") == "push" and os.environ.get("GITHUB_REF") == "refs/heads/main":
         token = os.environ.get("GITHUB_TOKEN")
@@ -597,10 +1004,15 @@ def main() -> int:
         if token:
             try:
                 api = api_reader(token)
-                candidate = prove(main_sha, args.gate, api)
-                print(f"Reuse verified PR test evidence from exact tree {candidate}")
+                if args.release_component is None:
+                    candidate = prove(main_sha, args.gate, api)
+                    print(f"Reuse verified PR test evidence from exact tree {candidate}")
+                else:
+                    prepare_release_component(main_sha, args.release_component, api)
                 reuse = True
-            except (Unconfirmed, KeyError, ValueError, TypeError, urllib.error.URLError, OSError) as error:
+            except (Unconfirmed, KeyError, ValueError, TypeError,
+                    urllib.error.URLError, OSError, subprocess.SubprocessError,
+                    tarfile.TarError, UnicodeError) as error:
                 if args.gate == "camoufox":
                     try:
                         # The current PR may legitimately skip heavy browser tests
@@ -626,7 +1038,7 @@ def main() -> int:
                             UnicodeError) as prior_error:
                         print(f"No reusable Camoufox history ({type(prior_error).__name__}); full main test required")
                 else:
-                    print(f"No reusable evidence ({type(error).__name__}); run full main gate")
+                    print(f"No reusable evidence ({type(error).__name__}): {error}; full main execution required")
         else:
             print("No GitHub API authority; run full main gate")
     else:
