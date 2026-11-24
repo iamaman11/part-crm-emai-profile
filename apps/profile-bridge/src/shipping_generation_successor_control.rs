@@ -1849,10 +1849,10 @@ mod tests {
         UnixMillis,
     };
     use session_domain::ProfileLease;
-    use std::collections::VecDeque;
-    use std::sync::atomic::{AtomicU64, Ordering};
     #[cfg(windows)]
     use sha2::{Digest, Sha256};
+    use std::collections::VecDeque;
+    use std::sync::atomic::{AtomicU64, Ordering};
 
     static FIXTURE_SEQUENCE: AtomicU64 = AtomicU64::new(1);
 
@@ -2224,9 +2224,7 @@ mod tests {
     }
 
     #[cfg(windows)]
-    fn stream_file_sha256(
-        path: &std::path::Path,
-    ) -> Result<[u8; 32], Box<dyn std::error::Error>> {
+    fn stream_file_sha256(path: &std::path::Path) -> Result<[u8; 32], Box<dyn std::error::Error>> {
         use std::io::Read;
 
         let mut file = std::fs::File::open(path)?;

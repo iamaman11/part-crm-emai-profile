@@ -186,15 +186,6 @@ mod windows {
     };
     #[cfg(test)]
     use crate::shipping_control_plane::{MachineHttpMethod, MachineHttpPort, MachineHttpResponse};
-    #[cfg(test)]
-    use bridge_domain::BridgePortError;
-    #[cfg(test)]
-    use control_plane_contract::profile_generation_api::{
-        BRIDGE_PROFILE_GENERATION_COMMIT_PATH_TEMPLATE,
-        BRIDGE_PROFILE_GENERATION_OBSERVE_PATH_TEMPLATE,
-        BridgeGenerationSuccessorCommitOutcomeDto, BridgeGenerationSuccessorCommitResponse,
-        BridgeGenerationSuccessorObserveResponse,
-    };
     use crate::shipping_generation_successor_control::{
         observe_current_successor_profile_version, publish_closed_streamed_successor,
     };
@@ -209,9 +200,17 @@ mod windows {
     use crate::windows_generation_get::WindowsSignedGenerationObjectGet;
     use crate::windows_generation_put::WindowsSignedGenerationObjectPut;
     use application_ports::{ProfileCoordinatorPort, ProfileCoordinatorRuntimePort};
-    use profile_platform_primitives::UnixMillis;
+    #[cfg(test)]
+    use bridge_domain::BridgePortError;
+    #[cfg(test)]
+    use control_plane_contract::profile_generation_api::{
+        BRIDGE_PROFILE_GENERATION_COMMIT_PATH_TEMPLATE,
+        BRIDGE_PROFILE_GENERATION_OBSERVE_PATH_TEMPLATE, BridgeGenerationSuccessorCommitOutcomeDto,
+        BridgeGenerationSuccessorCommitResponse, BridgeGenerationSuccessorObserveResponse,
+    };
     #[cfg(test)]
     use profile_platform_primitives::CorrelationId;
+    use profile_platform_primitives::UnixMillis;
     use session_domain::ProfileLease;
     use std::env;
     use std::path::PathBuf;
@@ -256,9 +255,10 @@ mod windows {
 
     #[cfg(test)]
     impl TestLostCommitAckArm {
-        fn arm(root: &MaterializationRoot, intent: &crate::generation_initialization::InitialProfileOpen)
-            -> Result<Self, &'static str>
-        {
+        fn arm(
+            root: &MaterializationRoot,
+            intent: &crate::generation_initialization::InitialProfileOpen,
+        ) -> Result<Self, &'static str> {
             TEST_LOST_COMMIT_ACK.with(|slot| {
                 let mut scope = slot.borrow_mut();
                 if scope.is_some() {
@@ -277,9 +277,8 @@ mod windows {
         }
 
         fn proved(&self) -> bool {
-            TEST_LOST_COMMIT_ACK.with(|slot| {
-                slot.borrow().as_ref().is_some_and(|scope| scope.proved)
-            })
+            TEST_LOST_COMMIT_ACK
+                .with(|slot| slot.borrow().as_ref().is_some_and(|scope| scope.proved))
         }
     }
 
@@ -335,9 +334,7 @@ mod windows {
     }
 
     #[cfg(test)]
-    impl<T: MachineHttpPort<Error = BridgePortError>> MachineHttpPort
-        for TestOnlyDropCommitAck<'_, T>
-    {
+    impl<T: MachineHttpPort<Error = BridgePortError>> MachineHttpPort for TestOnlyDropCommitAck<'_, T> {
         type Error = BridgePortError;
 
         fn request(
@@ -452,11 +449,8 @@ mod windows {
                 upload,
             );
         }
-        let mut masked = TestOnlyDropCommitAck::new(
-            transport,
-            &intent.tenant_id,
-            &intent.profile_id,
-        );
+        let mut masked =
+            TestOnlyDropCommitAck::new(transport, &intent.tenant_id, &intent.profile_id);
         let result = publish_closed_streamed_successor(
             &intent.tenant_id,
             &intent.profile_id,
@@ -470,9 +464,7 @@ mod windows {
         let proved = masked.proved();
         TEST_LOST_COMMIT_ACK.with(|slot| {
             if let Some(scope) = slot.borrow_mut().as_mut() {
-                scope.proved = proved
-                    && scope.commit_attempts == 1
-                    && scope.observe_attempts == 1;
+                scope.proved = proved && scope.commit_attempts == 1 && scope.observe_attempts == 1;
             }
         });
         if !proved {
@@ -526,17 +518,19 @@ mod windows {
         let correlation = CorrelationId::parse("corr_k1_ack_loss")?;
         let mut port = Port {
             requests: Vec::new(),
-            commit_response: MachineHttpResponse::new(
-                200,
-                br#"{"outcome":"ACTIVATED"}"#.to_vec(),
-            ),
+            commit_response: MachineHttpResponse::new(200, br#"{"outcome":"ACTIVATED"}"#.to_vec()),
             observe_active_exact: true,
         };
         let mut scoped = TestOnlyDropCommitAck::new(&mut port, &tenant, &profile);
         let commit = scoped.commit_path.clone();
         let observe = scoped.observe_path.clone();
         assert_eq!(
-            scoped.request(MachineHttpMethod::PostJson, &commit, &correlation, Some(b"{}")),
+            scoped.request(
+                MachineHttpMethod::PostJson,
+                &commit,
+                &correlation,
+                Some(b"{}")
+            ),
             Err(BridgePortError::Unavailable),
             "valid real 2xx response must be suppressed after the request"
         );
@@ -549,7 +543,12 @@ mod windows {
         assert_eq!(observed.body(), br#"{"activeExact":true}"#);
         assert!(scoped.proved());
         assert_eq!(
-            scoped.request(MachineHttpMethod::PostJson, &commit, &correlation, Some(b"{}")),
+            scoped.request(
+                MachineHttpMethod::PostJson,
+                &commit,
+                &correlation,
+                Some(b"{}")
+            ),
             Err(BridgePortError::InvalidResponse),
             "second Commit must never reach the signed machine port"
         );
@@ -566,7 +565,12 @@ mod windows {
             };
             let mut scoped = TestOnlyDropCommitAck::new(&mut port, &tenant, &profile);
             assert_eq!(
-                scoped.request(MachineHttpMethod::PostJson, &commit, &correlation, Some(b"{}")),
+                scoped.request(
+                    MachineHttpMethod::PostJson,
+                    &commit,
+                    &correlation,
+                    Some(b"{}")
+                ),
                 Ok(rejected),
                 "only a newly ACTIVATED successful Commit may be masked"
             );
@@ -576,23 +580,34 @@ mod windows {
         }
         let mut false_observation = Port {
             requests: Vec::new(),
-            commit_response: MachineHttpResponse::new(
-                200,
-                br#"{"outcome":"ACTIVATED"}"#.to_vec(),
-            ),
+            commit_response: MachineHttpResponse::new(200, br#"{"outcome":"ACTIVATED"}"#.to_vec()),
             observe_active_exact: false,
         };
         let mut scoped = TestOnlyDropCommitAck::new(&mut false_observation, &tenant, &profile);
         assert_eq!(
-            scoped.request(MachineHttpMethod::PostJson, &commit, &correlation, Some(b"{}")),
+            scoped.request(
+                MachineHttpMethod::PostJson,
+                &commit,
+                &correlation,
+                Some(b"{}")
+            ),
             Err(BridgePortError::Unavailable)
         );
         assert_eq!(
-            scoped.request(MachineHttpMethod::PostJson, &observe, &correlation, Some(b"{}"))?
+            scoped
+                .request(
+                    MachineHttpMethod::PostJson,
+                    &observe,
+                    &correlation,
+                    Some(b"{}")
+                )?
                 .body(),
             br#"{"activeExact":false}"#
         );
-        assert!(!scoped.proved(), "only a positive exact observation proves the masked ACK");
+        assert!(
+            !scoped.proved(),
+            "only a positive exact observation proves the masked ACK"
+        );
         Ok(())
     }
 
@@ -649,19 +664,27 @@ mod windows {
         let correlation = CorrelationId::parse("corr_k1_scope_retry")?;
         let armed = TestLostCommitAckArm::arm(&root, &intent)?;
         let mut port = Port::default();
-        let mut first = TestOnlyDropCommitAck::new(
-            &mut port,
-            &intent.tenant_id,
-            &intent.profile_id,
-        );
+        let mut first =
+            TestOnlyDropCommitAck::new(&mut port, &intent.tenant_id, &intent.profile_id);
         let commit = first.commit_path.clone();
         let observe = first.observe_path.clone();
         assert_eq!(
-            first.request(MachineHttpMethod::PostJson, &commit, &correlation, Some(b"{}")),
+            first.request(
+                MachineHttpMethod::PostJson,
+                &commit,
+                &correlation,
+                Some(b"{}")
+            ),
             Err(BridgePortError::Unavailable)
         );
         assert_eq!(
-            first.request(MachineHttpMethod::PostJson, &observe, &correlation, Some(b"{}"))?
+            first
+                .request(
+                    MachineHttpMethod::PostJson,
+                    &observe,
+                    &correlation,
+                    Some(b"{}")
+                )?
                 .status(),
             200
         );
@@ -669,29 +692,34 @@ mod windows {
         drop(first);
         // Simulate the publish helper recording the first verified success.
         TEST_LOST_COMMIT_ACK.with(|slot| {
-            slot.borrow_mut()
-                .as_mut()
-                .expect("armed K1 scope")
-                .proved = true;
+            slot.borrow_mut().as_mut().expect("armed K1 scope").proved = true;
         });
         assert!(armed.proved());
         let requests_before_retry = port.requests.clone();
         assert_eq!(requests_before_retry, vec![commit.clone(), observe]);
 
-        let mut second = TestOnlyDropCommitAck::new(
-            &mut port,
-            &intent.tenant_id,
-            &intent.profile_id,
-        );
+        let mut second =
+            TestOnlyDropCommitAck::new(&mut port, &intent.tenant_id, &intent.profile_id);
         assert_eq!(
-            second.request(MachineHttpMethod::PostJson, &commit, &correlation, Some(b"{}")),
+            second.request(
+                MachineHttpMethod::PostJson,
+                &commit,
+                &correlation,
+                Some(b"{}")
+            ),
             Err(BridgePortError::InvalidResponse),
             "a second wrapper may not transmit a second signed Commit"
         );
         assert!(!second.proved());
         drop(second);
-        assert_eq!(port.requests, requests_before_retry, "no second network call");
-        assert!(!armed.proved(), "duplicate attempt must invalidate K1 proof");
+        assert_eq!(
+            port.requests, requests_before_retry,
+            "no second network call"
+        );
+        assert!(
+            !armed.proved(),
+            "duplicate attempt must invalidate K1 proof"
+        );
         Ok(())
     }
 
@@ -2651,8 +2679,7 @@ mod windows {
         use super::{
             ClosedSyncAdmission, MaterializationRoot, READY_SYNC_SNAPSHOT_STARTS,
             TestLostCommitAckArm, WindowsDeviceApplicationBinding,
-            pending_descriptor_matches_current,
-            run_closed_sync_with_admission,
+            pending_descriptor_matches_current, run_closed_sync_with_admission,
         };
         use crate::generation_initialization::{InitialProfileOpen, InitialProfileStatus};
         use crate::generation_reopen::GenerationReopenControlPort;
@@ -2866,9 +2893,7 @@ mod windows {
         /// the old sparse fixture, but DO NOT prove SQLite structural validity.
         /// That and cold Restore/browser usability require separate physical
         /// verification; this test only proves preservation of source bytes.
-        fn physical_wal_sha256(
-            path: &Path,
-        ) -> Result<[u8; 32], Box<dyn std::error::Error>> {
+        fn physical_wal_sha256(path: &Path) -> Result<[u8; 32], Box<dyn std::error::Error>> {
             let mut file = std::fs::File::open(path)?;
             if file.metadata()?.len() < 65 * 1024 * 1024 {
                 return Err("K1 requires a real Firefox WAL >=65 MiB".into());
@@ -2877,9 +2902,7 @@ mod windows {
             let mut buffer = [0_u8; 65_536];
             let mut first_magic = [0_u8; 4];
             file.read_exact(&mut first_magic)?;
-            if first_magic != [0x37, 0x7f, 0x06, 0x82]
-                && first_magic != [0x37, 0x7f, 0x06, 0x83]
-            {
+            if first_magic != [0x37, 0x7f, 0x06, 0x82] && first_magic != [0x37, 0x7f, 0x06, 0x83] {
                 return Err("K1 fixture is not a SQLite write-ahead log".into());
             }
             use std::io::{Seek, SeekFrom};
@@ -2945,8 +2968,7 @@ mod windows {
                 .clone();
             if before.profile_version() != version
                 || before.pending_sync().is_some()
-                || std::fs::read(before.path().join(".local-unsynced"))?
-                    != b"local-unsynced-v2"
+                || std::fs::read(before.path().join(".local-unsynced"))? != b"local-unsynced-v2"
                 || !crate::browser_execution::browser_writer_locks_absent(&before)?
             {
                 return Err("K1 fixture is not a closed dirty CURRENT".into());
@@ -2974,7 +2996,10 @@ mod windows {
                 .ok_or("another Sync already owns the K1 fixture")?;
             let ack = TestLostCommitAckArm::arm(&root, &intent)?;
             run_closed_sync_with_admission(&intent, &binding, &root, "https://staging.alegria.by")?;
-            assert!(ack.proved(), "real signed 2xx Commit ACK was not masked exactly once");
+            assert!(
+                ack.proved(),
+                "real signed 2xx Commit ACK was not masked exactly once"
+            );
             drop(ack);
             let current = read_only.download_capability(binding.tenant_id(), &profile_id)?;
             let after = root.open_profile_current(binding.tenant_id(), &profile_id)?;
@@ -2983,7 +3008,9 @@ mod windows {
             assert_eq!(after.base_generation_id(), Some(current.generation_id()));
             assert_eq!(
                 after.profile_version(),
-                version.checked_add(1).ok_or("K1 profile version overflow")?
+                version
+                    .checked_add(1)
+                    .ok_or("K1 profile version overflow")?
             );
             assert_eq!(
                 after.path(),
@@ -3001,9 +3028,20 @@ mod windows {
             run_closed_sync_with_admission(&intent, &binding, &root, "https://staging.alegria.by")?;
             let still_current = read_only.download_capability(binding.tenant_id(), &profile_id)?;
             let still_local = root.open_profile_current(binding.tenant_id(), &profile_id)?;
-            assert_eq!(still_current.generation_id(), current.generation_id(), "no D1 N+2");
-            assert_eq!(still_local.generation_id(), current.generation_id(), "no local N+2");
-            assert_eq!(still_local.base_generation_id(), Some(current.generation_id()));
+            assert_eq!(
+                still_current.generation_id(),
+                current.generation_id(),
+                "no D1 N+2"
+            );
+            assert_eq!(
+                still_local.generation_id(),
+                current.generation_id(),
+                "no local N+2"
+            );
+            assert_eq!(
+                still_local.base_generation_id(),
+                Some(current.generation_id())
+            );
             assert_eq!(still_local.profile_version(), after.profile_version());
             assert_eq!(still_local.path(), old_path.as_path());
             assert!(still_local.pending_sync().is_none());
