@@ -311,7 +311,11 @@ jobs:
             --repository "$GITHUB_REPOSITORY" \
             --release-set-id "$current_id" \
             --destination "$asset_root"
-          bash scripts/release-set-assets-ar11.sh materialize known-good-v2-v3 "$current_id" "$asset_root" "$release_root"
+          # The target was independently SHA/size verified by opsctl above.
+          # Share only byte-identical immutable runtime input; known-good's own
+          # source SHA and Release Set still receive independent opsctl verification.
+          bash scripts/release-set-assets-ar11.sh materialize known-good-v2-v3 \
+            "$current_id" "$asset_root" "$release_root" "$TARGET_RELEASE_ROOT"
           cp "$release_root/release-set.json" "$policy_dir/release-set.json"
           gh api "repos/$GITHUB_REPOSITORY/branches/main" > "$RUNNER_TEMP/kg-main.json"
           gh api "repos/$GITHUB_REPOSITORY/compare/$known_good_source...$SOURCE_SHA" > "$RUNNER_TEMP/kg-compare.json"
