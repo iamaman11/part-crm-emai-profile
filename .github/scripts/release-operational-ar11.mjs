@@ -578,7 +578,9 @@ function camoufoxClassifierErrors(classifier) {
   errors.push(...requireMarkers(exact, [
     '.github/workflows/release-set-promotion.yml',
     '.github/scripts/release-operational-ar11.mjs',
-    'architecture/release-architecture-ar11.json',
+    'architecture/ar11-behavioural-certification.json',
+    'scripts/download-release-set-ar11.py',
+    'scripts/promotion-operational-outcome-ar11.py',
     '.github/workflows/v2-phase-a-d1-command-router.yml',
   ], 'Camoufox exact proven-unrelated set'));
   errors.push(...requireMarkers(prefixes, [
@@ -601,6 +603,7 @@ function camoufoxClassifierErrors(classifier) {
     'frontend/',
     'Cargo.lock',
     'rust-toolchain.toml',
+    'architecture/release-architecture-ar11.json',
     'scripts/classify-camoufox-runtime-scope.py',
     '.github/workflows/camoufox-runtime-gate.yml',
   ], 'Camoufox proven-unrelated classifier sets'));
@@ -608,6 +611,7 @@ function camoufoxClassifierErrors(classifier) {
     'runtime/camouhost/launcher.py',
     'apps/profile-bridge/src/main.rs',
     'Cargo.lock',
+    'architecture/release-architecture-ar11.json',
     'scripts/classify-camoufox-runtime-scope.py',
     '.github/workflows/camoufox-runtime-gate.yml',
     'scripts/test-browser-mail-execution-d1.py',

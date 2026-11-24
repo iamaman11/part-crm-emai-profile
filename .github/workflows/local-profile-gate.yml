@@ -43,10 +43,13 @@ jobs:
 
   local-profile-linux:
     needs: accepted-pr-proof
-    if: needs.accepted-pr-proof.outputs.reuse != 'true'
+    if: always() && (github.event_name == 'pull_request' || needs.accepted-pr-proof.result != 'success' || needs.accepted-pr-proof.outputs.reuse != 'true')
     name: Local Profile Linux
     runs-on: ubuntu-latest
     steps:
+      - name: Require successful accepted PR proof routing
+        run: test "${{ needs.accepted-pr-proof.result }}" = success
+
       - name: Checkout
         uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a
         with:
@@ -91,10 +94,15 @@ jobs:
 
   local-profile-windows:
     needs: accepted-pr-proof
-    if: needs.accepted-pr-proof.outputs.reuse != 'true'
+    if: always() && (github.event_name == 'pull_request' || needs.accepted-pr-proof.result != 'success' || needs.accepted-pr-proof.outputs.reuse != 'true')
     name: Local Profile Windows
     runs-on: windows-latest
     steps:
+      - name: Require successful accepted PR proof routing
+        shell: pwsh
+        run: |
+          if ('${{ needs.accepted-pr-proof.result }}' -ne 'success') { throw 'Accepted PR proof routing did not succeed' }
+
       - name: Checkout
         uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a
         with:

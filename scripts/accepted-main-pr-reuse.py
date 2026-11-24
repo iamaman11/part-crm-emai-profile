@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Reuse exact PR test evidence after a verified, tree-identical squash merge.
+"""Reuse exact PR test evidence after a verified, tree-identical PR merge.
 
 This is a read-only GitHub API attestation, not a cache. A missing/ambiguous
 receipt returns reuse=false and runs the ordinary heavy tests on main.
@@ -91,6 +91,22 @@ def require(ok: bool, reason: str) -> None:
         raise Unconfirmed(reason)
 
 
+def required_workflow_paths() -> dict[str, str]:
+    """Bind run names to their unique tracked workflow paths in this exact tree."""
+    directory = Path(__file__).resolve().parent.parent / ".github/workflows"
+    paths: dict[str, str] = {}
+    for source in (*directory.glob("*.yml"), *directory.glob("*.yaml")):
+        names = [line.partition(": ")[2].strip().strip("'\"")
+                 for line in source.read_text(encoding="utf-8").splitlines()
+                 if line.startswith("name: ")]
+        for name in names:
+            if name in REQUIRED:
+                require(name not in paths, f"duplicate required workflow name: {name}")
+                paths[name] = f".github/workflows/{source.name}"
+    require(set(paths) == REQUIRED, "required workflow path missing from exact source")
+    return paths
+
+
 def api_reader(token: str) -> Callable[[str], Any]:
     def read(path: str) -> Any:
         request = urllib.request.Request(
@@ -114,7 +130,12 @@ def prove(main_sha: str, gate: str, api: Callable[[str], Any],
     accepted = api(f"{root}/commits/{main_sha}")
     require(accepted.get("sha") == main_sha, "main SHA drift")
     parents = accepted.get("parents", [])
-    require(len(parents) == 1, "not an exact single-parent squash merge")
+    require(isinstance(parents, list) and len(parents) in (1, 2),
+            "not an exact squash or two-parent PR merge")
+    require(all(isinstance(parent, dict) and
+                isinstance(parent.get("sha"), str) and
+                SHA.fullmatch(parent["sha"]) for parent in parents),
+            "invalid accepted-main parent SHA")
     base = parents[0]["sha"]
     tree = accepted["commit"]["tree"]["sha"]
     associated = api(f"{root}/commits/{main_sha}/pulls")
@@ -122,6 +143,11 @@ def prove(main_sha: str, gate: str, api: Callable[[str], Any],
     pr = associated[0]
     candidate = pr.get("head", {}).get("sha")
     require(bool(SHA.fullmatch(candidate or "")), "invalid PR head")
+    head_branch = pr.get("head", {}).get("ref")
+    require(isinstance(head_branch, str) and bool(head_branch), "invalid PR head branch")
+    if len(parents) == 2:
+        require(parents[1]["sha"] == candidate,
+                "merge second parent differs from tested PR head")
     require(
         pr.get("state") == "closed"
         and bool(pr.get("merged_at"))
@@ -150,10 +176,22 @@ def prove(main_sha: str, gate: str, api: Callable[[str], Any],
         if name in REQUIRED and (name not in latest or run["id"] > latest[name]["id"]):
             latest[name] = run
     require(set(latest) == REQUIRED, "required PR workflow evidence missing")
+    paths = required_workflow_paths()
     for name, run in latest.items():
         require(
             run.get("status") == "completed" and run.get("conclusion") == "success",
             f"PR workflow not successful: {name}",
+        )
+        require(
+            run.get("path") == paths[name]
+            and run.get("head_branch") == head_branch
+            and isinstance(run.get("repository"), dict)
+            and run["repository"].get("full_name") == REPOSITORY
+            and isinstance(run.get("head_repository"), dict)
+            and run["head_repository"].get("full_name") == REPOSITORY
+            and type(run.get("run_attempt")) is int
+            and run["run_attempt"] >= 1,
+            f"PR workflow path/repository/attempt mismatch: {name}",
         )
     # A successful, exact-tree PR with its heavy steps skipped is only a
     # candidate for a separately proven, unchanged prior-runtime receipt.
@@ -175,6 +213,13 @@ def prove(main_sha: str, gate: str, api: Callable[[str], Any],
         require(
             job.get("status") == "completed" and job.get("conclusion") == "success",
             f"required PR job did not complete: {name}",
+        )
+        require(
+            job.get("run_id") == source_run["id"]
+            and job.get("run_attempt") == source_run["run_attempt"]
+            and job.get("head_sha") == candidate
+            and job.get("workflow_name") == WORKFLOW[gate],
+            f"required PR job run/attempt/head mismatch: {name}",
         )
         actual = {s.get("name"): s.get("conclusion") for s in job.get("steps", [])}
         require(all(actual.get(step) == "success" for step in steps),
@@ -225,7 +270,7 @@ def prove_unchanged_prior_camoufox(
 
     The current accepted main PR has already passed exact-tree/18-workflow
     validation. Past proof comes from the existing GitHub PR run and exact-tree
-    squash receipt; no new registry, signing, cache, or source-of-truth.
+    PR-merge receipt; no new registry, signing, cache, or source-of-truth.
     """
     require(bool(SHA.fullmatch(base_sha)), "invalid current base")
     chain = ancestors(base_sha)
@@ -248,20 +293,28 @@ def prove_unchanged_prior_camoufox(
 def fixture(gate: str) -> tuple[dict[str, Any], Callable[[str], Any]]:
     main, base, head, tree = ("a" * 40, "b" * 40, "c" * 40, "d" * 40)
     root = f"repos/{REPOSITORY}"
+    paths = required_workflow_paths()
     pr = {
         "state": "closed", "merged_at": "2026-10-31T00:00:00Z",
         "merge_commit_sha": main,
         "base": {"sha": base, "ref": "main", "repo": {"full_name": REPOSITORY}},
-        "head": {"sha": head, "repo": {"full_name": REPOSITORY}},
+        "head": {"sha": head, "ref": "codex/exact-pr-proof",
+                 "repo": {"full_name": REPOSITORY}},
     }
     runs = [
         {"id": i + 1, "name": name, "head_sha": head, "event": "pull_request",
-         "status": "completed", "conclusion": "success"}
+         "status": "completed", "conclusion": "success",
+         "path": paths[name],
+         "head_branch": "codex/exact-pr-proof",
+         "repository": {"full_name": REPOSITORY},
+         "head_repository": {"full_name": REPOSITORY}, "run_attempt": 1}
         for i, name in enumerate(sorted(REQUIRED))
     ]
     gate_run = next(run for run in runs if run["name"] == WORKFLOW[gate])
     jobs = [
         {"name": name, "status": "completed", "conclusion": "success",
+         "run_id": gate_run["id"], "run_attempt": gate_run["run_attempt"],
+         "head_sha": head, "workflow_name": WORKFLOW[gate],
          "steps": [{"name": step, "conclusion": "success"} for step in steps]}
         for name, steps in CRITICAL[gate].items()
     ]
@@ -285,8 +338,42 @@ def self_test() -> None:
     for gate in CRITICAL:
         pages, read = fixture(gate)
         require(prove("a" * 40, gate, read) == "c" * 40, "valid squash receipt rejected")
+        prefix = f"repos/{REPOSITORY}"
+        mainpath = f"{prefix}/commits/{'a'*40}"
+        merge_pages = json.loads(json.dumps(pages))
+        merge_pages[mainpath]["parents"].append({"sha": "c" * 40})
+        require(prove("a" * 40, gate, lambda path: merge_pages[path]) == "c" * 40,
+                "valid exact two-parent merge receipt rejected")
+        for mutation in ("wrong-head-parent", "swapped-parents", "third-parent",
+                         "merge-tree", "merge-failed-run", "merge-skipped-test"):
+            clone = json.loads(json.dumps(merge_pages))
+            if mutation == "wrong-head-parent":
+                clone[mainpath]["parents"][1]["sha"] = "e" * 40
+            elif mutation == "swapped-parents":
+                clone[mainpath]["parents"].reverse()
+            elif mutation == "third-parent":
+                clone[mainpath]["parents"].append({"sha": "e" * 40})
+            elif mutation == "merge-tree":
+                clone[f"{prefix}/commits/{'c'*40}"]["commit"]["tree"]["sha"] = "e" * 40
+            elif mutation == "merge-failed-run":
+                runpath = f"{prefix}/actions/runs?head_sha={'c'*40}&event=pull_request&per_page=100"
+                target = next(x for x in clone[runpath]["workflow_runs"]
+                              if x["name"] == WORKFLOW[gate])
+                target["conclusion"] = "failure"
+            else:
+                jobpath = next(k for k in clone if k.endswith("/jobs?per_page=100"))
+                clone[jobpath]["jobs"][0]["steps"][0]["conclusion"] = "skipped"
+            try:
+                prove("a" * 40, gate, lambda path: clone[path])
+            except Unconfirmed:
+                pass
+            else:
+                raise AssertionError(f"{gate}: accepted unsafe two-parent receipt: {mutation}")
         for mutation in ("tree", "parent", "failed-run", "pending-run", "missing-job",
-                         "skipped-test", "foreign-repo", "wrong-merge", "incomplete-list"):
+                         "skipped-test", "foreign-repo", "wrong-merge", "incomplete-list",
+                         "foreign-run-path", "foreign-run-branch", "foreign-run-repo", "foreign-head-repo",
+                         "missing-run-attempt", "stale-job-attempt", "foreign-job-run",
+                         "foreign-job-head", "foreign-job-workflow"):
             clone = json.loads(json.dumps(pages))
             prefix = f"repos/{REPOSITORY}"
             if mutation == "tree":
@@ -300,10 +387,37 @@ def self_test() -> None:
             elif mutation == "incomplete-list":
                 runpath = f"{prefix}/actions/runs?head_sha={'c'*40}&event=pull_request&per_page=100"
                 clone[runpath]["total_count"] = 101
+            elif mutation in ("foreign-run-path", "foreign-run-branch", "foreign-run-repo", "foreign-head-repo",
+                              "missing-run-attempt"):
+                runpath = f"{prefix}/actions/runs?head_sha={'c'*40}&event=pull_request&per_page=100"
+                target = next(x for x in clone[runpath]["workflow_runs"]
+                              if x["name"] == WORKFLOW[gate])
+                if mutation == "foreign-run-path":
+                    target["path"] = ".github/workflows/foreign-duplicate-name.yml"
+                elif mutation == "foreign-run-branch":
+                    target["head_branch"] = "foreign/branch"
+                elif mutation == "foreign-run-repo":
+                    target["repository"]["full_name"] = "other/repo"
+                elif mutation == "foreign-head-repo":
+                    target["head_repository"]["full_name"] = "other/repo"
+                else:
+                    target.pop("run_attempt")
             elif mutation in ("failed-run", "pending-run"):
                 runpath = f"{prefix}/actions/runs?head_sha={'c'*40}&event=pull_request&per_page=100"
                 target = next(x for x in clone[runpath]["workflow_runs"] if x["name"] == WORKFLOW[gate])
                 target["conclusion"] = "failure" if mutation == "failed-run" else None
+            elif mutation in ("foreign-job-run", "foreign-job-head", "foreign-job-workflow",
+                              "stale-job-attempt"):
+                jobpath = next(k for k in clone if k.endswith("/jobs?per_page=100"))
+                job = clone[jobpath]["jobs"][0]
+                if mutation == "foreign-job-run":
+                    job["run_id"] += 1
+                elif mutation == "foreign-job-head":
+                    job["head_sha"] = "e" * 40
+                elif mutation == "foreign-job-workflow":
+                    job["workflow_name"] = "Other Workflow"
+                else:
+                    job["run_attempt"] += 1
             else:
                 suffix = next(k for k in clone if k.endswith("/jobs?per_page=100"))
                 if mutation == "missing-job":
@@ -363,6 +477,9 @@ def self_test() -> None:
         run for run in prior_runs["workflow_runs"]
         if run["name"] == WORKFLOW["camoufox"]
     )
+    for job in old_jobs["jobs"]:
+        job["run_id"] = prior_camoufox["id"]
+        job["head_sha"] = prior_head
     prior_jobs = f"{root}/actions/runs/{prior_camoufox['id']}/jobs?per_page=100"
     now[f"{root}/commits/{base_sha}"] = {
         "sha": base_sha,
@@ -376,12 +493,15 @@ def self_test() -> None:
             "sha": "e" * 40, "ref": "main",
             "repo": {"full_name": REPOSITORY},
         },
-        "head": {"sha": prior_head, "repo": {"full_name": REPOSITORY}},
+        "head": {"sha": prior_head, "ref": "codex/prior-proof",
+                 "repo": {"full_name": REPOSITORY}},
     }]
     now[f"{root}/commits/{prior_head}"] = {
         "sha": prior_head, "commit": {"tree": {"sha": "8" * 40}},
     }
     now[prior_run] = prior_runs
+    for run in prior_runs["workflow_runs"]:
+        run["head_branch"] = "codex/prior-proof"
     now[prior_jobs] = old_jobs
     for job in now[current_jobs]["jobs"]:
         for step in job["steps"]:

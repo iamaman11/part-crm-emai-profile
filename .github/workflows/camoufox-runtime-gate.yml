@@ -12,8 +12,9 @@ permissions:
   pull-requests: read
 
 concurrency:
-  # A stale queued proof for an earlier PR head must not block exact-head validation.
-  group: camoufox-runtime-gate-${{ github.workflow }}-${{ github.ref }}-${{ github.event.pull_request.head.sha || github.sha }}
+  # New revisions cancel stale work of this PR. Distinct accepted-main SHAs
+  # retain independent proof identities and cannot cancel each other.
+  group: camoufox-runtime-gate-${{ github.event_name }}-${{ github.event.pull_request.number || github.sha }}
   cancel-in-progress: true
 
 jobs:
@@ -47,7 +48,7 @@ jobs:
           if [ "$GITHUB_EVENT_NAME" = push ]; then
             test "$GITHUB_REF" = refs/heads/main
             # The full real Windows/Camoufox proof was already run on the PR
-            # only when GitHub independently proves an exact-tree squash merge,
+            # only when GitHub independently proves an exact-tree PR merge,
             # 18 successful PR workflows and completed real browser test steps.
             # Missing evidence always falls back to the complete main replay.
             python3.12 scripts/accepted-main-pr-reuse.py --self-test
@@ -64,7 +65,9 @@ jobs:
           test "$GITHUB_EVENT_NAME" = pull_request
           [[ "$BASE_SHA" =~ ^[0-9a-f]{40}$ ]]
           git cat-file -e "$BASE_SHA^{commit}"
-          git diff --name-only "$BASE_SHA...$HEAD_SHA" > "$RUNNER_TEMP/changed-paths.txt"
+          # --no-renames retains both sides of moves (including runtime -> docs);
+          # -z preserves exact names, including whitespace and newlines.
+          git diff --no-renames --name-only -z "$BASE_SHA...$HEAD_SHA" > "$RUNNER_TEMP/changed-paths.txt"
           test -s "$RUNNER_TEMP/changed-paths.txt"
           python3.12 -m py_compile scripts/classify-camoufox-runtime-scope.py
           python3.12 scripts/classify-camoufox-runtime-scope.py --self-test
