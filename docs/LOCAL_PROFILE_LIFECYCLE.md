@@ -243,10 +243,12 @@ requirements remain enforced. Strict fingerprint comparison remains available fo
 
 ## 6. Native Browser Lifecycle Observation And Coordinator Heartbeat
 
-`ProfileBridgeOperator` is the local runtime orchestration owner. The shipping composition creates the
-concrete adapters and calls it; `main.rs` does not duplicate its lifecycle algorithm.
+The existing Windows `shipping_composition` is the shipping lifecycle, closed-Sync and recovery
+composition root. It constructs concrete adapters and calls the bounded local/Sync owners;
+`main.rs` only dispatches commands and does not duplicate their algorithms. The historical
+`ProfileBridgeOperator` is compiled only for tests/synthetic fixtures and is not a shipping caller.
 
-Shipping composition preserves the typed operator failure through the CLI. Safe user diagnostic
+Shipping composition preserves typed runtime failures through the CLI. Safe user diagnostic
 codes identify the failed phase; closed owner outcomes preserve cleanup/recovery details without raw
 claims, profile data or local paths. Close-observation failure never fabricates a controlled close.
 
