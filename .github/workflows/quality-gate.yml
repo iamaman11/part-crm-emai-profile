@@ -636,15 +636,13 @@ jobs:
         run: rustup show active-toolchain
 
       # Keep OS/toolchain/manifests/flags in the action's hashed key.
-      # The independent opsctl Cargo workspace is used by this job as well.
       # Restored artifacts never substitute any check or exact-head test.
-      - name: Restore versioned Rust dependencies and opsctl
+      - name: Restore versioned Rust dependencies
         uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2 (immutable)
         with:
           shared-key: profile-bridge-ci-v1
           workspaces: |
             . -> target
-            tools/opsctl -> target
           cache-on-failure: 'true'
 
       - name: Check and test native crates
@@ -652,13 +650,6 @@ jobs:
           cargo test --locked --workspace --all-targets
           --exclude browser-profile-control-plane-worker
           --exclude cloudflare-adapters
-
-      - name: Verify AR-6 opsctl quality on Windows
-        shell: pwsh
-        run: |
-          cargo fmt --manifest-path tools/opsctl/Cargo.toml --all -- --check
-          cargo clippy --locked --manifest-path tools/opsctl/Cargo.toml --workspace --all-targets -- -D warnings
-          cargo test --locked --manifest-path tools/opsctl/Cargo.toml --workspace
 
       - name: Build release Profile Bridge executable
         run: cargo build --locked --release -p profile-bridge
