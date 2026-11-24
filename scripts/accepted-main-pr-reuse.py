@@ -8,7 +8,9 @@ The accepted-main Release Set is still built and signed from exact main.
 from __future__ import annotations
 
 import argparse
+import contextlib
 import hashlib
+import io
 import json
 import os
 import re
@@ -22,6 +24,7 @@ import urllib.error
 import urllib.parse
 import urllib.request
 import zipfile
+import zlib
 from collections.abc import Callable, Iterable
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -1420,6 +1423,58 @@ def verify_d1_full_artifact(item: dict[str, Any], token: str) -> None:
     validate_d1_fault_report(report)
 
 
+def prove_accepted_d1_full(main_sha: str, api: Callable[[str], Any], token: str,
+                           *, as_of: datetime | None = None) -> tuple[str, dict[str, Any]]:
+    """Reuse one pre-merge FULL PR D1 witness, including the original ZIP bytes.
+
+    All 18 PR workflows and both real D1 jobs/critical steps must have run.
+    A rerun or uploaded artifact after merge is not evidence for the accepted
+    transaction, even if its eventual GitHub conclusion is green.
+    """
+    require(bool(token), "D1 FULL receipt requires read-only GitHub authority")
+    accepted = api(f"repos/{REPOSITORY}/commits/{main_sha}")
+    require(isinstance(accepted.get("parents"), list) and len(accepted["parents"]) == 1,
+            "D1 main reuse requires the protected single-parent squash merge")
+    source_run: dict[str, Any] = {}
+    candidate = prove(main_sha, "d1", api, proven_run=source_run)
+    merged = api(f"repos/{REPOSITORY}/commits/{main_sha}/pulls")
+    require(isinstance(merged, list) and len(merged) == 1,
+            "D1 accepted PR identity ambiguous")
+    merged_at = github_time(merged[0].get("merged_at"))
+    started = github_time(source_run.get("created_at"))
+    completed = github_time(source_run.get("updated_at"))
+    require(started <= completed <= merged_at,
+            "D1 FULL workflow did not complete before protected merge")
+    job_inventory = api(f"repos/{REPOSITORY}/actions/runs/{source_run['id']}/jobs?per_page=100")
+    require(isinstance(job_inventory.get("jobs"), list)
+            and type(job_inventory.get("total_count")) is int
+            and job_inventory["total_count"] == len(job_inventory["jobs"])
+            and job_inventory["total_count"] <= 100,
+            "D1 FULL producer job inventory incomplete")
+    producer_start: datetime | None = None
+    producer_end: datetime | None = None
+    for name in CRITICAL["d1"]:
+        matches = [job for job in job_inventory["jobs"] if job.get("name") == name]
+        require(len(matches) == 1, f"D1 FULL producer missing or ambiguous: {name}")
+        job = matches[0]
+        job_started = github_time(job.get("started_at"))
+        job_completed = github_time(job.get("completed_at"))
+        require(job.get("run_id") == source_run["id"]
+                and job.get("run_attempt") == source_run["run_attempt"]
+                and job.get("head_sha") == candidate
+                and started <= job_started <= job_completed <= completed,
+                f"D1 FULL {name} did not execute in accepted pre-merge attempt")
+        if name == "Native opsctl and pinned Wrangler D1 proof":
+            producer_start, producer_end = job_started, job_completed
+    receipt = select_d1_full_artifact(source_run, candidate, api, as_of=as_of)
+    created = github_time(receipt.get("created_at"))
+    require(producer_start is not None and producer_end is not None
+            and producer_start <= created <= producer_end <= completed <= merged_at,
+            "D1 FULL ZIP appeared outside its accepted pre-merge Linux producer")
+    verify_d1_full_artifact(receipt, token)
+    return candidate, receipt
+
+
 def prove_open_d1_light_pr(api: Callable[[str], Any], token: str) -> str:
     """Frontend-only PR may inherit only a truly executed prior FULL D1 report.
 
@@ -1610,7 +1665,7 @@ def self_test() -> None:
     full_artifact = {
         "id": 42, "name": f"d1-fault-recovery-{d1_run['id']}-1",
         "size_in_bytes": 512, "digest": "sha256:" + "a" * 64,
-        "expired": False, "created_at": "2026-11-24T00:00:00Z",
+        "expired": False, "created_at": "2026-10-31T00:05:00Z",
         "expires_at": "2026-12-24T00:00:00Z",
         "workflow_run": {"id": d1_run["id"], "head_sha": d1_candidate,
                          "head_branch": d1_run["head_branch"]},
@@ -1655,6 +1710,7 @@ def self_test() -> None:
         path = Path(temporary) / "report.zip"
         with zipfile.ZipFile(path, "w", compression=zipfile.ZIP_DEFLATED) as output:
             output.writestr("fault-recovery-report.json", json.dumps(valid_d1_report))
+        original_zip_bytes = path.read_bytes()
         physical = dict(full_artifact)
         physical["size_in_bytes"] = path.stat().st_size
         physical["digest"] = "sha256:" + hashlib.sha256(path.read_bytes()).hexdigest()
@@ -1662,6 +1718,78 @@ def self_test() -> None:
         try:
             globals()["download_raw_artifact"] = lambda _artifact, target, _token: shutil.copyfile(path, target)
             verify_d1_full_artifact(physical, "offline-self-test-token")
+            # The accepted-main bypass is valid only for the COMPOSED exact
+            # proof: squash merge, current FULL Linux+Windows, pre-merge Linux
+            # producer ZIP and its original SHA-256/20 real local scenarios.
+            d1_main_pages = json.loads(json.dumps(d1_pages))
+            d1_main_pages[artifacts_key]["artifacts"] = [dict(physical)]
+            candidate, receipt = prove_accepted_d1_full(
+                "a" * 40, lambda key: d1_main_pages[key],
+                "offline-self-test-token", as_of=fixture_now,
+            )
+            require(candidate == d1_candidate and receipt["id"] == physical["id"],
+                    "accepted-main D1 FULL ZIP custody rejected valid pre-merge proof")
+            runs_key = next(key for key in d1_main_pages
+                            if "/actions/runs?head_sha=" in key)
+            for fault in (
+                "non-squash", "light-pr", "missing-windows", "post-merge-run",
+                "post-merge-linux", "post-merge-windows", "zip-after-linux",
+                "post-merge-zip", "missing-zip", "wrong-zip-digest",
+            ):
+                case = json.loads(json.dumps(d1_main_pages))
+                jobs = case[d1_jobs_key]["jobs"]
+                artifact = case[artifacts_key]["artifacts"][0]
+                if fault == "non-squash":
+                    case[f"repos/{REPOSITORY}/commits/{'a' * 40}"]["parents"].append(
+                        {"sha": d1_candidate})
+                elif fault == "light-pr":
+                    next(step for job in jobs for step in job["steps"]
+                         if step["name"] == "Execute reusable D1 fault and recovery harness")[
+                             "conclusion"] = "skipped"
+                elif fault == "missing-windows":
+                    jobs[:] = [job for job in jobs if "Windows" not in job["name"]]
+                    case[d1_jobs_key]["total_count"] = len(jobs)
+                elif fault == "post-merge-run":
+                    next(run for run in case[runs_key]["workflow_runs"]
+                         if run["name"] == WORKFLOW["d1"])["updated_at"] = "2026-10-31T02:00:00Z"
+                elif fault in ("post-merge-linux", "post-merge-windows"):
+                    next(job for job in jobs if ("Windows" in job["name"])
+                         == (fault == "post-merge-windows"))["completed_at"] = "2026-10-31T02:00:00Z"
+                elif fault == "zip-after-linux":
+                    artifact["created_at"] = "2026-10-31T00:11:00Z"
+                elif fault == "post-merge-zip":
+                    artifact["created_at"] = "2026-11-01T00:00:00Z"
+                elif fault == "missing-zip":
+                    case[artifacts_key]["artifacts"].clear()
+                    case[artifacts_key]["total_count"] = 0
+                else:
+                    artifact["digest"] = "sha256:" + "f" * 64
+                try:
+                    prove_accepted_d1_full(
+                        "a" * 40, lambda key: case[key],
+                        "offline-self-test-token", as_of=fixture_now,
+                    )
+                except (Unconfirmed, KeyError):
+                    pass
+                else:
+                    raise AssertionError(f"unsafe accepted-main D1 bypass: {fault}")
+            try:
+                prove_accepted_d1_full("a" * 40, lambda key: d1_main_pages[key], "",
+                                       as_of=fixture_now)
+            except Unconfirmed:
+                pass
+            else:
+                raise AssertionError("D1 main bypass accepted absent API authority")
+            try:
+                prove_accepted_d1_full(
+                    "a" * 40,
+                    lambda _key: (_ for _ in ()).throw(urllib.error.URLError("offline")),
+                    "offline-self-test-token", as_of=fixture_now,
+                )
+            except urllib.error.URLError:
+                pass  # The public --gate caller must emit reuse=false and FULL.
+            else:
+                raise AssertionError("D1 main accepted unavailable GitHub API")
             for fault in ("wrong-sha", "bad-zip", "unsafe-report"):
                 case = dict(physical)
                 if fault == "wrong-sha":
@@ -1683,8 +1811,81 @@ def self_test() -> None:
                     pass
                 else:
                     raise AssertionError(f"unsafe downloaded D1 report accepted: {fault}")
+            corrupt = json.loads(json.dumps(d1_main_pages))
+            damaged = corrupt[artifacts_key]["artifacts"][0]
+            damaged["size_in_bytes"] = path.stat().st_size
+            damaged["digest"] = "sha256:" + hashlib.sha256(path.read_bytes()).hexdigest()
+            try:
+                prove_accepted_d1_full(
+                    "a" * 40, lambda key: corrupt[key],
+                    "offline-self-test-token", as_of=fixture_now,
+                )
+            except Unconfirmed:
+                pass
+            else:
+                raise AssertionError("accepted-main D1 bypass admitted unsafe ZIP report")
+            path.write_bytes(original_zip_bytes)
+            # Exercise the actual --gate CLI decision, not just its attestor.
+            original_args = sys.argv
+            original_reader = globals()["api_reader"]
+            env_keys = ("GITHUB_EVENT_NAME", "GITHUB_REF", "GITHUB_SHA", "GITHUB_TOKEN")
+            original_environment = {key: os.environ.get(key) for key in env_keys}
+            try:
+                os.environ.update({"GITHUB_EVENT_NAME": "push",
+                                   "GITHUB_REF": "refs/heads/main",
+                                   "GITHUB_SHA": "a" * 40,
+                                   "GITHUB_TOKEN": "offline-self-test-token"})
+                output_path = Path(temporary) / "github-output.txt"
+                sys.argv = [str(Path(__file__)), "--gate", "d1",
+                            "--github-output", str(output_path)]
+                for mode, expected in (("valid", "true"), ("missing-token", "false"),
+                                       ("api-unavailable", "false"),
+                                       ("corrupt-zip", "false")):
+                    output_path.unlink(missing_ok=True)
+                    active_pages = d1_main_pages
+                    if mode == "missing-token":
+                        os.environ.pop("GITHUB_TOKEN", None)
+                    else:
+                        os.environ["GITHUB_TOKEN"] = "offline-self-test-token"
+                    if mode == "corrupt-zip":
+                        path.write_bytes(b"not-a-real-ZIP" * 100)
+                        active_pages = json.loads(json.dumps(d1_main_pages))
+                        item = active_pages[artifacts_key]["artifacts"][0]
+                        item["size_in_bytes"] = path.stat().st_size
+                        item["digest"] = "sha256:" + hashlib.sha256(path.read_bytes()).hexdigest()
+                    if mode == "api-unavailable":
+                        globals()["api_reader"] = lambda _token: (
+                            lambda _key: (_ for _ in ()).throw(urllib.error.URLError("offline")))
+                    else:
+                        globals()["api_reader"] = lambda _token: (
+                            lambda key: active_pages[key])
+                    with contextlib.redirect_stdout(io.StringIO()):
+                        status = main()
+                    require(status == 0 and output_path.read_text(encoding="utf-8")
+                            == f"reuse={expected}\n",
+                            f"D1 main gate did not fail FULL safely for {mode}")
+            finally:
+                sys.argv = original_args
+                globals()["api_reader"] = original_reader
+                for key, value in original_environment.items():
+                    if value is None:
+                        os.environ.pop(key, None)
+                    else:
+                        os.environ[key] = value
         finally:
             globals()["download_raw_artifact"] = prior_download
+
+        report_path = Path(temporary) / "local-D1-report.json"
+        report_path.write_text(json.dumps(valid_d1_report), encoding="utf-8")
+        cli = [sys.executable, str(Path(__file__).resolve()),
+               "--verify-d1-report", str(report_path)]
+        require(subprocess.run(cli, capture_output=True, text=True, check=False).returncode == 0,
+                "physical PR D1 report CLI rejected exact 20 local scenarios")
+        unsafe_report = dict(valid_d1_report)
+        unsafe_report["remote_provider_credentials_present"] = True
+        report_path.write_text(json.dumps(unsafe_report), encoding="utf-8")
+        require(subprocess.run(cli, capture_output=True, text=True, check=False).returncode != 0,
+                "physical PR D1 report CLI accepted remote/provider escape")
 
     for unsafe in ("http://raw.blob.core.windows.net/example",
                    "https://blob.core.windows.net.evil.example/raw",
@@ -2786,6 +2987,7 @@ def main() -> int:
     parser.add_argument("--pr-native-proof", action="store_true")
     parser.add_argument("--pr-quality-rust-linux-proof", action="store_true")
     parser.add_argument("--pr-d1-proof", action="store_true")
+    parser.add_argument("--verify-d1-report", type=Path)
     parser.add_argument("--pr-camoufox-byte-proof", action="store_true")
     parser.add_argument("--pr-native-certify", action="store_true")
     parser.add_argument("--pr-native-bridge", type=Path)
@@ -2799,6 +3001,7 @@ def main() -> int:
     routes = sum((args.gate is not None, args.release_component is not None,
                   args.pr_camoufox_byte_proof,
                   args.pr_native_proof, args.pr_d1_proof,
+                  args.verify_d1_report is not None,
                   args.pr_quality_rust_linux_proof, args.pr_native_certify,
                   args.pr_native_bridge is not None,
                   args.native_runner_receipt is not None))
@@ -2806,6 +3009,14 @@ def main() -> int:
         return 0 if args.self_test else parser.error("one evidence route is required")
     if routes != 1:
         parser.error("choose exactly one evidence route")
+    if args.verify_d1_report is not None:
+        path = args.verify_d1_report
+        require(path.is_file() and not path.is_symlink()
+                and 100 <= path.stat().st_size <= 512 * 1024,
+                "local D1 report file absent, linked or oversized")
+        validate_d1_fault_report(json.loads(path.read_text(encoding="utf-8")))
+        print("D1_FULL_LOCAL_REPORT_VALIDATED=PASS;scenarios=20;provider_mutation=false")
+        return 0
     if args.native_runner_receipt is not None:
         if args.receipt_output is None:
             parser.error("--native-runner-receipt requires --receipt-output")
@@ -2927,7 +3138,12 @@ def main() -> int:
             try:
                 api = api_reader(token)
                 if args.release_component is None:
-                    if args.gate in NATIVE_REUSED_CRITICAL:
+                    if args.gate == "d1":
+                        candidate, receipt = prove_accepted_d1_full(main_sha, api, token)
+                        print(f"Reuse pre-merge FULL D1 Linux+Windows and SHA-verified "
+                              f"20-scenario PR ZIP from exact tree {candidate};"
+                              f"artifact_id={receipt['id']}")
+                    elif args.gate in NATIVE_REUSED_CRITICAL:
                         candidate, prior = prove_accepted_native_reuse(main_sha, args.gate, api)
                         if prior is None:
                             print(f"Reuse verified current PR FULL native proof from exact tree {candidate}")
@@ -2952,7 +3168,8 @@ def main() -> int:
                 reuse = True
             except (Unconfirmed, KeyError, ValueError, TypeError,
                     urllib.error.URLError, OSError, subprocess.SubprocessError,
-                    tarfile.TarError, UnicodeError) as error:
+                    tarfile.TarError, UnicodeError, zipfile.BadZipFile,
+                    zipfile.LargeZipFile, zlib.error, EOFError) as error:
                 if args.gate == "camoufox":
                     try:
                         # The current PR may legitimately skip heavy browser tests

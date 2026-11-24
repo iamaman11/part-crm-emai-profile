@@ -16,9 +16,36 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  accepted-pr-proof:
+    name: Prove exact accepted FULL D1 PR evidence
+    if: github.event_name == 'push'
+    runs-on: ubuntu-latest
+    outputs:
+      reuse: ${{ steps.proof.outcome == 'success' && steps.proof.outputs.reuse == 'true' }}
+    steps:
+      - name: Checkout exact source
+        uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+
+      - name: Verify exact source checkout
+        env:
+          EXPECTED_SOURCE_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: python -c "import os, subprocess; actual = subprocess.check_output(['git', 'rev-parse', 'HEAD'], text=True).strip(); expected = os.environ['EXPECTED_SOURCE_SHA']; assert actual == expected, f'expected {expected}, got {actual}'"
+
+      - name: Prove pre-merge FULL D1 Linux and Windows and exact report ZIP
+        id: proof
+        continue-on-error: true
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: python scripts/accepted-main-pr-reuse.py --gate d1 --github-output "$GITHUB_OUTPUT"
+
   linux:
     name: Native opsctl and pinned Wrangler D1 proof
     runs-on: ubuntu-latest
+    needs: accepted-pr-proof
+    if: always() && (github.event_name == 'pull_request' || needs.accepted-pr-proof.result != 'success' || needs.accepted-pr-proof.outputs.reuse != 'true')
     steps:
       - name: Checkout exact source
         uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a
@@ -110,44 +137,8 @@ jobs:
             --root . \
             --wrangler-version 4.94.0 \
             --report artifacts/d1-evolution/fault-recovery-report.json
-          python - <<'PY'
-          import json
-          from pathlib import Path
-
-          report = json.loads(Path('artifacts/d1-evolution/fault-recovery-report.json').read_text(encoding='utf-8'))
-          required = {
-              'ledger_noncanonical',
-              'supported_ahead_recovery_window',
-              'expand_old_new_runtime_rollout',
-              'contract_rejection_admission',
-              'contract_exact_successor',
-              'transaction_observation_plan_target_drift',
-              'authorization_freshness_and_scope_drift',
-              'executor_checkout_identity_drift',
-              'stale_or_unknown_target_fence',
-              'runner_interruption_requires_recovery',
-              'canonical_prefix_matrix_catalog',
-              'canonical_prefix_matrix_resolver',
-              'clean_bootstrap_and_replay_catalog',
-              'clean_bootstrap_and_replay_resolver',
-              'existing_catalog_like_reparse',
-              'current_empty_baseline',
-              'future_migration_append_catalog',
-              'future_migration_append_resolver',
-              'partial_prefix_failure',
-              'repair_and_safe_continuation',
-          }
-          observed = {item['scenario_id'] for item in report['scenarios']}
-          assert report['schema_version'] == 1, report
-          assert report['status'] == 'PASS', report
-          assert report['mode'] == 'LOCAL_TEST_ONLY', report
-          assert report['provider_mutation'] is False, report
-          assert report['production_mutation'] is False, report
-          assert report['remote_provider_credentials_present'] is False, report
-          assert report['scenario_count'] == len(report['scenarios']), report
-          assert required <= observed, sorted(required - observed)
-          assert all(item['status'] == 'PASS' for item in report['scenarios']), report
-          PY
+          python scripts/accepted-main-pr-reuse.py --verify-d1-report \
+            artifacts/d1-evolution/fault-recovery-report.json
 
       - name: Upload D1 fault and recovery evidence
         if: steps.d1_light.outputs.d1_light != 'true'
@@ -161,6 +152,8 @@ jobs:
   windows-cli:
     name: Native opsctl D1 CLI portability on Windows
     runs-on: windows-latest
+    needs: accepted-pr-proof
+    if: always() && (github.event_name == 'pull_request' || needs.accepted-pr-proof.result != 'success' || needs.accepted-pr-proof.outputs.reuse != 'true')
     steps:
       - name: Checkout exact source
         uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a

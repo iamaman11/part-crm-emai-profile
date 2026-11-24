@@ -42,7 +42,7 @@ That suffix does not apply to CAP transaction selection or create a second sourc
 ## No duplicate heavyweight CI for tree-identical accepted main
 
 Run all applicable heavy checks on the exact PR candidate **before merging**.
-After a guarded single-parent squash merge, the Camoufox, Quality and Local Profile
+After a guarded single-parent squash merge, the Camoufox, Quality, Local Profile and D1
 workflows may reuse those checks only if `scripts/accepted-main-pr-reuse.py`
 independently verifies all of the following from the GitHub API:
 
@@ -51,6 +51,12 @@ independently verifies all of the following from the GitHub API:
 - the accepted commit and tested PR HEAD have the exact same Git tree SHA;
 - all 18 permanent required PR workflows completed successfully on that
   candidate, and the named expensive tests actually ran and succeeded.
+
+For D1, this also requires the exact pre-merge FULL Linux and Windows jobs,
+the original GitHub report ZIP verified byte-for-byte against its SHA-256,
+and exactly 20 typed, unique, passing `LOCAL_TEST_ONLY` recovery scenarios
+with no provider, Production or remote-credential mutation. A LIGHT PR,
+post-merge rerun, missing or stale ZIP, or unavailable proof runs FULL D1.
 
 If any proof is missing, stale, skipped, ambiguous or unavailable, the
 **normal full main tests run**, including direct pushes and non-squash merges.
