@@ -665,7 +665,7 @@ function camoufoxErrors(workflow, classifier) {
     "if: needs.scope.outputs.heavy == 'true'",
     'Require exact runtime package',
     'Download exact official runtime artifact',
-    'Run Windows Bridge library tests and production archive reader',
+    'Run production shipping archive reader',
   ], 'Windows production archive-reader context'));
   errors.push(...requireMarkers(windows, [
     // The browser Open proof and shipping-reader proof independently consume

@@ -279,8 +279,8 @@ fn parse_profile_bridge_zip(
         if data_end > central_offset {
             return Err(WindowsDeliveryArchiveError::InvalidArchive);
         }
-        let identity = hash_and_crc_region(file, data_offset, u64::from(uncompressed_size))?;
-        if identity.crc32 != expected_crc32 {
+        let identity = hash_region(file, data_offset, u64::from(uncompressed_size), true)?;
+        if identity.crc32 != Some(expected_crc32) {
             return Err(WindowsDeliveryArchiveError::InvalidArchive);
         }
 
@@ -415,7 +415,9 @@ fn parse_runtime_pax_tar(
                 if relative_path.is_empty() {
                     return Err(WindowsDeliveryArchiveError::InvalidArchive);
                 }
-                let identity = hash_and_crc_region(file, data_offset, header_size)?;
+                // TAR has no per-file CRC contract: hash the exact payload
+                // without running ZIP's bitwise CRC loop on runtime bytes.
+                let identity = hash_region(file, data_offset, header_size, false)?;
                 parsed.push(ParsedArchiveEntry {
                     relative_path,
                     kind: DeliveryArchiveEntryKind::RegularFile,
@@ -640,19 +642,20 @@ fn ensure_zero_tail(
 
 struct RegionIdentity {
     sha256: String,
-    crc32: u32,
+    crc32: Option<u32>,
 }
 
-fn hash_and_crc_region(
+fn hash_region(
     file: &mut File,
     offset: u64,
     size: u64,
+    check_crc32: bool,
 ) -> Result<RegionIdentity, WindowsDeliveryArchiveError> {
     file.seek(SeekFrom::Start(offset))
         .map_err(|_| WindowsDeliveryArchiveError::Io)?;
     let mut remaining = size;
     let mut sha256 = Sha256::new();
-    let mut crc32 = 0xffff_ffff_u32;
+    let mut crc32 = check_crc32.then_some(0xffff_ffff_u32);
     let mut buffer = [0_u8; 64 * 1024];
     while remaining > 0 {
         let read_len = usize::try_from(remaining.min(buffer.len() as u64))
@@ -660,11 +663,13 @@ fn hash_and_crc_region(
         file.read_exact(&mut buffer[..read_len])
             .map_err(|_| WindowsDeliveryArchiveError::Io)?;
         sha256.update(&buffer[..read_len]);
-        for byte in &buffer[..read_len] {
-            crc32 ^= u32::from(*byte);
-            for _ in 0..8 {
-                let mask = (crc32 & 1).wrapping_neg();
-                crc32 = (crc32 >> 1) ^ (0xedb8_8320 & mask);
+        if let Some(crc) = &mut crc32 {
+            for byte in &buffer[..read_len] {
+                *crc ^= u32::from(*byte);
+                for _ in 0..8 {
+                    let mask = (*crc & 1).wrapping_neg();
+                    *crc = (*crc >> 1) ^ (0xedb8_8320 & mask);
+                }
             }
         }
         remaining -=
@@ -672,7 +677,7 @@ fn hash_and_crc_region(
     }
     Ok(RegionIdentity {
         sha256: encode_lower_hex(sha256.finalize().as_slice()),
-        crc32: !crc32,
+        crc32: crc32.map(|crc| !crc),
     })
 }
 
@@ -1087,6 +1092,24 @@ mod tests {
         bridge_bytes[8] = 8;
         fs::write(&bridge, bridge_bytes)?;
         let mut reader = WindowsDeliveryArchiveReader::new();
+        assert_eq!(
+            reader.entries(DeliveryComponentKind::ProfileBridge, &bridge),
+            Err(WindowsDeliveryArchiveError::InvalidArchive)
+        );
+
+        // An otherwise canonical ZIP with tampered payload bytes must still
+        // fail the CRC32 check; TAR's unused CRC may not weaken ZIP admission.
+        write_stored_zip(
+            &bridge,
+            &[ZipFixture {
+                name: "profile-bridge.exe",
+                content: b"bridge",
+                mode: 0o100755,
+            }],
+        )?;
+        let mut bridge_bytes = fs::read(&bridge)?;
+        bridge_bytes[30 + "profile-bridge.exe".len()] ^= 1;
+        fs::write(&bridge, bridge_bytes)?;
         assert_eq!(
             reader.entries(DeliveryComponentKind::ProfileBridge, &bridge),
             Err(WindowsDeliveryArchiveError::InvalidArchive)
