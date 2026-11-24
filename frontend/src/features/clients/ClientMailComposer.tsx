@@ -190,6 +190,7 @@ export function ClientMailComposer({
   const canRetryReceipt = receipt?.state === 'RETRYABLE' && attempt !== null;
   const canRetryTransport = send.isError && attempt !== null;
   const lockedAttempt =
+    canRetryTransport ||
     receipt?.state === 'PENDING' ||
     receipt?.state === 'DISPATCHING' ||
     receipt?.state === 'SENT' ||

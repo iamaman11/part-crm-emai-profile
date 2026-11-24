@@ -172,6 +172,35 @@ describe('ClientMailComposer', () => {
     expect(secondCall?.[3]).toBe(firstCall?.[3]);
   });
 
+  it('does not allow a fresh send after an uncertain transport failure', async () => {
+    mockedSendClientMail
+      .mockRejectedValueOnce(new Error('Network response lost after dispatch'))
+      .mockResolvedValueOnce(receipt('SENT'));
+    const user = userEvent.setup();
+    renderComposer('NEW');
+
+    await user.type(screen.getByLabelText('To'), 'client@example.test');
+    await user.type(screen.getByLabelText('Message'), 'Possibly delivered');
+    await user.click(screen.getByRole('button', { name: 'Send' }));
+
+    const retry = await screen.findByRole('button', { name: 'Retry same protected attempt' });
+    expect(mockedSendClientMail).toHaveBeenCalledTimes(1);
+    expect((screen.getByRole('button', { name: 'Send' }) as HTMLButtonElement).disabled).toBe(true);
+    expect((screen.getByLabelText('From') as HTMLSelectElement).disabled).toBe(true);
+    expect((screen.getByLabelText('To') as HTMLInputElement).disabled).toBe(true);
+    expect((screen.getByLabelText('Message') as HTMLTextAreaElement).disabled).toBe(true);
+    await user.click(screen.getByRole('button', { name: 'Send' }));
+    expect(mockedSendClientMail).toHaveBeenCalledTimes(1);
+
+    const firstCall = mockedSendClientMail.mock.calls[0];
+    await user.click(retry);
+    await waitFor(() => expect(mockedSendClientMail).toHaveBeenCalledTimes(2));
+    const secondCall = mockedSendClientMail.mock.calls[1];
+    expect(secondCall?.[2]).toEqual(firstCall?.[2]);
+    expect(secondCall?.[3]).toBe(firstCall?.[3]);
+    expect(await screen.findByText('Sent successfully.')).toBeTruthy();
+  });
+
   it.each(['PENDING', 'DISPATCHING'] as const)(
     '%s locks the current attempt instead of exposing a duplicate send',
     async (state) => {
