@@ -43,27 +43,20 @@ REQUIRED = frozenset({
 # successful workflow with all expensive jobs skipped by a PR scope filter.
 CRITICAL: dict[str, dict[str, tuple[str, ...]]] = {
     "camoufox": {
-        # The unprotected producer materializes/proves/packages exact runtime
-        # bytes; the protected Windows consumer independently downloads them
-        # and physically runs BOTH archive-reader and native Open tests in one
-        # Cargo invocation. Every listed step must actually finish successfully
-        # on the exact PR head/attempt before accepted-main may reuse proof.
+        # One Windows job materializes, proves, packages, clean-extracts and
+        # physically exercises exactly the same runtime bytes without a second
+        # runner or artifact transport. Every listed step must actually finish
+        # on the exact PR head/attempt before accepted-main can reuse proof.
         "Rust Bridge contracts (browser-independent)": (
             "Run existing Rust Bridge tests",
         ),
-        "Build and verify official Windows Camoufox runtime": (
+        "Profile Bridge Windows regression": (
             "Checkout exact candidate",
             "Verify exact source checkout",
             "Validate existing runtime owners",
             "Materialize official browser and verified offline fpgen model",
             "Prove official Firefox native restored tabs and POST safety on exact runtime",
             "Package exact compressed Release Set runtime input",
-            "Upload exact-head official runtime for downstream Windows proofs",
-        ),
-        "Profile Bridge Windows regression": (
-            "Checkout exact candidate",
-            "Verify exact source checkout",
-            "Download exact official runtime artifact",
             "Extract and verify exact official runtime",
             "Run physical shipping reader and native Bridge Open on exact packaged runtime",
         ),
