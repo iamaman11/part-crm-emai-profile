@@ -656,7 +656,11 @@ impl From<crate::native_transport::HttpFailure> for WindowsReleaseAssetFetcherEr
             HttpFailure::Redirect => Self::InsecureRedirect,
             HttpFailure::Size => Self::Size,
             HttpFailure::Disk => Self::Disk,
-            HttpFailure::Network => Self::Process,
+            HttpFailure::ConnectionReset
+            | HttpFailure::ConnectionAborted
+            | HttpFailure::BrokenPipe
+            | HttpFailure::UnexpectedEof
+            | HttpFailure::Network => Self::Process,
         }
     }
 }
@@ -899,6 +903,10 @@ mod tests {
             (HttpFailure::Redirect, "INSECURE_REDIRECT"),
             (HttpFailure::Size, "SIZE"),
             (HttpFailure::Disk, "DISK"),
+            (HttpFailure::ConnectionReset, "NETWORK_OR_PROCESS"),
+            (HttpFailure::ConnectionAborted, "NETWORK_OR_PROCESS"),
+            (HttpFailure::BrokenPipe, "NETWORK_OR_PROCESS"),
+            (HttpFailure::UnexpectedEof, "NETWORK_OR_PROCESS"),
             (HttpFailure::Network, "NETWORK_OR_PROCESS"),
         ] {
             assert_eq!(
