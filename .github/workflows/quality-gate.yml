@@ -43,10 +43,13 @@ jobs:
 
   rust-linux:
     needs: accepted-pr-proof
-    if: needs.accepted-pr-proof.outputs.reuse != 'true'
+    if: always() && (github.event_name == 'pull_request' || needs.accepted-pr-proof.result != 'success' || needs.accepted-pr-proof.outputs.reuse != 'true')
     name: Rust Linux and WASM
     runs-on: ubuntu-latest
     steps:
+      - name: Require successful accepted PR proof routing
+        run: test "${{ needs.accepted-pr-proof.result }}" = success
+
       - name: Checkout
         uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a
         with:
@@ -381,10 +384,13 @@ jobs:
 
   d1-catalog:
     needs: accepted-pr-proof
-    if: needs.accepted-pr-proof.outputs.reuse != 'true'
+    if: always() && (github.event_name == 'pull_request' || needs.accepted-pr-proof.result != 'success' || needs.accepted-pr-proof.outputs.reuse != 'true')
     name: D1 Catalog Migrations
     runs-on: ubuntu-latest
     steps:
+      - name: Require successful accepted PR proof routing
+        run: test "${{ needs.accepted-pr-proof.result }}" = success
+
       - name: Checkout
         uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a
         with:
@@ -432,12 +438,15 @@ jobs:
 
   cloudflare-worker:
     needs: accepted-pr-proof
-    if: needs.accepted-pr-proof.outputs.reuse != 'true'
+    if: always() && (github.event_name == 'pull_request' || needs.accepted-pr-proof.result != 'success' || needs.accepted-pr-proof.outputs.reuse != 'true')
     name: Cloudflare Worker Release Build
     runs-on: ubuntu-latest
     env:
       SOURCE_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
     steps:
+      - name: Require successful accepted PR proof routing
+        run: test "${{ needs.accepted-pr-proof.result }}" = success
+
       - name: Checkout exact release source
         uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a
         with:
@@ -566,10 +575,15 @@ jobs:
 
   rust-windows:
     needs: accepted-pr-proof
-    if: needs.accepted-pr-proof.outputs.reuse != 'true'
+    if: always() && (github.event_name == 'pull_request' || needs.accepted-pr-proof.result != 'success' || needs.accepted-pr-proof.outputs.reuse != 'true')
     name: Rust Windows And Profile Bridge Artifact
     runs-on: windows-latest
     steps:
+      - name: Require successful accepted PR proof routing
+        shell: pwsh
+        run: |
+          if ('${{ needs.accepted-pr-proof.result }}' -ne 'success') { throw 'Accepted PR proof routing did not succeed' }
+
       - name: Checkout
         uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a
         with:
