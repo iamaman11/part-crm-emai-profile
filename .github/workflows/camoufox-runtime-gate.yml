@@ -102,19 +102,23 @@ jobs:
         run: cargo test --locked -p profile-bridge --lib
 
   runtime-package-windows:
-    name: Build and verify official Windows Camoufox runtime
-    # Materialize and package official runtime on an isolated Windows runner.
+    # Keep the existing protected job context while combining both owners.
+    name: Profile Bridge Windows regression
+    # One runner keeps the exact packaged bytes local. The native Bridge proof
+    # is last: its Firefox child may outlive the Rust test process.
     needs: scope
-    if: needs.scope.outputs.heavy == 'true'
+    # Preserve the required Windows context on LIGHT and scope failures too.
+    # Heavy physical steps remain conditional and cannot be bypassed on HEAVY.
+    if: always()
     runs-on: windows-2025
-    timeout-minutes: 90
+    timeout-minutes: 20
     steps:
       - name: Require successful scope classification
         shell: pwsh
         run: |
           if ('${{ needs.scope.result }}' -ne 'success') { throw 'Camoufox scope classification failed' }
           if ('${{ needs.scope.outputs.heavy }}' -notin @('true','false')) { throw 'invalid Camoufox proof scope' }
-          if ('${{ needs.scope.outputs.heavy }}' -ne 'true') { throw 'official runtime package requires full heavy proof' }
+          if ('${{ needs.scope.outputs.heavy }}' -eq 'false') { Write-Host 'Runtime-unrelated PR: exact scope classification is sufficient.' }
 
       - name: Checkout exact candidate
         if: needs.scope.outputs.heavy == 'true'
@@ -134,6 +138,15 @@ jobs:
         uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
         with:
           python-version: '3.12.10'
+
+      - name: Restore versioned Rust dependencies
+        if: needs.scope.outputs.heavy == 'true'
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6
+        with:
+          shared-key: profile-bridge-ci-v1
+          workspaces: |
+            . -> target
+          cache-on-failure: 'true'
 
       - name: Validate existing runtime owners
         if: needs.scope.outputs.heavy == 'true'
@@ -195,83 +208,25 @@ jobs:
           if ((Get-Item $archive).Length -ge 2GB) { throw 'runtime compressed archive exceeds release asset limit' }
           python scripts/camouhost-runtime-package.py verify-manifest --manifest "$manifest" > $null
           if ($LASTEXITCODE -ne 0) { throw 'compressed runtime manifest invalid' }
-
-      - name: Upload exact-head official runtime for downstream Windows proofs
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
-        with:
-          name: official-158-runtime-${{ github.event.pull_request.head.sha || github.sha }}
-          path: |
-            ${{ runner.temp }}/runtime-bundle.tar.gz
-            ${{ runner.temp }}/runtime-manifest.json
-          if-no-files-found: error
-          retention-days: 7
-
-  bridge-regression-windows:
-    name: Profile Bridge Windows regression
-    # Fresh runner isolates native Open from the producer's Firefox POST children.
-    # Both Rust physical tests share one verified downloaded packaged runtime.
-    needs: [scope, runtime-package-windows]
-    if: always()
-    runs-on: windows-2025
-    timeout-minutes: 90
-    steps:
-      - name: Require successful prerequisites
-        shell: pwsh
-        run: |
-          if ('${{ needs.scope.result }}' -ne 'success') { throw 'Camoufox scope classification failed' }
-          if ('${{ needs.scope.outputs.heavy }}' -notin @('true','false')) { throw 'invalid Camoufox proof scope' }
-          if ('${{ needs.scope.outputs.heavy }}' -eq 'true') {
-            if ('${{ needs.runtime-package-windows.result }}' -ne 'success') { throw 'official runtime package failed' }
-          } else {
-            Write-Host 'Runtime-unrelated PR: exact scope classification is sufficient.'
-          }
-
-      - name: Checkout exact candidate
-        if: needs.scope.outputs.heavy == 'true'
-        uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a
-        with:
-          ref: ${{ github.event.pull_request.head.sha || github.sha }}
-          persist-credentials: false
-
-      - name: Verify exact source checkout
-        if: needs.scope.outputs.heavy == 'true'
-        env:
-          EXPECTED_SOURCE_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
-        run: python -c "import os, subprocess; actual = subprocess.check_output(['git', 'rev-parse', 'HEAD'], text=True).strip(); expected = os.environ['EXPECTED_SOURCE_SHA']; assert actual == expected, f'expected {expected}, got {actual}'"
-
-      - name: Set up exact verification Python
-        if: needs.scope.outputs.heavy == 'true'
-        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
-        with:
-          python-version: '3.12.10'
-
-      - name: Restore versioned Rust dependencies
-        if: needs.scope.outputs.heavy == 'true'
-        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6
-        with:
-          shared-key: profile-bridge-ci-v1
-          workspaces: |
-            . -> target
-          cache-on-failure: 'true'
-
-      - name: Download exact official runtime artifact
-        if: needs.scope.outputs.heavy == 'true'
-        uses: actions/download-artifact@70fc10c6e5e1ce46ad2ea6f2b72d43f7d47b13c3
-        with:
-          name: official-158-runtime-${{ github.event.pull_request.head.sha || github.sha }}
-          path: ${{ runner.temp }}/camouhost-runtime-artifact
+          # Preserve an exact compressed-byte identity across local packaging,
+          # extraction and both physical Rust proofs without remote transport.
+          $archiveSha = (Get-FileHash -Algorithm SHA256 -LiteralPath $archive).Hash.ToLowerInvariant()
+          if ($archiveSha -notmatch '^[0-9a-f]{64}$') { throw 'runtime archive SHA-256 is invalid' }
+          Set-Content -LiteralPath (Join-Path $env:RUNNER_TEMP 'runtime-bundle.sha256') -Value $archiveSha -NoNewline -Encoding ascii
 
       - name: Extract and verify exact official runtime
         if: needs.scope.outputs.heavy == 'true'
         shell: pwsh
         run: |
-          $artifact = Join-Path $env:RUNNER_TEMP 'camouhost-runtime-artifact'
-          $archive = Join-Path $artifact 'runtime-bundle.tar.gz'
-          $externalManifest = Join-Path $artifact 'runtime-manifest.json'
+          $archive = Join-Path $env:RUNNER_TEMP 'runtime-bundle.tar.gz'
+          $externalManifest = Join-Path $env:RUNNER_TEMP 'runtime-manifest.json'
           if (-not (Test-Path -LiteralPath $archive -PathType Leaf) -or
               -not (Test-Path -LiteralPath $externalManifest -PathType Leaf)) {
-            throw 'downloaded official runtime archive or detached manifest is missing'
+            throw 'packaged official runtime archive or detached manifest is missing'
           }
+          $expectedArchiveSha = (Get-Content -LiteralPath (Join-Path $env:RUNNER_TEMP 'runtime-bundle.sha256') -Raw).Trim()
+          $actualArchiveSha = (Get-FileHash -Algorithm SHA256 -LiteralPath $archive).Hash.ToLowerInvariant()
+          if ($actualArchiveSha -cne $expectedArchiveSha) { throw 'runtime archive bytes changed after packaging' }
           $root = Join-Path $env:RUNNER_TEMP 'camouhost-delivered-runtime'
           if (Test-Path -LiteralPath $root) { throw 'shipping extraction must use a clean directory' }
           New-Item -ItemType Directory -Path $root -ErrorAction Stop | Out-Null
@@ -287,11 +242,12 @@ jobs:
 
       - name: Run physical shipping reader and native Bridge Open on exact packaged runtime
         if: needs.scope.outputs.heavy == 'true'
+        # An orphaned Firefox must not strand a required PR proof for 90 min.
+        timeout-minutes: 8
         shell: pwsh
         run: |
-          $artifact = Join-Path $env:RUNNER_TEMP 'camouhost-runtime-artifact'
-          $archive = Join-Path $artifact 'runtime-bundle.tar.gz'
-          $manifest = Join-Path $artifact 'runtime-manifest.json'
+          $archive = Join-Path $env:RUNNER_TEMP 'runtime-bundle.tar.gz'
+          $manifest = Join-Path $env:RUNNER_TEMP 'runtime-manifest.json'
           $root = Join-Path $env:RUNNER_TEMP 'camouhost-delivered-runtime'
           if (-not (Test-Path -LiteralPath $archive -PathType Leaf) -or
               -not (Test-Path -LiteralPath $manifest -PathType Leaf) -or
@@ -324,18 +280,15 @@ jobs:
           }
 
   camoufox-required-proof:
-    # Branch protection retains the canonical cold-launch check name. The
-    # protected fresh Windows consumer physically runs both Rust proofs.
+    # Branch protection retains the canonical cold-launch status name. The
+    # single Windows job performs every physical proof on one packaged runtime.
     name: Real Camoufox cold-launch proof
-    needs: [scope, runtime-package-windows, bridge-regression-windows]
+    needs: [scope, runtime-package-windows]
     if: always()
     runs-on: ubuntu-24.04
     steps:
       - name: Require exact official Camoufox and Bridge Windows proof
         run: |
           test "${{ needs.scope.result }}" = success
-          if [ "${{ needs.scope.outputs.heavy }}" = "true" ]; then
-            test "${{ needs.runtime-package-windows.result }}" = success
-          fi
-          test "${{ needs.bridge-regression-windows.result }}" = success
+          test "${{ needs.runtime-package-windows.result }}" = success
 

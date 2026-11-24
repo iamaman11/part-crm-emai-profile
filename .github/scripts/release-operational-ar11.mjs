@@ -19,8 +19,8 @@ const CAMOUFOX_ACTIVE_PHYSICAL_COMMANDS = [
   ['runtime-package-windows', 'Materialize official browser and verified offline fpgen model', 'python scripts/camouhost-runtime-build-windows.py build'],
   ['runtime-package-windows', 'Prove official Firefox native restored tabs and POST safety on exact runtime', 'python scripts/test-ar10-real-camoufox-cleanup.py'],
   ['runtime-package-windows', 'Package exact compressed Release Set runtime input', 'python scripts/camouhost-runtime-package.py package --runtime-root'],
-  ['bridge-regression-windows', 'Extract and verify exact official runtime', 'tar.exe -xzf $archive -C $root'],
-  ['bridge-regression-windows', 'Run physical shipping reader and native Bridge Open on exact packaged runtime', '& "$env:WINDIR\\System32\\cmd.exe" /d /s /c $testCommand'],
+  ['runtime-package-windows', 'Extract and verify exact official runtime', 'tar.exe -xzf $archive -C $root'],
+  ['runtime-package-windows', 'Run physical shipping reader and native Bridge Open on exact packaged runtime', '& "$env:WINDIR\\System32\\cmd.exe" /d /s /c $testCommand'],
 ];
 const LEGACY_FILES = [
   '.github/workflows/mailbox-secret-resolver-promotion.yml',
@@ -641,20 +641,21 @@ function camoufoxErrors(workflow, classifier) {
   const errors = [];
   const scope = jobBlock(workflow, 'scope');
   const linux = jobBlock(workflow, 'real-runtime-linux');
-  const producer = jobBlock(workflow, 'runtime-package-windows');
-  const windows = jobBlock(workflow, 'bridge-regression-windows');
+  const windows = jobBlock(workflow, 'runtime-package-windows');
   const proof = jobBlock(workflow, 'camoufox-required-proof');
-  if (!scope || !linux || !producer || !windows || !proof) {
-    return ['Camoufox bounded producer/consumer Windows proof topology is incomplete'];
+  if (!scope || !linux || !windows || !proof) {
+    return ['Camoufox single Windows physical proof topology is incomplete'];
   }
   errors.push(...forbidMarkers(workflow, [
+    '  bridge-regression-windows:',
+    'needs.bridge-regression-windows',
     '  shipping-archive-reader-windows:',
     'needs.shipping-archive-reader-windows',
-  ], 'Camoufox bounded producer/consumer proof (obsolete third Windows job)'));
+  ], 'Camoufox single Windows proof (obsolete extra Windows job)'));
   const uploadCount = (workflow.match(/uses:\s+actions\/upload-artifact@/g) ?? []).length;
   const downloadCount = (workflow.match(/uses:\s+actions\/download-artifact@/g) ?? []).length;
-  if (uploadCount !== 1 || downloadCount !== 1) {
-    errors.push(`Camoufox transport must use exactly one upload and one download, got ${uploadCount}/${downloadCount}`);
+  if (uploadCount !== 0 || downloadCount !== 0) {
+    errors.push(`Camoufox one-runner proof must not transport its runtime, got ${uploadCount} uploads/${downloadCount} downloads`);
   }
   errors.push(...requireMarkers(scope, [
     'Classify accepted-main or mechanically proven runtime-unrelated PR',
@@ -680,39 +681,45 @@ function camoufoxErrors(workflow, classifier) {
     'Require successful scope classification',
     'needs.scope.outputs.heavy',
   ], 'Linux required context'));
-  errors.push(...requireMarkers(producer, [
-    'name: Build and verify official Windows Camoufox runtime',
-    'needs: scope',
-    "if: needs.scope.outputs.heavy == 'true'",
-    'runs-on: windows-2025',
-    'Require successful scope classification',
-  ], 'Windows bounded runtime producer'));
   errors.push(...requireMarkers(windows, [
-    // A single protected consumer executes both real Rust tests on the exact
-    // unpacked candidate and shipping archive, with one producer transport.
+    // Preserve the protected branch-status context while one physical Windows
+    // owner builds, packages, extracts and verifies the same local bytes.
     'name: Profile Bridge Windows regression',
-    'needs: [scope, runtime-package-windows]',
+    'needs: scope',
     'if: always()',
-    'Require successful prerequisites',
-    'needs.runtime-package-windows.result',
-    'needs.scope.outputs.heavy',
-    "-notin @('true','false')",
     'runs-on: windows-2025',
-  ], 'protected Windows shipping reader and native browser proof'));
+    'timeout-minutes: 20',
+    'Require successful scope classification',
+    "-notin @('true','false')",
+  ], 'protected Windows runtime build, shipping reader and native browser proof'));
+  const scopeGuard = stepBlock(windows, 'Require successful scope classification');
+  if (windows.split('\n').filter((line) => /^    timeout-minutes:/.test(line)).join('') !== '    timeout-minutes: 20') {
+    errors.push('Windows physical proof must enforce a 20-minute job deadline');
+  }
+  const activeScopeGuard = scopeGuard.split('\n').map((line) => line.trim()).filter(Boolean);
+  if (activeScopeGuard.filter((line) => line === "if ('${{ needs.scope.result }}' -ne 'success') { throw 'Camoufox scope classification failed' }").length !== 1
+      || activeScopeGuard.filter((line) => line === "if ('${{ needs.scope.outputs.heavy }}' -notin @('true','false')) { throw 'invalid Camoufox proof scope' }").length !== 1
+      || activeScopeGuard.some((line) => line.startsWith('if: '))) {
+    errors.push('Windows scope prerequisite must fail closed for invalid or failed scope');
+  }
 
   const jobsSection = workflow.split('\njobs:\n')[1] ?? '';
   const jobIds = [...jobsSection.matchAll(/^  ([A-Za-z0-9_-]+):\s*$/gm)].map((match) => match[1]);
-  const expectedJobIds = ['scope', 'real-runtime-linux', 'runtime-package-windows', 'bridge-regression-windows', 'camoufox-required-proof'];
+  const expectedJobIds = ['scope', 'real-runtime-linux', 'runtime-package-windows', 'camoufox-required-proof'];
   if (jobIds.length !== expectedJobIds.length || expectedJobIds.some((id) => jobIds.filter((actual) => actual === id).length !== 1)) {
-    errors.push('Camoufox proof must contain exactly five unique scope/Linux/producer/consumer/final jobs');
+    errors.push('Camoufox proof must contain exactly four unique scope/Linux/Windows/final jobs');
   }
 
-  // A step title is not proof. Pin commands, exact dependencies, transport
-  // binding, verification and ordered execution in each Windows runner.
-  const producerSteps = [
+  // A step title is not proof. Require ordered executed commands on one
+  // protected runner, plus exact source, archive and physical PASS checks.
+  const windowsSteps = [
     ['Checkout exact candidate', ['actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a', 'persist-credentials: false']],
     ['Verify exact source checkout', ['EXPECTED_SOURCE_SHA:', "['git', 'rev-parse', 'HEAD']"]],
     ['Set up exact build Python', ["python-version: '3.12.10'"]],
+    ['Restore versioned Rust dependencies', [
+      'Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6',
+      'shared-key: profile-bridge-ci-v1',
+    ]],
     ['Validate existing runtime owners', [
       'python scripts/test-camouhost-native-process.py',
       'python scripts/test-camouhost-native-ipc.py',
@@ -735,35 +742,19 @@ function camoufoxErrors(workflow, classifier) {
       'runtime-bundle.tar.gz',
       'runtime-manifest.json',
       'python scripts/camouhost-runtime-package.py verify-manifest',
-    ]],
-    ['Upload exact-head official runtime for downstream Windows proofs', [
-      'actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a',
-      'name: official-158-runtime-${{ github.event.pull_request.head.sha || github.sha }}',
-      'runtime-bundle.tar.gz',
-      'runtime-manifest.json',
-      'if-no-files-found: error',
-    ]],
-  ];
-  const consumerSteps = [
-    ['Checkout exact candidate', ['actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a', 'persist-credentials: false']],
-    ['Verify exact source checkout', ['EXPECTED_SOURCE_SHA:', "['git', 'rev-parse', 'HEAD']"]],
-    ['Set up exact verification Python', ["python-version: '3.12.10'"]],
-    ['Restore versioned Rust dependencies', [
-      'Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6',
-      'shared-key: profile-bridge-ci-v1',
-    ]],
-    ['Download exact official runtime artifact', [
-      'actions/download-artifact@70fc10c6e5e1ce46ad2ea6f2b72d43f7d47b13c3',
-      'name: official-158-runtime-${{ github.event.pull_request.head.sha || github.sha }}',
-      'camouhost-runtime-artifact',
+      "Get-FileHash -Algorithm SHA256 -LiteralPath $archive",
+      "Join-Path $env:RUNNER_TEMP 'runtime-bundle.sha256'",
+      "Set-Content -LiteralPath (Join-Path $env:RUNNER_TEMP 'runtime-bundle.sha256')",
     ]],
     ['Extract and verify exact official runtime', [
-      "Join-Path $artifact 'runtime-bundle.tar.gz'",
-      "Join-Path $artifact 'runtime-manifest.json'",
+      "Join-Path $env:RUNNER_TEMP 'runtime-bundle.tar.gz'",
+      "Join-Path $env:RUNNER_TEMP 'runtime-manifest.json'",
       'camouhost-delivered-runtime',
       "if (Test-Path -LiteralPath $root) { throw 'shipping extraction must use a clean directory' }",
       'tar.exe -xzf $archive -C $root',
       'Get-FileHash -Algorithm SHA256',
+      "Get-Content -LiteralPath (Join-Path $env:RUNNER_TEMP 'runtime-bundle.sha256')",
+      'if ($actualArchiveSha -cne $expectedArchiveSha)',
       'python scripts/camouhost-runtime-package.py verify-manifest',
     ]],
     ['Run physical shipping reader and native Bridge Open on exact packaged runtime', [
@@ -787,10 +778,7 @@ function camoufoxErrors(workflow, classifier) {
       'if ($cargoExit -ne 0)',
     ]],
   ];
-  for (const [jobName, job, steps] of [
-    ['producer', producer, producerSteps],
-    ['consumer', windows, consumerSteps],
-  ]) {
+  for (const [jobName, job, steps] of [['runtime-package-windows', windows, windowsSteps]]) {
     let previousOffset = -1;
     for (const [name, markers] of steps) {
       const stepNameMarker = `      - name: ${name}`;
@@ -802,24 +790,43 @@ function camoufoxErrors(workflow, classifier) {
       previousOffset = offset;
       const step = stepBlock(job, name);
       const stepConditions = step.split('\n').filter((line) => /^        if: /.test(line));
-      const expectedConditions = name === 'Upload exact-head official runtime for downstream Windows proofs'
-        ? [] : ["        if: needs.scope.outputs.heavy == 'true'"];
+      const expectedConditions = ["        if: needs.scope.outputs.heavy == 'true'"];
       if (JSON.stringify(stepConditions) !== JSON.stringify(expectedConditions)) {
         errors.push(`Windows ${jobName} physical proof step can bypass exact HEAVY classification: ${name}`);
       }
       errors.push(...requireMarkers(step, markers, `Windows ${jobName} physical proof step ${name}`));
       if (name === 'Extract and verify exact official runtime'
-          && (step.match(/Get-FileHash -Algorithm SHA256/g) ?? []).length !== 2) {
-        errors.push('Windows consumer extraction must SHA-256 compare both embedded and detached manifests');
+          && (step.match(/Get-FileHash -Algorithm SHA256/g) ?? []).length !== 3) {
+        errors.push('Windows extraction must SHA-256 verify compressed archive and both embedded/detached manifests');
       }
     }
   }
   for (const [jobName, name, command] of CAMOUFOX_ACTIVE_PHYSICAL_COMMANDS) {
     errors.push(...requireActiveShellCommand(
-      stepBlock(jobName === 'runtime-package-windows' ? producer : windows, name), command, `Windows physical proof step ${name}`,
+      stepBlock(windows, name), command, `Windows physical proof step ${name}`,
+    ));
+  }
+  // Both SHA-256 observations and the comparison must be *executed* commands,
+  // not marker text in a disabled condition, comment or forged log. The local
+  // receipt binds the exact compressed archive tested by the shipping reader.
+  const archiveIdentityCommands = [
+    ['Package exact compressed Release Set runtime input', "$archiveSha = (Get-FileHash -Algorithm SHA256 -LiteralPath $archive).Hash.ToLowerInvariant()"],
+    ['Package exact compressed Release Set runtime input', "if ($archiveSha -notmatch '^[0-9a-f]{64}$') { throw 'runtime archive SHA-256 is invalid' }"],
+    ['Package exact compressed Release Set runtime input', "Set-Content -LiteralPath (Join-Path $env:RUNNER_TEMP 'runtime-bundle.sha256') -Value $archiveSha -NoNewline -Encoding ascii"],
+    ['Extract and verify exact official runtime', "$expectedArchiveSha = (Get-Content -LiteralPath (Join-Path $env:RUNNER_TEMP 'runtime-bundle.sha256') -Raw).Trim()"],
+    ['Extract and verify exact official runtime', "$actualArchiveSha = (Get-FileHash -Algorithm SHA256 -LiteralPath $archive).Hash.ToLowerInvariant()"],
+    ['Extract and verify exact official runtime', "if ($actualArchiveSha -cne $expectedArchiveSha) { throw 'runtime archive bytes changed after packaging' }"],
+    ['Extract and verify exact official runtime', "if ((Get-FileHash -Algorithm SHA256 $embedded).Hash -ne (Get-FileHash -Algorithm SHA256 $externalManifest).Hash) {"],
+  ];
+  for (const [name, command] of archiveIdentityCommands) {
+    errors.push(...requireActiveShellCommand(
+      stepBlock(windows, name), command, `Windows exact runtime SHA-256 proof step ${name}`,
     ));
   }
   const pairedProof = stepBlock(windows, 'Run physical shipping reader and native Bridge Open on exact packaged runtime');
+  if (pairedProof.split('\n').filter((line) => /^        timeout-minutes:/.test(line)).join('') !== '        timeout-minutes: 8') {
+    errors.push('Windows physical Cargo proof must enforce an 8-minute step deadline');
+  }
   const activeCargoAssignments = pairedProof.split('\n').map((line) => line.trim())
     .filter((line) => line.startsWith("$testCommand = 'cargo test --locked -p profile-bridge --test real_camoufox_runtime"));
   const canonicalCargoAssignment = "$testCommand = 'cargo test --locked -p profile-bridge --test real_camoufox_runtime -- --skip published_windows_runtime_is_consumed_by_shipping_selector --test-threads=2 --show-output > \"' + $log + '\" 2>&1'";
@@ -843,7 +850,7 @@ function camoufoxErrors(workflow, classifier) {
     }
   }
   for (const [job, name, quietCommand] of [
-    [producer, 'Package exact compressed Release Set runtime input', 'verify-manifest --manifest "$manifest" > $null'],
+    [windows, 'Package exact compressed Release Set runtime input', 'verify-manifest --manifest "$manifest" > $null'],
     [windows, 'Extract and verify exact official runtime', 'verify-manifest --manifest $externalManifest > $null'],
   ]) {
     if (!stepBlock(job, name).includes(quietCommand)) {
@@ -851,15 +858,21 @@ function camoufoxErrors(workflow, classifier) {
     }
   }
   errors.push(...requireMarkers(proof, [
-    'needs: [scope, runtime-package-windows, bridge-regression-windows]',
+    'needs: [scope, runtime-package-windows]',
     'if: always()',
     'Require exact official Camoufox and Bridge Windows proof',
     'test "${{ needs.scope.result }}" = success',
     'test "${{ needs.runtime-package-windows.result }}" = success',
-    'test "${{ needs.bridge-regression-windows.result }}" = success',
   ], 'Camoufox required-proof aggregator'));
-  if (!proof.split('\n').includes('    needs: [scope, runtime-package-windows, bridge-regression-windows]')) {
-    errors.push('Camoufox required-proof aggregator lost its producer or protected Windows dependency');
+  if (!proof.split('\n').includes('    needs: [scope, runtime-package-windows]')) {
+    errors.push('Camoufox required-proof aggregator lost its protected Windows dependency');
+  }
+  const finalStep = stepBlock(proof, 'Require exact official Camoufox and Bridge Windows proof');
+  if (!/run: \|\n\s*test "\$\{\{ needs\.scope\.result \}\}" = success\n\s*test "\$\{\{ needs\.runtime-package-windows\.result \}\}" = success(?:\n|$)/.test(finalStep)) {
+    errors.push('Camoufox required-proof aggregator must unconditionally require both scope and Windows success');
+  }
+  if (!windows.split('\n').includes('    if: always()')) {
+    errors.push('Camoufox protected Windows status must run even for LIGHT or failed scope');
   }
   if (!linux.includes("if: needs.scope.outputs.heavy == 'true'")) errors.push('Linux heavy proof is not gated by exact scope output');
   return errors;
@@ -1119,10 +1132,9 @@ function selfTest(files) {
       throw new Error(`${scenario} fixture unexpectedly passed`);
     }
   };
-  const producerProof = jobBlock(files.camoufox, 'runtime-package-windows');
-  const windowsProof = jobBlock(files.camoufox, 'bridge-regression-windows');
+  const windowsProof = jobBlock(files.camoufox, 'runtime-package-windows');
   for (const [jobName, name, realCommand] of CAMOUFOX_ACTIVE_PHYSICAL_COMMANDS) {
-    const step = stepBlock(jobName === 'runtime-package-windows' ? producerProof : windowsProof, name);
+    const step = stepBlock(windowsProof, name);
     if (!step) throw new Error(`missing ${name} fixture source`);
     assertCamoufoxRejected(
       files.camoufox.replace(step, step.replace(`      - name: ${name}`, `      - name: fake skipped ${name}`)),
@@ -1144,81 +1156,106 @@ function selfTest(files) {
         'not executing active shell command',
       );
     }
-    const bypass = jobName === 'runtime-package-windows'
-      ? step.replace(`      - name: ${name}`, `      - name: ${name}\n        if: false`)
-      : step.replace("if: needs.scope.outputs.heavy == 'true'", 'if: false');
+    const bypass = step.replace("if: needs.scope.outputs.heavy == 'true'", 'if: false');
     assertCamoufoxRejected(
       files.camoufox.replace(step, bypass),
       `unexpectedly skipped physical ${name} on HEAVY`,
       'can bypass exact HEAVY classification',
     );
   }
+  for (const [name, command] of [
+    ['Package exact compressed Release Set runtime input', "$archiveSha = (Get-FileHash -Algorithm SHA256 -LiteralPath $archive).Hash.ToLowerInvariant()"],
+    ['Package exact compressed Release Set runtime input', "if ($archiveSha -notmatch '^[0-9a-f]{64}$') { throw 'runtime archive SHA-256 is invalid' }"],
+    ['Package exact compressed Release Set runtime input', "Set-Content -LiteralPath (Join-Path $env:RUNNER_TEMP 'runtime-bundle.sha256') -Value $archiveSha -NoNewline -Encoding ascii"],
+    ['Extract and verify exact official runtime', "$expectedArchiveSha = (Get-Content -LiteralPath (Join-Path $env:RUNNER_TEMP 'runtime-bundle.sha256') -Raw).Trim()"],
+    ['Extract and verify exact official runtime', "$actualArchiveSha = (Get-FileHash -Algorithm SHA256 -LiteralPath $archive).Hash.ToLowerInvariant()"],
+    ['Extract and verify exact official runtime', "if ($actualArchiveSha -cne $expectedArchiveSha) { throw 'runtime archive bytes changed after packaging' }"],
+    ['Extract and verify exact official runtime', "if ((Get-FileHash -Algorithm SHA256 $embedded).Hash -ne (Get-FileHash -Algorithm SHA256 $externalManifest).Hash) {"],
+  ]) {
+    const step = stepBlock(windowsProof, name);
+    for (const [kind, replacement] of [
+      ['commented', `# ${command}`],
+      ['forged', `Write-Host 'forged SHA-256: ${command}'`],
+    ]) {
+      assertCamoufoxRejected(
+        files.camoufox.replace(step, step.replace(command, replacement)),
+        `${kind} exact archive identity command in ${name}`,
+        'not executing active shell command',
+      );
+    }
+  }
   for (const [jobName, name, protectedMarker] of [
     ['runtime-package-windows', 'Prove official Firefox native restored tabs and POST safety on exact runtime', 'AR10_NATIVE_FIREFOX_SESSIONSTORE=PHYSICAL_PASS'],
-    ['runtime-package-windows', 'Upload exact-head official runtime for downstream Windows proofs', 'if-no-files-found: error'],
-    ['bridge-regression-windows', 'Download exact official runtime artifact', 'camouhost-runtime-artifact'],
-    ['bridge-regression-windows', 'Extract and verify exact official runtime', "if (Test-Path -LiteralPath $root) { throw 'shipping extraction must use a clean directory' }"],
-    ['bridge-regression-windows', 'Extract and verify exact official runtime', 'Get-FileHash -Algorithm SHA256'],
-    ['bridge-regression-windows', 'Run physical shipping reader and native Bridge Open on exact packaged runtime', '$env:AR10_PACKAGED_RUNTIME_ARCHIVE = $archive'],
-    ['bridge-regression-windows', 'Run physical shipping reader and native Bridge Open on exact packaged runtime', '$env:AR10_PACKAGED_RUNTIME_MANIFEST = $manifest'],
-    ['bridge-regression-windows', 'Run physical shipping reader and native Bridge Open on exact packaged runtime', 'running 2 tests'],
-    ['bridge-regression-windows', 'Run physical shipping reader and native Bridge Open on exact packaged runtime', '2 passed; 0 failed'],
-    ['bridge-regression-windows', 'Run physical shipping reader and native Bridge Open on exact packaged runtime', 'REAL_SHIPPING_ARCHIVE_READER=PASS;FILES=[0-9]+;COMPRESSED_BYTES=[0-9]+'],
-    ['bridge-regression-windows', 'Run physical shipping reader and native Bridge Open on exact packaged runtime', 'AR10_NATIVE_OPEN_LOCK=PASS;elapsed_ms=[0-9]+'],
+    ['runtime-package-windows', 'Extract and verify exact official runtime', "if (Test-Path -LiteralPath $root) { throw 'shipping extraction must use a clean directory' }"],
+    ['runtime-package-windows', 'Extract and verify exact official runtime', 'Get-FileHash -Algorithm SHA256'],
+    ['runtime-package-windows', 'Run physical shipping reader and native Bridge Open on exact packaged runtime', '$env:AR10_PACKAGED_RUNTIME_ARCHIVE = $archive'],
+    ['runtime-package-windows', 'Run physical shipping reader and native Bridge Open on exact packaged runtime', '$env:AR10_PACKAGED_RUNTIME_MANIFEST = $manifest'],
+    ['runtime-package-windows', 'Run physical shipping reader and native Bridge Open on exact packaged runtime', 'running 2 tests'],
+    ['runtime-package-windows', 'Run physical shipping reader and native Bridge Open on exact packaged runtime', '2 passed; 0 failed'],
+    ['runtime-package-windows', 'Run physical shipping reader and native Bridge Open on exact packaged runtime', 'REAL_SHIPPING_ARCHIVE_READER=PASS;FILES=[0-9]+;COMPRESSED_BYTES=[0-9]+'],
+    ['runtime-package-windows', 'Run physical shipping reader and native Bridge Open on exact packaged runtime', 'AR10_NATIVE_OPEN_LOCK=PASS;elapsed_ms=[0-9]+'],
   ]) {
-    const step = stepBlock(jobName === 'runtime-package-windows' ? producerProof : windowsProof, name);
+    const step = stepBlock(windowsProof, name);
     assertCamoufoxRejected(
       files.camoufox.replace(step, step.replaceAll(protectedMarker, 'Write-Host "unverified"')),
       `missing ${name} integrity marker ${protectedMarker}`,
-      `Windows ${jobName === 'runtime-package-windows' ? 'producer' : 'consumer'} physical proof step ${name}`,
+      `Windows ${jobName} physical proof step ${name}`,
     );
   }
   const missingProtectedJoin = files.camoufox.replace(
-    'needs: [scope, runtime-package-windows, bridge-regression-windows]',
-    'needs: scope',
-  );
-  assertCamoufoxRejected(missingProtectedJoin, 'missing protected Windows join', 'Camoufox required-proof aggregator');
-  const missingProducerDependency = files.camoufox.replace(
     'needs: [scope, runtime-package-windows]',
     'needs: scope',
   );
-  assertCamoufoxRejected(missingProducerDependency, 'consumer removed producer dependency', 'protected Windows shipping reader');
-  const missingBridgeVerdict = files.camoufox.replace(
-    'test "${{ needs.bridge-regression-windows.result }}" = success',
-    'echo "bridge result ignored"',
+  assertCamoufoxRejected(missingProtectedJoin, 'missing protected Windows join', 'Camoufox required-proof aggregator');
+  const missingScopeDependency = files.camoufox.replace(
+    windowsProof, windowsProof.replace('needs: scope', 'needs: []'),
   );
-  assertCamoufoxRejected(missingBridgeVerdict, 'ignored protected Windows verdict', 'Camoufox required-proof aggregator');
-  const missingProducerVerdict = files.camoufox.replace(
+  assertCamoufoxRejected(missingScopeDependency, 'Windows removed scope dependency', 'protected Windows runtime build');
+  const missingWindowsVerdict = files.camoufox.replace(
     'test "${{ needs.runtime-package-windows.result }}" = success',
-    'echo "producer result ignored"',
+    'echo "Windows result ignored"',
   );
-  assertCamoufoxRejected(missingProducerVerdict, 'ignored runtime producer verdict', 'Camoufox required-proof aggregator');
+  assertCamoufoxRejected(missingWindowsVerdict, 'ignored protected Windows verdict', 'Camoufox required-proof aggregator');
+  const conditionalWindowsVerdict = files.camoufox.replace(
+    '          test "${{ needs.runtime-package-windows.result }}" = success',
+    '          if [ "${{ needs.scope.outputs.heavy }}" = "true" ]; then\n            test "${{ needs.runtime-package-windows.result }}" = success\n          fi',
+  );
+  assertCamoufoxRejected(conditionalWindowsVerdict, 'conditional protected Windows verdict', 'unconditionally require both scope and Windows success');
+  const bypassedScopeGuard = windowsProof.replace(
+    "if ('${{ needs.scope.result }}' -ne 'success') { throw 'Camoufox scope classification failed' }",
+    'Write-Host "scope is assumed successful"',
+  );
+  assertCamoufoxRejected(files.camoufox.replace(windowsProof, bypassedScopeGuard), 'bypassed Windows scope prerequisite', 'Windows scope prerequisite must fail closed');
   const obsoleteJob = files.camoufox.replace(
     '  camoufox-required-proof:',
-    '  obsolete-runtime-package-windows:\n    name: restored redundant runtime job\n  camoufox-required-proof:',
+    '  bridge-regression-windows:\n    name: restored redundant runtime job\n  camoufox-required-proof:',
   );
-  assertCamoufoxRejected(obsoleteJob, 'redundant runtime producer job', 'exactly five unique');
+  assertCamoufoxRejected(obsoleteJob, 'redundant Windows consumer job', 'obsolete extra Windows job');
   const obsoleteReaderJob = files.camoufox.replace(
     '  camoufox-required-proof:',
     '  shipping-archive-reader-windows:\n    name: restored obsolete reader job\n  camoufox-required-proof:',
   );
-  assertCamoufoxRejected(obsoleteReaderJob, 'obsolete cross-runner reader job', 'obsolete third Windows job');
-  for (const [name, transportStep] of [
-    ['upload', stepBlock(producerProof, 'Upload exact-head official runtime for downstream Windows proofs')],
-    ['download', stepBlock(windowsProof, 'Download exact official runtime artifact')],
+  assertCamoufoxRejected(obsoleteReaderJob, 'obsolete cross-runner reader job', 'obsolete extra Windows job');
+  for (const [name, action] of [
+    ['upload', 'actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a'],
+    ['download', 'actions/download-artifact@70fc10c6e5e1ce46ad2ea6f2b72d43f7d47b13c3'],
   ]) {
     assertCamoufoxRejected(
-      files.camoufox.replace(transportStep, ''),
-      `missing one ${name} runtime transport`,
-      'exactly one upload and one download',
+      files.camoufox.replace('  camoufox-required-proof:',
+        `  obsolete-${name}-transport:\n    steps:\n      - name: Forbidden runtime ${name}\n        uses: ${action}\n  camoufox-required-proof:`),
+      `restored runtime ${name} between runners`,
+      'must not transport its runtime',
     );
-    const duplicate = files.camoufox.replace(
-      '  camoufox-required-proof:',
-      `  obsolete-${name}-transport:\n    steps:\n${transportStep}\n  camoufox-required-proof:`,
-    );
-    assertCamoufoxRejected(duplicate, `duplicated runtime ${name}`, 'exactly one upload and one download');
   }
   const combinedStep = stepBlock(windowsProof, 'Run physical shipping reader and native Bridge Open on exact packaged runtime');
+  for (const [scenario, replacement, expectedError] of [
+    ['missing physical Cargo deadline', combinedStep.replace('        timeout-minutes: 8\n', ''), '8-minute step deadline'],
+    ['unsafe extended physical Cargo deadline', combinedStep.replace('        timeout-minutes: 8', '        timeout-minutes: 90'), '8-minute step deadline'],
+  ]) {
+    assertCamoufoxRejected(files.camoufox.replace(combinedStep, replacement), scenario, expectedError);
+  }
+  const longWindowsJob = files.camoufox.replace(windowsProof, windowsProof.replace('    timeout-minutes: 20', '    timeout-minutes: 90'));
+  assertCamoufoxRejected(longWindowsJob, 'unbounded Windows job deadline', '20-minute job deadline');
   for (const mutation of ['--test-threads=1', '--skip shipping_windows_runtime_archive_is_readable_by_production_delivery_reader', '--skip bridge_preflight_launches_real_camoufox_and_acquires_native_profile_lock']) {
     const original = '--test-threads=2';
     assertCamoufoxRejected(
@@ -1250,7 +1287,7 @@ function selfTest(files) {
   );
   assertCamoufoxRejected(files.camoufox.replace(combinedStep, disabledPassVerdict), 'forged native PASS without inspection', 'actively enforce both test results');
   for (const [step, noisyMarker] of [
-    [stepBlock(producerProof, 'Package exact compressed Release Set runtime input'), 'verify-manifest --manifest "$manifest" > $null'],
+    [stepBlock(windowsProof, 'Package exact compressed Release Set runtime input'), 'verify-manifest --manifest "$manifest" > $null'],
     [stepBlock(windowsProof, 'Extract and verify exact official runtime'), 'verify-manifest --manifest $externalManifest > $null'],
   ]) {
     assertCamoufoxRejected(
