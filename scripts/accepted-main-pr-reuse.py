@@ -43,22 +43,18 @@ REQUIRED = frozenset({
 # successful workflow with all expensive jobs skipped by a PR scope filter.
 CRITICAL: dict[str, dict[str, tuple[str, ...]]] = {
     "camoufox": {
-        # Keep these names bound to the *current* executable Windows steps.
-        # The real browser, immutable package and shipping reader are separate
-        # jobs; the final protected status depends on all three.
+        # Exact PR receipt must prove every physical Windows runtime step ran
+        # inside the protected Bridge regression job. Neither an artifact
+        # upload nor a successful summary job is a substitute for these tests.
         "Rust Bridge contracts (browser-independent)": (
             "Run existing Rust Bridge tests",
         ),
-        "Build and verify official Windows Camoufox runtime": (
+        "Profile Bridge Windows regression": (
             "Materialize official browser and verified offline fpgen model",
             "Prove official Firefox native restored tabs and POST safety on exact runtime",
             "Package exact compressed Release Set runtime input",
-            "Upload exact-head official runtime for downstream Windows proofs",
-        ),
-        "Rust shipping reader verifies exact compressed Windows runtime": (
             "Run production shipping archive reader",
-        ),
-        "Profile Bridge Windows regression": (
+            "Extract and verify exact official runtime",
             "Run official Camoufox Playwright user Open and native file-lock proof through production Bridge crates",
         ),
         # A successful meta status cannot replace the underlying real tests.
@@ -835,12 +831,14 @@ def self_test() -> None:
                 pass
             else:
                 raise AssertionError(f"{gate}: accepted unsafe proof: {mutation}")
-        # The source workflow splits the native proof across several jobs.
-        # Missing or skipped evidence in *any* job must force a full replay.
+        # Every required physical test must have run on the exact PR attempt.
+        # Missing, skipped, or failed evidence from *any* step forces replay.
         for required_job, required_steps in CRITICAL[gate].items():
             jobpath = next(k for k in pages if k.endswith("/jobs?per_page=100"))
             for mutation, skipped_step in [("missing", None)] + [
-                ("skipped", name) for name in required_steps
+                (outcome, name)
+                for name in required_steps
+                for outcome in ("skipped", "failure")
             ]:
                 clone = json.loads(json.dumps(pages))
                 jobs = clone[jobpath]["jobs"]
@@ -851,7 +849,7 @@ def self_test() -> None:
                 else:
                     next(step for step in target["steps"] if step["name"] == skipped_step)[
                         "conclusion"
-                    ] = "skipped"
+                    ] = mutation
                 try:
                     prove("a" * 40, gate, lambda path: clone[path])
                 except Unconfirmed:
