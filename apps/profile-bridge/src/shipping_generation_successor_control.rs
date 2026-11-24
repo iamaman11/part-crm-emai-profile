@@ -2059,7 +2059,11 @@ mod tests {
             let root = MaterializationRoot::open_or_create(&fixture.root_path)?;
             let workspace =
                 root.open_generation(&fixture.tenant, &fixture.profile, &fixture.base)?;
-            let candidate = fixture.prepared.candidate_workspace().generation_id().clone();
+            let candidate = fixture
+                .prepared
+                .candidate_workspace()
+                .generation_id()
+                .clone();
             let inventory = workspace.inventory()?;
             let (plain_bytes, plain_digest) =
                 digest_closed_workspace_streaming(&workspace, &inventory)?;
