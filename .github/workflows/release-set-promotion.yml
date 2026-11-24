@@ -96,6 +96,7 @@ jobs:
       RELEASE_SET_ID: ''
       TARGET_PROFILE: rehearsal-core-v2
       TARGET_ENVIRONMENT: staging
+      CARGO_PROFILE_DEV_OPT_LEVEL: '2'
     steps:
       - name: Resolve unique immutable Release Set for exact protected main
         id: resolve
