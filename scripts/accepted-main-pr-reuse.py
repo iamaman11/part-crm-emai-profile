@@ -583,10 +583,14 @@ def runtime_proof_artifacts(
             and inventory["total_count"] <= 100
             and inventory["total_count"] == len(inventory["artifacts"]),
             "incomplete physical runtime artifact inventory")
+    # actions/upload-artifact archive:false publishes the raw *file basename*
+    # as the REST artifact name, regardless of a customized YAML name.
+    # Exact producer/run/HEAD/attempt/expiry/SHA binding below supplies
+    # authority; never rely on a logical artifact name ignored by the API.
     names = {
-        "proof": f"camoufox-runtime-proof-{candidate}",
-        "archive": f"camoufox-runtime-bundle-{candidate}",
-        "manifest": f"camoufox-runtime-manifest-{candidate}",
+        "proof": "camoufox-runtime-proof.json",
+        "archive": "runtime-bundle.tar.gz",
+        "manifest": "runtime-manifest.json",
     }
     selected: dict[str, dict[str, Any]] = {}
     for component, name in names.items():
@@ -2088,7 +2092,7 @@ def self_test() -> None:
                       if run["name"] == WORKFLOW["camoufox"])
     inventory_url = f"{root}/actions/runs/{source_run['id']}/artifacts?per_page=100"
     proof_artifact = {
-        "id": 979, "name": f"camoufox-runtime-proof-{head_sha}",
+        "id": 979, "name": "camoufox-runtime-proof.json",
         "size_in_bytes": 512, "digest": "sha256:" + "f" * 64,
         "expired": False, "created_at": "2026-10-31T00:05:00Z",
         "expires_at": "2030-01-01T00:00:00Z",
@@ -2174,6 +2178,50 @@ def self_test() -> None:
                      "size": built["manifest_size_bytes"]},
     }
     validate_physical_runtime_miss_artifacts(built, miss_artifacts)
+    # GitHub raw artifact inventories use on-disk basenames, not logical
+    # upload-artifact name= values. Validate the REST producer inventory for
+    # a 1.5-GiB MISS, alongside the independent small receipt HIT.
+    built_pages = json.loads(json.dumps(full_pages))
+    for name, digest, size, identifier in (
+        ("runtime-bundle.tar.gz", built["archive_sha256"],
+         built["archive_size_bytes"], 980),
+        ("runtime-manifest.json", built["manifest_sha256"],
+         built["manifest_size_bytes"], 981),
+    ):
+        item = json.loads(json.dumps(proof_artifact))
+        item.update(id=identifier, name=name, digest="sha256:" + digest,
+                    size_in_bytes=size)
+        built_pages[inventory_url]["artifacts"].append(item)
+        built_pages[inventory_url]["total_count"] += 1
+    built_reference, built_selected = runtime_proof_artifacts(
+        main_sha, lambda key: built_pages[key], release_id,
+    )
+    require(built_reference["candidate"] == head_sha
+            and set(built_selected) == {"proof", "archive", "manifest"},
+            "raw GitHub artifact basename inventory was not resolved")
+    validate_physical_runtime_miss_artifacts(built, built_selected)
+    for fault in ("configured-logical-name", "missing-raw-archive",
+                  "duplicate-raw-archive", "wrong-raw-archive-SHA"):
+        changed = json.loads(json.dumps(built_pages))
+        inventory = changed[inventory_url]
+        archive = next(a for a in inventory["artifacts"]
+                       if a["name"] == "runtime-bundle.tar.gz")
+        if fault == "configured-logical-name":
+            archive["name"] = f"camoufox-runtime-bundle-{head_sha}"
+        elif fault == "missing-raw-archive":
+            inventory["artifacts"].remove(archive)
+            inventory["total_count"] -= 1
+        elif fault == "duplicate-raw-archive":
+            inventory["artifacts"].append(dict(archive))
+            inventory["total_count"] += 1
+        else:
+            archive["digest"] = "sha256:" + "9" * 64
+        def prove_miss() -> None:
+            _, selected = runtime_proof_artifacts(
+                main_sha, lambda key: changed[key], release_id,
+            )
+            validate_physical_runtime_miss_artifacts(built, selected)
+        reject(prove_miss, "raw GitHub artifact " + fault)
     for fault in ("missing-archive", "missing-manifest", "tampered-archive"):
         changed = json.loads(json.dumps(miss_artifacts))
         if fault == "missing-archive":
@@ -2184,7 +2232,7 @@ def self_test() -> None:
             changed["archive"]["sha256"] = "9" * 64
         reject(lambda: validate_physical_runtime_miss_artifacts(built, changed),
                fault)
-    for fault in ("missing-receipt", "expired-receipt", "wrong-artifact-head",
+    for fault in ("missing-receipt", "legacy-configured-name", "expired-receipt", "wrong-artifact-head",
                   "wrong-artifact-run", "duplicate-receipt", "stale-attempt",
                   "missing-physical-step", "post-merge-rerun"):
         changed = json.loads(json.dumps(full_pages))
@@ -2194,6 +2242,8 @@ def self_test() -> None:
         if fault == "missing-receipt":
             inventory["artifacts"].remove(item)
             inventory["total_count"] -= 1
+        elif fault == "legacy-configured-name":
+            item["name"] = f"camoufox-runtime-proof-{head_sha}"
         elif fault == "expired-receipt":
             item["expired"] = True
         elif fault == "wrong-artifact-head":
