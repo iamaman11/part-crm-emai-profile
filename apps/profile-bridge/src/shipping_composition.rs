@@ -2954,13 +2954,16 @@ mod windows {
             let mut file = std::fs::File::open(path)?;
             let mut header = [0_u8; 32];
             file.read_exact(&mut header)?;
-            if !matches!(&header[..4], [0x37, 0x7f, 0x06, 0x82] | [0x37, 0x7f, 0x06, 0x83])
-                || u32::from_be_bytes(header[4..8].try_into()?) != 3_007_000
+            if !matches!(
+                &header[..4],
+                [0x37, 0x7f, 0x06, 0x82] | [0x37, 0x7f, 0x06, 0x83]
+            ) || u32::from_be_bytes(header[4..8].try_into()?) != 3_007_000
             {
                 return Err("K1 stress WAL has invalid SQLite header".into());
             }
             let page_size = u32::from_be_bytes(header[8..12].try_into()?);
-            if !matches!(page_size, 512..=65_536) || !page_size.is_power_of_two()
+            if !matches!(page_size, 512..=65_536)
+                || !page_size.is_power_of_two()
                 || (fingerprint.0 - 32) % (u64::from(page_size) + 24) != 0
             {
                 return Err("K1 stress WAL has invalid page/frame alignment".into());
@@ -3096,7 +3099,8 @@ mod windows {
             db: &Path,
             wal: &Path,
             sqlite_exe: &Path,
-        ) -> Result<((u64, [u8; 32]), Option<(u64, [u8; 32])>), Box<dyn std::error::Error>> {
+        ) -> Result<((u64, [u8; 32]), Option<(u64, [u8; 32])>), Box<dyn std::error::Error>>
+        {
             let db_sha = physical_file_sha256(root, db)?;
             let wal_sha = optional_native_wal_sha(root, wal)?;
             let clone = tempfile::tempdir()?;
@@ -3135,7 +3139,8 @@ mod windows {
         -> Result<(), Box<dyn std::error::Error>> {
             if std::env::var("PROFILE_BRIDGE_TEST_ALLOW_STAGING_MUTATION").as_deref()
                 != Ok("YES_SCOPED_DISPOSABLE_PROFILE")
-                || std::env::var("PROFILE_BRIDGE_TEST_LOST_COMMIT_ACK_STRUCTURED_WAL_65MIB").as_deref()
+                || std::env::var("PROFILE_BRIDGE_TEST_LOST_COMMIT_ACK_STRUCTURED_WAL_65MIB")
+                    .as_deref()
                     != Ok("YES_ONE_DISPOSABLE_WAL_ACK_LOSS")
             {
                 return Err("separate exact disposable K1 staging authorization required".into());
@@ -3187,12 +3192,10 @@ mod windows {
             // user_data; a running snapshot can never see only one half.
             let stress_db = old_path.join("user_data/k1-structured/k1-structured.sqlite");
             let stress_wal = old_path.join("user_data/k1-structured/k1-structured.sqlite-wal");
-            let native_before = validate_native_cookie_pair(
-                root.path(), &native_db, &native_wal, &sqlite_exe,
-            )?;
-            let stress_before = validate_sqlite_stress_pair(
-                root.path(), &stress_db, &stress_wal, &sqlite_exe,
-            )?;
+            let native_before =
+                validate_native_cookie_pair(root.path(), &native_db, &native_wal, &sqlite_exe)?;
+            let stress_before =
+                validate_sqlite_stress_pair(root.path(), &stress_db, &stress_wal, &sqlite_exe)?;
             eprintln!(
                 "K1_SPLIT_NATIVE_COOKIE_WAL_OBSERVED;present={};bytes={};STRUCTURED_SQLITE_WAL_BYTES={}",
                 native_before.1.is_some(),
@@ -3298,7 +3301,9 @@ mod windows {
                 ),
                 stress_before
             );
-            eprintln!("K1_SPLIT_NATIVE_COOKIE_AND_STRUCTURED_SQLITE_65MIB_LOST_ACK_EXACT_CURRENT_SOURCE_PASS;COLD_RESTORE_AND_BROWSER_UNPROVEN");
+            eprintln!(
+                "K1_SPLIT_NATIVE_COOKIE_AND_STRUCTURED_SQLITE_65MIB_LOST_ACK_EXACT_CURRENT_SOURCE_PASS;COLD_RESTORE_AND_BROWSER_UNPROVEN"
+            );
             Ok(())
         }
 
