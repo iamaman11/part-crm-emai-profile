@@ -250,7 +250,9 @@ jobs:
 
   bridge-regression-windows:
     name: Profile Bridge Windows regression
-    needs: [scope, runtime-package-windows, shipping-archive-reader-windows]
+    # Browser Open and the shipping archive reader independently consume the
+    # same verified runtime. The protected final gate still requires BOTH.
+    needs: [scope, runtime-package-windows]
     if: always()
     runs-on: windows-2025
     timeout-minutes: 90
@@ -262,7 +264,6 @@ jobs:
           if ('${{ needs.scope.outputs.heavy }}' -notin @('true','false')) { throw 'invalid Camoufox proof scope' }
           if ('${{ needs.scope.outputs.heavy }}' -eq 'true') {
             if ('${{ needs.runtime-package-windows.result }}' -ne 'success') { throw 'official runtime package failed' }
-            if ('${{ needs.shipping-archive-reader-windows.result }}' -ne 'success') { throw 'production runtime archive reader failed' }
           } else {
             Write-Host 'Runtime-unrelated PR: exact scope classification is sufficient.'
           }

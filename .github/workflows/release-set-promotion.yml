@@ -127,6 +127,14 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
 
+      # Build artifacts are only an accelerator; immutable Release Set proof always reruns.
+      - name: Restore opsctl Rust compilation cache for read-only resolution
+        if: needs.route.outputs.mode == 'preflight'
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2 (immutable)
+        with:
+          shared-key: release-set-promotion-opsctl-v1
+          workspaces: tools/opsctl -> target
+
       - name: Verify immutable target before any provider credential
         if: needs.route.outputs.mode == 'preflight'
         env:
