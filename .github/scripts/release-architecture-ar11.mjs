@@ -214,10 +214,11 @@ function validatePublicationWiring(authority, workflow = fs.readFileSync(release
     '--expected-asset runtime-bundle.tar.gz',
     '--expected-asset runtime-manifest.json',
     'python scripts/github-release-publication.py publish',
-    'python scripts/camouhost-runtime-build-windows.py build',
-    '--runtime-lock runtime/camouhost/runtime-lock.json',
-    '--runtime-source runtime/camouhost/real.py',
-    '--output "$runtimeRoot" --build-python "$buildPython"',
+    'Require exact PR-tested runtime bytes before Release publication',
+    'python scripts/accepted-main-pr-reuse.py --release-component runtime',
+    'Verify exact PR-tested runtime component on cache miss',
+    'runtime-physical-proof.json',
+    'published runtime bytes differ from exactly physically tested PR bytes',
   ]) {
     if (!workflow.includes(marker)) fail(`Release Set build workflow lacks required publication wiring: ${marker}`);
   }
@@ -262,6 +263,58 @@ function validatePublicationWiring(authority, workflow = fs.readFileSync(release
   const jobCount = (marker) => workflow.split(marker).length - 1;
   if (jobCount('\n  runtime-bundle:\n') !== 1 || jobCount('\n  assemble-publish:\n') !== 1) {
     fail('Release Set build workflow must contain exactly one runtime owner and one aggregate assembler');
+  }
+  // Main consumes the SHA-bound bytes physically tested in the accepted PR,
+  // rather than silently building a second, potentially different browser.
+  const runtime = workflow.split('\n  runtime-bundle:\n')[1].split('\n  assemble-publish:\n')[0];
+  const runtimeSteps = [
+    ['Require exact PR-tested runtime bytes before Release publication', [
+      'python scripts/accepted-main-pr-reuse.py --release-component runtime',
+      '--runtime-release-id "$env:RUNTIME_RELEASE_ID"',
+      '--runtime-publication-state "$($probe.state)"',
+      '--runtime-output-dir artifacts/ar11-runtime-component',
+      "if ($LASTEXITCODE -ne 0) { throw 'accepted-main runtime has no exact physical PR byte receipt' }",
+    ]],
+    ['Verify exact PR-tested runtime component on cache miss', [
+      "if: steps.runtime-identity.outputs.reuse != 'true'",
+      'python scripts/camouhost-runtime-package.py verify-manifest',
+      'if ((Get-FileHash -Algorithm SHA256 -LiteralPath $archivePath).Hash.ToLowerInvariant() -cne $proof.archive_sha256 -or',
+      '(Get-FileHash -Algorithm SHA256 -LiteralPath $manifestPath).Hash.ToLowerInvariant() -cne $proof.manifest_sha256)',
+      "throw 'exact PR-tested runtime bytes changed before publication'",
+    ]],
+    ['Publish exact runtime component once', [
+      "if: steps.runtime-identity.outputs.reuse != 'true'",
+      'python scripts/github-release-publication.py publish',
+    ]],
+    ['Observe and verify exact durable runtime component', [
+      'if ($physicalProof.release_id -cne $env:RUNTIME_RELEASE_ID -or',
+      '$runtimeSha -cne $physicalProof.archive_sha256 -or',
+      '$runtimeAsset.size -ne $physicalProof.archive_size_bytes -or',
+      '$manifestSha -cne $physicalProof.manifest_sha256 -or',
+      '$manifestAsset.size -ne $physicalProof.manifest_size_bytes)',
+      "throw 'published runtime bytes differ from exactly physically tested PR bytes'",
+    ]],
+  ];
+  let lastStep = -1;
+  for (const [name, markers] of runtimeSteps) {
+    const title = '      - name: ' + name;
+    const start = runtime.indexOf(title);
+    if (start < 0 || start <= lastStep || runtime.split(title).length !== 2) {
+      fail('runtime source/physical receipt publication order is invalid: ' + name);
+    }
+    const end = runtime.indexOf('\n      - name:', start + title.length);
+    const step = runtime.slice(start, end < 0 ? undefined : end);
+    const active = step.split('\n').filter((line) => !/^\s*#/.test(line)).join('\n');
+    for (const marker of markers) {
+      if (!active.includes(marker)) fail('runtime physical receipt publication step ' + name + ' lacks active ' + marker);
+    }
+    lastStep = start;
+  }
+  for (const forbidden of [
+    'python scripts/camouhost-runtime-build-windows.py build',
+    'python scripts/camouhost-runtime-package.py package --runtime-root',
+  ]) {
+    if (runtime.includes(forbidden)) fail('accepted-main runtime must not rebuild physically tested PR bytes: ' + forbidden);
   }
   if (jobCount('python scripts/github-release-publication.py publish') !== 2) {
     fail('runtime component and aggregate Release Set must share exactly one publication primitive');
@@ -327,6 +380,21 @@ function selfTest(authority) {
     ['unbound assembly', workflow.replace('    needs: assemble-publish', '    needs: cloud-components')],
     ['key in job environment', workflow.replace('          PROFILE_BRIDGE_DELIVERY_PFX_BASE64:', '      PROFILE_BRIDGE_DELIVERY_PFX_BASE64:')],
     ['missing signing adapter', workflow.replace('& ./scripts/windows-delivery-sign.ps1', '& ./scripts/unsigned-placeholder.ps1')],
+    ['missing exact physical runtime admission', workflow.replace('python scripts/accepted-main-pr-reuse.py --release-component runtime', 'Write-Host "runtime assumed proven"')],
+    ['commented out physical runtime admission', workflow.replace('          python scripts/accepted-main-pr-reuse.py --release-component runtime', '          # python scripts/accepted-main-pr-reuse.py --release-component runtime')],
+    ['missing runtime input identity', workflow.replace('--runtime-release-id "$env:RUNTIME_RELEASE_ID"', '--runtime-release-id "untrusted"')],
+    ['missing runtime publication state binding', workflow.replace('--runtime-publication-state "$($probe.state)"', '--runtime-publication-state "reuse"')],
+    ['missing main receipt failure guard', workflow.replace("if ($LASTEXITCODE -ne 0) { throw 'accepted-main runtime has no exact physical PR byte receipt' }", 'Write-Host "ignored missing receipt"')],
+    ['missing PR-tested cache-miss SHA', workflow.replace("throw 'exact PR-tested runtime bytes changed before publication'", 'Write-Host "assume SHA equality"')],
+    ['missing PR-tested archive SHA comparison', workflow.replace('if ((Get-FileHash -Algorithm SHA256 -LiteralPath $archivePath).Hash.ToLowerInvariant() -cne $proof.archive_sha256 -or', 'if ($false -or')],
+    ['missing PR-tested manifest SHA comparison', workflow.replace('(Get-FileHash -Algorithm SHA256 -LiteralPath $manifestPath).Hash.ToLowerInvariant() -cne $proof.manifest_sha256)', '$false)')],
+    ['missing published-byte SHA equality', workflow.replace("throw 'published runtime bytes differ from exactly physically tested PR bytes'", 'Write-Host "assume published bytes match"')],
+    ['missing published archive SHA equality', workflow.replace('$runtimeSha -cne $physicalProof.archive_sha256 -or', '$false -or')],
+    ['missing published archive size equality', workflow.replace('$runtimeAsset.size -ne $physicalProof.archive_size_bytes -or', '$false -or')],
+    ['missing published manifest SHA equality', workflow.replace('$manifestSha -cne $physicalProof.manifest_sha256 -or', '$false -or')],
+    ['missing published manifest size equality', workflow.replace('$manifestAsset.size -ne $physicalProof.manifest_size_bytes)', '$false)')],
+    ['main runtime redundant materialization', workflow.replace('      - name: Verify exact PR-tested runtime component on cache miss', '      - name: Disallowed runtime duplicate build\n        run: python scripts/camouhost-runtime-build-windows.py build\n      - name: Verify exact PR-tested runtime component on cache miss')],
+    ['main runtime redundant repackage', workflow.replace('      - name: Verify exact PR-tested runtime component on cache miss', '      - name: Disallowed runtime duplicate package\n        run: python scripts/camouhost-runtime-package.py package --runtime-root\n      - name: Verify exact PR-tested runtime component on cache miss')],
   ]) {
     rejected = false;
     try { validatePublicationWiring(authority, damaged); } catch { rejected = true; }

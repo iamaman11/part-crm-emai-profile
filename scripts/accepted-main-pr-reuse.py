@@ -59,6 +59,10 @@ CRITICAL: dict[str, dict[str, tuple[str, ...]]] = {
             "Package exact compressed Release Set runtime input",
             "Extract and verify exact official runtime",
             "Run physical shipping reader and native Bridge Open on exact packaged runtime",
+            "Bind exact physically tested runtime archive and manifest SHA",
+            "Verify physical PR runtime uploads match exact tested SHA",
+            "Upload SHA-bound physical runtime proof receipt",
+            "Verify uploaded physical runtime proof receipt digest",
         ),
         # A successful meta status cannot replace the underlying real tests.
         "Real Camoufox cold-launch proof": (
@@ -482,6 +486,273 @@ def download_raw_artifact(artifact: dict[str, Any], destination: Path, token: st
         require(remaining == 0, "raw artifact download truncated")
 
 
+RUNTIME_RECEIPT_FIELDS = frozenset({
+    "schema_version", "kind", "source_commit_sha", "run_id", "run_attempt",
+    "release_id", "origin", "archive_sha256", "archive_size_bytes",
+    "manifest_sha256", "manifest_size_bytes",
+})
+
+
+def prove_runtime_producer(main_sha: str, api: Callable[[str], Any]) -> tuple[str, str]:
+    """Select the current FULL Camoufox PR, or an unchanged FULL ancestor.
+
+    A LIGHT PR is never a physical receipt. Historical FULL jobs without the
+    new published-byte receipt are rejected by the artifact lookup below.
+    """
+    try:
+        return main_sha, prove(main_sha, "camoufox", api)
+    except Unconfirmed:
+        prove(main_sha, "camoufox", api, require_steps=False)
+        accepted = api(f"repos/{REPOSITORY}/commits/{main_sha}")
+        parents = accepted.get("parents", [])
+        require(isinstance(parents, list) and len(parents) in (1, 2),
+                "runtime receipt has no accepted-main ancestor")
+        base = parents[0]["sha"]
+        prior = prove_unchanged_prior_camoufox(
+            main_sha, base, api,
+            lambda sha: list(github_first_parent(sha, api)),
+            lambda old, new: github_changed_paths(old, new, api),
+            camoufox_unrelated,
+        )
+        return prior, prove(prior, "camoufox", api)
+
+
+def runtime_proof_artifacts(
+    main_sha: str, api: Callable[[str], Any], expected_release_id: str,
+) -> tuple[dict[str, Any], dict[str, dict[str, Any]]]:
+    """Bind physical runtime artifacts to the exact tested PR job/attempt.
+
+    Unlike a release identity derived only from source inputs, this contract
+    requires a byte digest emitted *after* real Firefox and Bridge tests.
+    """
+    require(bool(SHA.fullmatch(main_sha)), "invalid main SHA for runtime custody")
+    require(re.fullmatch(r"runtime-bundle-v3-sha256-[0-9a-f]{64}",
+                         expected_release_id) is not None,
+            "invalid exact runtime component identity")
+    physical_main, candidate = prove_runtime_producer(main_sha, api)
+    root = f"repos/{REPOSITORY}"
+    accepted = api(f"{root}/commits/{physical_main}/pulls")
+    require(isinstance(accepted, list) and len(accepted) == 1,
+            "runtime physical PR merge is ambiguous")
+    merged_at = github_time(accepted[0].get("merged_at"))
+    runs = api(f"{root}/actions/runs?head_sha={candidate}&event=pull_request&per_page=100")
+    require(isinstance(runs.get("workflow_runs"), list)
+            and type(runs.get("total_count")) is int
+            and runs["total_count"] <= 100,
+            "incomplete runtime PR run inventory")
+    matches = [run for run in runs["workflow_runs"]
+               if run.get("name") == WORKFLOW["camoufox"]
+               and run.get("head_sha") == candidate]
+    require(bool(matches), "runtime physical workflow run missing")
+    source = max(matches, key=lambda run: run["id"])
+    require(source.get("status") == "completed"
+            and source.get("conclusion") == "success"
+            and github_time(source.get("created_at")) <=
+            github_time(source.get("updated_at")) <= merged_at,
+            "runtime physical workflow not completed before merge")
+    jobs = api(f"{root}/actions/runs/{source['id']}/jobs?per_page=100")
+    require(isinstance(jobs.get("jobs"), list)
+            and type(jobs.get("total_count")) is int
+            and jobs["total_count"] <= 100,
+            "incomplete physical runtime producer jobs")
+    producers = [job for job in jobs["jobs"]
+                 if job.get("name") == "Profile Bridge Windows regression"]
+    require(len(producers) == 1, "physical runtime producer job ambiguous")
+    job = producers[0]
+    require(job.get("conclusion") == "success"
+            and job.get("run_id") == source["id"]
+            and job.get("run_attempt") == source["run_attempt"]
+            and job.get("head_sha") == candidate,
+            "runtime producer run/attempt/source mismatch")
+    required = {
+        "Bind exact physically tested runtime archive and manifest SHA",
+        "Verify physical PR runtime uploads match exact tested SHA",
+        "Upload SHA-bound physical runtime proof receipt",
+        "Verify uploaded physical runtime proof receipt digest",
+    }
+    steps = [(step.get("name"), step.get("status"), step.get("conclusion"))
+             for step in job.get("steps", [])]
+    require(len({name for name, _, _ in steps}) == len(steps),
+            "duplicate physical runtime proof steps")
+    require(all((name, "completed", "success") in steps for name in required),
+            "physical runtime byte receipt was not completed")
+
+    inventory = api(f"{root}/actions/runs/{source['id']}/artifacts?per_page=100")
+    require(isinstance(inventory.get("artifacts"), list)
+            and type(inventory.get("total_count")) is int
+            and inventory["total_count"] <= 100
+            and inventory["total_count"] == len(inventory["artifacts"]),
+            "incomplete physical runtime artifact inventory")
+    # actions/upload-artifact archive:false publishes the raw *file basename*
+    # as the REST artifact name, regardless of a customized YAML name.
+    # Exact producer/run/HEAD/attempt/expiry/SHA binding below supplies
+    # authority; never rely on a logical artifact name ignored by the API.
+    names = {
+        "proof": "camoufox-runtime-proof.json",
+        "archive": "runtime-bundle.tar.gz",
+        "manifest": "runtime-manifest.json",
+    }
+    selected: dict[str, dict[str, Any]] = {}
+    for component, name in names.items():
+        found = [a for a in inventory["artifacts"] if a.get("name") == name]
+        require(len(found) <= 1, f"ambiguous runtime {component} artifact")
+        if not found:
+            continue
+        a = found[0]
+        workflow = a.get("workflow_run") or {}
+        digest = a.get("digest")
+        require(type(a.get("id")) is int and a["id"] > 0
+                and type(a.get("size_in_bytes")) is int and a["size_in_bytes"] > 0
+                and isinstance(digest, str) and DIGEST.fullmatch(digest) is not None
+                and a.get("expired") is False
+                and github_time(a.get("expires_at")) > datetime.now(timezone.utc)
+                and workflow.get("id") == source["id"]
+                and workflow.get("head_sha") == candidate
+                and workflow.get("head_branch") == source["head_branch"]
+                and github_time(job.get("started_at")) <=
+                github_time(a.get("created_at")) <=
+                github_time(job.get("completed_at")) <= merged_at,
+                f"runtime {component} artifact unbound from physical producer")
+        selected[component] = {
+            "id": a["id"], "name": name, "size": a["size_in_bytes"],
+            "sha256": DIGEST.fullmatch(digest).group(1),
+        }
+    require("proof" in selected, "runtime physical byte receipt absent")
+    require(len({a["id"] for a in selected.values()}) == len(selected),
+            "runtime physical artifact IDs overlap")
+    return {
+        "candidate": candidate, "source_run_id": source["id"],
+        "source_attempt": source["run_attempt"],
+        "expected_release_id": expected_release_id,
+    }, selected
+
+
+def validate_physical_runtime_receipt(
+    receipt: Any, reference: dict[str, Any], expected_release_id: str,
+) -> None:
+    require(isinstance(receipt, dict) and set(receipt) == RUNTIME_RECEIPT_FIELDS
+            and receipt.get("schema_version") == 1
+            and receipt.get("kind") == "CAMOUFOX_WINDOWS_PHYSICAL_RUNTIME_RECEIPT"
+            and receipt.get("source_commit_sha") == reference["candidate"]
+            and receipt.get("run_id") == reference["source_run_id"]
+            and receipt.get("run_attempt") == reference["source_attempt"]
+            and receipt.get("release_id") == expected_release_id
+            and receipt.get("origin") in ("published", "built")
+            and all(isinstance(receipt.get(key), str)
+                    and re.fullmatch(r"[0-9a-f]{64}", receipt[key])
+                    for key in ("archive_sha256", "manifest_sha256"))
+            and all(type(receipt.get(key)) is int and receipt[key] > 0
+                    for key in ("archive_size_bytes", "manifest_size_bytes"))
+            and receipt["archive_size_bytes"] < 2 * 1024 * 1024 * 1024,
+            "unbound or malformed runtime physical receipt")
+
+
+def validate_physical_published_assets(
+    release: Any, receipt: dict[str, Any], expected_release_id: str,
+) -> None:
+    require(isinstance(release, dict)
+            and release.get("tag_name") == expected_release_id
+            and release.get("draft") is False
+            and release.get("prerelease") is False,
+            "runtime publication identity/flags mismatch")
+    assets = release.get("assets")
+    require(isinstance(assets, list) and len(assets) == 2,
+            "runtime publication asset inventory mismatch")
+    for name, sha_field, size_field in (
+        ("runtime-bundle.tar.gz", "archive_sha256", "archive_size_bytes"),
+        ("runtime-manifest.json", "manifest_sha256", "manifest_size_bytes"),
+    ):
+        matches = [a for a in assets if isinstance(a, dict) and a.get("name") == name]
+        require(len(matches) == 1 and matches[0].get("state") == "uploaded"
+                and matches[0].get("digest") == f"sha256:{receipt[sha_field]}"
+                and matches[0].get("size") == receipt[size_field],
+                f"published runtime bytes differ from physically tested {name}")
+
+
+def validate_physical_runtime_miss_artifacts(
+    receipt: dict[str, Any], selected: dict[str, dict[str, Any]],
+) -> None:
+    require(receipt["origin"] == "built"
+            and set(selected) == {"proof", "archive", "manifest"},
+            "runtime publication miss lacks exact PR-tested bytes")
+    for kind, sha_field, size_field in (
+        ("archive", "archive_sha256", "archive_size_bytes"),
+        ("manifest", "manifest_sha256", "manifest_size_bytes"),
+    ):
+        a = selected[kind]
+        require(a["size"] == receipt[size_field]
+                and a["sha256"] == receipt[sha_field],
+                f"physical runtime {kind} artifact receipt mismatch")
+
+
+def prepare_physical_runtime_component(
+    main_sha: str, expected_release_id: str, publication_state: str,
+    destination: Path, api: Callable[[str], Any], token: str,
+) -> None:
+    """Reuse the published physical bytes, or transfer the precise tested miss.
+
+    Never rebuild the runtime on accepted main: source identity is insufficient
+    to prove binary equality for a non-reproducible external browser package.
+    """
+    require(publication_state in {"reuse", "absent", "resume"},
+            "unknown runtime publication state")
+    require(not destination.is_symlink() and destination.is_dir(),
+            "runtime evidence destination must be a clean directory")
+    require(all(path.is_file() and not path.is_symlink()
+                and path.name in {"runtime-input-identity.json", "runtime-release-probe.json"}
+                for path in destination.iterdir()),
+            "runtime proof destination contains unexpected files")
+    current = api(f"repos/{REPOSITORY}/git/ref/heads/main")
+    require(current.get("ref") == "refs/heads/main"
+            and current.get("object", {}).get("sha") == main_sha,
+            "runtime publication target is no longer protected main")
+    reference, selected = runtime_proof_artifacts(main_sha, api, expected_release_id)
+    with tempfile.TemporaryDirectory(prefix="camoufox-physical-custody-") as temporary:
+        root = Path(temporary)
+        raw = root / selected["proof"]["name"]
+        download_raw_artifact(selected["proof"], raw, token)
+        require(raw.stat().st_size == selected["proof"]["size"]
+                and hashlib.sha256(raw.read_bytes()).hexdigest() == selected["proof"]["sha256"],
+                "physical runtime receipt bytes invalid")
+        try:
+            receipt = json.loads(raw.read_text(encoding="utf-8-sig"))
+        except (ValueError, UnicodeError) as error:
+            raise Unconfirmed(f"physical runtime receipt JSON invalid: {error}") from error
+        validate_physical_runtime_receipt(receipt, reference, expected_release_id)
+        if publication_state == "reuse":
+            release = api(f"repos/{REPOSITORY}/releases/tags/{expected_release_id}")
+            validate_physical_published_assets(release, receipt, expected_release_id)
+        else:
+            validate_physical_runtime_miss_artifacts(receipt, selected)
+            for kind, output_name, sha_field, size_field in (
+                ("archive", "runtime-bundle.tar.gz", "archive_sha256", "archive_size_bytes"),
+                ("manifest", "runtime-manifest.json", "manifest_sha256", "manifest_size_bytes"),
+            ):
+                a = selected[kind]
+                target = destination / output_name
+                require(not target.exists(), "runtime miss artifact destination exists")
+                download_raw_artifact(a, target, token)
+                require(target.stat().st_size == receipt[size_field]
+                        and sha256_file_streamed(target) == receipt[sha_field],
+                        f"PR-tested runtime {kind} bytes changed in main")
+        (destination / "runtime-physical-proof.json").write_text(
+            json.dumps(receipt, sort_keys=True, indent=2) + "\n",
+            encoding="utf-8", newline="\n",
+        )
+    print(f"Exact physically tested runtime: main={main_sha} "
+          f"PR_HEAD={reference['candidate']} run={reference['source_run_id']} "
+          f"attempt={reference['source_attempt']} sha256={receipt['archive_sha256']} "
+          f"publication={publication_state} origin={receipt['origin']}")
+
+
+def sha256_file_streamed(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as source:
+        for chunk in iter(lambda: source.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
 def current_windows_runner_identity() -> dict[str, str]:
     """Bind a physical test to a specific hosted Windows image and compiler."""
     image_os = os.environ.get("ImageOS", "")
@@ -857,6 +1128,51 @@ def github_changed_paths(old_sha: str, new_sha: str,
     require(comparison["status"] != "identical" or not paths,
             "identical GitHub compare contains changes")
     return paths
+
+
+def prove_open_camoufox_light_pr(
+    api: Callable[[str], Any], *, graph_api_only: bool = False,
+) -> tuple[str, str]:
+    """Require current protected base and only source-closure-unrelated PR edits.
+
+    The runtime byte proof is then resolved against this base, not against an
+    arbitrary archived commit or a PR's own metadata. This entrypoint must
+    fail *before* a required green LIGHT Camoufox context can be emitted.
+    """
+    require(os.environ.get("GITHUB_EVENT_NAME") == "pull_request"
+            and os.environ.get("GITHUB_REPOSITORY") == REPOSITORY,
+            "Camoufox LIGHT custody only permitted on canonical pull_request")
+    head = os.environ.get("PR_HEAD_SHA", "")
+    base = os.environ.get("PR_BASE_SHA", "")
+    number = os.environ.get("PR_NUMBER", "")
+    require(bool(SHA.fullmatch(head) and SHA.fullmatch(base))
+            and number.isdecimal() and int(number) > 0,
+            "invalid Camoufox PR exact source/base/number")
+    if not graph_api_only:
+        require(subprocess.check_output(["git", "rev-parse", "HEAD"],
+                                        text=True).strip() == head,
+                "Camoufox LIGHT PR checkout changed after event")
+    root = f"repos/{REPOSITORY}"
+    current_main = api(f"{root}/git/ref/heads/main")
+    require(current_main.get("ref") == "refs/heads/main"
+            and current_main.get("object", {}).get("sha") == base,
+            "Camoufox LIGHT PR base is not current protected main")
+    pr = api(f"{root}/pulls/{int(number)}")
+    require(pr.get("state") == "open" and pr.get("merged_at") is None
+            and pr.get("head", {}).get("sha") == head
+            and pr.get("base", {}).get("sha") == base
+            and pr.get("base", {}).get("ref") == "main"
+            and pr.get("head", {}).get("repo", {}).get("full_name") == REPOSITORY
+            and pr.get("base", {}).get("repo", {}).get("full_name") == REPOSITORY,
+            "Camoufox LIGHT PR source/base/fork authority mismatch")
+    changes = github_changed_paths(base, head, api)
+    require(bool(changes) and camoufox_unrelated(changes),
+            "Camoufox LIGHT PR changed physical source inputs or diff is incomplete")
+    package = runpy.run_path(str(Path(__file__).with_name("camouhost-runtime-package.py")))
+    release_id = package["runtime_input_identity"]()["release_id"]
+    require(re.fullmatch(r"runtime-bundle-v3-sha256-[0-9a-f]{64}", release_id)
+            is not None, "current runtime source input identity unavailable")
+    return base, release_id
 
 
 def prove_unchanged_prior_native(
@@ -1764,14 +2080,346 @@ def self_test() -> None:
     )
     assert process.returncode != 0 and "BRIDGE_RELEASE_REUSE_NOT_PROVEN" in process.stderr
 
+    # One post-physical raw receipt, bound to the real FULL Gate attempt,
+    # authorizes exact bytes. A LIGHT PR inherits only a recent unchanged FULL
+    # receipt, never a skipped browser job or a source-identity-only guess.
+    release_id = "runtime-bundle-v3-sha256-" + "e" * 64
+    full_pages, _ = fixture("camoufox")
+    root = f"repos/{REPOSITORY}"
+    main_sha, head_sha = "a" * 40, "c" * 40
+    history_url = f"{root}/actions/runs?head_sha={head_sha}&event=pull_request&per_page=100"
+    source_run = next(run for run in full_pages[history_url]["workflow_runs"]
+                      if run["name"] == WORKFLOW["camoufox"])
+    inventory_url = f"{root}/actions/runs/{source_run['id']}/artifacts?per_page=100"
+    proof_artifact = {
+        "id": 979, "name": "camoufox-runtime-proof.json",
+        "size_in_bytes": 512, "digest": "sha256:" + "f" * 64,
+        "expired": False, "created_at": "2026-10-31T00:05:00Z",
+        "expires_at": "2030-01-01T00:00:00Z",
+        "workflow_run": {
+            "id": source_run["id"], "head_sha": head_sha,
+            "head_branch": source_run["head_branch"],
+        },
+    }
+    full_pages[inventory_url]["artifacts"].append(proof_artifact)
+    full_pages[inventory_url]["total_count"] += 1
+    reference, artifacts = runtime_proof_artifacts(
+        main_sha, lambda key: full_pages[key], release_id,
+    )
+    require(reference["candidate"] == head_sha and set(artifacts) == {"proof"},
+            "positive FULL runtime source/receipt artifact rejected")
+    receipt = {
+        "schema_version": 1, "kind": "CAMOUFOX_WINDOWS_PHYSICAL_RUNTIME_RECEIPT",
+        "source_commit_sha": head_sha,
+        "run_id": source_run["id"], "run_attempt": source_run["run_attempt"],
+        "release_id": release_id, "origin": "published",
+        "archive_sha256": "1" * 64, "archive_size_bytes": 1_525_000_000,
+        "manifest_sha256": "2" * 64, "manifest_size_bytes": 1_063_374,
+    }
+    validate_physical_runtime_receipt(receipt, reference, release_id)
+    published = {
+        "tag_name": release_id, "draft": False, "prerelease": False,
+        "assets": [
+            {"name": "runtime-bundle.tar.gz", "state": "uploaded",
+             "digest": "sha256:" + receipt["archive_sha256"],
+             "size": receipt["archive_size_bytes"]},
+            {"name": "runtime-manifest.json", "state": "uploaded",
+             "digest": "sha256:" + receipt["manifest_sha256"],
+             "size": receipt["manifest_size_bytes"]},
+        ],
+    }
+    validate_physical_published_assets(published, receipt, release_id)
+    def reject(proof: Callable[[], None], name: str) -> None:
+        try:
+            proof()
+        except (Unconfirmed, KeyError, ValueError, TypeError):
+            return
+        raise AssertionError(f"unsafe runtime custody accepted: {name}")
+    for fault in ("wrong-head", "wrong-attempt", "wrong-release-id",
+                  "wrong-digest", "extra-field", "zero-size", "fake-origin"):
+        changed = json.loads(json.dumps(receipt))
+        if fault == "wrong-head":
+            changed["source_commit_sha"] = "9" * 40
+        elif fault == "wrong-attempt":
+            changed["run_attempt"] += 1
+        elif fault == "wrong-release-id":
+            changed["release_id"] = "runtime-bundle-v3-sha256-" + "9" * 64
+        elif fault == "wrong-digest":
+            changed["archive_sha256"] = "not-a-sha"
+        elif fault == "extra-field":
+            changed["untrusted"] = True
+        elif fault == "zero-size":
+            changed["archive_size_bytes"] = 0
+        else:
+            changed["origin"] = "assumed"
+        reject(lambda: validate_physical_runtime_receipt(changed, reference, release_id),
+               fault)
+    for fault in ("wrong-published-sha", "wrong-published-size",
+                  "duplicate-asset", "draft-release"):
+        changed = json.loads(json.dumps(published))
+        if fault == "wrong-published-sha":
+            changed["assets"][0]["digest"] = "sha256:" + "9" * 64
+        elif fault == "wrong-published-size":
+            changed["assets"][0]["size"] += 1
+        elif fault == "duplicate-asset":
+            changed["assets"][1] = dict(changed["assets"][0])
+        else:
+            changed["draft"] = True
+        reject(lambda: validate_physical_published_assets(changed, receipt, release_id),
+               fault)
+    reject(lambda: validate_physical_runtime_miss_artifacts(receipt, artifacts),
+           "published-only receipt accepted on runtime publication miss")
+    built = dict(receipt, origin="built")
+    miss_artifacts = {
+        **artifacts,
+        "archive": {"sha256": built["archive_sha256"],
+                    "size": built["archive_size_bytes"]},
+        "manifest": {"sha256": built["manifest_sha256"],
+                     "size": built["manifest_size_bytes"]},
+    }
+    validate_physical_runtime_miss_artifacts(built, miss_artifacts)
+    # GitHub raw artifact inventories use on-disk basenames, not logical
+    # upload-artifact name= values. Validate the REST producer inventory for
+    # a 1.5-GiB MISS, alongside the independent small receipt HIT.
+    built_pages = json.loads(json.dumps(full_pages))
+    for name, digest, size, identifier in (
+        ("runtime-bundle.tar.gz", built["archive_sha256"],
+         built["archive_size_bytes"], 980),
+        ("runtime-manifest.json", built["manifest_sha256"],
+         built["manifest_size_bytes"], 981),
+    ):
+        item = json.loads(json.dumps(proof_artifact))
+        item.update(id=identifier, name=name, digest="sha256:" + digest,
+                    size_in_bytes=size)
+        built_pages[inventory_url]["artifacts"].append(item)
+        built_pages[inventory_url]["total_count"] += 1
+    built_reference, built_selected = runtime_proof_artifacts(
+        main_sha, lambda key: built_pages[key], release_id,
+    )
+    require(built_reference["candidate"] == head_sha
+            and set(built_selected) == {"proof", "archive", "manifest"},
+            "raw GitHub artifact basename inventory was not resolved")
+    validate_physical_runtime_miss_artifacts(built, built_selected)
+    for fault in ("configured-logical-name", "missing-raw-archive",
+                  "duplicate-raw-archive", "wrong-raw-archive-SHA"):
+        changed = json.loads(json.dumps(built_pages))
+        inventory = changed[inventory_url]
+        archive = next(a for a in inventory["artifacts"]
+                       if a["name"] == "runtime-bundle.tar.gz")
+        if fault == "configured-logical-name":
+            archive["name"] = f"camoufox-runtime-bundle-{head_sha}"
+        elif fault == "missing-raw-archive":
+            inventory["artifacts"].remove(archive)
+            inventory["total_count"] -= 1
+        elif fault == "duplicate-raw-archive":
+            inventory["artifacts"].append(dict(archive))
+            inventory["total_count"] += 1
+        else:
+            archive["digest"] = "sha256:" + "9" * 64
+        def prove_miss() -> None:
+            _, selected = runtime_proof_artifacts(
+                main_sha, lambda key: changed[key], release_id,
+            )
+            validate_physical_runtime_miss_artifacts(built, selected)
+        reject(prove_miss, "raw GitHub artifact " + fault)
+    for fault in ("missing-archive", "missing-manifest", "tampered-archive"):
+        changed = json.loads(json.dumps(miss_artifacts))
+        if fault == "missing-archive":
+            changed.pop("archive")
+        elif fault == "missing-manifest":
+            changed.pop("manifest")
+        else:
+            changed["archive"]["sha256"] = "9" * 64
+        reject(lambda: validate_physical_runtime_miss_artifacts(built, changed),
+               fault)
+    for fault in ("missing-receipt", "legacy-configured-name", "expired-receipt", "wrong-artifact-head",
+                  "wrong-artifact-run", "duplicate-receipt", "stale-attempt",
+                  "missing-physical-step", "post-merge-rerun"):
+        changed = json.loads(json.dumps(full_pages))
+        inventory = changed[inventory_url]
+        item = next(a for a in inventory["artifacts"]
+                    if a["name"] == proof_artifact["name"])
+        if fault == "missing-receipt":
+            inventory["artifacts"].remove(item)
+            inventory["total_count"] -= 1
+        elif fault == "legacy-configured-name":
+            item["name"] = f"camoufox-runtime-proof-{head_sha}"
+        elif fault == "expired-receipt":
+            item["expired"] = True
+        elif fault == "wrong-artifact-head":
+            item["workflow_run"]["head_sha"] = "9" * 40
+        elif fault == "wrong-artifact-run":
+            item["workflow_run"]["id"] += 1
+        elif fault == "duplicate-receipt":
+            inventory["artifacts"].append(dict(item))
+            inventory["total_count"] += 1
+        elif fault == "stale-attempt":
+            jobs = changed[f"{root}/actions/runs/{source_run['id']}/jobs?per_page=100"]["jobs"]
+            producer = next(j for j in jobs
+                            if j["name"] == "Profile Bridge Windows regression")
+            producer["run_attempt"] += 1
+        elif fault == "missing-physical-step":
+            jobs = changed[f"{root}/actions/runs/{source_run['id']}/jobs?per_page=100"]["jobs"]
+            producer = next(j for j in jobs
+                            if j["name"] == "Profile Bridge Windows regression")
+            step = next(s for s in producer["steps"]
+                        if s["name"] == "Upload SHA-bound physical runtime proof receipt")
+            step["conclusion"] = "skipped"
+        else:
+            source = next(run for run in changed[history_url]["workflow_runs"]
+                          if run["name"] == WORKFLOW["camoufox"])
+            source["updated_at"] = "2026-11-01T00:00:00Z"
+        reject(lambda: runtime_proof_artifacts(main_sha, lambda key: changed[key],
+                                               release_id), fault)
+
+    # Inherited LIGHT success comes from current exact-tree 18/18 plus the
+    # previous accepted main FULL physical receipt, with only documented
+    # Camoufox-unrelated changes (including exact frontend/src TS/CSS).
+    light_main, light_head = "6" * 40, "7" * 40
+    light = json.loads(json.dumps(full_pages))
+    light[f"{root}/commits/{light_main}"] = {
+        "sha": light_main, "parents": [{"sha": main_sha}],
+        "commit": {"tree": {"sha": "8" * 40}},
+    }
+    light[f"{root}/commits/{light_main}/pulls"] = [{
+        "state": "closed", "merged_at": "2026-11-01T01:00:00Z",
+        "merge_commit_sha": light_main,
+        "base": {"sha": main_sha, "ref": "main",
+                 "repo": {"full_name": REPOSITORY}},
+        "head": {"sha": light_head, "ref": "codex/frontend-only",
+                 "repo": {"full_name": REPOSITORY}},
+    }]
+    light[f"{root}/commits/{light_head}"] = {
+        "sha": light_head, "commit": {"tree": {"sha": "8" * 40}},
+    }
+    light[f"{root}/commits/{'b'*40}"] = {
+        "sha": "b" * 40, "parents": [],
+        "commit": {"tree": {"sha": "0" * 40}},
+    }
+    light_runs = json.loads(json.dumps(full_pages[history_url]))
+    for run in light_runs["workflow_runs"]:
+        run["id"] += 1000
+        run["head_sha"] = light_head
+        run["head_branch"] = "codex/frontend-only"
+        run["created_at"] = "2026-11-01T00:00:00Z"
+        run["updated_at"] = "2026-11-01T00:10:00Z"
+    light_history_url = f"{root}/actions/runs?head_sha={light_head}&event=pull_request&per_page=100"
+    light[light_history_url] = light_runs
+    light_source = next(run for run in light_runs["workflow_runs"]
+                        if run["name"] == WORKFLOW["camoufox"])
+    light_jobs = json.loads(json.dumps(full_pages[
+        f"{root}/actions/runs/{source_run['id']}/jobs?per_page=100"]))
+    for job in light_jobs["jobs"]:
+        job["run_id"] = light_source["id"]
+        job["head_sha"] = light_head
+        for step in job["steps"]:
+            step["conclusion"] = "skipped"
+    light[f"{root}/actions/runs/{light_source['id']}/jobs?per_page=100"] = light_jobs
+    light[f"{root}/compare/{main_sha}...{light_main}"] = {
+        "base_commit": {"sha": main_sha},
+        "merge_base_commit": {"sha": main_sha},
+        "status": "ahead", "ahead_by": 1,
+        "commits": [{"sha": light_main}],
+        "files": [{"filename": "docs/runtime-note.md", "status": "modified"}],
+    }
+    require(prove(main_sha, "camoufox", lambda key: light[key]) == head_sha,
+            "fixture lost prior FULL physical Camoufox proof")
+    require(camoufox_unrelated(github_changed_paths(
+        main_sha, light_main, lambda key: light[key])),
+        "runtime-unrelated fixture did not classify LIGHT")
+    inherited_source, inherited_head = prove_runtime_producer(
+        light_main, lambda key: light[key],
+    )
+    require(inherited_source == main_sha and inherited_head == head_sha,
+            "LIGHT frontend PR did not inherit same-source FULL physical Gate")
+    inherited_reference, inherited_artifacts = runtime_proof_artifacts(
+        light_main, lambda key: light[key], release_id,
+    )
+    require(inherited_reference["candidate"] == head_sha
+            and set(inherited_artifacts) == {"proof"},
+            "LIGHT runtime physical SHA receipt was not inherited")
+    # The PR-side gate must make its LIGHT decision against live protected
+    # main and the exact source HEAD before it can suppress physical Windows.
+    light[f"{root}/git/ref/heads/main"] = {
+        "ref": "refs/heads/main", "object": {"sha": main_sha},
+    }
+    light[f"{root}/pulls/42"] = {
+        "state": "open", "merged_at": None,
+        "head": {"sha": light_head, "repo": {"full_name": REPOSITORY}},
+        "base": {"sha": main_sha, "ref": "main",
+                 "repo": {"full_name": REPOSITORY}},
+    }
+    light[f"{root}/compare/{main_sha}...{light_head}"] = {
+        "base_commit": {"sha": main_sha},
+        "merge_base_commit": {"sha": main_sha},
+        "status": "ahead", "ahead_by": 1,
+        "commits": [{"sha": light_head}],
+        "files": [{"filename": "frontend/src/app/main.tsx", "status": "modified"}],
+    }
+    light_environment = {
+        "GITHUB_EVENT_NAME": "pull_request",
+        "GITHUB_REPOSITORY": REPOSITORY,
+        "PR_HEAD_SHA": light_head,
+        "PR_BASE_SHA": main_sha,
+        "PR_NUMBER": "42",
+    }
+    old_environment = {key: os.environ.get(key) for key in light_environment}
+    try:
+        os.environ.update(light_environment)
+        base, current_release_id = prove_open_camoufox_light_pr(
+            lambda key: light[key], graph_api_only=True,
+        )
+        require(base == main_sha and current_release_id.startswith(
+            "runtime-bundle-v3-sha256-"),
+            "current exact frontend-only PR could not seek published-byte proof")
+        for fault in ("stale-base", "wrong-head", "foreign-repo",
+                      "runtime-change", "package-change", "renamed",
+                      "incomplete-compare", "closed-pr", "invalid-event"):
+            changed = json.loads(json.dumps(light))
+            if fault == "stale-base":
+                changed[f"{root}/git/ref/heads/main"]["object"]["sha"] = "9" * 40
+            elif fault == "wrong-head":
+                changed[f"{root}/pulls/42"]["head"]["sha"] = "9" * 40
+            elif fault == "foreign-repo":
+                changed[f"{root}/pulls/42"]["head"]["repo"]["full_name"] = "foreign/repo"
+            elif fault == "runtime-change":
+                changed[f"{root}/compare/{main_sha}...{light_head}"]["files"][0]["filename"] = "runtime/camouhost/real.py"
+            elif fault == "package-change":
+                changed[f"{root}/compare/{main_sha}...{light_head}"]["files"][0]["filename"] = "frontend/package.json"
+            elif fault == "renamed":
+                changed[f"{root}/compare/{main_sha}...{light_head}"]["files"][0]["status"] = "renamed"
+            elif fault == "incomplete-compare":
+                changed[f"{root}/compare/{main_sha}...{light_head}"]["files"] *= 300
+            elif fault == "closed-pr":
+                changed[f"{root}/pulls/42"]["state"] = "closed"
+            else:
+                os.environ["GITHUB_EVENT_NAME"] = "push"
+            reject(lambda: prove_open_camoufox_light_pr(
+                lambda key: changed[key], graph_api_only=True,
+            ), fault)
+            os.environ["GITHUB_EVENT_NAME"] = "pull_request"
+    finally:
+        for key, value in old_environment.items():
+            if value is None:
+                os.environ.pop(key, None)
+            else:
+                os.environ[key] = value
+    light[f"{root}/compare/{main_sha}...{light_main}"]["files"][0]["filename"] = "runtime/camouhost/real.py"
+    reject(lambda: prove_runtime_producer(light_main, lambda key: light[key]),
+           "LIGHT inherited changed runtime source")
+
     print("Accepted-main exact PR proof: positive and negative fixtures PASS")
 
 
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--gate", choices=sorted(CRITICAL))
-    parser.add_argument("--release-component", choices=("cloud", "bridge"))
+    parser.add_argument("--release-component", choices=("cloud", "bridge", "runtime"))
+    parser.add_argument("--runtime-release-id")
+    parser.add_argument("--runtime-publication-state", choices=("reuse", "absent", "resume"))
+    parser.add_argument("--runtime-output-dir", type=Path)
     parser.add_argument("--pr-native-proof", action="store_true")
+    parser.add_argument("--pr-camoufox-byte-proof", action="store_true")
     parser.add_argument("--pr-native-certify", action="store_true")
     parser.add_argument("--pr-native-bridge", type=Path)
     parser.add_argument("--native-runner-receipt", choices=sorted(RUNNER_RECEIPT))
@@ -1782,6 +2430,7 @@ def main() -> int:
     if args.self_test:
         self_test()
     routes = sum((args.gate is not None, args.release_component is not None,
+                  args.pr_camoufox_byte_proof,
                   args.pr_native_proof, args.pr_native_certify,
                   args.pr_native_bridge is not None,
                   args.native_runner_receipt is not None))
@@ -1795,6 +2444,25 @@ def main() -> int:
         write_full_runner_receipt(args.native_runner_receipt, args.receipt_output)
         print(f"FULL {args.native_runner_receipt} Windows runner identity receipt ready")
         return 0
+    if args.pr_camoufox_byte_proof:
+        try:
+            token = os.environ.get("GITHUB_TOKEN")
+            require(bool(token), "Camoufox LIGHT PR needs read-only GitHub authority")
+            api = api_reader(token)
+            base, release_id = prove_open_camoufox_light_pr(api)
+            with tempfile.TemporaryDirectory(prefix="camoufox-light-published-byte-") as temporary:
+                destination = Path(temporary)
+                prepare_physical_runtime_component(
+                    base, release_id, "reuse", destination, api, token,
+                )
+            print(f"CAMOUFOX_LIGHT_PUBLISHED_BYTES_PROVEN=PASS;base={base};release_id={release_id}")
+            return 0
+        except (Unconfirmed, KeyError, ValueError, TypeError, AssertionError,
+                urllib.error.URLError, OSError, subprocess.SubprocessError,
+                UnicodeError) as error:
+            print(f"CAMOUFOX_LIGHT_BYTE_PROOF_UNAVAILABLE ({type(error).__name__}): "
+                  f"{error}; full real Windows/Camoufox proof mandatory")
+            return 1
     if args.pr_native_proof or args.pr_native_certify or args.pr_native_bridge is not None:
         verified = False
         try:
@@ -1864,6 +2532,16 @@ def main() -> int:
                     else:
                         candidate = prove(main_sha, args.gate, api)
                         print(f"Reuse verified PR test evidence from exact tree {candidate}")
+                elif args.release_component == "runtime":
+                    require(bool(args.runtime_release_id)
+                            and args.runtime_publication_state is not None
+                            and args.runtime_output_dir is not None,
+                            "runtime component requires release ID, publication state and output dir")
+                    prepare_physical_runtime_component(
+                        main_sha, args.runtime_release_id,
+                        args.runtime_publication_state, args.runtime_output_dir,
+                        api, token,
+                    )
                 else:
                     prepare_release_component(main_sha, args.release_component, api)
                 reuse = True
@@ -1903,6 +2581,11 @@ def main() -> int:
     if args.release_component == "bridge" and not reuse:
         print("BRIDGE_RELEASE_REUSE_NOT_PROVEN: exact physically proven PR Bridge "
               "artifact missing; refusing untested main recompilation", file=sys.stderr)
+        return 1
+    if args.release_component == "runtime" and not reuse:
+        print("RUNTIME_PHYSICAL_BYTES_NOT_PROVEN: no exact published-byte Gate "
+              "receipt for this accepted main/runtime identity; refusing "
+              "main-side rebuild or unproven Release publication", file=sys.stderr)
         return 1
     if args.github_output is not None:
         with args.github_output.open("a", encoding="utf-8") as handle:

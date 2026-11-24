@@ -77,6 +77,11 @@ def is_safe_git_path(path: str) -> bool:
 def is_proven_unrelated(path: str) -> bool:
     if not is_safe_git_path(path):
         return False
+    # The Windows Camoufox/Bridge proof consumes no frontend/src source.
+    # The independent frontend and cross-component gates still execute; only
+    # isolated React/CSS source may inherit exact published-byte browser proof.
+    if path.startswith("frontend/src/") and path.endswith((".ts", ".tsx", ".css")):
+        return True
     if path in EXACT_PROVEN_UNRELATED:
         return True
     if path.startswith(PROVEN_UNRELATED_PREFIXES):
@@ -121,6 +126,26 @@ def run_self_test() -> None:
             False,
         ),
         ("docs-only", ["docs/architecture-note.md"], False),
+        ("frontend-only", [
+            "frontend/src/app/main.tsx",
+            "frontend/src/components/dialog.ts",
+            "frontend/src/styles/app.css",
+        ], False),
+        ("frontend-package-is-heavy", ["frontend/package.json"], True),
+        ("frontend-public-is-heavy", ["frontend/public/index.html"], True),
+        ("frontend-generated-is-heavy", ["frontend/src/generated/schema.json"], True),
+        ("frontend-asset-is-heavy", ["frontend/src/icons/profile.svg"], True),
+        ("frontend-cargo-is-heavy", ["frontend/src/Cargo.toml"], True),
+        ("frontend-with-rust-is-heavy", [
+            "frontend/src/app/main.tsx",
+            "apps/profile-bridge/src/main.rs",
+        ], True),
+        ("frontend-with-runtime-lock-is-heavy", [
+            "frontend/src/app/main.tsx",
+            "runtime/camouhost/runtime-lock.json",
+        ], True),
+        ("frontend-traversal-is-heavy", ["frontend/src/../runtime/camouhost/real.ts"], True),
+        ("frontend-ambiguous-backslash-is-heavy", [r"frontend/src\main.tsx"], True),
         ("d1-workflow", [".github/workflows/d1-migration-executor.yml"], False),
         ("opsctl-only", ["tools/opsctl/src/main.rs"], False),
         ("ar11-only", [

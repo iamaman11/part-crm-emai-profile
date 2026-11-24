@@ -181,6 +181,7 @@ jobs:
     runs-on: windows-2025
     timeout-minutes: 120
     permissions:
+      actions: read
       contents: write
     env:
       SOURCE_SHA: ${{ github.sha }}
@@ -236,6 +237,20 @@ jobs:
             throw "unsupported runtime publication probe state: $($probe.state)"
           }
 
+      - name: Require exact PR-tested runtime bytes before Release publication
+        shell: pwsh
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          RUNTIME_RELEASE_ID: ${{ steps.runtime-identity.outputs.release_id }}
+        run: |
+          $probe = Get-Content artifacts/ar11-runtime-component/runtime-release-probe.json -Raw | ConvertFrom-Json
+          if ($probe.release_id -cne $env:RUNTIME_RELEASE_ID) { throw 'runtime publication probe source drift' }
+          python scripts/accepted-main-pr-reuse.py --release-component runtime `
+            --runtime-release-id "$env:RUNTIME_RELEASE_ID" `
+            --runtime-publication-state "$($probe.state)" `
+            --runtime-output-dir artifacts/ar11-runtime-component
+          if ($LASTEXITCODE -ne 0) { throw 'accepted-main runtime has no exact physical PR byte receipt' }
+
       - name: Resolve existing immutable runtime manifest
         if: steps.runtime-identity.outputs.reuse == 'true'
         shell: pwsh
@@ -245,27 +260,22 @@ jobs:
           gh release download "$env:RUNTIME_RELEASE_ID" --repo "$env:GITHUB_REPOSITORY" --dir artifacts/ar11-runtime-component --pattern runtime-manifest.json
           python scripts/camouhost-runtime-package.py verify-manifest --manifest artifacts/ar11-runtime-component/runtime-manifest.json | Out-Null
 
-      - name: Materialize exact clean-host Windows runtime on cache miss
-        if: steps.runtime-identity.outputs.reuse != 'true'
-        shell: pwsh
-        run: |
-          $runtimeRoot = Join-Path $env:RUNNER_TEMP 'camouhost-runtime'
-          $buildPython = (Get-Command python).Source
-          python scripts/camouhost-runtime-build-windows.py build --runtime-lock runtime/camouhost/runtime-lock.json --runtime-source runtime/camouhost/real.py --output "$runtimeRoot" --build-python "$buildPython"
-          if (-not (Test-Path -LiteralPath (Join-Path $runtimeRoot 'python\python.exe') -PathType Leaf)) { throw 'embedded Python missing' }
-          if (-not (Test-Path -LiteralPath (Join-Path $runtimeRoot 'browser\camoufox.exe') -PathType Leaf)) { throw 'packaged Camoufox missing' }
-
-      - name: Package exact runtime component on cache miss
+      - name: Verify exact PR-tested runtime component on cache miss
         if: steps.runtime-identity.outputs.reuse != 'true'
         shell: pwsh
         env:
           RUNTIME_RELEASE_ID: ${{ steps.runtime-identity.outputs.release_id }}
         run: |
-          $runtimeRoot = Join-Path $env:RUNNER_TEMP 'camouhost-runtime'
-          python scripts/camouhost-runtime-package.py package --runtime-root "$runtimeRoot" --archive artifacts/ar11-runtime-component/runtime-bundle.tar.gz --manifest artifacts/ar11-runtime-component/runtime-manifest.json
-          python scripts/camouhost-runtime-package.py verify-manifest --manifest artifacts/ar11-runtime-component/runtime-manifest.json | Out-Null
-          $manifest = Get-Content artifacts/ar11-runtime-component/runtime-manifest.json -Raw | ConvertFrom-Json
-          if ($manifest.release_id -ne $env:RUNTIME_RELEASE_ID) { throw 'built runtime identity differs from exact current inputs' }
+          $archivePath = 'artifacts/ar11-runtime-component/runtime-bundle.tar.gz'
+          $manifestPath = 'artifacts/ar11-runtime-component/runtime-manifest.json'
+          $proof = Get-Content artifacts/ar11-runtime-component/runtime-physical-proof.json -Raw | ConvertFrom-Json
+          if (-not (Test-Path -LiteralPath $archivePath -PathType Leaf) -or -not (Test-Path -LiteralPath $manifestPath -PathType Leaf)) { throw 'exact PR-tested runtime bytes missing' }
+          python scripts/camouhost-runtime-package.py verify-manifest --manifest "$manifestPath" | Out-Null
+          if ($LASTEXITCODE -ne 0) { throw 'PR-tested runtime manifest invalid against accepted main' }
+          $manifest = Get-Content $manifestPath -Raw | ConvertFrom-Json
+          if ($manifest.release_id -cne $env:RUNTIME_RELEASE_ID -or $proof.release_id -cne $env:RUNTIME_RELEASE_ID) { throw 'PR-tested runtime identity differs from accepted main inputs' }
+          if ((Get-FileHash -Algorithm SHA256 -LiteralPath $archivePath).Hash.ToLowerInvariant() -cne $proof.archive_sha256 -or
+              (Get-FileHash -Algorithm SHA256 -LiteralPath $manifestPath).Hash.ToLowerInvariant() -cne $proof.manifest_sha256) { throw 'exact PR-tested runtime bytes changed before publication' }
 
       - name: Publish exact runtime component once
         if: steps.runtime-identity.outputs.reuse != 'true'
@@ -311,6 +321,14 @@ jobs:
           if ($manifestAsset.digest -ne "sha256:$manifestSha") { throw 'runtime manifest durable digest mismatch' }
 
           $runtimeSha = $runtimeAsset.digest.Substring(7)
+          $physicalProof = Get-Content artifacts/ar11-runtime-component/runtime-physical-proof.json -Raw | ConvertFrom-Json
+          if ($physicalProof.release_id -cne $env:RUNTIME_RELEASE_ID -or
+              $runtimeSha -cne $physicalProof.archive_sha256 -or
+              $runtimeAsset.size -ne $physicalProof.archive_size_bytes -or
+              $manifestSha -cne $physicalProof.manifest_sha256 -or
+              $manifestAsset.size -ne $physicalProof.manifest_size_bytes) {
+            throw 'published runtime bytes differ from exactly physically tested PR bytes'
+          }
           @{
             schema_version = 1
             kind = 'WINDOWS_RUNTIME_COMPONENT_OBSERVATION'
@@ -330,6 +348,7 @@ jobs:
             artifacts/ar11-runtime-component/runtime-input-identity.json
             artifacts/ar11-runtime-component/runtime-release-probe.json
             artifacts/ar11-runtime-component/runtime-manifest.json
+            artifacts/ar11-runtime-component/runtime-physical-proof.json
             artifacts/ar11-runtime-component/runtime-component-observation.json
           if-no-files-found: error
           retention-days: 7
