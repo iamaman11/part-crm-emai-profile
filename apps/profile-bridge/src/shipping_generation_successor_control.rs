@@ -1851,6 +1851,8 @@ mod tests {
     use session_domain::ProfileLease;
     use std::collections::VecDeque;
     use std::sync::atomic::{AtomicU64, Ordering};
+    #[cfg(windows)]
+    use sha2::{Digest, Sha256};
 
     static FIXTURE_SEQUENCE: AtomicU64 = AtomicU64::new(1);
 
@@ -2059,6 +2061,17 @@ mod tests {
             let root = MaterializationRoot::open_or_create(&fixture.root_path)?;
             let workspace =
                 root.open_generation(&fixture.tenant, &fixture.profile, &fixture.base)?;
+            // The positive case crosses the former 64 MiB ceiling with fully
+            // written, non-sparse opaque WAL-shaped working bytes. This proves
+            // streaming preservation, not a Firefox-valid SQLite WAL; that
+            // separate property requires the ignored native staging fixture.
+            let original_wal = if active_exact {
+                Some(write_non_sparse_wal_fixture(
+                    &workspace.path().join("user_data/cookies.sqlite-wal"),
+                )?)
+            } else {
+                None
+            };
             let candidate = fixture
                 .prepared
                 .candidate_workspace()
@@ -2067,6 +2080,9 @@ mod tests {
             let inventory = workspace.inventory()?;
             let (plain_bytes, plain_digest) =
                 digest_closed_workspace_streaming(&workspace, &inventory)?;
+            if active_exact {
+                assert!(plain_bytes > 65 * 1024 * 1024);
+            }
             let mut sealer = Sealer;
             let material = sealer.material_for(
                 &fixture.tenant,
@@ -2106,7 +2122,7 @@ mod tests {
                 commit_body: None,
                 observe_body: None,
             };
-            let mut upload = RecoveryPut::default();
+            let mut upload = HashingStreamPut::default();
             let result = super::publish_closed_streamed_successor(
                 &fixture.tenant,
                 &fixture.profile,
@@ -2127,7 +2143,8 @@ mod tests {
                 "ambiguous Commit can complete only on exact ACTIVE_EXACT"
             );
             assert_eq!(upload.calls, 1, "no second signed PUT after lost ACK");
-            assert_eq!(upload.exact_bytes.len() as u64, encrypted.container_bytes());
+            assert_eq!(upload.bytes, encrypted.container_bytes());
+            assert_eq!(upload.digest, Some(encrypted.container_digest()));
             assert_eq!(network.commit_count, 1, "no second Commit after lost ACK");
             let committed = network
                 .commit_body
@@ -2173,8 +2190,117 @@ mod tests {
                 assert!(path.contains(fixture.profile.as_str()));
             }
             assert!(network.inner.responses.is_empty());
+            if let Some(expected_digest) = original_wal {
+                let wal = workspace.path().join("user_data/cookies.sqlite-wal");
+                assert_eq!(std::fs::metadata(&wal)?.len(), 65 * 1024 * 1024);
+                assert_eq!(stream_file_sha256(&wal)?, expected_digest);
+            }
         }
         Ok(())
+    }
+
+    #[cfg(windows)]
+    fn write_non_sparse_wal_fixture(
+        path: &std::path::Path,
+    ) -> Result<[u8; 32], Box<dyn std::error::Error>> {
+        use std::io::Write;
+
+        std::fs::create_dir_all(path.parent().ok_or("WAL parent missing")?)?;
+        let mut file = std::fs::File::create(path)?;
+        let mut hasher = Sha256::new();
+        let mut buffer = [0x5a_u8; 65_536];
+        for (index, byte) in buffer.iter_mut().enumerate() {
+            *byte = (index % 251) as u8 + 1;
+        }
+        // 1,040 complete writes, not File::set_len or an in-memory 65 MiB Vec.
+        for block in 0_u64..(65 * 16) {
+            buffer[..8].copy_from_slice(&block.to_le_bytes());
+            file.write_all(&buffer)?;
+            hasher.update(&buffer);
+        }
+        file.sync_all()?;
+        assert_eq!(file.metadata()?.len(), 65 * 1024 * 1024);
+        Ok(hasher.finalize().into())
+    }
+
+    #[cfg(windows)]
+    fn stream_file_sha256(
+        path: &std::path::Path,
+    ) -> Result<[u8; 32], Box<dyn std::error::Error>> {
+        use std::io::Read;
+
+        let mut file = std::fs::File::open(path)?;
+        let mut hasher = Sha256::new();
+        let mut buffer = [0_u8; 65_536];
+        loop {
+            let count = file.read(&mut buffer)?;
+            if count == 0 {
+                break;
+            }
+            hasher.update(&buffer[..count]);
+        }
+        Ok(hasher.finalize().into())
+    }
+
+    /// The production publisher accepts a streaming port: tests must not
+    /// accidentally hide a full 65 MiB allocation inside their fake PUT.
+    #[cfg(windows)]
+    #[derive(Default)]
+    struct HashingStreamPut {
+        calls: usize,
+        bytes: u64,
+        digest: Option<[u8; 32]>,
+    }
+
+    #[cfg(windows)]
+    impl crate::shipping_generation_save::SignedGenerationObjectPutPort for HashingStreamPut {
+        type Error = BridgePortError;
+
+        fn put_exact(
+            &mut self,
+            _capability: &crate::shipping_generation_save::SignedGenerationUploadCapability,
+            _ciphertext: &[u8],
+        ) -> Result<(), Self::Error> {
+            Err(BridgePortError::InvalidResponse)
+        }
+    }
+
+    #[cfg(windows)]
+    impl crate::shipping_generation_save::SignedGenerationObjectStreamPutPort for HashingStreamPut {
+        fn put_verified_stream(
+            &mut self,
+            _capability: &crate::shipping_generation_save::SignedGenerationUploadCapability,
+            object: &mut crate::generation_object_spool::VerifiedGenerationObjectFile,
+        ) -> Result<(), Self::Error> {
+            use std::io::Read;
+
+            object
+                .recheck_and_rewind()
+                .map_err(|_| BridgePortError::InvalidResponse)?;
+            let mut hasher = Sha256::new();
+            let mut buffer = [0_u8; 65_536];
+            self.calls += 1;
+            self.bytes = 0;
+            loop {
+                let count = object
+                    .reader()
+                    .read(&mut buffer)
+                    .map_err(|_| BridgePortError::Unavailable)?;
+                if count == 0 {
+                    break;
+                }
+                self.bytes = self
+                    .bytes
+                    .checked_add(count as u64)
+                    .ok_or(BridgePortError::InvalidResponse)?;
+                hasher.update(&buffer[..count]);
+            }
+            self.digest = Some(hasher.finalize().into());
+            object
+                .recheck_and_rewind()
+                .map_err(|_| BridgePortError::InvalidResponse)?;
+            Ok(())
+        }
     }
 
     #[derive(Default)]

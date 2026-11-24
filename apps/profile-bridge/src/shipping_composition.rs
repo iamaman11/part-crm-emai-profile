@@ -184,6 +184,17 @@ mod windows {
         ControlPlaneCoordinator, ControlPlaneEnrollment, SharedControlPlaneCoordinator,
         ShippingControlPlaneError,
     };
+    #[cfg(test)]
+    use crate::shipping_control_plane::{MachineHttpMethod, MachineHttpPort, MachineHttpResponse};
+    #[cfg(test)]
+    use bridge_domain::BridgePortError;
+    #[cfg(test)]
+    use control_plane_contract::profile_generation_api::{
+        BRIDGE_PROFILE_GENERATION_COMMIT_PATH_TEMPLATE,
+        BRIDGE_PROFILE_GENERATION_OBSERVE_PATH_TEMPLATE,
+        BridgeGenerationSuccessorCommitOutcomeDto, BridgeGenerationSuccessorCommitResponse,
+        BridgeGenerationSuccessorObserveResponse,
+    };
     use crate::shipping_generation_successor_control::{
         observe_current_successor_profile_version, publish_closed_streamed_successor,
     };
@@ -199,6 +210,8 @@ mod windows {
     use crate::windows_generation_put::WindowsSignedGenerationObjectPut;
     use application_ports::{ProfileCoordinatorPort, ProfileCoordinatorRuntimePort};
     use profile_platform_primitives::UnixMillis;
+    #[cfg(test)]
+    use profile_platform_primitives::CorrelationId;
     use session_domain::ProfileLease;
     use std::env;
     use std::path::PathBuf;
@@ -220,6 +233,466 @@ mod windows {
     #[cfg(test)]
     thread_local! {
         static READY_SYNC_SNAPSHOT_STARTS: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+        // Only an explicitly armed, disposable #[ignore] Rust test can
+        // suppress one response AFTER the signed real Commit returned 2xx.
+        static TEST_LOST_COMMIT_ACK: std::cell::RefCell<Option<TestLostCommitAckScope>> =
+            const { std::cell::RefCell::new(None) };
+    }
+
+    #[cfg(test)]
+    struct TestLostCommitAckScope {
+        root: PathBuf,
+        tenant: String,
+        profile: String,
+        proved: bool,
+        commit_attempts: usize,
+        observe_attempts: usize,
+    }
+
+    /// The scope is per Rust test thread, never an installed-runtime switch.
+    /// Drop clears the fault even if a physical test fails or panics.
+    #[cfg(test)]
+    struct TestLostCommitAckArm;
+
+    #[cfg(test)]
+    impl TestLostCommitAckArm {
+        fn arm(root: &MaterializationRoot, intent: &crate::generation_initialization::InitialProfileOpen)
+            -> Result<Self, &'static str>
+        {
+            TEST_LOST_COMMIT_ACK.with(|slot| {
+                let mut scope = slot.borrow_mut();
+                if scope.is_some() {
+                    return Err("nested K1 lost-ACK physical test scope");
+                }
+                *scope = Some(TestLostCommitAckScope {
+                    root: root.path().to_path_buf(),
+                    tenant: intent.tenant_id.as_str().to_owned(),
+                    profile: intent.profile_id.as_str().to_owned(),
+                    proved: false,
+                    commit_attempts: 0,
+                    observe_attempts: 0,
+                });
+                Ok(Self)
+            })
+        }
+
+        fn proved(&self) -> bool {
+            TEST_LOST_COMMIT_ACK.with(|slot| {
+                slot.borrow().as_ref().is_some_and(|scope| scope.proved)
+            })
+        }
+    }
+
+    #[cfg(test)]
+    impl Drop for TestLostCommitAckArm {
+        fn drop(&mut self) {
+            TEST_LOST_COMMIT_ACK.with(|slot| {
+                slot.borrow_mut().take();
+            });
+        }
+    }
+
+    #[cfg(test)]
+    struct TestOnlyDropCommitAck<'a, T> {
+        inner: &'a mut T,
+        commit_path: String,
+        observe_path: String,
+        commits: usize,
+        observes: usize,
+        masked_successful_ack: bool,
+        observed_active_exact: bool,
+    }
+
+    #[cfg(test)]
+    impl<'a, T> TestOnlyDropCommitAck<'a, T> {
+        fn new(
+            inner: &'a mut T,
+            tenant: &profile_platform_primitives::TenantId,
+            profile: &profile_platform_primitives::ProfileId,
+        ) -> Self {
+            let scoped = |template: &str| {
+                template
+                    .replace("{tenantId}", tenant.as_str())
+                    .replace("{profileId}", profile.as_str())
+            };
+            Self {
+                inner,
+                commit_path: scoped(BRIDGE_PROFILE_GENERATION_COMMIT_PATH_TEMPLATE),
+                observe_path: scoped(BRIDGE_PROFILE_GENERATION_OBSERVE_PATH_TEMPLATE),
+                commits: 0,
+                observes: 0,
+                masked_successful_ack: false,
+                observed_active_exact: false,
+            }
+        }
+
+        fn proved(&self) -> bool {
+            self.commits == 1
+                && self.observes == 1
+                && self.masked_successful_ack
+                && self.observed_active_exact
+        }
+    }
+
+    #[cfg(test)]
+    impl<T: MachineHttpPort<Error = BridgePortError>> MachineHttpPort
+        for TestOnlyDropCommitAck<'_, T>
+    {
+        type Error = BridgePortError;
+
+        fn request(
+            &mut self,
+            method: MachineHttpMethod,
+            path: &str,
+            correlation_id: &CorrelationId,
+            body: Option<&[u8]>,
+        ) -> Result<MachineHttpResponse, Self::Error> {
+            if path == self.commit_path.as_str() {
+                if method != MachineHttpMethod::PostJson || body.is_none() {
+                    return Err(BridgePortError::InvalidResponse);
+                }
+                self.commits += 1;
+                // Count over the ENTIRE physically armed Sync, not just one
+                // adapter instance: a later Sync retry must not create a
+                // fresh wrapper and accidentally transmit a second Commit.
+                let globally_first = TEST_LOST_COMMIT_ACK.with(|slot| {
+                    slot.borrow_mut().as_mut().is_none_or(|scope| {
+                        scope.commit_attempts += 1;
+                        if scope.commit_attempts != 1 {
+                            scope.proved = false;
+                            return false;
+                        }
+                        true
+                    })
+                });
+                if self.commits != 1 || !globally_first {
+                    // Refuse even to send an unsafe duplicate mutation.
+                    return Err(BridgePortError::InvalidResponse);
+                }
+                let applied = self.inner.request(method, path, correlation_id, body)?;
+                if (200..300).contains(&applied.status())
+                    && matches!(
+                        serde_json::from_slice::<BridgeGenerationSuccessorCommitResponse>(
+                            applied.body(),
+                        ),
+                        Ok(BridgeGenerationSuccessorCommitResponse {
+                            outcome: BridgeGenerationSuccessorCommitOutcomeDto::Activated,
+                        })
+                    )
+                {
+                    self.masked_successful_ack = true;
+                    return Err(BridgePortError::Unavailable);
+                }
+                // A rejected/invalid Commit may not be disguised as applied.
+                return Ok(applied);
+            }
+            if path == self.observe_path.as_str() {
+                if method != MachineHttpMethod::PostJson {
+                    return Err(BridgePortError::InvalidResponse);
+                }
+                self.observes += 1;
+                let globally_first = TEST_LOST_COMMIT_ACK.with(|slot| {
+                    slot.borrow_mut().as_mut().is_none_or(|scope| {
+                        scope.observe_attempts += 1;
+                        if scope.observe_attempts != 1 || scope.commit_attempts != 1 {
+                            scope.proved = false;
+                            return false;
+                        }
+                        true
+                    })
+                });
+                if self.observes != 1 || !globally_first {
+                    return Err(BridgePortError::InvalidResponse);
+                }
+                let observed = self.inner.request(method, path, correlation_id, body)?;
+                self.observed_active_exact = (200..300).contains(&observed.status())
+                    && matches!(
+                        serde_json::from_slice::<BridgeGenerationSuccessorObserveResponse>(
+                            observed.body(),
+                        ),
+                        Ok(BridgeGenerationSuccessorObserveResponse {
+                            active_exact: true,
+                            ..
+                        })
+                    );
+                return Ok(observed);
+            }
+            self.inner.request(method, path, correlation_id, body)
+        }
+    }
+
+    #[cfg(test)]
+    #[allow(clippy::too_many_arguments)]
+    fn publish_with_scoped_test_ack_loss(
+        intent: &crate::generation_initialization::InitialProfileOpen,
+        root: &MaterializationRoot,
+        base: &profile_platform_primitives::GenerationId,
+        candidate: &profile_platform_primitives::GenerationId,
+        encrypted: &crate::generation_snapshot::ClosedProfileEncryptedStream,
+        lease: &ProfileLease,
+        transport: &mut WindowsApplicationSessionHttp,
+        upload: &mut WindowsSignedGenerationObjectPut,
+    ) -> Result<(), ShippingControlPlaneError> {
+        let armed = TEST_LOST_COMMIT_ACK.with(|slot| {
+            slot.borrow().as_ref().is_some_and(|scope| {
+                scope.root.as_path() == root.path()
+                    && scope.tenant == intent.tenant_id.as_str()
+                    && scope.profile == intent.profile_id.as_str()
+            })
+        });
+        if !armed {
+            return publish_closed_streamed_successor(
+                &intent.tenant_id,
+                &intent.profile_id,
+                base,
+                candidate,
+                encrypted,
+                lease,
+                transport,
+                upload,
+            );
+        }
+        let mut masked = TestOnlyDropCommitAck::new(
+            transport,
+            &intent.tenant_id,
+            &intent.profile_id,
+        );
+        let result = publish_closed_streamed_successor(
+            &intent.tenant_id,
+            &intent.profile_id,
+            base,
+            candidate,
+            encrypted,
+            lease,
+            &mut masked,
+            upload,
+        );
+        let proved = masked.proved();
+        TEST_LOST_COMMIT_ACK.with(|slot| {
+            if let Some(scope) = slot.borrow_mut().as_mut() {
+                scope.proved = proved
+                    && scope.commit_attempts == 1
+                    && scope.observe_attempts == 1;
+            }
+        });
+        if !proved {
+            return Err(ShippingControlPlaneError::InvalidResponse);
+        }
+        result
+    }
+
+    /// Fast, provider-free proof that the physical-test adapter hides ONLY
+    /// one valid 2xx Commit ACK after forwarding the real typed request.
+    #[cfg(test)]
+    #[test]
+    fn test_only_lost_commit_ack_port_forwards_then_masks_one_valid_receipt()
+    -> Result<(), Box<dyn std::error::Error>> {
+        struct Port {
+            requests: Vec<String>,
+            commit_response: MachineHttpResponse,
+            observe_active_exact: bool,
+        }
+
+        impl MachineHttpPort for Port {
+            type Error = BridgePortError;
+
+            fn request(
+                &mut self,
+                _method: MachineHttpMethod,
+                path: &str,
+                _correlation_id: &CorrelationId,
+                _body: Option<&[u8]>,
+            ) -> Result<MachineHttpResponse, Self::Error> {
+                self.requests.push(path.to_owned());
+                if path.ends_with("/generation-successor/commit") {
+                    return Ok(self.commit_response.clone());
+                }
+                if path.ends_with("/generation-successor/observe") {
+                    return Ok(MachineHttpResponse::new(
+                        200,
+                        if self.observe_active_exact {
+                            br#"{"activeExact":true}"#.to_vec()
+                        } else {
+                            br#"{"activeExact":false}"#.to_vec()
+                        },
+                    ));
+                }
+                Err(BridgePortError::InvalidResponse)
+            }
+        }
+
+        let tenant = profile_platform_primitives::TenantId::parse("tenant_k1_port")?;
+        let profile = profile_platform_primitives::ProfileId::parse("profile_k1_port")?;
+        let correlation = CorrelationId::parse("corr_k1_ack_loss")?;
+        let mut port = Port {
+            requests: Vec::new(),
+            commit_response: MachineHttpResponse::new(
+                200,
+                br#"{"outcome":"ACTIVATED"}"#.to_vec(),
+            ),
+            observe_active_exact: true,
+        };
+        let mut scoped = TestOnlyDropCommitAck::new(&mut port, &tenant, &profile);
+        let commit = scoped.commit_path.clone();
+        let observe = scoped.observe_path.clone();
+        assert_eq!(
+            scoped.request(MachineHttpMethod::PostJson, &commit, &correlation, Some(b"{}")),
+            Err(BridgePortError::Unavailable),
+            "valid real 2xx response must be suppressed after the request"
+        );
+        let observed = scoped.request(
+            MachineHttpMethod::PostJson,
+            &observe,
+            &correlation,
+            Some(b"{}"),
+        )?;
+        assert_eq!(observed.body(), br#"{"activeExact":true}"#);
+        assert!(scoped.proved());
+        assert_eq!(
+            scoped.request(MachineHttpMethod::PostJson, &commit, &correlation, Some(b"{}")),
+            Err(BridgePortError::InvalidResponse),
+            "second Commit must never reach the signed machine port"
+        );
+        drop(scoped);
+        assert_eq!(port.requests, vec![commit.clone(), observe.clone()]);
+        for rejected in [
+            MachineHttpResponse::new(200, br#"{"outcome":"ALREADY_ACTIVE"}"#.to_vec()),
+            MachineHttpResponse::new(503, b"temporarily unavailable".to_vec()),
+        ] {
+            let mut port = Port {
+                requests: Vec::new(),
+                commit_response: rejected.clone(),
+                observe_active_exact: true,
+            };
+            let mut scoped = TestOnlyDropCommitAck::new(&mut port, &tenant, &profile);
+            assert_eq!(
+                scoped.request(MachineHttpMethod::PostJson, &commit, &correlation, Some(b"{}")),
+                Ok(rejected),
+                "only a newly ACTIVATED successful Commit may be masked"
+            );
+            assert!(!scoped.proved());
+            drop(scoped);
+            assert_eq!(port.requests, vec![commit.clone()]);
+        }
+        let mut false_observation = Port {
+            requests: Vec::new(),
+            commit_response: MachineHttpResponse::new(
+                200,
+                br#"{"outcome":"ACTIVATED"}"#.to_vec(),
+            ),
+            observe_active_exact: false,
+        };
+        let mut scoped = TestOnlyDropCommitAck::new(&mut false_observation, &tenant, &profile);
+        assert_eq!(
+            scoped.request(MachineHttpMethod::PostJson, &commit, &correlation, Some(b"{}")),
+            Err(BridgePortError::Unavailable)
+        );
+        assert_eq!(
+            scoped.request(MachineHttpMethod::PostJson, &observe, &correlation, Some(b"{}"))?
+                .body(),
+            br#"{"activeExact":false}"#
+        );
+        assert!(!scoped.proved(), "only a positive exact observation proves the masked ACK");
+        Ok(())
+    }
+
+    /// A retry creates a NEW publisher/port adapter. Its local counter starts
+    /// at zero, but the original per-thread K1 scope MUST still reject Commit.
+    #[cfg(test)]
+    #[test]
+    fn test_only_lost_commit_ack_scope_blocks_second_wrapper_commit()
+    -> Result<(), Box<dyn std::error::Error>> {
+        use crate::generation_initialization::{InitialProfileOpen, InitialProfileStatus};
+        use profile_platform_primitives::{ActorId, ProfileId, TenantId};
+
+        #[derive(Default)]
+        struct Port {
+            requests: Vec<String>,
+        }
+
+        impl MachineHttpPort for Port {
+            type Error = BridgePortError;
+
+            fn request(
+                &mut self,
+                _method: MachineHttpMethod,
+                path: &str,
+                _correlation_id: &CorrelationId,
+                _body: Option<&[u8]>,
+            ) -> Result<MachineHttpResponse, Self::Error> {
+                self.requests.push(path.to_owned());
+                if path.ends_with("/generation-successor/commit") {
+                    return Ok(MachineHttpResponse::new(
+                        200,
+                        br#"{"outcome":"ACTIVATED"}"#.to_vec(),
+                    ));
+                }
+                if path.ends_with("/generation-successor/observe") {
+                    return Ok(MachineHttpResponse::new(
+                        200,
+                        br#"{"activeExact":true}"#.to_vec(),
+                    ));
+                }
+                Err(BridgePortError::InvalidResponse)
+            }
+        }
+
+        let directory = tempfile::tempdir()?;
+        let root = MaterializationRoot::open_or_create(directory.path())?;
+        let intent = InitialProfileOpen {
+            tenant_id: TenantId::parse("tenant_k1_scope_retry")?,
+            actor_id: ActorId::parse("actor_k1_scope_retry")?,
+            profile_id: ProfileId::parse("profile_k1_scope_retry")?,
+            expected_version: 1,
+            status: InitialProfileStatus::Ready,
+        };
+        let correlation = CorrelationId::parse("corr_k1_scope_retry")?;
+        let armed = TestLostCommitAckArm::arm(&root, &intent)?;
+        let mut port = Port::default();
+        let mut first = TestOnlyDropCommitAck::new(
+            &mut port,
+            &intent.tenant_id,
+            &intent.profile_id,
+        );
+        let commit = first.commit_path.clone();
+        let observe = first.observe_path.clone();
+        assert_eq!(
+            first.request(MachineHttpMethod::PostJson, &commit, &correlation, Some(b"{}")),
+            Err(BridgePortError::Unavailable)
+        );
+        assert_eq!(
+            first.request(MachineHttpMethod::PostJson, &observe, &correlation, Some(b"{}"))?
+                .status(),
+            200
+        );
+        assert!(first.proved());
+        drop(first);
+        // Simulate the publish helper recording the first verified success.
+        TEST_LOST_COMMIT_ACK.with(|slot| {
+            slot.borrow_mut()
+                .as_mut()
+                .expect("armed K1 scope")
+                .proved = true;
+        });
+        assert!(armed.proved());
+        let requests_before_retry = port.requests.clone();
+        assert_eq!(requests_before_retry, vec![commit.clone(), observe]);
+
+        let mut second = TestOnlyDropCommitAck::new(
+            &mut port,
+            &intent.tenant_id,
+            &intent.profile_id,
+        );
+        assert_eq!(
+            second.request(MachineHttpMethod::PostJson, &commit, &correlation, Some(b"{}")),
+            Err(BridgePortError::InvalidResponse),
+            "a second wrapper may not transmit a second signed Commit"
+        );
+        assert!(!second.proved());
+        drop(second);
+        assert_eq!(port.requests, requests_before_retry, "no second network call");
+        assert!(!armed.proved(), "duplicate attempt must invalidate K1 proof");
+        Ok(())
     }
 
     /// A scoped helper for the existing one-shot Sync's long native-seal/R2-PUT path.
@@ -1088,7 +1561,19 @@ mod windows {
             }
             let publish_started = Instant::now();
             let mut upload = WindowsSignedGenerationObjectPut::from_system().map_err(|_| ())?;
-            publish_closed_streamed_successor(
+            #[cfg(test)]
+            let publication = publish_with_scoped_test_ack_loss(
+                intent,
+                root,
+                &base,
+                &candidate,
+                &encrypted,
+                &lease,
+                &mut transport,
+                &mut upload,
+            );
+            #[cfg(not(test))]
+            let publication = publish_closed_streamed_successor(
                 &intent.tenant_id,
                 &intent.profile_id,
                 &base,
@@ -1097,8 +1582,8 @@ mod windows {
                 &lease,
                 &mut transport,
                 &mut upload,
-            )
-            .map_err(|_| ())?;
+            );
+            publication.map_err(|_| ())?;
             observe_sync_phase(Stage::SyncPublish, publish_started);
             #[cfg(test)]
             test_only_abort_after_confirmed_commit(root, intent);
@@ -2165,7 +2650,8 @@ mod windows {
     mod physical_staging_closed_sync {
         use super::{
             ClosedSyncAdmission, MaterializationRoot, READY_SYNC_SNAPSHOT_STARTS,
-            WindowsDeviceApplicationBinding, pending_descriptor_matches_current,
+            TestLostCommitAckArm, WindowsDeviceApplicationBinding,
+            pending_descriptor_matches_current,
             run_closed_sync_with_admission,
         };
         use crate::generation_initialization::{InitialProfileOpen, InitialProfileStatus};
@@ -2173,6 +2659,8 @@ mod windows {
         use crate::shipping_control_plane::ControlPlaneCoordinator;
         use crate::windows_device_application::WindowsDeviceApplication;
         use profile_platform_primitives::ProfileId;
+        use sha2::{Digest, Sha256};
+        use std::io::Read;
         use std::path::{Path, PathBuf};
 
         pub(super) fn is_opted_in_disposable_restore(root: &Path, profile: &str) -> bool {
@@ -2370,6 +2858,158 @@ mod windows {
             assert!(!after.path().join(".local-unsynced").exists());
             assert!(after.base_generation_id().is_some());
             eprintln!("R6_STAGING_EXACT_CLOSED_SYNC_CLEAN_LOCAL_PASS");
+            Ok(())
+        }
+
+        /// Read-only fingerprint of the externally prepared, allegedly native
+        /// Firefox/SQLite WAL. Header, size and nonzero-chunk coverage reject
+        /// the old sparse fixture, but DO NOT prove SQLite structural validity.
+        /// That and cold Restore/browser usability require separate physical
+        /// verification; this test only proves preservation of source bytes.
+        fn physical_wal_sha256(
+            path: &Path,
+        ) -> Result<[u8; 32], Box<dyn std::error::Error>> {
+            let mut file = std::fs::File::open(path)?;
+            if file.metadata()?.len() < 65 * 1024 * 1024 {
+                return Err("K1 requires a real Firefox WAL >=65 MiB".into());
+            }
+            let mut sha = Sha256::new();
+            let mut buffer = [0_u8; 65_536];
+            let mut first_magic = [0_u8; 4];
+            file.read_exact(&mut first_magic)?;
+            if first_magic != [0x37, 0x7f, 0x06, 0x82]
+                && first_magic != [0x37, 0x7f, 0x06, 0x83]
+            {
+                return Err("K1 fixture is not a SQLite write-ahead log".into());
+            }
+            use std::io::{Seek, SeekFrom};
+            file.seek(SeekFrom::Start(0))?;
+            let mut nonzero_chunks = 0_u64;
+            loop {
+                let read = file.read(&mut buffer)?;
+                if read == 0 {
+                    break;
+                }
+                if buffer[..read].iter().any(|byte| *byte != 0) {
+                    nonzero_chunks += 1;
+                }
+                sha.update(&buffer[..read]);
+            }
+            // One nonzero header followed by a 65 MiB sparse hole cannot
+            // impersonate a real populated WAL in this physical scenario.
+            if nonzero_chunks < 260 {
+                return Err("K1 WAL appears mostly sparse or unpopulated".into());
+            }
+            Ok(sha.finalize().into())
+        }
+
+        /// Runs the actual signed Windows Sync against ONE already authenticated,
+        /// CLOSED disposable staging profile. The real D1 Commit must apply
+        /// and return 2xx; the test-only typed port then loses ONLY that ACK.
+        /// The existing shipping publisher must observe exact ACTIVE_EXACT,
+        /// complete local N+1 in place, leave the original WAL bytes intact,
+        /// and perform a second clean Sync without creating N+2. No R2
+        /// decrypt/readback or browser usability is established here. This
+        /// ignored test is NOT deployment authorization or CI-only K1 GO.
+        #[test]
+        #[ignore = "requires separately owner-authorized exact disposable staging WAL>=65MiB and real signed Commit"]
+        fn authorized_test_profile_k1_real_wal_lost_commit_ack_exact_current()
+        -> Result<(), Box<dyn std::error::Error>> {
+            if std::env::var("PROFILE_BRIDGE_TEST_ALLOW_STAGING_MUTATION").as_deref()
+                != Ok("YES_SCOPED_DISPOSABLE_PROFILE")
+                || std::env::var("PROFILE_BRIDGE_TEST_LOST_COMMIT_ACK_65MIB").as_deref()
+                    != Ok("YES_ONE_DISPOSABLE_WAL_ACK_LOSS")
+            {
+                return Err("separate exact disposable K1 staging authorization required".into());
+            }
+            let scratch = PathBuf::from(
+                std::env::var_os("PROFILE_BRIDGE_TEST_CLOSED_SYNC_ROOT")
+                    .ok_or("missing disposable K1 scratch root")?,
+            );
+            let profile_text = std::env::var("PROFILE_BRIDGE_TEST_CLOSED_SYNC_PROFILE")?;
+            if !is_opted_in_disposable_restore(&scratch, &profile_text) {
+                return Err("refuse installed or non-restored K1 profile".into());
+            }
+            let profile_id = ProfileId::parse(profile_text)?;
+            let version =
+                std::env::var("PROFILE_BRIDGE_TEST_CLOSED_SYNC_VERSION")?.parse::<u64>()?;
+            let binding = WindowsDeviceApplicationBinding::open(&PathBuf::from(
+                std::env::var_os("PROFILE_BRIDGE_TEST_CLOSED_SYNC_BINDING")
+                    .ok_or("missing exact device binding")?,
+            ))?;
+            let root = MaterializationRoot::open_or_create(&scratch)?;
+            let before = root.open_profile_current(binding.tenant_id(), &profile_id)?;
+            let old_base = before
+                .base_generation_id()
+                .ok_or("fixture requires an already verified READY generation")?
+                .clone();
+            if before.profile_version() != version
+                || before.pending_sync().is_some()
+                || std::fs::read(before.path().join(".local-unsynced"))?
+                    != b"local-unsynced-v2"
+                || !crate::browser_execution::browser_writer_locks_absent(&before)?
+            {
+                return Err("K1 fixture is not a closed dirty CURRENT".into());
+            }
+            let old_path = before.path().to_path_buf();
+            let wal = old_path.join("user_data/cookies.sqlite-wal");
+            let before_wal_sha = physical_wal_sha256(&wal)?;
+            let app = WindowsDeviceApplication::from_system(
+                "https://staging.alegria.by",
+                binding.clone(),
+            )?;
+            let mut read_only = ControlPlaneCoordinator::for_local_current_restore(app.transport());
+            let old_cloud = read_only.download_capability(binding.tenant_id(), &profile_id)?;
+            if old_cloud.generation_id() != &old_base {
+                return Err("staging D1 CURRENT differs from exact local base".into());
+            }
+            let intent = InitialProfileOpen {
+                tenant_id: binding.tenant_id().clone(),
+                actor_id: binding.actor_id().clone(),
+                profile_id: profile_id.clone(),
+                expected_version: version,
+                status: InitialProfileStatus::Ready,
+            };
+            let _sync_owner = ClosedSyncAdmission::try_acquire(&before)?
+                .ok_or("another Sync already owns the K1 fixture")?;
+            let ack = TestLostCommitAckArm::arm(&root, &intent)?;
+            run_closed_sync_with_admission(&intent, &binding, &root, "https://staging.alegria.by")?;
+            assert!(ack.proved(), "real signed 2xx Commit ACK was not masked exactly once");
+            drop(ack);
+            let current = read_only.download_capability(binding.tenant_id(), &profile_id)?;
+            let after = root.open_profile_current(binding.tenant_id(), &profile_id)?;
+            assert_ne!(current.generation_id(), &old_base, "D1 must advance to N+1");
+            assert_eq!(after.generation_id(), current.generation_id());
+            assert_eq!(after.base_generation_id(), Some(current.generation_id()));
+            assert_eq!(
+                after.profile_version(),
+                version.checked_add(1).ok_or("K1 profile version overflow")?
+            );
+            assert_eq!(
+                after.path(),
+                old_path.as_path(),
+                "working folder must not be replaced"
+            );
+            assert!(after.pending_sync().is_none(), "no unknown prepared N+2");
+            assert!(!after.path().join(".local-unsynced").exists());
+            assert_eq!(physical_wal_sha256(&wal)?, before_wal_sha);
+
+            // Re-enter the ACTUAL shipping Sync on clean CURRENT under the
+            // same held admission. It must be a no-op, not a second Commit or
+            // candidate generation. Re-read D1 rather than trusting the
+            // earlier response, and re-open the local persisted marker.
+            run_closed_sync_with_admission(&intent, &binding, &root, "https://staging.alegria.by")?;
+            let still_current = read_only.download_capability(binding.tenant_id(), &profile_id)?;
+            let still_local = root.open_profile_current(binding.tenant_id(), &profile_id)?;
+            assert_eq!(still_current.generation_id(), current.generation_id(), "no D1 N+2");
+            assert_eq!(still_local.generation_id(), current.generation_id(), "no local N+2");
+            assert_eq!(still_local.base_generation_id(), Some(current.generation_id()));
+            assert_eq!(still_local.profile_version(), after.profile_version());
+            assert_eq!(still_local.path(), old_path.as_path());
+            assert!(still_local.pending_sync().is_none());
+            assert!(!still_local.path().join(".local-unsynced").exists());
+            assert_eq!(physical_wal_sha256(&wal)?, before_wal_sha);
+            eprintln!("K1_REAL_WAL_65MIB_LOST_COMMIT_ACK_EXACT_CURRENT_N_PLUS_ONE_PASS");
             Ok(())
         }
 
