@@ -7,7 +7,9 @@ on:
       - main
 
 permissions:
+  actions: read
   contents: read
+  pull-requests: read
 
 concurrency:
   group: d1-evolution-gate-${{ github.workflow }}-${{ github.ref }}
@@ -29,13 +31,25 @@ jobs:
           EXPECTED_SOURCE_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
         run: python -c "import os, subprocess; actual = subprocess.check_output(['git', 'rev-parse', 'HEAD'], text=True).strip(); expected = os.environ['EXPECTED_SOURCE_SHA']; assert actual == expected, f'expected {expected}, got {actual}'"
 
+      - name: Prove frontend-only PR inherits exact FULL D1 fault and recovery receipt
+        if: github.event_name == 'pull_request'
+        id: d1_light
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: python scripts/accepted-main-pr-reuse.py --pr-d1-proof --github-output "$GITHUB_OUTPUT"
+
       - name: Set up pinned Node and npm
+        if: steps.d1_light.outputs.d1_light != 'true'
         uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e
         with:
           node-version: '24.19.0'
           package-manager-cache: false
 
       - name: Enforce pinned Wrangler version
+        if: steps.d1_light.outputs.d1_light != 'true'
         run: |
           test "$(node --version)" = "v24.19.0"
           npm install --global npm@11.17.0
@@ -43,6 +57,7 @@ jobs:
           test "$(npx --yes wrangler@4.94.0 --version)" = "4.94.0"
 
       - name: Verify protected executor and release identity contracts
+        if: steps.d1_light.outputs.d1_light != 'true'
         run: |
           node scripts/check-d1-migration-executor.mjs
           node scripts/check-d1-migration-executor.mjs --self-test
@@ -50,15 +65,18 @@ jobs:
           node scripts/check-d1-release-schema-identity.mjs --self-test
 
       - name: Prove K2 608 MiB D1 successor-v2 migration and append-only recovery
+        if: steps.d1_light.outputs.d1_light != 'true'
         run: python scripts/test-k2-generation-stream-limit-d1.py
 
       - name: Prove K2 append-only historical WORKING evidence cannot authorize prune
+        if: steps.d1_light.outputs.d1_light != 'true'
         run: |
           python scripts/test-k2-working-proof-d1.py
           python scripts/test-k2-retirement-intent-d1.py
           python scripts/test-profile-current-cold-retirement-d1.py
 
       - name: Execute all opsctl D1 commands as real CLI processes
+        if: steps.d1_light.outputs.d1_light != 'true'
         run: |
           cargo run --locked --quiet --manifest-path tools/opsctl/Cargo.toml -- --root . d1 repository \
             | python -m json.tool >/dev/null
@@ -82,6 +100,7 @@ jobs:
             --release-manifest tests/d1-evolution/resolver-release-compatible.json | python -m json.tool >/dev/null
 
       - name: Execute reusable D1 fault and recovery harness
+        if: steps.d1_light.outputs.d1_light != 'true'
         env:
           PYTHONDONTWRITEBYTECODE: '1'
         run: |
@@ -131,6 +150,7 @@ jobs:
           PY
 
       - name: Upload D1 fault and recovery evidence
+        if: steps.d1_light.outputs.d1_light != 'true'
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
           name: d1-fault-recovery-${{ github.run_id }}-${{ github.run_attempt }}

@@ -21,6 +21,7 @@ import tempfile
 import urllib.error
 import urllib.parse
 import urllib.request
+import zipfile
 from collections.abc import Callable, Iterable
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -113,11 +114,28 @@ CRITICAL: dict[str, dict[str, tuple[str, ...]]] = {
             "Verify uploaded FULL Local runner identity digest",
         ),
     },
+    "d1": {
+        "Native opsctl and pinned Wrangler D1 proof": (
+            "Verify exact source checkout",
+            "Enforce pinned Wrangler version",
+            "Verify protected executor and release identity contracts",
+            "Prove K2 608 MiB D1 successor-v2 migration and append-only recovery",
+            "Prove K2 append-only historical WORKING evidence cannot authorize prune",
+            "Execute all opsctl D1 commands as real CLI processes",
+            "Execute reusable D1 fault and recovery harness",
+            "Upload D1 fault and recovery evidence",
+        ),
+        "Native opsctl D1 CLI portability on Windows": (
+            "Verify exact source checkout",
+            "Execute all native opsctl D1 commands on Windows",
+        ),
+    },
 }
 WORKFLOW = {
     "camoufox": "Camoufox Runtime Gate",
     "quality": "Quality Gate",
     "local-profile": "Local Profile Gate",
+    "d1": "D1 Evolution Gate",
 }
 
 # A native-unaffected PR is not allowed to present a green-only surrogate.
@@ -192,7 +210,8 @@ def api_reader(token: str) -> Callable[[str], Any]:
 
 
 def prove(main_sha: str, gate: str, api: Callable[[str], Any],
-          *, require_steps: bool = True, native_reused: bool = False) -> str:
+          *, require_steps: bool = True, native_reused: bool = False,
+          proven_run: dict[str, Any] | None = None) -> str:
     require(bool(SHA.fullmatch(main_sha)), "invalid main commit")
     require(gate in CRITICAL, "unknown gate")
     root = f"repos/{REPOSITORY}"
@@ -316,6 +335,8 @@ def prove(main_sha: str, gate: str, api: Callable[[str], Any],
                     continue  # Installer/upload are still physically executed.
                 require(actual.get(full_step) == ("completed", "skipped"),
                         f"native inherited path executed/missed FULL step: {full_step}")
+    if proven_run is not None:
+        proven_run.update(source_run)
     return candidate
 
 
@@ -1269,6 +1290,118 @@ def prove_open_native_pr(api: Callable[[str], Any],
     return prior, artifacts
 
 
+D1_REQUIRED_SCENARIOS = frozenset({
+    "ledger_noncanonical", "supported_ahead_recovery_window",
+    "expand_old_new_runtime_rollout", "contract_rejection_admission",
+    "contract_exact_successor", "transaction_observation_plan_target_drift",
+    "authorization_freshness_and_scope_drift", "executor_checkout_identity_drift",
+    "stale_or_unknown_target_fence", "runner_interruption_requires_recovery",
+    "canonical_prefix_matrix_catalog", "canonical_prefix_matrix_resolver",
+    "clean_bootstrap_and_replay_catalog", "clean_bootstrap_and_replay_resolver",
+    "existing_catalog_like_reparse", "current_empty_baseline",
+    "future_migration_append_catalog", "future_migration_append_resolver",
+    "partial_prefix_failure", "repair_and_safe_continuation",
+})
+
+
+def validate_d1_fault_report(report: Any) -> None:
+    """Independently check every historical physical D1 scenario receipt."""
+    require(isinstance(report, dict) and report.get("schema_version") == 1
+            and report.get("status") == "PASS"
+            and report.get("mode") == "LOCAL_TEST_ONLY"
+            and report.get("provider_mutation") is False
+            and report.get("production_mutation") is False
+            and report.get("remote_provider_credentials_present") is False,
+            "D1 report metadata or local-only safety violated")
+    scenarios = report.get("scenarios")
+    require(isinstance(scenarios, list)
+            and report.get("scenario_count") == len(D1_REQUIRED_SCENARIOS)
+            and len(scenarios) == len(D1_REQUIRED_SCENARIOS),
+            "D1 report lost one or more full scenarios")
+    observed: list[str] = []
+    for item in scenarios:
+        require(isinstance(item, dict) and item.get("status") == "PASS"
+                and item.get("provider_mutation") is False
+                and item.get("production_mutation") is False
+                and isinstance(item.get("owner"), str) and bool(item["owner"])
+                and isinstance(item.get("proof_kind"), str) and bool(item["proof_kind"]),
+                "D1 scenario has missing/unsafe typed proof")
+        observed.append(item.get("scenario_id"))
+    require(set(observed) == D1_REQUIRED_SCENARIOS and len(set(observed)) == len(observed),
+            "D1 scenario IDs are missing, duplicated or substituted")
+
+
+def select_d1_full_artifact(source_run: dict[str, Any], candidate: str,
+                            api: Callable[[str], Any],
+                            *, as_of: datetime | None = None) -> dict[str, Any]:
+    """Bind one unexpired report ZIP to the exact successful FULL PR job attempt."""
+    run_id, attempt = source_run.get("id"), source_run.get("run_attempt")
+    require(type(run_id) is int and type(attempt) is int and attempt >= 1,
+            "invalid FULL D1 run identity")
+    root = f"repos/{REPOSITORY}"
+    inventory = api(f"{root}/actions/runs/{run_id}/artifacts?per_page=100")
+    require(isinstance(inventory.get("artifacts"), list)
+            and isinstance(inventory.get("total_count"), int)
+            and inventory["total_count"] == len(inventory["artifacts"])
+            and inventory["total_count"] <= 100,
+            "incomplete D1 full-report artifact inventory")
+    name = f"d1-fault-recovery-{run_id}-{attempt}"
+    matches = [a for a in inventory["artifacts"] if a.get("name") == name]
+    require(len(matches) == 1, "missing/ambiguous exact FULL D1 report artifact")
+    item = matches[0]
+    provenance = item.get("workflow_run", {})
+    require(type(item.get("id")) is int and item["id"] > 0
+            and type(item.get("size_in_bytes")) is int
+            and 100 <= item["size_in_bytes"] <= 128 * 1024
+            and bool(DIGEST.fullmatch(item.get("digest") or ""))
+            and item.get("expired") is False
+            and isinstance(provenance, dict)
+            and provenance.get("id") == run_id
+            and provenance.get("head_sha") == candidate
+            and provenance.get("head_branch") == source_run.get("head_branch"),
+            "D1 report digest/source/run/attempt identity unconfirmed")
+    now = as_of or datetime.now(timezone.utc)
+    created, expires = github_time(item.get("created_at")), github_time(item.get("expires_at"))
+    require(now - timedelta(days=30) <= created <= now + timedelta(minutes=5)
+            and expires > now and expires > created,
+            "D1 report artifact stale, future-dated or expired")
+    return item
+
+
+def verify_d1_full_artifact(item: dict[str, Any], token: str) -> None:
+    """Read actual compressed ZIP bytes; green workflow alone is insufficient."""
+    with tempfile.TemporaryDirectory(prefix="prior-full-d1-report-") as temporary:
+        archive_path = Path(temporary) / "d1-report.zip"
+        download_raw_artifact({"id": item["id"], "size": item["size_in_bytes"]},
+                              archive_path, token)
+        require(hashlib.sha256(archive_path.read_bytes()).hexdigest()
+                == item["digest"].removeprefix("sha256:"),
+                "D1 downloaded ZIP SHA-256 differs from GitHub digest")
+        with zipfile.ZipFile(archive_path) as archive:
+            members = archive.infolist()
+            require(len(members) == 1 and members[0].filename == "fault-recovery-report.json"
+                    and not members[0].is_dir()
+                    and 100 <= members[0].file_size <= 512 * 1024,
+                    "D1 physical report ZIP has unexpected or oversized content")
+            report = json.loads(archive.read(members[0]).decode("utf-8"))
+    validate_d1_fault_report(report)
+
+
+def prove_open_d1_light_pr(api: Callable[[str], Any], token: str) -> str:
+    """Frontend-only PR may inherit only a truly executed prior FULL D1 report.
+
+    The existing native source/ancestor owner proves strict frontend-only,
+    exact current base, no fork, complete diff and past FULL Windows custody.
+    The D1 owner additionally checks its own independent FULL job and ZIP.
+    """
+    prior, _ = prove_open_native_pr(api, graph_api_only=True)
+    source_run: dict[str, Any] = {}
+    candidate = prove(prior, "d1", api, proven_run=source_run)
+    receipt = select_d1_full_artifact(source_run, candidate, api)
+    verify_d1_full_artifact(receipt, token)
+    return prior
+
+
 def prove_accepted_native_reuse(main_sha: str, gate: str,
                                 api: Callable[[str], Any]) -> tuple[str, str | None]:
     """Accept current FULL physical proof or independently validate inheritance.
@@ -1379,6 +1512,147 @@ def fixture(gate: str) -> tuple[dict[str, Any], Callable[[str], Any]]:
 
 
 def self_test() -> None:
+    d1_pages, d1_api = fixture("d1")
+    d1_candidate = "c" * 40
+    d1_run: dict[str, Any] = {}
+    require(prove("a" * 40, "d1", d1_api, proven_run=d1_run) == d1_candidate
+            and d1_run["name"] == WORKFLOW["d1"],
+            "real FULL D1 Windows/Linux proof was not recognized")
+    d1_jobs_key = next(key for key in d1_pages if key.endswith("/jobs?per_page=100"))
+    for fault in ("skipped-harness", "skipped-k2", "missing-windows", "duplicate-job"):
+        case = json.loads(json.dumps(d1_pages))
+        jobs = case[d1_jobs_key]["jobs"]
+        if fault in ("skipped-harness", "skipped-k2"):
+            target = ("Execute reusable D1 fault and recovery harness"
+                      if fault == "skipped-harness"
+                      else "Prove K2 608 MiB D1 successor-v2 migration and append-only recovery")
+            next(step for job in jobs for step in job["steps"]
+                 if step["name"] == target)["conclusion"] = "skipped"
+        elif fault == "missing-windows":
+            jobs.pop(next(i for i, job in enumerate(jobs) if "Windows" in job["name"]))
+        else:
+            jobs.append(dict(jobs[0]))
+        try:
+            prove("a" * 40, "d1", lambda key: case[key])
+        except (Unconfirmed, KeyError):
+            pass
+        else:
+            raise AssertionError(f"unsafe historical D1 full proof accepted: {fault}")
+
+    valid_d1_report = {
+        "schema_version": 1, "status": "PASS", "mode": "LOCAL_TEST_ONLY",
+        "provider_mutation": False, "production_mutation": False,
+        "remote_provider_credentials_present": False,
+        "scenario_count": len(D1_REQUIRED_SCENARIOS),
+        "scenarios": [{"scenario_id": name, "status": "PASS", "owner": "D1",
+                       "proof_kind": "LOCAL_WAL", "provider_mutation": False,
+                       "production_mutation": False}
+                      for name in sorted(D1_REQUIRED_SCENARIOS)],
+    }
+    validate_d1_fault_report(valid_d1_report)
+    for fault in ("missing", "duplicate", "unknown", "failed", "unsafe", "remote", "untyped"):
+        case = json.loads(json.dumps(valid_d1_report))
+        if fault == "missing":
+            case["scenarios"].pop()
+        elif fault == "duplicate":
+            case["scenarios"][0] = dict(case["scenarios"][1])
+        elif fault == "unknown":
+            case["scenarios"][0]["scenario_id"] = "fake_green_D1"
+        elif fault == "failed":
+            case["scenarios"][0]["status"] = "SKIPPED"
+        elif fault == "unsafe":
+            case["scenarios"][0]["provider_mutation"] = True
+        elif fault == "remote":
+            case["remote_provider_credentials_present"] = True
+        else:
+            case["scenarios"][0]["proof_kind"] = ""
+        try:
+            validate_d1_fault_report(case)
+        except Unconfirmed:
+            pass
+        else:
+            raise AssertionError(f"unsafe compressed D1 receipt accepted: {fault}")
+
+    fixture_now = datetime(2026, 11, 24, tzinfo=timezone.utc)
+    full_artifact = {
+        "id": 42, "name": f"d1-fault-recovery-{d1_run['id']}-1",
+        "size_in_bytes": 512, "digest": "sha256:" + "a" * 64,
+        "expired": False, "created_at": "2026-11-24T00:00:00Z",
+        "expires_at": "2026-12-24T00:00:00Z",
+        "workflow_run": {"id": d1_run["id"], "head_sha": d1_candidate,
+                         "head_branch": d1_run["head_branch"]},
+    }
+    artifacts_key = f"repos/{REPOSITORY}/actions/runs/{d1_run['id']}/artifacts?per_page=100"
+    d1_pages[artifacts_key] = {"total_count": 1, "artifacts": [full_artifact]}
+    require(select_d1_full_artifact(d1_run, d1_candidate, d1_api,
+                                    as_of=fixture_now)["id"] == 42,
+            "exact previous D1 ZIP receipt not recognized")
+    for fault in ("missing", "duplicate", "wrong-run", "wrong-head", "wrong-attempt",
+                  "bad-digest", "expired", "stale", "wrong-branch"):
+        case = json.loads(json.dumps(d1_pages))
+        items = case[artifacts_key]["artifacts"]
+        if fault == "missing":
+            items.clear()
+        elif fault == "duplicate":
+            items.append(dict(items[0]))
+        elif fault == "wrong-run":
+            items[0]["workflow_run"]["id"] += 1
+        elif fault == "wrong-head":
+            items[0]["workflow_run"]["head_sha"] = "f" * 40
+        elif fault == "wrong-attempt":
+            items[0]["name"] += "-2"
+        elif fault == "bad-digest":
+            items[0]["digest"] = "missing"
+        elif fault == "expired":
+            items[0]["expired"] = True
+        elif fault == "stale":
+            items[0]["created_at"] = "2026-09-01T00:00:00Z"
+        else:
+            items[0]["workflow_run"]["head_branch"] = "foreign"
+        case[artifacts_key]["total_count"] = len(items)
+        try:
+            select_d1_full_artifact(d1_run, d1_candidate, lambda key: case[key],
+                                    as_of=fixture_now)
+        except (Unconfirmed, KeyError):
+            pass
+        else:
+            raise AssertionError(f"unsafe GitHub D1 artifact admitted: {fault}")
+
+    with tempfile.TemporaryDirectory(prefix="d1-full-proof-self-test-") as temporary:
+        path = Path(temporary) / "report.zip"
+        with zipfile.ZipFile(path, "w", compression=zipfile.ZIP_DEFLATED) as output:
+            output.writestr("fault-recovery-report.json", json.dumps(valid_d1_report))
+        physical = dict(full_artifact)
+        physical["size_in_bytes"] = path.stat().st_size
+        physical["digest"] = "sha256:" + hashlib.sha256(path.read_bytes()).hexdigest()
+        prior_download = globals()["download_raw_artifact"]
+        try:
+            globals()["download_raw_artifact"] = lambda _artifact, target, _token: shutil.copyfile(path, target)
+            verify_d1_full_artifact(physical, "offline-self-test-token")
+            for fault in ("wrong-sha", "bad-zip", "unsafe-report"):
+                case = dict(physical)
+                if fault == "wrong-sha":
+                    case["digest"] = "sha256:" + "f" * 64
+                elif fault == "bad-zip":
+                    path.write_bytes(b"not a ZIP")
+                    case["size_in_bytes"] = path.stat().st_size
+                    case["digest"] = "sha256:" + hashlib.sha256(path.read_bytes()).hexdigest()
+                else:
+                    with zipfile.ZipFile(path, "w") as output:
+                        invalid = dict(valid_d1_report)
+                        invalid["status"] = "FAIL"
+                        output.writestr("fault-recovery-report.json", json.dumps(invalid))
+                    case["size_in_bytes"] = path.stat().st_size
+                    case["digest"] = "sha256:" + hashlib.sha256(path.read_bytes()).hexdigest()
+                try:
+                    verify_d1_full_artifact(case, "offline-self-test-token")
+                except (Unconfirmed, zipfile.BadZipFile):
+                    pass
+                else:
+                    raise AssertionError(f"unsafe downloaded D1 report accepted: {fault}")
+        finally:
+            globals()["download_raw_artifact"] = prior_download
+
     for unsafe in ("http://raw.blob.core.windows.net/example",
                    "https://blob.core.windows.net.evil.example/raw",
                    "https://evil.example/raw", "https://user:pass@host.githubusercontent.com/raw",
@@ -2419,6 +2693,7 @@ def main() -> int:
     parser.add_argument("--runtime-publication-state", choices=("reuse", "absent", "resume"))
     parser.add_argument("--runtime-output-dir", type=Path)
     parser.add_argument("--pr-native-proof", action="store_true")
+    parser.add_argument("--pr-d1-proof", action="store_true")
     parser.add_argument("--pr-camoufox-byte-proof", action="store_true")
     parser.add_argument("--pr-native-certify", action="store_true")
     parser.add_argument("--pr-native-bridge", type=Path)
@@ -2431,7 +2706,7 @@ def main() -> int:
         self_test()
     routes = sum((args.gate is not None, args.release_component is not None,
                   args.pr_camoufox_byte_proof,
-                  args.pr_native_proof, args.pr_native_certify,
+                  args.pr_native_proof, args.pr_d1_proof, args.pr_native_certify,
                   args.pr_native_bridge is not None,
                   args.native_runner_receipt is not None))
     if routes == 0:
@@ -2463,6 +2738,23 @@ def main() -> int:
             print(f"CAMOUFOX_LIGHT_BYTE_PROOF_UNAVAILABLE ({type(error).__name__}): "
                   f"{error}; full real Windows/Camoufox proof mandatory")
             return 1
+    if args.pr_d1_proof:
+        verified = False
+        try:
+            token = os.environ.get("GITHUB_TOKEN")
+            require(bool(token), "D1 LIGHT proof requires read-only GitHub authority")
+            prior = prove_open_d1_light_pr(api_reader(token), token)
+            print(f"D1_LIGHT_FULL_REPORT_PROVEN=PASS;prior_FULL_main={prior}")
+            verified = True
+        except (Unconfirmed, KeyError, ValueError, TypeError, AssertionError,
+                urllib.error.URLError, OSError, subprocess.SubprocessError,
+                UnicodeError, zipfile.BadZipFile) as error:
+            print(f"D1_LIGHT_FULL_REPORT_UNAVAILABLE ({type(error).__name__}): {error}; "
+                  "run real FULL D1 Linux proof")
+        if args.github_output is not None:
+            with args.github_output.open("a", encoding="utf-8") as output:
+                output.write(f"d1_light={'true' if verified else 'false'}\n")
+        return 0  # An absent/ambiguous proof always executes FULL on this PR.
     if args.pr_native_proof or args.pr_native_certify or args.pr_native_bridge is not None:
         verified = False
         try:
