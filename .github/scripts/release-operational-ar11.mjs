@@ -900,7 +900,11 @@ function camoufoxErrors(workflow, classifier) {
       'AR10_NATIVE_FIREFOX_SESSIONSTORE=PHYSICAL_PASS',
     ]],
     ['Run physical shipping reader and native Bridge Open on exact packaged runtime', [
-      'camouhost-delivered-runtime',
+      'camouhost-bridge-clean-runtime',
+      "if (Test-Path -LiteralPath $root) { throw 'Bridge runtime extraction must use a clean directory' }",
+      "if ($actualArchiveSha -cne $expectedArchiveSha) { throw 'physical runtime archive changed after SessionStore proof' }",
+      'tar.exe -xzf $archive -C $root',
+      'clean Bridge runtime embedded manifest mismatch',
       '$env:AR10_PACKAGED_RUNTIME_ARCHIVE = $archive',
       '$env:AR10_PACKAGED_RUNTIME_MANIFEST = $manifest',
       "$env:AR10_REAL_CAMOUFOX = '1'",
@@ -1041,6 +1045,15 @@ function camoufoxErrors(workflow, classifier) {
     ));
   }
   const pairedProof = stepBlock(windows, 'Run physical shipping reader and native Bridge Open on exact packaged runtime');
+  for (const command of [
+    "if (Test-Path -LiteralPath $root) { throw 'Bridge runtime extraction must use a clean directory' }",
+    "if ($actualArchiveSha -cne $expectedArchiveSha) { throw 'physical runtime archive changed after SessionStore proof' }",
+    'tar.exe -xzf $archive -C $root',
+    "if ($LASTEXITCODE -ne 0) { throw 'clean Bridge runtime extraction failed' }",
+  ]) {
+    errors.push(...requireActiveShellCommand(
+      pairedProof, command, 'Windows clean Bridge runtime extraction must be active'));
+  }
   if (pairedProof.split('\n').filter((line) => /^        timeout-minutes:/.test(line)).join('') !== '        timeout-minutes: 8') {
     errors.push('Windows physical Cargo proof must enforce an 8-minute step deadline');
   }
@@ -1552,6 +1565,20 @@ function selfTest(files) {
     'Camoufox raw runtime custody steps must follow both completed physical tests',
   );
   const combinedStep = stepBlock(windowsProof, 'Run physical shipping reader and native Bridge Open on exact packaged runtime');
+  for (const guard of [
+    "if (Test-Path -LiteralPath $root) { throw 'Bridge runtime extraction must use a clean directory' }",
+    "if ($actualArchiveSha -cne $expectedArchiveSha) { throw 'physical runtime archive changed after SessionStore proof' }",
+    'tar.exe -xzf $archive -C $root',
+    'if ($LASTEXITCODE -ne 0) { throw \'clean Bridge runtime extraction failed\' }',
+  ]) {
+    for (const passive of [`# ${guard}`, `Write-Host 'forged: ${guard}'`]) {
+      assertCamoufoxRejected(
+        files.camoufox.replace(combinedStep, combinedStep.replace(guard, passive)),
+        'clean Bridge extraction guard replaced by passive text',
+        'not executing active shell command',
+      );
+    }
+  }
   for (const [scenario, replacement, expectedError] of [
     ['missing physical Cargo deadline', combinedStep.replace('        timeout-minutes: 8\n', ''), '8-minute step deadline'],
     ['unsafe extended physical Cargo deadline', combinedStep.replace('        timeout-minutes: 8', '        timeout-minutes: 90'), '8-minute step deadline'],

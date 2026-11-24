@@ -322,11 +322,26 @@ jobs:
         run: |
           $archive = Join-Path $env:RUNNER_TEMP 'runtime-bundle.tar.gz'
           $manifest = Join-Path $env:RUNNER_TEMP 'runtime-manifest.json'
-          $root = Join-Path $env:RUNNER_TEMP 'camouhost-delivered-runtime'
           if (-not (Test-Path -LiteralPath $archive -PathType Leaf) -or
-              -not (Test-Path -LiteralPath $manifest -PathType Leaf) -or
-              -not (Test-Path -LiteralPath (Join-Path $root 'python/python.exe') -PathType Leaf)) {
-            throw 'exact packaged archive, manifest or extracted Python is missing'
+              -not (Test-Path -LiteralPath $manifest -PathType Leaf)) {
+            throw 'exact packaged archive or manifest is missing'
+          }
+          # The preceding SessionStore/POST test executes embedded Python and
+          # can rewrite imported .pyc caches. Bridge delivery must consume a
+          # pristine copy of the SAME proven archive, never that mutable tree.
+          $root = Join-Path $env:RUNNER_TEMP 'camouhost-bridge-clean-runtime'
+          if (Test-Path -LiteralPath $root) { throw 'Bridge runtime extraction must use a clean directory' }
+          $expectedArchiveSha = (Get-Content -LiteralPath (Join-Path $env:RUNNER_TEMP 'runtime-bundle.sha256') -Raw).Trim()
+          $actualArchiveSha = (Get-FileHash -Algorithm SHA256 -LiteralPath $archive).Hash.ToLowerInvariant()
+          if ($actualArchiveSha -cne $expectedArchiveSha) { throw 'physical runtime archive changed after SessionStore proof' }
+          New-Item -ItemType Directory -Path $root -ErrorAction Stop | Out-Null
+          tar.exe -xzf $archive -C $root
+          if ($LASTEXITCODE -ne 0) { throw 'clean Bridge runtime extraction failed' }
+          if ((Get-FileHash -Algorithm SHA256 (Join-Path $root 'runtime-manifest.json')).Hash -ne (Get-FileHash -Algorithm SHA256 $manifest).Hash) {
+            throw 'clean Bridge runtime embedded manifest mismatch'
+          }
+          if (-not (Test-Path -LiteralPath (Join-Path $root 'python/python.exe') -PathType Leaf)) {
+            throw 'clean Bridge runtime embedded Python missing'
           }
           $env:AR10_PACKAGED_RUNTIME_ARCHIVE = $archive
           $env:AR10_PACKAGED_RUNTIME_MANIFEST = $manifest
