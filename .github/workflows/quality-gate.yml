@@ -637,12 +637,15 @@ jobs:
 
       # Keep OS/toolchain/manifests/flags in the action's hashed key.
       # Restored artifacts never substitute any check or exact-head test.
+      # Include the standalone opsctl workspace only for the proven warm cache
+      # identity; its fmt/clippy/test belong to Linux Quality, not this job.
       - name: Restore versioned Rust dependencies
         uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2 (immutable)
         with:
           shared-key: profile-bridge-ci-v1
           workspaces: |
             . -> target
+            tools/opsctl -> target
           cache-on-failure: 'true'
 
       - name: Check and test native crates
