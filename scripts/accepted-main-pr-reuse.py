@@ -43,19 +43,29 @@ REQUIRED = frozenset({
 # successful workflow with all expensive jobs skipped by a PR scope filter.
 CRITICAL: dict[str, dict[str, tuple[str, ...]]] = {
     "camoufox": {
-        # Exact PR receipt must prove every physical Windows runtime step ran
-        # inside the protected Bridge regression job. Neither an artifact
-        # upload nor a successful summary job is a substitute for these tests.
+        # The unprotected producer materializes/proves/packages exact runtime
+        # bytes; the protected Windows consumer independently downloads them
+        # and physically runs BOTH archive-reader and native Open tests in one
+        # Cargo invocation. Every listed step must actually finish successfully
+        # on the exact PR head/attempt before accepted-main may reuse proof.
         "Rust Bridge contracts (browser-independent)": (
             "Run existing Rust Bridge tests",
         ),
-        "Profile Bridge Windows regression": (
+        "Build and verify official Windows Camoufox runtime": (
+            "Checkout exact candidate",
+            "Verify exact source checkout",
+            "Validate existing runtime owners",
             "Materialize official browser and verified offline fpgen model",
             "Prove official Firefox native restored tabs and POST safety on exact runtime",
             "Package exact compressed Release Set runtime input",
-            "Run production shipping archive reader",
+            "Upload exact-head official runtime for downstream Windows proofs",
+        ),
+        "Profile Bridge Windows regression": (
+            "Checkout exact candidate",
+            "Verify exact source checkout",
+            "Download exact official runtime artifact",
             "Extract and verify exact official runtime",
-            "Run official Camoufox Playwright user Open and native file-lock proof through production Bridge crates",
+            "Run physical shipping reader and native Bridge Open on exact packaged runtime",
         ),
         # A successful meta status cannot replace the underlying real tests.
         "Real Camoufox cold-launch proof": (
@@ -245,12 +255,12 @@ def prove(main_sha: str, gate: str, api: Callable[[str], Any],
             and job.get("workflow_name") == WORKFLOW[gate],
             f"required PR job run/attempt/head mismatch: {name}",
         )
-        actual: dict[str, str] = {}
+        actual: dict[str, tuple[str | None, str | None]] = {}
         for step in job.get("steps", []):
             label = step.get("name")
             require(label not in actual, f"duplicate PR step: {name}/{label}")
-            actual[label] = step.get("conclusion")
-        require(all(actual.get(step) == "success" for step in steps),
+            actual[label] = (step.get("status"), step.get("conclusion"))
+        require(all(actual.get(step) == ("completed", "success") for step in steps),
                 f"required PR test skipped/missing: {name}")
     return candidate
 
@@ -599,7 +609,8 @@ def fixture(gate: str) -> tuple[dict[str, Any], Callable[[str], Any]]:
          "run_id": gate_run["id"], "run_attempt": gate_run["run_attempt"],
          "head_sha": head, "workflow_name": WORKFLOW[gate],
          "started_at": "2026-10-31T00:00:00Z", "completed_at": "2026-10-31T00:10:00Z",
-         "steps": [{"name": step, "conclusion": "success"} for step in steps]}
+         "steps": [{"name": step, "status": "completed", "conclusion": "success"}
+                   for step in steps]}
         for name, steps in CRITICAL[gate].items()
     ]
     artifact_inventory = []
@@ -832,13 +843,13 @@ def self_test() -> None:
             else:
                 raise AssertionError(f"{gate}: accepted unsafe proof: {mutation}")
         # Every required physical test must have run on the exact PR attempt.
-        # Missing, skipped, or failed evidence from *any* step forces replay.
+        # Missing, skipped, failed, or unfinished evidence forces replay.
         for required_job, required_steps in CRITICAL[gate].items():
             jobpath = next(k for k in pages if k.endswith("/jobs?per_page=100"))
             for mutation, skipped_step in [("missing", None)] + [
                 (outcome, name)
                 for name in required_steps
-                for outcome in ("skipped", "failure")
+                for outcome in ("skipped", "failure", "in_progress")
             ]:
                 clone = json.loads(json.dumps(pages))
                 jobs = clone[jobpath]["jobs"]
@@ -847,9 +858,12 @@ def self_test() -> None:
                     jobs.remove(target)
                     clone[jobpath]["total_count"] -= 1
                 else:
-                    next(step for step in target["steps"] if step["name"] == skipped_step)[
-                        "conclusion"
-                    ] = mutation
+                    target_step = next(step for step in target["steps"]
+                                       if step["name"] == skipped_step)
+                    if mutation == "in_progress":
+                        target_step["status"] = mutation
+                    else:
+                        target_step["conclusion"] = mutation
                 try:
                     prove("a" * 40, gate, lambda path: clone[path])
                 except Unconfirmed:
