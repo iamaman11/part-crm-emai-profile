@@ -19,6 +19,8 @@ const EXPECTED_PROMOTION_RUN_NAME = "run-name: AR11 Release Set Promotion — ${
 const READ_ONLY_TERMINAL_DISPOSITION = '(.status == "READ_ONLY_READY" or .status == "NOOP" or .status == "BLOCKED")';
 const CAMOUFOX_ACTIVE_PHYSICAL_COMMANDS = [
   ['runtime-package-windows', 'Materialize official browser and verified offline fpgen model', 'python scripts/camouhost-runtime-build-windows.py build'],
+  ['runtime-package-windows', 'Materialize official browser and verified offline fpgen model', 'python scripts/github-release-publication.py probe'],
+  ['runtime-package-windows', 'Materialize official browser and verified offline fpgen model', 'gh release download'],
   ['runtime-package-windows', 'Prove official Firefox native restored tabs and POST safety on exact runtime', 'python scripts/test-ar10-real-camoufox-cleanup.py'],
   ['runtime-package-windows', 'Package exact compressed Release Set runtime input', 'python scripts/camouhost-runtime-package.py package --runtime-root'],
   ['runtime-package-windows', 'Extract and verify exact official runtime', 'tar.exe -xzf $archive -C $root'],
@@ -282,6 +284,26 @@ function legacyAuthorityErrors(exists = existsSync) {
 
 function buildErrors(build) {
   const errors = [];
+  const runtime = jobBlock(build, 'runtime-bundle');
+  errors.push(...requireMarkers(runtime, [
+    'Require exact PR-tested runtime bytes before Release publication',
+    'python scripts/accepted-main-pr-reuse.py --release-component runtime',
+    '--runtime-release-id "$env:RUNTIME_RELEASE_ID"',
+    '--runtime-publication-state "$($probe.state)"',
+    'Verify exact PR-tested runtime component on cache miss',
+    'runtime-physical-proof.json',
+    'published runtime bytes differ from exactly physically tested PR bytes',
+    'runtime-bundle.tar.gz', 'runtime-manifest.json',
+  ], 'SHA-bound main runtime publication'));
+  errors.push(...forbidMarkers(runtime, [
+    'camouhost-runtime-build-windows.py build',
+    'camouhost-runtime-package.py package --runtime-root',
+  ], 'main must never rebuild an already physically tested runtime'));
+  errors.push(...requireActiveShellCommand(
+    stepBlock(runtime, 'Require exact PR-tested runtime bytes before Release publication'),
+    'python scripts/accepted-main-pr-reuse.py --release-component runtime',
+    'main Release Set physical archive custody',
+  ));
   errors.push(...requireMarkers(build, [
     'branches:\n      - main',
     'Build immutable cloud components once',
@@ -681,6 +703,11 @@ function camoufoxClassifierErrors(classifier) {
     '"o0-e3a-d1-only-regression"',
     '"classifier-change-is-heavy"',
     '"gate-change-is-heavy"',
+    'path.startswith("frontend/src/") and path.endswith((".ts", ".tsx", ".css"))',
+    '"frontend-only"',
+    '"frontend-package-is-heavy"',
+    '"frontend-generated-is-heavy"',
+    '"frontend-cargo-is-heavy"',
     '"mixed-fails-closed"',
     '"unknown-fails-closed"',
     'classify([])',
@@ -751,8 +778,11 @@ function camoufoxErrors(workflow, classifier) {
   ], 'Camoufox single Windows proof (obsolete extra Windows job)'));
   const uploadCount = (workflow.match(/uses:\s+actions\/upload-artifact@/g) ?? []).length;
   const downloadCount = (workflow.match(/uses:\s+actions\/download-artifact@/g) ?? []).length;
-  if (uploadCount !== 0 || downloadCount !== 0) {
-    errors.push(`Camoufox one-runner proof must not transport its runtime, got ${uploadCount} uploads/${downloadCount} downloads`);
+  // The physical tests stay on one Windows runner. A tiny receipt is always
+  // exported after PASS; actual 1.5 GiB bytes cross to main only on a new
+  // runtime input (never on a published-byte reuse hit).
+  if (uploadCount !== 3 || downloadCount !== 0) {
+    errors.push(`Camoufox exact physical custody must upload receipt and miss-only raw assets, got ${uploadCount} uploads/${downloadCount} downloads`);
   }
   errors.push(...requireMarkers(scope, [
     'Classify accepted-main or mechanically proven runtime-unrelated PR',
@@ -761,6 +791,7 @@ function camoufoxErrors(workflow, classifier) {
     'persist-credentials: false',
     'if [ "$GITHUB_EVENT_NAME" = push ]; then',
     "echo 'heavy=true'",
+    "echo 'heavy=true' >> \"$GITHUB_OUTPUT\"\n              echo 'No exact verified PR proof: full main Camoufox replay required.'",
     'python3.12 scripts/accepted-main-pr-reuse.py --self-test',
     'python3.12 scripts/accepted-main-pr-reuse.py --gate camoufox',
     "grep -qx 'reuse=true'",
@@ -769,7 +800,11 @@ function camoufoxErrors(workflow, classifier) {
     'python3.12 -m py_compile scripts/classify-camoufox-runtime-scope.py',
     'python3.12 scripts/classify-camoufox-runtime-scope.py --self-test',
     '--paths-file "$RUNNER_TEMP/changed-paths.txt"',
-    '--github-output "$GITHUB_OUTPUT"',
+    '--github-output "$RUNNER_TEMP/camoufox-classified.txt"',
+    "grep -qx 'heavy=false' \"$RUNNER_TEMP/camoufox-classified.txt\"",
+    'python3.12 scripts/accepted-main-pr-reuse.py --pr-camoufox-byte-proof',
+    "echo 'heavy=true' >> \"$GITHUB_OUTPUT\"\n              echo 'No published-byte physical receipt: execute complete Gate.'",
+    "echo 'heavy=true' >> \"$GITHUB_OUTPUT\"",
   ], 'Camoufox scope routing'));
   errors.push(...camoufoxClassifierErrors(classifier));
   errors.push(...requireMarkers(linux, [
@@ -778,18 +813,23 @@ function camoufoxErrors(workflow, classifier) {
     'Require successful scope classification',
     'needs.scope.outputs.heavy',
   ], 'Linux required context'));
+  const protectedRunnerSelection = "runs-on: ${{ needs.scope.outputs.heavy == 'true' && 'windows-2025' || 'ubuntu-24.04' }}";
   errors.push(...requireMarkers(windows, [
     // Preserve the protected branch-status context while one physical Windows
-    // owner builds, packages, extracts and verifies the same local bytes.
+    // owner tests published bytes. An independently SHA-attested LIGHT can
+    // resolve on Ubuntu without occupying the Windows runner queue.
     'name: Profile Bridge Windows regression',
     'needs: scope',
     'if: always()',
-    'runs-on: windows-2025',
+    protectedRunnerSelection,
     'timeout-minutes: 20',
     'Require successful scope classification',
     "-notin @('true','false')",
   ], 'protected Windows runtime build, shipping reader and native browser proof'));
   const scopeGuard = stepBlock(windows, 'Require successful scope classification');
+  if (windows.split('\n').filter((line) => /^    runs-on:/.test(line)).join('') !== '    ' + protectedRunnerSelection) {
+    errors.push('protected Windows runtime build must use exact Windows-on-HEAVY and Ubuntu-on-attested-LIGHT runner selection');
+  }
   if (windows.split('\n').filter((line) => /^    timeout-minutes:/.test(line)).join('') !== '    timeout-minutes: 20') {
     errors.push('Windows physical proof must enforce a 20-minute job deadline');
   }
@@ -826,13 +866,10 @@ function camoufoxErrors(workflow, classifier) {
     ['Materialize official browser and verified offline fpgen model', [
       'python scripts/camouhost-runtime-build-windows.py build',
       '--runtime-lock runtime/camouhost/runtime-lock.json',
-      'from camoufox.fpgen_model import is_pinned',
-    ]],
-    ['Prove official Firefox native restored tabs and POST safety on exact runtime', [
-      'python scripts/test-ar10-real-camoufox-cleanup.py',
-      '--native-restore-only',
-      'native_restore_proof stage=passed safe_get=PASS post_replay=0 user_post_after_admission=PASS',
-      'AR10_NATIVE_FIREFOX_SESSIONSTORE=PHYSICAL_PASS',
+      'python scripts/camouhost-runtime-package.py identity',
+      'python scripts/github-release-publication.py probe',
+      'gh release download',
+      'Get-FileHash -Algorithm SHA256',
     ]],
     ['Package exact compressed Release Set runtime input', [
       'python scripts/camouhost-runtime-package.py package --runtime-root',
@@ -853,6 +890,14 @@ function camoufoxErrors(workflow, classifier) {
       "Get-Content -LiteralPath (Join-Path $env:RUNNER_TEMP 'runtime-bundle.sha256')",
       'if ($actualArchiveSha -cne $expectedArchiveSha)',
       'python scripts/camouhost-runtime-package.py verify-manifest',
+      'from camoufox.fpgen_model import is_pinned',
+    ]],
+    ['Prove official Firefox native restored tabs and POST safety on exact runtime', [
+      'camouhost-delivered-runtime',
+      'python scripts/test-ar10-real-camoufox-cleanup.py',
+      '--native-restore-only',
+      'native_restore_proof stage=passed safe_get=PASS post_replay=0 user_post_after_admission=PASS',
+      'AR10_NATIVE_FIREFOX_SESSIONSTORE=PHYSICAL_PASS',
     ]],
     ['Run physical shipping reader and native Bridge Open on exact packaged runtime', [
       'camouhost-delivered-runtime',
@@ -873,6 +918,11 @@ function camoufoxErrors(workflow, classifier) {
       '& "$env:WINDIR\\System32\\cmd.exe" /d /s /c $testCommand',
       '$cargoExit = $LASTEXITCODE',
       'if ($cargoExit -ne 0)',
+    ]],
+    ['Bind exact physically tested runtime archive and manifest SHA', [
+      'Get-FileHash -Algorithm SHA256 -LiteralPath $archive',
+      'Get-FileHash -Algorithm SHA256 -LiteralPath $manifest',
+      'CAMOUFOX_PHYSICAL_RUNTIME_SHA256=',
     ]],
   ];
   for (const [jobName, job, steps] of [['runtime-package-windows', windows, windowsSteps]]) {
@@ -902,6 +952,63 @@ function camoufoxErrors(workflow, classifier) {
     errors.push(...requireActiveShellCommand(
       stepBlock(windows, name), command, `Windows physical proof step ${name}`,
     ));
+  }
+  const custodySteps = [
+    ['Upload exact PR-tested runtime archive only on publication miss',
+      "needs.scope.outputs.heavy == 'true' && github.event_name == 'pull_request' && steps.custody.outputs.origin == 'built'",
+      'camoufox-runtime-bundle-', 'runtime-bundle.tar.gz'],
+    ['Upload exact PR-tested runtime manifest only on publication miss',
+      "needs.scope.outputs.heavy == 'true' && github.event_name == 'pull_request' && steps.custody.outputs.origin == 'built'",
+      'camoufox-runtime-manifest-', 'runtime-manifest.json'],
+    ['Upload SHA-bound physical runtime proof receipt',
+      "needs.scope.outputs.heavy == 'true' && github.event_name == 'pull_request'",
+      'camoufox-runtime-proof-', 'camoufox-runtime-proof.json'],
+  ];
+  for (const [name, expectedCondition, identity, file] of custodySteps) {
+    const step = stepBlock(windows, name);
+    const conditions = step.split('\n').filter((line) => /^        if: /.test(line));
+    if (conditions.length !== 1 || conditions[0] !== '        if: ' + expectedCondition) {
+      errors.push('Camoufox physical runtime custody upload has unsafe condition: ' + name);
+    }
+    errors.push(...requireMarkers(step, [
+      'actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a',
+      'archive: false', 'if-no-files-found: error',
+      name.includes('proof receipt') ? 'retention-days: 30' : 'retention-days: 7',
+      identity, file,
+    ], 'Camoufox raw physical runtime custody ' + name));
+  }
+  for (const [name, markers] of [
+    ['Verify physical PR runtime uploads match exact tested SHA',
+      ['ARCHIVE_UPLOAD_SHA:', 'MANIFEST_UPLOAD_SHA:', 'archive_sha256', 'manifest_sha256',
+       "if ($env:ARCHIVE_UPLOAD_SHA -cne $receipt.archive_sha256 -or $env:MANIFEST_UPLOAD_SHA -cne $receipt.manifest_sha256)"]],
+    ['Verify uploaded physical runtime proof receipt digest',
+      ['RECEIPT_UPLOAD_SHA:', 'Get-FileHash -Algorithm SHA256',
+       "if ($env:RECEIPT_UPLOAD_SHA -cne $actual)"]],
+  ]) {
+    errors.push(...requireMarkers(stepBlock(windows, name), markers,
+      'Camoufox exact physical runtime custody ' + name));
+  }
+  const custodyOrder = [
+    'Run physical shipping reader and native Bridge Open on exact packaged runtime',
+    'Bind exact physically tested runtime archive and manifest SHA',
+    'Upload exact PR-tested runtime archive only on publication miss',
+    'Upload exact PR-tested runtime manifest only on publication miss',
+    'Verify physical PR runtime uploads match exact tested SHA',
+    'Upload SHA-bound physical runtime proof receipt',
+    'Verify uploaded physical runtime proof receipt digest',
+  ].map((name) => windows.indexOf('      - name: ' + name));
+  if (custodyOrder.some((offset, index) => offset < 0 ||
+      (index > 0 && offset <= custodyOrder[index - 1]))) {
+    errors.push('Camoufox raw runtime custody steps must follow both completed physical tests');
+  }
+  for (const name of [
+    'Verify physical PR runtime uploads match exact tested SHA',
+    'Verify uploaded physical runtime proof receipt digest',
+  ]) {
+    const expected = "        if: needs.scope.outputs.heavy == 'true' && github.event_name == 'pull_request'";
+    if (!stepBlock(windows, name).split('\n').includes(expected)) {
+      errors.push('Camoufox custody digest verdict can skip a physical PR: ' + name);
+    }
   }
   // Both SHA-256 observations and the comparison must be *executed* commands,
   // not marker text in a disabled condition, comment or forged log. The local
@@ -988,6 +1095,16 @@ function validateAll({ build, promotion, camoufox, camoufoxClassifier, downloade
 }
 
 function selfTest(files) {
+  for (const [label, original, replacement] of [
+    ['missing main PR physical byte proof', 'python scripts/accepted-main-pr-reuse.py --release-component runtime', 'Write-Host "pretend physical bytes existed"'],
+    ['missing main runtime published byte equality', 'published runtime bytes differ from exactly physically tested PR bytes', 'runtime bytes assumed equal'],
+    ['restored main runtime rebuild', 'Verify exact PR-tested runtime component on cache miss', 'camouhost-runtime-build-windows.py build'],
+  ]) {
+    const altered = files.build.replace(original, replacement);
+    if (altered === files.build || !buildErrors(altered).length) {
+      throw new Error(label + ' custody negative fixture unexpectedly passed');
+    }
+  }
   const positiveSidecarErrors = runtimeSidecarErrors(files.promotion, files.downloader, files.overlay);
   if (positiveSidecarErrors.length) throw new Error(`positive runtime sidecar fixture failed: ${positiveSidecarErrors.join('; ')}`);
   for (const [label, original, replacement] of [
@@ -1245,11 +1362,19 @@ function selfTest(files) {
     throw new Error('accepted-main PR proof bypass fixture passed');
   }
   const missingHeavyFallback = files.camoufox.replace(
-    "echo 'heavy=true' >> \"$GITHUB_OUTPUT\"",
+    "echo 'heavy=true' >> \"$GITHUB_OUTPUT\"\n              echo 'No exact verified PR proof: full main Camoufox replay required.'",
     'echo "skipped fallback"',
   );
   if (!camoufoxErrors(missingHeavyFallback, files.camoufoxClassifier).some(error => error.includes('Camoufox scope routing'))) {
     throw new Error('accepted-main full replay fallback bypass fixture passed');
+  }
+  const missingLightByteProof = files.camoufox.replace(
+    'python3.12 scripts/accepted-main-pr-reuse.py --pr-camoufox-byte-proof',
+    'echo "filename-only LIGHT was assumed sufficient"',
+  );
+  if (!camoufoxErrors(missingLightByteProof, files.camoufoxClassifier)
+    .some(error => error.includes('Camoufox scope routing'))) {
+    throw new Error('PR LIGHT bypass without published-byte physical receipt fixture passed');
   }
   const assertCamoufoxRejected = (candidate, scenario, expectedError) => {
     if (candidate === files.camoufox) throw new Error(`${scenario} fixture setup failed`);
@@ -1259,6 +1384,17 @@ function selfTest(files) {
     }
   };
   const windowsProof = jobBlock(files.camoufox, 'runtime-package-windows');
+  const protectedRunnerSelection = "runs-on: ${{ needs.scope.outputs.heavy == 'true' && 'windows-2025' || 'ubuntu-24.04' }}";
+  for (const [kind, replacement] of [
+    ['HEAVY wrongly runs on Ubuntu', "runs-on: ${{ needs.scope.outputs.heavy == 'true' && 'ubuntu-24.04' || 'ubuntu-24.04' }}"],
+    ['LIGHT selection bypasses validated scope', "runs-on: ${{ github.event_name == 'pull_request' && 'ubuntu-24.04' || 'windows-2025' }}"],
+  ]) {
+    assertCamoufoxRejected(
+      files.camoufox.replace(windowsProof, windowsProof.replace(protectedRunnerSelection, replacement)),
+      kind,
+      'protected Windows runtime build',
+    );
+  }
   for (const [jobName, name, realCommand] of CAMOUFOX_ACTIVE_PHYSICAL_COMMANDS) {
     const step = stepBlock(windowsProof, name);
     if (!step) throw new Error(`missing ${name} fixture source`);
@@ -1370,9 +1506,32 @@ function selfTest(files) {
       files.camoufox.replace('  camoufox-required-proof:',
         `  obsolete-${name}-transport:\n    steps:\n      - name: Forbidden runtime ${name}\n        uses: ${action}\n  camoufox-required-proof:`),
       `restored runtime ${name} between runners`,
-      'must not transport its runtime',
+      'must upload receipt and miss-only raw assets',
     );
   }
+  const rawArchiveUpload = stepBlock(windowsProof,
+    'Upload exact PR-tested runtime archive only on publication miss');
+  assertCamoufoxRejected(
+    files.camoufox.replace(rawArchiveUpload,
+      rawArchiveUpload.replace('archive: false', 'archive: true')),
+    'PR runtime archive unexpectedly rewrapped with different bytes',
+    'Camoufox raw physical runtime custody',
+  );
+  assertCamoufoxRejected(
+    files.camoufox.replace(rawArchiveUpload,
+      rawArchiveUpload.replace("steps.custody.outputs.origin == 'built'",
+        "steps.custody.outputs.origin != 'built'")),
+    'PR runtime archive uploaded on reusable published-byte hit',
+    'Camoufox physical runtime custody upload has unsafe condition',
+  );
+  const physicalTests = stepBlock(windowsProof,
+    'Run physical shipping reader and native Bridge Open on exact packaged runtime');
+  assertCamoufoxRejected(
+    files.camoufox.replace(rawArchiveUpload, '')
+      .replace(physicalTests, rawArchiveUpload + physicalTests),
+    'PR raw runtime bytes uploaded before physical proof',
+    'Camoufox raw runtime custody steps must follow both completed physical tests',
+  );
   const combinedStep = stepBlock(windowsProof, 'Run physical shipping reader and native Bridge Open on exact packaged runtime');
   for (const [scenario, replacement, expectedError] of [
     ['missing physical Cargo deadline', combinedStep.replace('        timeout-minutes: 8\n', ''), '8-minute step deadline'],
@@ -1436,6 +1595,14 @@ function selfTest(files) {
   if (unsafePrefixClassifier === files.camoufoxClassifier) throw new Error('unsafe Camoufox prefix fixture setup failed');
   if (camoufoxClassifierErrors(unsafePrefixClassifier).length === 0) {
     throw new Error('unsafe Camoufox runtime prefix fixture passed');
+  }
+  const broadFrontendClassifier = files.camoufoxClassifier.replace(
+    'path.startswith("frontend/src/") and path.endswith((".ts", ".tsx", ".css"))',
+    'path.startswith("frontend/")',
+  );
+  if (broadFrontendClassifier === files.camoufoxClassifier ||
+      !camoufoxClassifierErrors(broadFrontendClassifier).length) {
+    throw new Error('unsafe broad frontend Camoufox LIGHT exemption fixture passed');
   }
   const missingUnknownFixture = files.camoufoxClassifier.replace('"unknown-fails-closed"', '"unknown-fixture-removed"');
   if (camoufoxClassifierErrors(missingUnknownFixture).length === 0) {
