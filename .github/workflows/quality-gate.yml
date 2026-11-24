@@ -688,12 +688,13 @@ jobs:
 
       # Source-only PR test transport; not a signed installer or approved Release Set.
       # No production enrollment, trust mutation or deployment is possible here.
+      # Raw archive:false uses the source basename `profile-bridge.exe` as its
+      # artifact identity; the accepted-main proof binds it to one PR run/HEAD.
       - name: Upload disposable exact-head Windows Bridge candidate
         if: github.event_name == 'pull_request'
         id: bridge-upload
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
-          name: pr-bridge-v1-${{ github.event.pull_request.head.sha }}.exe
           path: target/release/profile-bridge.exe
           archive: false
           if-no-files-found: error

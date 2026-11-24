@@ -19,6 +19,7 @@ import sys
 import tarfile
 import tempfile
 import urllib.error
+import urllib.parse
 import urllib.request
 from collections.abc import Callable
 from datetime import datetime, timezone
@@ -261,7 +262,7 @@ def prove(main_sha: str, gate: str, api: Callable[[str], Any],
 RELEASE_ARTIFACTS = {
     "cloud": re.compile(r"cloudflare-v1-sha256-[0-9a-f]{64}\.tar\Z"),
     "resolver": re.compile(r"mailbox-secret-resolver-v1-sha256-[0-9a-f]{64}\.tar\Z"),
-    "bridge": re.compile(r"pr-bridge-v1-[0-9a-f]{40}\.exe\Z"),
+    "bridge": re.compile(r"profile-bridge\.exe\Z"),
 }
 RELEASE_PRODUCERS = {
     "cloud": "Cloudflare Worker Release Build",
@@ -332,9 +333,7 @@ def prove_release_artifacts(main_sha: str, api: Callable[[str], Any]) -> dict[st
             and workflow.get("id") == quality["id"]
             and workflow.get("head_sha") == candidate
             and workflow.get("head_branch") == quality["head_branch"]
-            and started <= created <= completed
-            and artifact.get("name") == (f"pr-bridge-v1-{candidate}.exe" if component == "bridge"
-                                          else artifact["name"]),
+            and started <= created <= completed,
             f"unbound PR {component} artifact identity/attempt/digest",
         )
         selected[component] = {
@@ -353,8 +352,7 @@ def prove_release_artifacts(main_sha: str, api: Callable[[str], Any]) -> dict[st
 
 
 def verify_downloaded_raw(destination: Path, kind: str, artifact: dict[str, Any]) -> Path:
-    allowed_names = ({artifact["name"], "profile-bridge.exe"} if kind == "bridge"
-                     else {artifact["name"]})
+    allowed_names = {artifact["name"]}
     files = list(destination.iterdir())
     require(len(files) == 1 and files[0].is_file() and not files[0].is_symlink()
             and files[0].name in allowed_names, "downloaded artifact shape mismatch")
@@ -366,6 +364,56 @@ def verify_downloaded_raw(destination: Path, kind: str, artifact: dict[str, Any]
             digest.update(chunk)
     require(digest.hexdigest() == artifact["sha256"], "artifact byte digest mismatch")
     return actual
+
+
+def signed_artifact_url(value: str) -> str:
+    """Accept only an HTTPS object-store redirect; never forward the API token."""
+    require(isinstance(value, str), "missing signed artifact URL")
+    parts = urllib.parse.urlsplit(value)
+    host = parts.hostname or ""
+    require(parts.scheme == "https" and parts.username is None
+            and parts.password is None and parts.port in (None, 443)
+            and (host.endswith(".blob.core.windows.net")
+                 or host.endswith(".githubusercontent.com")
+                 or host.endswith(".amazonaws.com")),
+            "unexpected artifact redirect origin")
+    return value
+
+
+def download_raw_artifact(artifact: dict[str, Any], destination: Path, token: str) -> None:
+    """GitHub raw artifacts are NOT ZIP: `gh run download` cannot read them.
+
+    The artifact-ID endpoint returns a short-lived, signed object-store URL.
+    The first API request carries the GitHub token; the subsequent raw byte
+    request carries no credentials. Size and digest are checked afterwards.
+    """
+    class NoRedirect(urllib.request.HTTPRedirectHandler):
+        def redirect_request(self, req, fp, code, msg, headers, newurl):
+            return None
+
+    endpoint = f"https://api.github.com/repos/{REPOSITORY}/actions/artifacts/{artifact['id']}/zip"
+    request = urllib.request.Request(endpoint, headers={
+        "Accept": "application/vnd.github+json",
+        "Authorization": f"Bearer {token}",
+        "X-GitHub-Api-Version": "2022-11-28",
+    })
+    try:
+        with urllib.request.build_opener(NoRedirect).open(request, timeout=20):
+            raise Unconfirmed("artifact API did not return a signed raw redirect")
+    except urllib.error.HTTPError as response:
+        require(response.code in (302, 303, 307),
+                f"artifact API rejected raw download: HTTP {response.code}")
+        url = signed_artifact_url(response.headers.get("Location"))
+    with urllib.request.urlopen(url, timeout=35) as payload, destination.open("wb") as output:
+        remaining = artifact["size"]
+        while True:
+            chunk = payload.read(min(1024 * 1024, remaining + 1))
+            if not chunk:
+                break
+            require(len(chunk) <= remaining, "raw artifact exceeds expected byte count")
+            output.write(chunk)
+            remaining -= len(chunk)
+        require(remaining == 0, "raw artifact download truncated")
 
 
 def prepare_release_component(main_sha: str, component: str, api: Callable[[str], Any]) -> None:
@@ -387,12 +435,8 @@ def prepare_release_component(main_sha: str, component: str, api: Callable[[str]
             artifact = receipt["artifacts"][kind]
             destination = scratch / kind
             destination.mkdir()
-            subprocess.run(
-                ["gh", "run", "download", str(receipt["quality_run_id"]),
-                 "--repo", REPOSITORY, "--name", artifact["name"],
-                 "--dir", str(destination)], check=True, stdout=subprocess.DEVNULL,
-                timeout=35,
-            )
+            download_raw_artifact(artifact, destination / artifact["name"],
+                                  os.environ["GITHUB_TOKEN"])
             downloaded[kind] = verify_downloaded_raw(destination, kind, artifact)
             print(f"Verified PR binary origin: main={main_sha} "
                   f"PR_HEAD={receipt['candidate_sha']} run={receipt['quality_run_id']} "
@@ -567,7 +611,7 @@ def fixture(gate: str) -> tuple[dict[str, Any], Callable[[str], Any]]:
         names = {
             "cloud": f"cloudflare-v1-sha256-{'1'*64}.tar",
             "resolver": f"mailbox-secret-resolver-v1-sha256-{'2'*64}.tar",
-            "bridge": f"pr-bridge-v1-{head}.exe",
+            "bridge": "profile-bridge.exe",
         }
         artifact_inventory = [
             {"id": index + 100, "name": name, "size_in_bytes": 2048,
@@ -599,11 +643,24 @@ def fixture(gate: str) -> tuple[dict[str, Any], Callable[[str], Any]]:
 
 
 def self_test() -> None:
+    for unsafe in ("http://raw.blob.core.windows.net/example",
+                   "https://blob.core.windows.net.evil.example/raw",
+                   "https://evil.example/raw", "https://user:pass@host.githubusercontent.com/raw",
+                   "file:///etc/passwd", "https://api.github.com/artifacts/raw"):
+        try:
+            signed_artifact_url(unsafe)
+        except Unconfirmed:
+            pass
+        else:
+            raise AssertionError(f"untrusted signed artifact origin accepted: {unsafe}")
+    require(signed_artifact_url("https://results.blob.core.windows.net/x?signature=1")
+            == "https://results.blob.core.windows.net/x?signature=1",
+            "valid signed raw artifact origin rejected")
     with tempfile.TemporaryDirectory(prefix="accepted-main-artifact-fixture-") as temporary:
         base = Path(temporary)
         target = base / "profile-bridge.exe"
         target.write_bytes(b"MZ" + b"verified-pr-binary")
-        identity = {"name": f"pr-bridge-v1-{'c'*40}.exe", "size": target.stat().st_size,
+        identity = {"name": "profile-bridge.exe", "size": target.stat().st_size,
                     "sha256": hashlib.sha256(target.read_bytes()).hexdigest()}
         require(verify_downloaded_raw(base, "bridge", identity) == target,
                 "verified PR Bridge binary rejected")
