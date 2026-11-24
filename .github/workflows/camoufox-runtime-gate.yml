@@ -232,11 +232,9 @@ jobs:
           name: official-158-runtime-${{ github.event.pull_request.head.sha || github.sha }}
           path: ${{ runner.temp }}/camouhost-runtime-artifact
 
-      - name: Run Windows Bridge library tests and production archive reader
+      - name: Run production Windows runtime archive reader
         shell: pwsh
         run: |
-          cargo test --locked -p profile-bridge --lib
-          if ($LASTEXITCODE -ne 0) { throw 'Windows Bridge library tests failed' }
           $archive = Join-Path $env:RUNNER_TEMP 'camouhost-runtime-artifact/runtime-bundle.tar.gz'
           $manifest = Join-Path $env:RUNNER_TEMP 'camouhost-runtime-artifact/runtime-manifest.json'
           $env:AR10_PACKAGED_RUNTIME_ARCHIVE = $archive

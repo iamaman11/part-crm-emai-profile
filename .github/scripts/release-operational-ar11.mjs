@@ -665,8 +665,20 @@ function camoufoxErrors(workflow, classifier) {
     "if: needs.scope.outputs.heavy == 'true'",
     'Require exact runtime package',
     'Download exact official runtime artifact',
-    'Run Windows Bridge library tests and production archive reader',
+    'Run production Windows runtime archive reader',
+    'runtime-bundle.tar.gz',
+    'runtime-manifest.json',
+    '$env:AR10_PACKAGED_RUNTIME_ARCHIVE = $archive',
+    '$env:AR10_PACKAGED_RUNTIME_MANIFEST = $manifest',
+    'cargo test --locked -p profile-bridge --test real_camoufox_runtime shipping_windows_runtime_archive_is_readable_by_production_delivery_reader -- --exact --nocapture',
+    "if ($LASTEXITCODE -ne 0) { throw 'production compressed runtime archive reader failed' }",
+    'REAL_SHIPPING_ARCHIVE_READER=PASS;FILES=[0-9]+;COMPRESSED_BYTES=[0-9]+',
+    'test result: ok\\. 1 passed; 0 failed; 0 ignored; 0 measured; [0-9]+ filtered out;',
+    'REAL_SHIPPING_ARCHIVE_READER_NOT_EXECUTED_OR_NOT_PASSED',
   ], 'Windows production archive-reader context'));
+  if (archiveReader.includes('cargo test --locked -p profile-bridge --lib')) {
+    errors.push('Windows production archive-reader repeats the Bridge library suite instead of verifying the shipping reader only');
+  }
   errors.push(...requireMarkers(windows, [
     // The browser Open proof and shipping-reader proof independently consume
     // the same verified package. The protected aggregator MUST join both.
@@ -946,6 +958,42 @@ function selfTest(files) {
       || !camoufoxErrors(missingArchiveReaderFromFinalProof, files.camoufoxClassifier)
         .some(error => error.includes('Camoufox required-proof aggregator'))) {
     throw new Error('missing shipping-reader edge on protected final Camoufox proof fixture passed');
+  }
+  const shippingReaderCommand = 'cargo test --locked -p profile-bridge --test real_camoufox_runtime shipping_windows_runtime_archive_is_readable_by_production_delivery_reader -- --exact --nocapture';
+  const missingShippingReader = files.camoufox.replace(shippingReaderCommand, 'echo shipping-reader-bypassed');
+  if (missingShippingReader === files.camoufox
+      || !camoufoxErrors(missingShippingReader, files.camoufoxClassifier)
+        .some(error => error.includes('Windows production archive-reader context'))) {
+    throw new Error('missing real Windows shipping-reader test command fixture passed');
+  }
+  const missingArchiveBinding = files.camoufox.replace(
+    '$env:AR10_PACKAGED_RUNTIME_ARCHIVE = $archive',
+    '$env:AR10_PACKAGED_RUNTIME_ARCHIVE = ""',
+  );
+  if (missingArchiveBinding === files.camoufox
+      || !camoufoxErrors(missingArchiveBinding, files.camoufoxClassifier)
+        .some(error => error.includes('Windows production archive-reader context'))) {
+    throw new Error('missing exact runtime archive binding fixture passed');
+  }
+  const missingShippingReaderVerdict = files.camoufox.replace(
+    'REAL_SHIPPING_ARCHIVE_READER_NOT_EXECUTED_OR_NOT_PASSED',
+    'SHIPPING_READER_VERDICT_BYPASSED',
+  );
+  if (missingShippingReaderVerdict === files.camoufox
+      || !camoufoxErrors(missingShippingReaderVerdict, files.camoufoxClassifier)
+        .some(error => error.includes('Windows production archive-reader context'))) {
+    throw new Error('missing physical shipping-reader verdict guard fixture passed');
+  }
+  const archiveReaderProof = jobBlock(files.camoufox, 'shipping-archive-reader-windows');
+  const redundantWindowsLibrarySuite = files.camoufox.replace(
+    archiveReaderProof,
+    archiveReaderProof.replace('Run production Windows runtime archive reader',
+      'Run production Windows runtime archive reader\n          cargo test --locked -p profile-bridge --lib'),
+  );
+  if (redundantWindowsLibrarySuite === files.camoufox
+      || !camoufoxErrors(redundantWindowsLibrarySuite, files.camoufoxClassifier)
+        .some(error => error.includes('repeats the Bridge library suite'))) {
+    throw new Error('redundant Windows library suite reintroduction fixture passed');
   }
   const browserProof = jobBlock(files.camoufox, 'bridge-regression-windows');
   const missingRuntimePackageFromBrowser = files.camoufox.replace(browserProof, browserProof.replace(

@@ -49,7 +49,7 @@ CRITICAL: dict[str, dict[str, tuple[str, ...]]] = {
             "Upload exact-head official runtime for downstream Windows proofs",
         ),
         "Rust shipping reader verifies exact compressed Windows runtime": (
-            "Run Windows Bridge library tests and production archive reader",
+            "Run production Windows runtime archive reader",
         ),
         "Profile Bridge Windows regression": (
             "Run official Camoufox Playwright user Open and native file-lock proof through production Bridge crates",
@@ -199,31 +199,40 @@ def prove(main_sha: str, gate: str, api: Callable[[str], Any],
     if not require_steps:
         require(gate == "camoufox", "only Camoufox has unchanged-input proof reuse")
         return candidate
-    source_run = latest[WORKFLOW[gate]]
-    jobs = api(f"{root}/actions/runs/{source_run['id']}/jobs?per_page=100")
-    require(
-        isinstance(jobs.get("jobs"), list)
-        and isinstance(jobs.get("total_count"), int)
-        and jobs["total_count"] <= 100,
-        "incomplete PR job inventory",
-    )
-    by_name = {job.get("name"): job for job in jobs["jobs"]}
-    for name, steps in CRITICAL[gate].items():
-        job = by_name.get(name, {})
+    witnesses = [(WORKFLOW[gate], CRITICAL[gate])]
+    if gate == "camoufox":
+        # The shipping reader no longer reruns all 541 native Bridge library
+        # tests. Reuse is therefore allowed only when Quality Windows really
+        # executed those tests at this exact PR head and attempt.
+        witnesses.append((WORKFLOW["quality"], {
+            "Rust Windows And Profile Bridge Artifact": ("Check and test native crates",),
+        }))
+    for workflow_name, required_jobs in witnesses:
+        source_run = latest[workflow_name]
+        jobs = api(f"{root}/actions/runs/{source_run['id']}/jobs?per_page=100")
         require(
-            job.get("status") == "completed" and job.get("conclusion") == "success",
-            f"required PR job did not complete: {name}",
+            isinstance(jobs.get("jobs"), list)
+            and isinstance(jobs.get("total_count"), int)
+            and jobs["total_count"] <= 100,
+            f"incomplete PR job inventory: {workflow_name}",
         )
-        require(
-            job.get("run_id") == source_run["id"]
-            and job.get("run_attempt") == source_run["run_attempt"]
-            and job.get("head_sha") == candidate
-            and job.get("workflow_name") == WORKFLOW[gate],
-            f"required PR job run/attempt/head mismatch: {name}",
-        )
-        actual = {s.get("name"): s.get("conclusion") for s in job.get("steps", [])}
-        require(all(actual.get(step) == "success" for step in steps),
-                f"required PR test skipped/missing: {name}")
+        by_name = {job.get("name"): job for job in jobs["jobs"]}
+        for name, steps in required_jobs.items():
+            job = by_name.get(name, {})
+            require(
+                job.get("status") == "completed" and job.get("conclusion") == "success",
+                f"required PR job did not complete: {name}",
+            )
+            require(
+                job.get("run_id") == source_run["id"]
+                and job.get("run_attempt") == source_run["run_attempt"]
+                and job.get("head_sha") == candidate
+                and job.get("workflow_name") == workflow_name,
+                f"required PR job run/attempt/head mismatch: {name}",
+            )
+            actual = {s.get("name"): s.get("conclusion") for s in job.get("steps", [])}
+            require(all(actual.get(step) == "success" for step in steps),
+                    f"required PR test skipped/missing: {name}")
     return candidate
 
 
@@ -331,6 +340,18 @@ def fixture(gate: str) -> tuple[dict[str, Any], Callable[[str], Any]]:
         f"{root}/actions/runs/{gate_run['id']}/jobs?per_page=100":
             {"total_count": len(jobs), "jobs": jobs},
     }
+    if gate == "camoufox":
+        quality_run = next(run for run in runs if run["name"] == WORKFLOW["quality"])
+        pages[f"{root}/actions/runs/{quality_run['id']}/jobs?per_page=100"] = {
+            "total_count": 1,
+            "jobs": [{
+                "name": "Rust Windows And Profile Bridge Artifact",
+                "status": "completed", "conclusion": "success",
+                "run_id": quality_run["id"], "run_attempt": quality_run["run_attempt"],
+                "head_sha": head, "workflow_name": WORKFLOW["quality"],
+                "steps": [{"name": "Check and test native crates", "conclusion": "success"}],
+            }],
+        }
     return pages, lambda path: pages[path]
 
 
@@ -456,6 +477,39 @@ def self_test() -> None:
                     raise AssertionError(
                         f"{gate}: accepted {mutation} evidence: {required_job}/{skipped_step}"
                     )
+        if gate == "camoufox":
+            quality_run = next(run for run in pages[
+                f"{prefix}/actions/runs?head_sha={'c'*40}&event=pull_request&per_page=100"
+            ]["workflow_runs"] if run["name"] == WORKFLOW["quality"])
+            quality_path = f"{prefix}/actions/runs/{quality_run['id']}/jobs?per_page=100"
+            for mutation in ("missing", "failed-job", "skipped-step", "failed-step",
+                             "stale-attempt", "wrong-run", "wrong-head", "wrong-workflow"):
+                clone = json.loads(json.dumps(pages))
+                evidence = clone[quality_path]
+                job = evidence["jobs"][0]
+                if mutation == "missing":
+                    evidence["jobs"] = []
+                    evidence["total_count"] = 0
+                elif mutation == "failed-job":
+                    job["conclusion"] = "failure"
+                elif mutation == "skipped-step":
+                    job["steps"][0]["conclusion"] = "skipped"
+                elif mutation == "failed-step":
+                    job["steps"][0]["conclusion"] = "failure"
+                elif mutation == "stale-attempt":
+                    job["run_attempt"] += 1
+                elif mutation == "wrong-run":
+                    job["run_id"] += 1
+                elif mutation == "wrong-head":
+                    job["head_sha"] = "e" * 40
+                else:
+                    job["workflow_name"] = WORKFLOW["camoufox"]
+                try:
+                    prove("a" * 40, gate, lambda path: clone[path])
+                except Unconfirmed:
+                    pass
+                else:
+                    raise AssertionError(f"Camoufox accepted unsafe Quality Windows proof: {mutation}")
     # Fail-closed historical reuse: current PR has all 18 successful checks
     # but SKIPPED heavy jobs, while older accepted main has exact real proof.
     now, _ = fixture("camoufox")
@@ -468,6 +522,12 @@ def self_test() -> None:
     )
     current_jobs = f"{root}/actions/runs/{current_camoufox['id']}/jobs?per_page=100"
     old_jobs = json.loads(json.dumps(now[current_jobs]))
+    current_quality = next(
+        run for run in now[current_run]["workflow_runs"]
+        if run["name"] == WORKFLOW["quality"]
+    )
+    current_quality_jobs = f"{root}/actions/runs/{current_quality['id']}/jobs?per_page=100"
+    old_quality_jobs = json.loads(json.dumps(now[current_quality_jobs]))
     prior_run = f"{root}/actions/runs?head_sha={prior_head}&event=pull_request&per_page=100"
     prior_runs = json.loads(json.dumps(now[current_run]))
     for run in prior_runs["workflow_runs"]:
@@ -477,10 +537,18 @@ def self_test() -> None:
         run for run in prior_runs["workflow_runs"]
         if run["name"] == WORKFLOW["camoufox"]
     )
+    prior_quality = next(
+        run for run in prior_runs["workflow_runs"]
+        if run["name"] == WORKFLOW["quality"]
+    )
     for job in old_jobs["jobs"]:
         job["run_id"] = prior_camoufox["id"]
         job["head_sha"] = prior_head
+    for job in old_quality_jobs["jobs"]:
+        job["run_id"] = prior_quality["id"]
+        job["head_sha"] = prior_head
     prior_jobs = f"{root}/actions/runs/{prior_camoufox['id']}/jobs?per_page=100"
+    prior_quality_jobs = f"{root}/actions/runs/{prior_quality['id']}/jobs?per_page=100"
     now[f"{root}/commits/{base_sha}"] = {
         "sha": base_sha,
         "parents": [{"sha": "e" * 40}],
@@ -503,6 +571,7 @@ def self_test() -> None:
     for run in prior_runs["workflow_runs"]:
         run["head_branch"] = "codex/prior-proof"
     now[prior_jobs] = old_jobs
+    now[prior_quality_jobs] = old_quality_jobs
     for job in now[current_jobs]["jobs"]:
         for step in job["steps"]:
             step["conclusion"] = "skipped"
@@ -567,6 +636,18 @@ def self_test() -> None:
         pass
     else:
         raise AssertionError("skipped prior physical step reused")
+    now[prior_jobs]["jobs"][0]["steps"][0]["conclusion"] = "success"
+    now[prior_quality_jobs]["jobs"][0]["steps"][0]["conclusion"] = "skipped"
+    try:
+        prove_unchanged_prior_camoufox(
+            now_sha, base_sha, api, lambda _: [base_sha],
+            preserved, camoufox_unrelated,
+        )
+    except Unconfirmed:
+        pass
+    else:
+        raise AssertionError("skipped prior Quality Windows native tests reused")
+    now[prior_quality_jobs]["jobs"][0]["steps"][0]["conclusion"] = "success"
     try:
         prove_unchanged_prior_camoufox(
             now_sha, base_sha, api, lambda _: [],
