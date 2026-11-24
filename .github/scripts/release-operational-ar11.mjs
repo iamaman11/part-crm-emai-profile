@@ -628,7 +628,9 @@ function camoufoxErrors(workflow, classifier) {
     'Run Windows Bridge library tests and production archive reader',
   ], 'Windows production archive-reader context'));
   errors.push(...requireMarkers(windows, [
-    'needs: [scope, runtime-package-windows, shipping-archive-reader-windows]',
+    // The browser Open proof and shipping-reader proof independently consume
+    // the same verified package. The protected aggregator MUST join both.
+    'needs: [scope, runtime-package-windows]',
     'if: always()',
     'Require successful prerequisites',
     'needs.scope.outputs.heavy',
@@ -862,6 +864,25 @@ function selfTest(files) {
   );
   if (!camoufoxErrors(missingHeavyFallback, files.camoufoxClassifier).some(error => error.includes('Camoufox scope routing'))) {
     throw new Error('accepted-main full replay fallback bypass fixture passed');
+  }
+  const missingArchiveReaderFromFinalProof = files.camoufox.replace(
+    'needs: [scope, runtime-package-windows, shipping-archive-reader-windows, bridge-regression-windows]',
+    'needs: [scope, runtime-package-windows, bridge-regression-windows]',
+  );
+  if (missingArchiveReaderFromFinalProof === files.camoufox
+      || !camoufoxErrors(missingArchiveReaderFromFinalProof, files.camoufoxClassifier)
+        .some(error => error.includes('Camoufox required-proof aggregator'))) {
+    throw new Error('missing shipping-reader edge on protected final Camoufox proof fixture passed');
+  }
+  const browserProof = jobBlock(files.camoufox, 'bridge-regression-windows');
+  const missingRuntimePackageFromBrowser = files.camoufox.replace(browserProof, browserProof.replace(
+    'needs: [scope, runtime-package-windows]',
+    'needs: scope',
+  ));
+  if (missingRuntimePackageFromBrowser === files.camoufox
+      || !camoufoxErrors(missingRuntimePackageFromBrowser, files.camoufoxClassifier)
+        .some(error => error.includes('Windows user Open and native file-lock context'))) {
+    throw new Error('missing verified runtime package on Windows proof fixture passed');
   }
   const wrongAcceptedMainPolicy = structuredClone(files.authority);
   wrongAcceptedMainPolicy.promotion_policy.pr_runtime_accepted_main_policy = 'ALWAYS_HEAVY';

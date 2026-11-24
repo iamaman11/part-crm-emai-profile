@@ -855,12 +855,6 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
 
-      - name: Restore opsctl Rust compilation cache for manual resolve
-        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2 (immutable)
-        with:
-          shared-key: release-set-promotion-opsctl-v1
-          workspaces: tools/opsctl -> target
-
       - name: Re-verify immutable target without provider credentials
         id: target_verify
         env:
