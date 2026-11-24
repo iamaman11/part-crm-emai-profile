@@ -1,6 +1,6 @@
 name: Release Set Promotion
 
-run-name: AR11 Release Set Promotion — ${{ github.event_name == 'workflow_run' && 'READ-ONLY PREFLIGHT' || github.event_name == 'workflow_dispatch' && format('STAGING PROMOTION by {0}', github.actor) || 'INTERNAL ROLLBACK-NEGATIVE EVIDENCE' }}
+run-name: AR11 Release Set Promotion — ${{ github.event_name == 'workflow_run' && 'STAGING READY/AUTO PROMOTION' || 'INTERNAL ROLLBACK-NEGATIVE EVIDENCE' }}
 
 on:
   workflow_run:
@@ -8,7 +8,6 @@ on:
       - Release Set Build
     types:
       - completed
-  workflow_dispatch:
   workflow_call:
     inputs:
       operation:
@@ -36,16 +35,14 @@ permissions:
   contents: read
 
 concurrency:
-  # A manual Run workflow click is the authorization. Serialize attempts; the exact-current fence below
-  # is the compare-and-swap replay guard: after success, EXPECTED_CURRENT no longer matches.
+  # Standing staging authority exists only after a same-run READ_ONLY_READY verdict.
+  # Serialize effects; exact CURRENT is re-fenced before every provider invocation.
   group: release-set-promotion-staging
   cancel-in-progress: false
 
 jobs:
   route:
-    name: Classify automatic READY vs zero-field mutation vs internal evidence
-    # GitHub permits Write collaborators to dispatch; only the repository owner may authorize staging.
-    if: github.event_name != 'workflow_dispatch' || github.actor == github.repository_owner
+    name: Classify accepted-main READY vs internal rollback evidence
     runs-on: ubuntu-latest
     outputs:
       mode: ${{ steps.route.outputs.mode }}
@@ -59,31 +56,38 @@ jobs:
           READY_SOURCE_BRANCH: ${{ github.event.workflow_run.head_branch }}
           READY_SOURCE_EVENT: ${{ github.event.workflow_run.event }}
           READY_SOURCE_CONCLUSION: ${{ github.event.workflow_run.conclusion }}
+          READY_SOURCE_REPOSITORY: ${{ github.event.workflow_run.repository.full_name }}
         run: |
           set -euo pipefail
           if [ "$GITHUB_EVENT_NAME" = workflow_run ]; then
             test "$READY_SOURCE_BRANCH" = main
             test "$READY_SOURCE_EVENT" = push
             test "$READY_SOURCE_CONCLUSION" = success
+            test "$READY_SOURCE_REPOSITORY" = "$GITHUB_REPOSITORY"
             [[ "$READY_SOURCE_SHA" =~ ^[0-9a-f]{40}$ ]]
             echo 'mode=preflight' >> "$GITHUB_OUTPUT"
             echo "source_sha=$READY_SOURCE_SHA" >> "$GITHUB_OUTPUT"
-          elif [ "$GITHUB_EVENT_NAME" = workflow_dispatch ]; then
-            # The staging Environment's native deployment-branch policy is the main-branch gate.
-            test -z "$INTERNAL_OPERATION"
-            echo 'mode=promote' >> "$GITHUB_OUTPUT"
-            echo "source_sha=$GITHUB_SHA" >> "$GITHUB_OUTPUT"
-          else
+          elif [ "$GITHUB_EVENT_NAME" = workflow_call ]; then
             test "$INTERNAL_OPERATION" = rollback-negative
             test "$GITHUB_REF" = refs/heads/main
             echo 'mode=rollback-negative' >> "$GITHUB_OUTPUT"
             echo "source_sha=$GITHUB_SHA" >> "$GITHUB_OUTPUT"
+          else
+            exit 1
           fi
 
   preflight-ready:
     name: Observe provider and publish lossless read-only terminal outcome
     needs: route
     if: needs.route.outputs.mode == 'preflight'
+    outputs:
+      terminal_status: ${{ steps.outcome.outputs.status }}
+      ready_artifact_id: ${{ steps.ready_upload.outputs.artifact-id }}
+      ready_artifact_digest: ${{ steps.ready_upload.outputs.artifact-digest }}
+      ready_artifact_name: ${{ steps.ready.outputs.artifact_name }}
+      ready_evidence_sha256: ${{ steps.ready.outputs.ready_sha256 }}
+      source_sha: ${{ steps.resolve.outputs.main_sha }}
+      release_set_id: ${{ steps.resolve.outputs.release_set_id }}
     runs-on: ubuntu-latest
     timeout-minutes: 20
     environment: staging
@@ -553,6 +557,8 @@ jobs:
           worker_identity_sha="$(sha256sum "$RUNNER_TEMP/worker-binding-after.json" | cut -d' ' -f1)"
           d1_ledger_sha="$(sha256sum "$RUNNER_TEMP/d1-names-after.json" | cut -d' ' -f1)"
           jq -n \
+            --argjson ready_run_id "$GITHUB_RUN_ID" \
+            --argjson ready_run_attempt "$GITHUB_RUN_ATTEMPT" \
             --arg source_sha "$SOURCE_SHA" \
             --arg release_set_id "$RELEASE_SET_ID" \
             --arg expected_current "${{ steps.observe.outputs.current_id }}" \
@@ -567,11 +573,11 @@ jobs:
             --arg release_verify_sha256 "$(sha256sum "$RUNNER_TEMP/release-verify.json" | cut -d' ' -f1)" \
             --arg preflight_sha256 "$(sha256sum "$RUNNER_TEMP/promotion-preflight.json" | cut -d' ' -f1)" \
             --arg plan_sha256 "$(sha256sum "$RUNNER_TEMP/promotion-plan.json" | cut -d' ' -f1)" \
-            '{schema_version:1,kind:"AR11_READY_TO_MUTATE",ready:true,environment:"staging",source_sha:$source_sha,release_set_id:$release_set_id,expected_current_release_set_id:$expected_current,expected_current_capability_profile_id:$expected_current_profile,target_capability_profile_id:$target_profile,admission_mode:$admission_mode,worker_exists:true,worker_identity_sha256:$worker_identity_sha256,d1_head:$d1_head,d1_ledger_sha256:$d1_ledger_sha256,secret_bindings_verified:true,quiescence:{seconds:30,worker_identity_stable:true,d1_ledger_stable:true},promotion_id:$promotion_id,recovery_strategy:$recovery_strategy,release_verify_sha256:$release_verify_sha256,promotion_preflight_sha256:$preflight_sha256,promotion_plan_sha256:$plan_sha256,credential_values_accessed:false,provider_mutation:false,production_mutation:false}' \
+            '{schema_version:1,kind:"AR11_READY_TO_MUTATE",ready:true,environment:"staging",ready_run_id:$ready_run_id,ready_run_attempt:$ready_run_attempt,source_sha:$source_sha,release_set_id:$release_set_id,expected_current_release_set_id:$expected_current,expected_current_capability_profile_id:$expected_current_profile,target_capability_profile_id:$target_profile,admission_mode:$admission_mode,worker_exists:true,worker_identity_sha256:$worker_identity_sha256,d1_head:$d1_head,d1_ledger_sha256:$d1_ledger_sha256,secret_bindings_verified:true,quiescence:{seconds:30,worker_identity_stable:true,d1_ledger_stable:true},promotion_id:$promotion_id,recovery_strategy:$recovery_strategy,release_verify_sha256:$release_verify_sha256,promotion_preflight_sha256:$preflight_sha256,promotion_plan_sha256:$plan_sha256,credential_values_accessed:false,provider_mutation:false,production_mutation:false}' \
             > "$RUNNER_TEMP/ready-to-mutate.json"
-          jq -e --arg source "$SOURCE_SHA" --arg target "$RELEASE_SET_ID" --arg current "${{ steps.observe.outputs.current_id }}" --arg current_profile "${{ steps.observe.outputs.current_profile }}" --arg target_profile "${{ steps.policy.outputs.target_profile }}" --arg admission_mode "${{ steps.policy.outputs.admission_mode }}" '.kind == "AR11_READY_TO_MUTATE" and .ready == true and .source_sha == $source and .release_set_id == $target and .expected_current_release_set_id == $current and .expected_current_capability_profile_id == $current_profile and .target_capability_profile_id == $target_profile and .admission_mode == $admission_mode and .worker_exists == true and .secret_bindings_verified == true and .quiescence.worker_identity_stable == true and .quiescence.d1_ledger_stable == true and .credential_values_accessed == false and .provider_mutation == false and .production_mutation == false' "$RUNNER_TEMP/ready-to-mutate.json" >/dev/null
+          jq -e --arg source "$SOURCE_SHA" --arg target "$RELEASE_SET_ID" --arg current "${{ steps.observe.outputs.current_id }}" --arg current_profile "${{ steps.observe.outputs.current_profile }}" --arg target_profile "${{ steps.policy.outputs.target_profile }}" --arg admission_mode "${{ steps.policy.outputs.admission_mode }}" --argjson run "$GITHUB_RUN_ID" --argjson attempt "$GITHUB_RUN_ATTEMPT" '.kind == "AR11_READY_TO_MUTATE" and .ready == true and .ready_run_id == $run and .ready_run_attempt == $attempt and .source_sha == $source and .release_set_id == $target and .expected_current_release_set_id == $current and .expected_current_capability_profile_id == $current_profile and .target_capability_profile_id == $target_profile and .admission_mode == $admission_mode and .worker_exists == true and .secret_bindings_verified == true and .quiescence.worker_identity_stable == true and .quiescence.d1_ledger_stable == true and .credential_values_accessed == false and .provider_mutation == false and .production_mutation == false' "$RUNNER_TEMP/ready-to-mutate.json" >/dev/null
           ready_sha="$(sha256sum "$RUNNER_TEMP/ready-to-mutate.json" | cut -d' ' -f1)"
-          artifact_name="ar11-ready-to-mutate-$RELEASE_SET_ID-$SOURCE_SHA"
+          artifact_name="ar11-ready-to-mutate-$RELEASE_SET_ID-$SOURCE_SHA-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"
           echo "READY_TO_MUTATE evidence sha256=$ready_sha"
           echo "ready_sha256=$ready_sha" >> "$GITHUB_OUTPUT"
           echo "artifact_name=$artifact_name" >> "$GITHUB_OUTPUT"
@@ -700,9 +706,11 @@ jobs:
         run: rm -rf "$RUNNER_TEMP/deploy-manifest.json" "$RUNNER_TEMP/wrangler.staging.json" "$RUNNER_TEMP/target-assets" "$RUNNER_TEMP/target-release-set" "$RUNNER_TEMP/known-good-assets" "$RUNNER_TEMP/known-good-release-set" "$RUNNER_TEMP/runtime-sidecars" "$RUNNER_TEMP/secret-list.json"
 
   promote:
-    name: Execute exact candidate after owner dispatch and READY evidence
-    needs: route
-    if: needs.route.outputs.mode == 'promote'
+    name: Execute exact staging candidate after same-run READY evidence
+    needs: [route, preflight-ready]
+    # Repository-level variable only: job.if is evaluated before the staging
+    # Environment's variables are made available. Unset means no deploy.
+    if: needs.route.outputs.mode == 'preflight' && needs.preflight-ready.result == 'success' && needs.preflight-ready.outputs.terminal_status == 'READ_ONLY_READY' && needs.preflight-ready.outputs.ready_artifact_id != '' && github.run_attempt == 1 && github.event.workflow_run.run_attempt == 1 && vars.PROFILEBRIDGE_AUTO_STAGING_ENABLED == 'true'
     runs-on: ubuntu-latest
     environment: staging
     permissions:
@@ -712,7 +720,7 @@ jobs:
     outputs:
       resolve_phase_state_b64: ${{ steps.resolve_state.outputs.phase_state_b64 }}
       target_profile: ${{ steps.ready.outputs.target_profile }}
-      dispatch_digest: ${{ steps.intent.outputs.dispatch_digest }}
+      intent_digest: ${{ steps.intent.outputs.intent_digest }}
       mutation_phase_state_b64: ${{ steps.mutation_state.outputs.phase_state_b64 }}
       post_phase_state_b64: ${{ steps.post_state.outputs.phase_state_b64 }}
       promotion_verify_b64: ${{ steps.post_state.outputs.promotion_verify_b64 }}
@@ -726,7 +734,7 @@ jobs:
       READY_RUN_ID: ''
       READY_ARTIFACT_NAME: ''
       READY_EVIDENCE_SHA256: ''
-      DISPATCH_DIGEST: ''
+      INTENT_DIGEST: ''
     steps:
       - name: Resolve unique immutable Release Set for exact protected main
         id: resolve
@@ -753,50 +761,109 @@ jobs:
           } >> "$GITHUB_OUTPUT"
           echo "RELEASE_SET_ID=$release_set_id" >> "$GITHUB_ENV"
 
-      - name: Bind the explicit GitHub dispatch to unique accepted-main READY evidence
+      - name: Bind standing staging authority to exact same-run READY evidence
         id: intent
         env:
           SELECTED_MAIN_SHA: ${{ steps.resolve.outputs.main_sha }}
           SELECTED_RELEASE_SET_ID: ${{ steps.resolve.outputs.release_set_id }}
+          READY_ARTIFACT_ID: ${{ needs.preflight-ready.outputs.ready_artifact_id }}
+          READY_ARTIFACT_DIGEST: ${{ needs.preflight-ready.outputs.ready_artifact_digest }}
+          READY_ARTIFACT_NAME: ${{ needs.preflight-ready.outputs.ready_artifact_name }}
+          READY_EVIDENCE_SHA256_EXPECTED: ${{ needs.preflight-ready.outputs.ready_evidence_sha256 }}
+          READY_SOURCE_SHA: ${{ needs.preflight-ready.outputs.source_sha }}
+          READY_RELEASE_SET_ID: ${{ needs.preflight-ready.outputs.release_set_id }}
         run: |
           set -euo pipefail
-          test "$GITHUB_EVENT_NAME" = workflow_dispatch
-          main_sha="$GITHUB_SHA"
+          test "$GITHUB_EVENT_NAME" = workflow_run
+          test "${{ needs.preflight-ready.result }}" = success
+          test "${{ needs.preflight-ready.outputs.terminal_status }}" = READ_ONLY_READY
+          main_sha="$SOURCE_SHA"
           [[ "$main_sha" =~ ^[0-9a-f]{40}$ ]]
           test "$main_sha" = "$SELECTED_MAIN_SHA"
+          test "$main_sha" = "$READY_SOURCE_SHA"
+          # A second workflow run for the same accepted SHA must not replay an
+          # earlier UNKNOWN provider effect, even if both have attempt number 1.
+          gh api "repos/$GITHUB_REPOSITORY/actions/workflows/release-set-promotion.yml/runs?head_sha=$main_sha&event=workflow_run&per_page=100" \
+            > "$RUNNER_TEMP/same-source-promotion-runs.json"
+          jq -e --argjson run "$GITHUB_RUN_ID" --arg sha "$main_sha" '
+            .total_count == 1 and (.workflow_runs | length) == 1
+            and .workflow_runs[0].id == $run and .workflow_runs[0].run_attempt == 1
+            and .workflow_runs[0].event == "workflow_run"
+            and .workflow_runs[0].head_sha == $sha
+            and .workflow_runs[0].status == "in_progress"
+          ' "$RUNNER_TEMP/same-source-promotion-runs.json" >/dev/null
+          # Inductive cross-SHA safety: the immediately preceding canonical
+          # main workflow_run must have settled successfully on attempt one.
+          # A lost deploy ACK makes that run fail, so every newer candidate
+          # stops until separately governed recovery. Do not key authority on
+          # a mutable human-visible run-name or page through a capped search.
+          gh api "repos/$GITHUB_REPOSITORY/actions/workflows/release-set-promotion.yml/runs?event=workflow_run&branch=main&per_page=100" \
+            > "$RUNNER_TEMP/prior-standing-promotion-runs.json"
+          python - "$RUNNER_TEMP/prior-standing-promotion-runs.json" "$GITHUB_RUN_ID" <<'PY'
+          import json, sys
+          payload = json.load(open(sys.argv[1], encoding='utf-8'))
+          runs = payload.get('workflow_runs')
+          total = payload.get('total_count')
+          if (not isinstance(total, int) or total < 2 or not isinstance(runs, list)
+                  or len(runs) != min(total, 100)):
+              raise SystemExit('canonical promotion run history is not a bounded list')
+          if any(run.get('event') != 'workflow_run' or run.get('head_branch') != 'main'
+                 or not isinstance(run.get('run_number'), int) or run['run_number'] < 1
+                 or not isinstance(run.get('id'), int) for run in runs):
+              raise SystemExit('canonical promotion run list contains untrusted or malformed entries')
+          if (len({run['id'] for run in runs}) != len(runs)
+                  or len({run['run_number'] for run in runs}) != len(runs)):
+              raise SystemExit('canonical promotion history has duplicate identities')
+          current = [run for run in runs if run.get('id') == int(sys.argv[2])]
+          if len(current) != 1 or current[0].get('run_attempt') != 1 or current[0].get('status') != 'in_progress':
+              raise SystemExit('current canonical promotion run is not unique in recent history')
+          number = current[0].get('run_number')
+          if not isinstance(number, int):
+              raise SystemExit('canonical promotion run number missing')
+          previous = sorted(
+              (run for run in runs if run['run_number'] < number),
+              key=lambda run: run['run_number'], reverse=True,
+          )
+          if not previous:
+              raise SystemExit('no exact prior canonical main promotion run to establish replay baseline')
+          predecessor = previous[0]
+          if (predecessor.get('event') != 'workflow_run'
+                  or predecessor.get('head_branch') != 'main'
+                  or predecessor.get('status') != 'completed'
+                  or predecessor.get('conclusion') != 'success'
+                  or predecessor.get('run_attempt') != 1):
+              raise SystemExit('prior canonical main promotion run is unresolved; AR-14 recovery required')
+          PY
           release_set_id="$SELECTED_RELEASE_SET_ID"
           [[ "$release_set_id" =~ ^release-set-v3-sha256-[0-9a-f]{64}$ ]]
-          ready_artifact_name="ar11-ready-to-mutate-$release_set_id-$main_sha"
-          gh api "repos/$GITHUB_REPOSITORY/actions/artifacts?name=$ready_artifact_name&per_page=100" > "$RUNNER_TEMP/current-ready-artifacts.json"
-          jq -e --arg name "$ready_artifact_name" --arg sha "$main_sha" '
-            .total_count == 1 and (.artifacts | length) == 1
-            and .artifacts[0].name == $name
-            and .artifacts[0].expired == false
-            and .artifacts[0].workflow_run.head_sha == $sha
-            and (.artifacts[0].digest | test("^sha256:[0-9a-f]{64}$"))
-          ' "$RUNNER_TEMP/current-ready-artifacts.json" >/dev/null
-          ready_run_id="$(jq -er '.artifacts[0].workflow_run.id | tostring' "$RUNNER_TEMP/current-ready-artifacts.json")"
-          [[ "$ready_run_id" =~ ^[1-9][0-9]*$ ]]
-          gh api "repos/$GITHUB_REPOSITORY/actions/runs/$ready_run_id" > "$RUNNER_TEMP/candidate-ready-run.json"
-          jq -e --arg sha "$main_sha" '
-            .event == "workflow_run" and .status == "completed" and .conclusion == "success"
-            and .head_branch == "main" and .head_sha == $sha
-            and .path == ".github/workflows/release-set-promotion.yml"
-          ' "$RUNNER_TEMP/candidate-ready-run.json" >/dev/null
+          test "$release_set_id" = "$READY_RELEASE_SET_ID"
+          [[ "$READY_ARTIFACT_ID" =~ ^[1-9][0-9]*$ ]]
+          [[ "$READY_EVIDENCE_SHA256_EXPECTED" =~ ^[0-9a-f]{64}$ ]]
+          [[ "$READY_ARTIFACT_DIGEST" =~ ^sha256:[0-9a-f]{64}$ ]]
+          ready_artifact_name="ar11-ready-to-mutate-$release_set_id-$main_sha-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"
+          test "$READY_ARTIFACT_NAME" = "$ready_artifact_name"
+          gh api "repos/$GITHUB_REPOSITORY/actions/artifacts/$READY_ARTIFACT_ID" > "$RUNNER_TEMP/current-ready-artifact.json"
+          jq -e --arg name "$ready_artifact_name" --arg sha "$main_sha" --arg digest "$READY_ARTIFACT_DIGEST" --argjson run "$GITHUB_RUN_ID" --argjson artifact_id "$READY_ARTIFACT_ID" '
+            .id == $artifact_id and .name == $name and .expired == false
+            and .workflow_run.id == $run and .workflow_run.head_sha == $sha
+            and .digest == $digest
+          ' "$RUNNER_TEMP/current-ready-artifact.json" >/dev/null
           candidate_root="$RUNNER_TEMP/ready"
           mkdir -p "$candidate_root"
-          gh run download "$ready_run_id" --repo "$GITHUB_REPOSITORY" --name "$ready_artifact_name" --dir "$candidate_root"
+          gh run download "$GITHUB_RUN_ID" --repo "$GITHUB_REPOSITORY" --name "$ready_artifact_name" --dir "$candidate_root"
           test -f "$candidate_root/ready-to-mutate.json"
           ready_evidence_sha256="$(sha256sum "$candidate_root/ready-to-mutate.json" | cut -d' ' -f1)"
-          [[ "$ready_evidence_sha256" =~ ^[0-9a-f]{64}$ ]]
-          python - "$candidate_root/ready-to-mutate.json" "$main_sha" "$release_set_id" "$ready_run_id" "$ready_artifact_name" "$ready_evidence_sha256" "$RUNNER_TEMP/dispatch-intent.json" <<'PY'
+          test "$ready_evidence_sha256" = "$READY_EVIDENCE_SHA256_EXPECTED"
+          python - "$candidate_root/ready-to-mutate.json" "$main_sha" "$release_set_id" "$GITHUB_RUN_ID" "$GITHUB_RUN_ATTEMPT" "$READY_ARTIFACT_ID" "$ready_artifact_name" "$READY_ARTIFACT_DIGEST" "$ready_evidence_sha256" "$RUNNER_TEMP/standing-intent.json" <<'PY'
           import json, os, re, sys
-          ready_path, main_sha, target, ready_run_id, ready_artifact_name, ready_evidence_sha256, output_path = sys.argv[1:]
+          ready_path, main_sha, target, ready_run_id, ready_run_attempt, artifact_id, ready_artifact_name, artifact_digest, ready_evidence_sha256, output_path = sys.argv[1:]
           ready = json.load(open(ready_path, encoding='utf-8'))
           if ready.get('schema_version') != 1 or ready.get('kind') != 'AR11_READY_TO_MUTATE':
               raise SystemExit('READY evidence contract is invalid')
           if ready.get('ready') is not True or ready.get('environment') != 'staging':
               raise SystemExit('READY evidence is not admitted for staging')
+          if ready.get('ready_run_id') != int(ready_run_id) or ready.get('ready_run_attempt') != int(ready_run_attempt):
+              raise SystemExit('READY evidence is not from the exact current workflow run/attempt')
           if ready.get('source_sha') != main_sha or ready.get('release_set_id') != target:
               raise SystemExit('READY evidence does not match the exact accepted main and Release Set')
           if ready.get('credential_values_accessed') is not False or ready.get('provider_mutation') is not False or ready.get('production_mutation') is not False:
@@ -806,20 +873,24 @@ jobs:
           expected_current_profile = ready.get('expected_current_capability_profile_id')
           if not isinstance(expected_current, str) or re.fullmatch(r'release-set-v(?:2|3)-sha256-[0-9a-f]{64}', expected_current) is None:
               raise SystemExit('expected-current Release Set identity is invalid')
-          expected_artifact = f'ar11-ready-to-mutate-{target}-{main_sha}'
+          expected_artifact = f'ar11-ready-to-mutate-{target}-{main_sha}-{ready_run_id}-{ready_run_attempt}'
           if ready_artifact_name != expected_artifact:
               raise SystemExit('READY artifact identity does not match the exact candidate')
           profile_pattern = r'[A-Za-z0-9][A-Za-z0-9._-]{0,127}'
           if not isinstance(target_profile, str) or not isinstance(expected_current_profile, str) or re.fullmatch(profile_pattern, target_profile) is None or re.fullmatch(profile_pattern, expected_current_profile) is None:
               raise SystemExit('capability profile identity is invalid')
+          if target_profile != 'rehearsal-core-v2':
+              raise SystemExit('standing staging policy only admits rehearsal-core-v2')
           document = {
               'schema_version': 1,
-              'kind': 'STAGING_PROMOTION_DISPATCH_INTENT',
+              'kind': 'STAGING_PROMOTION_STANDING_INTENT',
               'authorization': {
-                  'mechanism': 'github.workflow_dispatch',
-                  'actor': os.environ['GITHUB_ACTOR'],
-                  'run_id': int(os.environ['GITHUB_RUN_ID']),
-                  'ref': os.environ['GITHUB_REF']
+                  'mechanism': 'github.workflow_run.read_only_ready',
+                  'policy': 'AR11_STANDING_STAGING_READY_V1',
+                  'run_id': int(ready_run_id),
+                  'run_attempt': int(ready_run_attempt),
+                  'ready_artifact_id': int(artifact_id),
+                  'ready_artifact_digest': artifact_digest
               },
               'environment': 'staging',
               'operation': 'worker_runtime_promotion_only',
@@ -827,6 +898,7 @@ jobs:
               'release_set_id': target,
               'expected_current_release_set_id': expected_current,
               'ready_run_id': int(ready_run_id),
+              'ready_run_attempt': int(ready_run_attempt),
               'ready_artifact_name': ready_artifact_name,
               'ready_evidence_sha256': ready_evidence_sha256,
               'target_capability_profile_id': target_profile,
@@ -836,14 +908,14 @@ jobs:
           json.dump(document, open(output_path, 'w', encoding='utf-8'), sort_keys=True, indent=2)
           open(output_path, 'a', encoding='utf-8').write('\n')
           PY
-          release_set_id="$(jq -er '.release_set_id' "$RUNNER_TEMP/dispatch-intent.json")"
-          expected_current="$(jq -er '.expected_current_release_set_id' "$RUNNER_TEMP/dispatch-intent.json")"
-          ready_run_id="$(jq -er '.ready_run_id | tostring' "$RUNNER_TEMP/dispatch-intent.json")"
-          ready_artifact_name="$(jq -er '.ready_artifact_name' "$RUNNER_TEMP/dispatch-intent.json")"
-          ready_evidence_sha256="$(jq -er '.ready_evidence_sha256' "$RUNNER_TEMP/dispatch-intent.json")"
-          target_profile="$(jq -er '.target_capability_profile_id' "$RUNNER_TEMP/dispatch-intent.json")"
-          expected_current_profile="$(jq -er '.expected_current_capability_profile_id' "$RUNNER_TEMP/dispatch-intent.json")"
-          dispatch_digest="$(jq -cS . "$RUNNER_TEMP/dispatch-intent.json" | sha256sum | cut -d' ' -f1)"
+          release_set_id="$(jq -er '.release_set_id' "$RUNNER_TEMP/standing-intent.json")"
+          expected_current="$(jq -er '.expected_current_release_set_id' "$RUNNER_TEMP/standing-intent.json")"
+          ready_run_id="$(jq -er '.ready_run_id | tostring' "$RUNNER_TEMP/standing-intent.json")"
+          ready_artifact_name="$(jq -er '.ready_artifact_name' "$RUNNER_TEMP/standing-intent.json")"
+          ready_evidence_sha256="$(jq -er '.ready_evidence_sha256' "$RUNNER_TEMP/standing-intent.json")"
+          target_profile="$(jq -er '.target_capability_profile_id' "$RUNNER_TEMP/standing-intent.json")"
+          expected_current_profile="$(jq -er '.expected_current_capability_profile_id' "$RUNNER_TEMP/standing-intent.json")"
+          intent_digest="$(jq -cS . "$RUNNER_TEMP/standing-intent.json" | sha256sum | cut -d' ' -f1)"
           {
             echo "main_sha=$main_sha"
             echo "release_set_id=$release_set_id"
@@ -851,9 +923,10 @@ jobs:
             echo "ready_run_id=$ready_run_id"
             echo "ready_artifact_name=$ready_artifact_name"
             echo "ready_evidence_sha256=$ready_evidence_sha256"
+            echo "ready_artifact_id=$READY_ARTIFACT_ID"
             echo "target_profile=$target_profile"
             echo "expected_current_profile=$expected_current_profile"
-            echo "dispatch_digest=$dispatch_digest"
+            echo "intent_digest=$intent_digest"
           } >> "$GITHUB_OUTPUT"
 
       - name: Verify exact downloaded READY_TO_MUTATE evidence
@@ -870,7 +943,7 @@ jobs:
         run: |
           set -euo pipefail
           gh api "repos/$GITHUB_REPOSITORY/actions/runs/$READY_RUN_ID" > "$RUNNER_TEMP/ready-run.json"
-          jq -e --arg sha "$MAIN_SHA" '.event == "workflow_run" and .status == "completed" and .conclusion == "success" and .head_branch == "main" and .head_sha == $sha and .path == ".github/workflows/release-set-promotion.yml"' "$RUNNER_TEMP/ready-run.json" >/dev/null
+          jq -e --arg sha "$MAIN_SHA" --argjson run "$GITHUB_RUN_ID" --argjson attempt "$GITHUB_RUN_ATTEMPT" '.id == $run and .run_attempt == $attempt and .event == "workflow_run" and .status == "in_progress" and .head_branch == "main" and .head_sha == $sha and (.path == ".github/workflows/release-set-promotion.yml@main" or .path == ".github/workflows/release-set-promotion.yml")' "$RUNNER_TEMP/ready-run.json" >/dev/null
           ready_root="$RUNNER_TEMP/ready"
           test -f "$ready_root/ready-to-mutate.json"
           for name in ready-to-mutate.json release-set.json accepted-source-evidence.json release-verify.json compatibility-evidence.json promotion-plan.json promotion-preflight.json pre-snapshot.json d1-names-after.json; do test -f "$ready_root/$name"; done
@@ -878,8 +951,10 @@ jobs:
           native_recovery="$(jq -er '.recovery_strategy' "$ready_root/promotion-preflight.json")"
           jq -e --arg recovery "$native_recovery" '.recovery_strategy == $recovery' "$ready_root/ready-to-mutate.json" >/dev/null
           test "$(sha256sum "$ready_root/promotion-preflight.json" | cut -d' ' -f1)" = "$(jq -er '.promotion_preflight_sha256' "$ready_root/ready-to-mutate.json")"
+          test "$(sha256sum "$ready_root/promotion-plan.json" | cut -d' ' -f1)" = "$(jq -er '.promotion_plan_sha256' "$ready_root/ready-to-mutate.json")"
+          test "$(sha256sum "$ready_root/release-verify.json" | cut -d' ' -f1)" = "$(jq -er '.release_verify_sha256' "$ready_root/ready-to-mutate.json")"
           test "$(sha256sum "$ready_root/ready-to-mutate.json" | cut -d' ' -f1)" = "$READY_EVIDENCE_SHA256"
-          jq -e --arg source "$MAIN_SHA" --arg target "$RELEASE_SET_ID" --arg current "$EXPECTED_CURRENT" --arg target_profile "$TARGET_PROFILE" --arg expected_profile "$EXPECTED_CURRENT_PROFILE" '.schema_version == 1 and .kind == "AR11_READY_TO_MUTATE" and .ready == true and .source_sha == $source and .release_set_id == $target and .expected_current_release_set_id == $current and .target_capability_profile_id == $target_profile and .expected_current_capability_profile_id == $expected_profile and (.admission_mode == "DIRECT" or .admission_mode == "PREREQUISITE_RELEASE_BRIDGE") and .worker_exists == true and .secret_bindings_verified == true and .quiescence.worker_identity_stable == true and .quiescence.d1_ledger_stable == true and .credential_values_accessed == false and .provider_mutation == false and .production_mutation == false' "$ready_root/ready-to-mutate.json" >/dev/null
+          jq -e --arg source "$MAIN_SHA" --arg target "$RELEASE_SET_ID" --arg current "$EXPECTED_CURRENT" --arg target_profile "$TARGET_PROFILE" --arg expected_profile "$EXPECTED_CURRENT_PROFILE" --argjson run "$GITHUB_RUN_ID" --argjson attempt "$GITHUB_RUN_ATTEMPT" '.schema_version == 1 and .kind == "AR11_READY_TO_MUTATE" and .ready == true and .ready_run_id == $run and .ready_run_attempt == $attempt and .source_sha == $source and .release_set_id == $target and .expected_current_release_set_id == $current and .target_capability_profile_id == $target_profile and .expected_current_capability_profile_id == $expected_profile and (.admission_mode == "DIRECT" or .admission_mode == "PREREQUISITE_RELEASE_BRIDGE") and .worker_exists == true and .secret_bindings_verified == true and .quiescence.worker_identity_stable == true and .quiescence.d1_ledger_stable == true and .credential_values_accessed == false and .provider_mutation == false and .production_mutation == false' "$ready_root/ready-to-mutate.json" >/dev/null
           promotion_id="$(jq -er '.promotion_id' "$ready_root/ready-to-mutate.json")"
           {
             echo "promotion_id=$promotion_id"
@@ -893,7 +968,7 @@ jobs:
             echo "READY_RUN_ID=$READY_RUN_ID"
             echo "READY_ARTIFACT_NAME=$READY_ARTIFACT_NAME"
             echo "READY_EVIDENCE_SHA256=$READY_EVIDENCE_SHA256"
-            echo "DISPATCH_DIGEST=${{ steps.intent.outputs.dispatch_digest }}"
+            echo "INTENT_DIGEST=${{ steps.intent.outputs.intent_digest }}"
           } >> "$GITHUB_ENV"
 
       - name: Checkout exact authorized source
@@ -915,7 +990,7 @@ jobs:
         id: ready_bind
         run: |
           set -euo pipefail
-          [[ "$DISPATCH_DIGEST" =~ ^[0-9a-f]{64}$ ]]
+          [[ "$INTENT_DIGEST" =~ ^[0-9a-f]{64}$ ]]
           ready_root="$RUNNER_TEMP/ready"
           test -f "$ready_root/ready-to-mutate.json"
           test "$(sha256sum "$ready_root/ready-to-mutate.json" | cut -d' ' -f1)" = "$READY_EVIDENCE_SHA256"
@@ -927,14 +1002,14 @@ jobs:
           test "$(jq -r '.ready' "$ready_root/ready-to-mutate.json")" = true
           test "$(jq -r '.provider_mutation' "$ready_root/ready-to-mutate.json")" = false
           jq -n \
-            --arg dispatch_digest "$DISPATCH_DIGEST" \
+            --arg intent_digest "$INTENT_DIGEST" \
             --arg ready_evidence_sha256 "$READY_EVIDENCE_SHA256" \
             --arg release_set_id "$RELEASE_SET_ID" \
             --arg expected_current "$EXPECTED_CURRENT" \
             --arg target_profile "$TARGET_PROFILE" \
             --arg expected_current_profile "$EXPECTED_CURRENT_PROFILE" \
             --arg source_sha "${{ steps.intent.outputs.main_sha }}" \
-            '{schema_version:1,kind:"AR11_MUTATION_FENCE",dispatch_digest:$dispatch_digest,ready_evidence_sha256:$ready_evidence_sha256,release_set_id:$release_set_id,expected_current_release_set_id:$expected_current,target_capability_profile_id:$target_profile,expected_current_capability_profile_id:$expected_current_profile,source_sha:$source_sha}' \
+            '{schema_version:1,kind:"AR11_MUTATION_FENCE",authorization_kind:"STANDING_AR11_READY",intent_digest:$intent_digest,ready_evidence_sha256:$ready_evidence_sha256,release_set_id:$release_set_id,expected_current_release_set_id:$expected_current,target_capability_profile_id:$target_profile,expected_current_capability_profile_id:$expected_current_profile,source_sha:$source_sha}' \
             > "$RUNNER_TEMP/mutation-fence.json"
 
       - name: Re-verify exact immutable Release Set before credentials
@@ -952,8 +1027,8 @@ jobs:
           cargo run --locked --quiet --manifest-path tools/opsctl/Cargo.toml -- \
             --root . release verify --release-set "$RUNNER_TEMP/ready/release-set.json" \
             --source-root . --artifact-root "$release_root" \
-            > "$RUNNER_TEMP/manual-mutation-release-verify.json"
-          jq -e '.decision == "VALID" and .release_set_schema_version == 3 and .source_accepted == true and .mutation_executed == false' "$RUNNER_TEMP/manual-mutation-release-verify.json" >/dev/null
+            > "$RUNNER_TEMP/staging-mutation-release-verify.json"
+          jq -e '.decision == "VALID" and .release_set_schema_version == 3 and .source_accepted == true and .mutation_executed == false' "$RUNNER_TEMP/staging-mutation-release-verify.json" >/dev/null
           runtime_id="$(jq -er '.components.runtime_bundle.release_id' "$release_root/release-set.json")"
           [[ "$runtime_id" =~ ^runtime-bundle-v3-sha256-[0-9a-f]{64}$ ]]
           runtime_sidecar_dir="$RUNNER_TEMP/runtime-sidecars/$runtime_id"
@@ -971,7 +1046,32 @@ jobs:
           test -n "$manifest"
           echo "CONTROL_RELEASE_ROOT=$(dirname "$manifest")" >> "$GITHUB_ENV"
 
-      - name: Capture manual resolve phase state
+      - name: Pin exact standing staging account and Worker before deploy credentials
+        id: staging_target_pin
+        env:
+          EXPECTED_STAGING_ACCOUNT_ID: ${{ vars.AR11_STAGING_ACCOUNT_ID }}
+          CLOUDFLARE_DEPLOY_MANIFEST_JSON: ${{ secrets.CLOUDFLARE_DEPLOY_MANIFEST_JSON }}
+        run: |
+          set -euo pipefail
+          [[ "$EXPECTED_STAGING_ACCOUNT_ID" =~ ^[0-9a-f]{32}$ ]]
+          jq -e --arg expected "$EXPECTED_STAGING_ACCOUNT_ID" '
+            .schema_version == 1
+            and .kind == "AR11_CLOUDFLARE_OBSERVE_TOKEN_POLICY_ATTESTATION"
+            and .environment == "staging"
+            and .account_id == $expected
+            and .production_scope == false and .mutation_capability == false
+          ' docs/evidence/ar11-fc6-cloudflare-observe-token-policy.json >/dev/null
+          test -n "$CLOUDFLARE_DEPLOY_MANIFEST_JSON"
+          # Never print the expected account or the protected deployment manifest.
+          jq -e --arg expected "$EXPECTED_STAGING_ACCOUNT_ID" '
+            (.control_plane.account_id // .account_id) == $expected
+            and (.control_plane.worker_name // .worker_name) == "browser-profile-control-plane-staging"
+            and (.control_plane.custom_domain // .custom_domain) == "staging.alegria.by"
+          ' <<<"$CLOUDFLARE_DEPLOY_MANIFEST_JSON" >/dev/null
+          test "$TARGET_PROFILE" = rehearsal-core-v2
+          test "$GITHUB_REPOSITORY" = iamaman11/part-crm-emai-profile
+
+      - name: Capture staging resolve phase state
         id: resolve_state
         if: always()
         run: |
@@ -987,17 +1087,18 @@ jobs:
           elif [ "${{ steps.ready.outcome }}" = "failure" ]; then failed_boundary="READY_BINDING"
           elif [ "${{ steps.authorized_checkout.outcome }}" = "failure" ]; then failed_boundary="SOURCE_CHECKOUT"
           elif [ "${{ steps.target_verify.outcome }}" = "failure" ]; then failed_boundary="TARGET_RELEASE_VERIFY"
+          elif [ "${{ steps.staging_target_pin.outcome }}" = "failure" ]; then failed_boundary="STAGING_TARGET_PIN"
           fi
-          dispatch_authorized=false
-          if [ "$GITHUB_EVENT_NAME" = workflow_dispatch ]; then dispatch_authorized=true; fi
+          authorization_kind=NOT_AUTHORIZED
+          if [ "${{ steps.intent.outcome }}" = success ]; then authorization_kind=STANDING_AR11_READY; fi
           jq -n \
             --arg source_sha "$source_sha" --arg release_set_id "$release_set_id" --arg promotion_id "$promotion_id" --arg target_profile "$target_profile" \
-            --arg failed_boundary "$failed_boundary" --arg dispatch_digest "${{ steps.intent.outputs.dispatch_digest }}" --argjson dispatch_authorized "$dispatch_authorized" \
+            --arg failed_boundary "$failed_boundary" --arg intent_digest "${{ steps.intent.outputs.intent_digest }}" --arg authorization_kind "$authorization_kind" \
             --arg resolve "${{ steps.resolve.outcome }}" --arg intent "${{ steps.intent.outcome }}" --arg ready "${{ steps.ready.outcome }}" \
             --arg source_checkout "${{ steps.authorized_checkout.outcome }}" --arg target_verify "${{ steps.target_verify.outcome }}" \
-            '{schema_version:1,kind:"AR11_MANUAL_PHASE_STATE",phase:"RESOLVE_VERIFY",source_sha:$source_sha,release_set_id:(if $release_set_id=="" then null else $release_set_id end),promotion_id:(if $promotion_id=="" then null else $promotion_id end),target_capability_profile_id:(if $target_profile=="" then null else $target_profile end),dispatch_authorized:$dispatch_authorized,dispatch_digest:(if $dispatch_digest=="" then null else $dispatch_digest end),provider_mutation_started:false,provider_mutation_executed:false,production_mutation_executed:false,failed_boundary:(if $failed_boundary=="" then null else $failed_boundary end),step_outcomes:{resolve:$resolve,intent:$intent,ready:$ready,source_checkout:$source_checkout,target_verify:$target_verify}}' \
-            > "$RUNNER_TEMP/manual-resolve-state.json"
-          phase_state_b64="$(base64 -w0 "$RUNNER_TEMP/manual-resolve-state.json")"
+            '{schema_version:1,kind:"AR11_STAGING_PHASE_STATE",phase:"RESOLVE_VERIFY",source_sha:$source_sha,release_set_id:(if $release_set_id=="" then null else $release_set_id end),promotion_id:(if $promotion_id=="" then null else $promotion_id end),target_capability_profile_id:(if $target_profile=="" then null else $target_profile end),authorization_kind:$authorization_kind,intent_digest:(if $intent_digest=="" then null else $intent_digest end),provider_mutation_started:false,provider_mutation_executed:false,production_mutation_executed:false,failed_boundary:(if $failed_boundary=="" then null else $failed_boundary end),step_outcomes:{resolve:$resolve,intent:$intent,ready:$ready,source_checkout:$source_checkout,target_verify:$target_verify}}' \
+            > "$RUNNER_TEMP/staging-resolve-state.json"
+          phase_state_b64="$(base64 -w0 "$RUNNER_TEMP/staging-resolve-state.json")"
           echo "phase_state_b64=$phase_state_b64" >> "$GITHUB_OUTPUT"
 
       - name: Set up pinned Node before deploy credential
@@ -1011,6 +1112,7 @@ jobs:
         id: dry_run
         env:
           CLOUDFLARE_DEPLOY_MANIFEST_JSON: ${{ secrets.CLOUDFLARE_DEPLOY_MANIFEST_JSON }}
+          EXPECTED_STAGING_ACCOUNT_ID: ${{ vars.AR11_STAGING_ACCOUNT_ID }}
         run: |
           set -euo pipefail
           umask 077
@@ -1024,6 +1126,13 @@ jobs:
             --ready-policy-evidence "$RUNNER_TEMP/ready/ready-to-mutate.json" \
             --expected-previous-release-set-id "$EXPECTED_CURRENT" \
             --environment staging --output "$RUNNER_TEMP/wrangler.staging.json"
+          jq -e --arg expected "$EXPECTED_STAGING_ACCOUNT_ID" '
+            .env.staging.account_id == $expected
+            and .env.staging.name == "browser-profile-control-plane-staging"
+            and .env.staging.vars.CANONICAL_ENVIRONMENT == "staging"
+            and .env.staging.vars.CAPABILITY_PROFILE_ID == "rehearsal-core-v2"
+            and ([.env.staging.routes[] | select(.pattern == "staging.alegria.by" and .custom_domain == true)] | length) == 1
+          ' "$RUNNER_TEMP/wrangler.staging.json" >/dev/null
           echo "DEPLOY_MANIFEST=$RUNNER_TEMP/deploy-manifest.json" >> "$GITHUB_ENV"
           echo "WRANGLER_CONFIG=$RUNNER_TEMP/wrangler.staging.json" >> "$GITHUB_ENV"
           npx --yes wrangler@4.94.0 deploy --dry-run --config "$RUNNER_TEMP/wrangler.staging.json" --env staging --experimental-autoconfig=false
@@ -1034,21 +1143,29 @@ jobs:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_OBSERVE_API_TOKEN }}
         run: |
           set -uo pipefail
+          main_read=not_run
+          main_match=not_run
           deployment_read=not_run
           release_set_match=not_run
           capability_profile_match=not_run
+          worker_identity_match=not_run
           d1_read=not_run
           d1_match=not_run
           deployment_http_code=""
           observed_release_set=""
           observed_profile=""
+          observed_worker_identity_sha256=""
+          expected_worker_identity_sha256="$(jq -er '.worker_identity_sha256' "$RUNNER_TEMP/ready/ready-to-mutate.json")"
           observed_d1_sha256=""
           expected_d1_sha256="$(sha256sum "$RUNNER_TEMP/ready/d1-names-after.json" | cut -d' ' -f1)"
           write_exact_fence() {
             jq -n \
               --arg deployment_read "$deployment_read" \
+              --arg main_read "$main_read" \
+              --arg main_match "$main_match" \
               --arg release_set_match "$release_set_match" \
               --arg capability_profile_match "$capability_profile_match" \
+              --arg worker_identity_match "$worker_identity_match" \
               --arg d1_read "$d1_read" \
               --arg d1_match "$d1_match" \
               --arg deployment_http_code "$deployment_http_code" \
@@ -1056,12 +1173,24 @@ jobs:
               --arg expected_release_set "$EXPECTED_CURRENT" \
               --arg observed_profile "$observed_profile" \
               --arg expected_profile "$EXPECTED_CURRENT_PROFILE" \
+              --arg observed_worker_identity_sha256 "$observed_worker_identity_sha256" \
+              --arg expected_worker_identity_sha256 "$expected_worker_identity_sha256" \
               --arg observed_d1_sha256 "$observed_d1_sha256" \
               --arg expected_d1_sha256 "$expected_d1_sha256" \
-              '{schema_version:1,kind:"AR11_EXACT_CURRENT_FENCE",credential_class:"READ_ONLY_OBSERVE",provider_mutation:false,production_mutation:false,deployment_http_code:(if $deployment_http_code=="" then null else $deployment_http_code end),observed_release_set_id:(if $observed_release_set=="" then null else $observed_release_set end),expected_release_set_id:$expected_release_set,observed_capability_profile_id:(if $observed_profile=="" then null else $observed_profile end),expected_capability_profile_id:$expected_profile,observed_d1_ledger_sha256:(if $observed_d1_sha256=="" then null else $observed_d1_sha256 end),expected_d1_ledger_sha256:$expected_d1_sha256,sub_fences:{deployment_read:$deployment_read,release_set_match:$release_set_match,capability_profile_match:$capability_profile_match,d1_read:$d1_read,d1_match:$d1_match}}' \
+              '{schema_version:1,kind:"AR11_EXACT_CURRENT_FENCE",credential_class:"READ_ONLY_OBSERVE",provider_mutation:false,production_mutation:false,deployment_http_code:(if $deployment_http_code=="" then null else $deployment_http_code end),observed_release_set_id:(if $observed_release_set=="" then null else $observed_release_set end),expected_release_set_id:$expected_release_set,observed_capability_profile_id:(if $observed_profile=="" then null else $observed_profile end),expected_capability_profile_id:$expected_profile,observed_worker_identity_sha256:(if $observed_worker_identity_sha256=="" then null else $observed_worker_identity_sha256 end),expected_worker_identity_sha256:$expected_worker_identity_sha256,observed_d1_ledger_sha256:(if $observed_d1_sha256=="" then null else $observed_d1_sha256 end),expected_d1_ledger_sha256:$expected_d1_sha256,sub_fences:{main_read:$main_read,main_match:$main_match,deployment_read:$deployment_read,release_set_match:$release_set_match,capability_profile_match:$capability_profile_match,worker_identity_match:$worker_identity_match,d1_read:$d1_read,d1_match:$d1_match}}' \
               > "$RUNNER_TEMP/exact-current-fence.json"
           }
           trap write_exact_fence EXIT
+          if ! gh api "repos/$GITHUB_REPOSITORY/branches/main" > "$RUNNER_TEMP/mutation-protected-main.json"; then
+            main_read=failure
+            exit 1
+          fi
+          main_read=success
+          if ! jq -e --arg sha "${{ steps.intent.outputs.main_sha }}" '.protected == true and .commit.sha == $sha' "$RUNNER_TEMP/mutation-protected-main.json" >/dev/null; then
+            main_match=failure
+            exit 1
+          fi
+          main_match=success
           if [ -z "$CLOUDFLARE_API_TOKEN" ]; then
             deployment_read=failure
             exit 1
@@ -1103,6 +1232,14 @@ jobs:
             capability_profile_match=failure
             exit 1
           fi
+          jq -S --slurpfile observed "$RUNNER_TEMP/mutation-current-deployment.json" '{release_set_id,capability_profile_id,deployment_id:$observed[0].id,versions:$observed[0].versions,script_etag:$observed[0].current_version.resources.script.etag}' "$RUNNER_TEMP/mutation-current-identity.json" > "$RUNNER_TEMP/mutation-worker-binding.json"
+          observed_worker_identity_sha256="$(sha256sum "$RUNNER_TEMP/mutation-worker-binding.json" | cut -d' ' -f1)"
+          if [ "$observed_worker_identity_sha256" = "$expected_worker_identity_sha256" ]; then
+            worker_identity_match=success
+          else
+            worker_identity_match=failure
+            exit 1
+          fi
           if ! npx --yes wrangler@4.94.0 d1 execute CATALOG_DB --remote \
             --command 'SELECT name FROM d1_migrations ORDER BY name' --json \
             --config "$WRANGLER_CONFIG" --env staging > "$RUNNER_TEMP/mutation-catalog-ledger.json"; then
@@ -1136,11 +1273,26 @@ jobs:
           trap - EXIT
           write_exact_fence
 
+      - name: Recheck live operator kill switch immediately before mutation
+        id: kill_switch
+        env:
+          # Deliberately separate from GITHUB_TOKEN: this narrowly scoped,
+          # read-only credential requires repository Variables:read. Never
+          # infer live switch state from an earlier job-time vars snapshot.
+          GH_TOKEN: ${{ secrets.AR11_STAGING_VARIABLES_READ_TOKEN }}
+        run: |
+          set -euo pipefail
+          test -n "$GH_TOKEN"
+          gh api "repos/$GITHUB_REPOSITORY/actions/variables/PROFILEBRIDGE_AUTO_STAGING_ENABLED" \
+            > "$RUNNER_TEMP/live-staging-kill-switch.json"
+          jq -e '.name == "PROFILEBRIDGE_AUTO_STAGING_ENABLED" and .value == "true"' \
+            "$RUNNER_TEMP/live-staging-kill-switch.json" >/dev/null
+
       - name: Mark provider mutation invocation boundary
         id: mutation_start
         run: |
           set -euo pipefail
-          jq -n --arg source_sha "${{ steps.intent.outputs.main_sha }}" --arg release_set_id "$RELEASE_SET_ID" --arg promotion_id "${{ steps.ready.outputs.promotion_id }}" --arg target_profile "$TARGET_PROFILE" --arg dispatch_digest "$DISPATCH_DIGEST" --arg ready_evidence_sha256 "$READY_EVIDENCE_SHA256" '{schema_version:1,kind:"AR11_PROVIDER_MUTATION_INVOCATION",source_sha:$source_sha,release_set_id:$release_set_id,promotion_id:$promotion_id,target_capability_profile_id:$target_profile,dispatch_digest:$dispatch_digest,ready_evidence_sha256:$ready_evidence_sha256}' > "$RUNNER_TEMP/provider-mutation-invocation.json"
+          jq -n --arg source_sha "${{ steps.intent.outputs.main_sha }}" --arg release_set_id "$RELEASE_SET_ID" --arg promotion_id "${{ steps.ready.outputs.promotion_id }}" --arg target_profile "$TARGET_PROFILE" --arg intent_digest "$INTENT_DIGEST" --arg ready_evidence_sha256 "$READY_EVIDENCE_SHA256" '{schema_version:1,kind:"AR11_PROVIDER_MUTATION_INVOCATION",authorization_kind:"STANDING_AR11_READY",source_sha:$source_sha,release_set_id:$release_set_id,promotion_id:$promotion_id,target_capability_profile_id:$target_profile,intent_digest:$intent_digest,ready_evidence_sha256:$ready_evidence_sha256}' > "$RUNNER_TEMP/provider-mutation-invocation.json"
 
       - name: Deploy exact Release Set v3 bits after all fences
         id: deploy
@@ -1153,7 +1305,7 @@ jobs:
             --config "$WRANGLER_CONFIG" --env staging --experimental-autoconfig=false \
             --message "release_set=$RELEASE_SET_ID profile=$TARGET_PROFILE"
 
-      - name: Capture manual mutation phase state
+      - name: Capture staging mutation phase state
         id: mutation_state
         if: always()
         run: |
@@ -1167,6 +1319,7 @@ jobs:
           elif [ "${{ steps.node_runtime.outcome }}" = "failure" ]; then failed_boundary="NODE_RUNTIME_SETUP"
           elif [ "${{ steps.dry_run.outcome }}" = "failure" ]; then failed_boundary="MUTATION_DRY_RUN"
           elif [ "${{ steps.exact_fence.outcome }}" = "failure" ]; then failed_boundary="EXACT_CURRENT_FENCE"
+          elif [ "${{ steps.kill_switch.outcome }}" = "failure" ]; then failed_boundary="OPERATOR_KILL_SWITCH"
           elif [ "${{ steps.mutation_start.outcome }}" = "failure" ]; then failed_boundary="MUTATION_INVOCATION_BOUNDARY"
           elif [ "${{ steps.deploy.outcome }}" = "failure" ]; then failed_boundary="PROVIDER_DEPLOY"
           fi
@@ -1180,14 +1333,14 @@ jobs:
           fi
           jq -n \
             --arg source_sha "$source_sha" --arg release_set_id "$RELEASE_SET_ID" --arg promotion_id "${{ steps.ready.outputs.promotion_id }}" --arg target_profile "$TARGET_PROFILE" \
-            --arg dispatch_digest "${{ steps.intent.outputs.dispatch_digest }}" --arg failed_boundary "$failed_boundary" --argjson mutation_started "$mutation_started" --argjson mutation_executed "$mutation_executed" --argjson exact_current_fence "$exact_current_fence" \
+            --arg intent_digest "${{ steps.intent.outputs.intent_digest }}" --arg failed_boundary "$failed_boundary" --argjson mutation_started "$mutation_started" --argjson mutation_executed "$mutation_executed" --argjson exact_current_fence "$exact_current_fence" \
             --arg authorized_checkout "${{ steps.authorized_checkout.outcome }}" --arg ready_bind "${{ steps.ready_bind.outcome }}" \
             --arg target_verify "${{ steps.target_verify.outcome }}" --arg node_runtime "${{ steps.node_runtime.outcome }}" \
             --arg dry_run "${{ steps.dry_run.outcome }}" \
-            --arg exact_fence "${{ steps.exact_fence.outcome }}" --arg mutation_start "${{ steps.mutation_start.outcome }}" --arg deploy "${{ steps.deploy.outcome }}" \
-            '{schema_version:1,kind:"AR11_MANUAL_PHASE_STATE",phase:"MUTATE",source_sha:$source_sha,release_set_id:(if $release_set_id=="" then null else $release_set_id end),promotion_id:(if $promotion_id=="" then null else $promotion_id end),target_capability_profile_id:(if $target_profile=="" then null else $target_profile end),dispatch_authorized:true,dispatch_digest:(if $dispatch_digest=="" then null else $dispatch_digest end),provider_mutation_started:$mutation_started,provider_mutation_executed:$mutation_executed,production_mutation_executed:false,failed_boundary:(if $failed_boundary=="" then null else $failed_boundary end),exact_current_fence:$exact_current_fence,step_outcomes:{authorized_checkout:$authorized_checkout,ready_bind:$ready_bind,target_verify:$target_verify,node_runtime:$node_runtime,dry_run:$dry_run,exact_fence:$exact_fence,mutation_start:$mutation_start,deploy:$deploy}}' \
-            > "$RUNNER_TEMP/manual-mutation-state.json"
-          phase_state_b64="$(base64 -w0 "$RUNNER_TEMP/manual-mutation-state.json")"
+            --arg exact_fence "${{ steps.exact_fence.outcome }}" --arg kill_switch "${{ steps.kill_switch.outcome }}" --arg mutation_start "${{ steps.mutation_start.outcome }}" --arg deploy "${{ steps.deploy.outcome }}" \
+            '{schema_version:1,kind:"AR11_STAGING_PHASE_STATE",phase:"MUTATE",source_sha:$source_sha,release_set_id:(if $release_set_id=="" then null else $release_set_id end),promotion_id:(if $promotion_id=="" then null else $promotion_id end),target_capability_profile_id:(if $target_profile=="" then null else $target_profile end),authorization_kind:"STANDING_AR11_READY",intent_digest:(if $intent_digest=="" then null else $intent_digest end),provider_mutation_started:$mutation_started,provider_mutation_executed:$mutation_executed,production_mutation_executed:false,failed_boundary:(if $failed_boundary=="" then null else $failed_boundary end),exact_current_fence:$exact_current_fence,step_outcomes:{authorized_checkout:$authorized_checkout,ready_bind:$ready_bind,target_verify:$target_verify,node_runtime:$node_runtime,dry_run:$dry_run,exact_fence:$exact_fence,kill_switch:$kill_switch,mutation_start:$mutation_start,deploy:$deploy}}' \
+            > "$RUNNER_TEMP/staging-mutation-state.json"
+          phase_state_b64="$(base64 -w0 "$RUNNER_TEMP/staging-mutation-state.json")"
           echo "phase_state_b64=$phase_state_b64" >> "$GITHUB_OUTPUT"
 
       - name: Reuse verified target for read-only post-deploy observation
@@ -1200,7 +1353,7 @@ jobs:
           ready_root="$RUNNER_TEMP/ready"
           release_root="$RUNNER_TEMP/mutation-release-set"
           test -f "$ready_root/ready-to-mutate.json"
-          test -f "$RUNNER_TEMP/manual-mutation-release-verify.json"
+          test -f "$RUNNER_TEMP/staging-mutation-release-verify.json"
           test -f "$release_root/release-set.json"
           test -f "$WRANGLER_CONFIG"
           test -f "$DEPLOY_MANIFEST"
@@ -1208,8 +1361,8 @@ jobs:
           test "$(jq -er '.release_set_id' "$ready_root/ready-to-mutate.json")" = "$RELEASE_SET_ID"
           test "$(jq -er '.target_capability_profile_id' "$ready_root/ready-to-mutate.json")" = "$TARGET_PROFILE"
           cmp --silent "$release_root/release-set.json" "$ready_root/release-set.json"
-          jq -e '.decision == "VALID" and .source_accepted == true and .mutation_executed == false' "$RUNNER_TEMP/manual-mutation-release-verify.json" >/dev/null
-          cp "$RUNNER_TEMP/manual-mutation-release-verify.json" "$RUNNER_TEMP/post-release-verify.json"
+          jq -e '.decision == "VALID" and .source_accepted == true and .mutation_executed == false' "$RUNNER_TEMP/staging-mutation-release-verify.json" >/dev/null
+          cp "$RUNNER_TEMP/staging-mutation-release-verify.json" "$RUNNER_TEMP/post-release-verify.json"
 
       - name: Re-observe provider and capture promotion.verify natural-owner verdict
         id: observe_verify
@@ -1262,7 +1415,7 @@ jobs:
           if-no-files-found: error
           retention-days: 30
 
-      - name: Capture manual post-verify phase state
+      - name: Capture staging post-verify phase state
         id: post_state
         if: always()
         run: |
@@ -1285,22 +1438,22 @@ jobs:
           jq -n \
             --argjson mutation_started "$mutation_started" --argjson mutation_executed "$mutation_executed" \
             --arg source_sha "$source_sha" --arg release_set_id "$RELEASE_SET_ID" --arg promotion_id "${{ steps.ready.outputs.promotion_id }}" --arg target_profile "$TARGET_PROFILE" \
-            --arg dispatch_digest "${{ steps.intent.outputs.dispatch_digest }}" --arg failed_boundary "$failed_boundary" --arg source_checkout "${{ steps.authorized_checkout.outcome }}" \
+            --arg intent_digest "${{ steps.intent.outputs.intent_digest }}" --arg failed_boundary "$failed_boundary" --arg source_checkout "${{ steps.authorized_checkout.outcome }}" \
             --arg target_prepare "${{ steps.target_prepare.outcome }}" --arg node_runtime "${{ steps.node_runtime.outcome }}" \
             --arg observe_verify "${{ steps.observe_verify.outcome }}" --arg verify_decision "${{ steps.observe_verify.outputs.decision }}" \
             --arg health "${{ steps.health.outcome }}" --arg post_evidence "${{ steps.post_evidence.outcome }}" \
-            '{schema_version:1,kind:"AR11_MANUAL_PHASE_STATE",phase:"POST_VERIFY",source_sha:$source_sha,release_set_id:(if $release_set_id=="" then null else $release_set_id end),promotion_id:(if $promotion_id=="" then null else $promotion_id end),target_capability_profile_id:(if $target_profile=="" then null else $target_profile end),dispatch_authorized:true,dispatch_digest:(if $dispatch_digest=="" then null else $dispatch_digest end),provider_mutation_started:$mutation_started,provider_mutation_executed:$mutation_executed,production_mutation_executed:false,failed_boundary:(if $failed_boundary=="" then null else $failed_boundary end),step_outcomes:{source_checkout:$source_checkout,target_prepare:$target_prepare,node_runtime:$node_runtime,observe_verify:$observe_verify,verify_decision:$verify_decision,health:$health,post_evidence:$post_evidence}}' \
-            > "$RUNNER_TEMP/manual-post-verify-state.json"
-          phase_state_b64="$(base64 -w0 "$RUNNER_TEMP/manual-post-verify-state.json")"
+            '{schema_version:1,kind:"AR11_STAGING_PHASE_STATE",phase:"POST_VERIFY",source_sha:$source_sha,release_set_id:(if $release_set_id=="" then null else $release_set_id end),promotion_id:(if $promotion_id=="" then null else $promotion_id end),target_capability_profile_id:(if $target_profile=="" then null else $target_profile end),authorization_kind:"STANDING_AR11_READY",intent_digest:(if $intent_digest=="" then null else $intent_digest end),provider_mutation_started:$mutation_started,provider_mutation_executed:$mutation_executed,production_mutation_executed:false,failed_boundary:(if $failed_boundary=="" then null else $failed_boundary end),step_outcomes:{source_checkout:$source_checkout,target_prepare:$target_prepare,node_runtime:$node_runtime,observe_verify:$observe_verify,verify_decision:$verify_decision,health:$health,post_evidence:$post_evidence}}' \
+            > "$RUNNER_TEMP/staging-post-verify-state.json"
+          phase_state_b64="$(base64 -w0 "$RUNNER_TEMP/staging-post-verify-state.json")"
           echo "phase_state_b64=$phase_state_b64" >> "$GITHUB_OUTPUT"
           promotion_verify_b64=""
           if [ -f "$RUNNER_TEMP/promotion-verify.json" ]; then promotion_verify_b64="$(base64 -w0 "$RUNNER_TEMP/promotion-verify.json")"; fi
           echo "promotion_verify_b64=$promotion_verify_b64" >> "$GITHUB_OUTPUT"
 
-  manual-outcome:
-    name: Publish one lossless manual AR11 terminal outcome
+  promotion-outcome:
+    name: Publish one lossless staging AR11 terminal outcome
     needs: [route, promote]
-    if: always() && needs.route.outputs.mode == 'promote'
+    if: always() && needs.route.outputs.mode == 'preflight' && needs.promote.result != 'skipped'
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -1314,10 +1467,10 @@ jobs:
       RESOLVE_RESULT: ${{ needs.promote.result }}
       MUTATE_RESULT: ${{ needs.promote.result }}
       POST_RESULT: ${{ needs.promote.result }}
-      DISPATCH_AUTHORIZED: ${{ needs.route.outputs.mode == 'promote' }}
-      DISPATCH_DIGEST: ${{ needs.promote.outputs.dispatch_digest }}
+      AUTHORIZATION_KIND: STANDING_AR11_READY
+      INTENT_DIGEST: ${{ needs.promote.outputs.intent_digest }}
     steps:
-      - name: Checkout exact manual AR11 source
+      - name: Checkout exact staging AR11 source
         id: source_checkout
         uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a
         with:
@@ -1325,7 +1478,7 @@ jobs:
           fetch-depth: 1
           persist-credentials: false
 
-      - name: Materialize captured manual phase transport
+      - name: Materialize captured staging phase transport
         id: captured
         run: |
           set -euo pipefail
@@ -1361,13 +1514,13 @@ jobs:
                   'step_outcomes': {'job_result': result},
               }
               path.write_text(json.dumps(state, sort_keys=True, indent=2) + '\n', encoding='utf-8')
-          write_state('manual-resolve-state.json', 'RESOLVE_VERIFY', os.environ.get('RESOLVE_STATE_B64',''), os.environ['RESOLVE_RESULT'])
-          write_state('manual-mutation-state.json', 'MUTATE', os.environ.get('MUTATION_STATE_B64',''), os.environ['MUTATE_RESULT'])
-          write_state('manual-post-verify-state.json', 'POST_VERIFY', os.environ.get('POST_STATE_B64',''), os.environ['POST_RESULT'])
+          write_state('staging-resolve-state.json', 'RESOLVE_VERIFY', os.environ.get('RESOLVE_STATE_B64',''), os.environ['RESOLVE_RESULT'])
+          write_state('staging-mutation-state.json', 'MUTATE', os.environ.get('MUTATION_STATE_B64',''), os.environ['MUTATE_RESULT'])
+          write_state('staging-post-verify-state.json', 'POST_VERIFY', os.environ.get('POST_STATE_B64',''), os.environ['POST_RESULT'])
           write_state('promotion-verify.json', 'PROMOTION_VERIFY', os.environ.get('PROMOTION_VERIFY_B64',''), os.environ['POST_RESULT'])
           PY
 
-      - name: Terminalize one lossless manual AR11 OperationalOutcome
+      - name: Terminalize one lossless staging AR11 OperationalOutcome
         id: outcome
         if: always()
         run: |
@@ -1375,21 +1528,21 @@ jobs:
           profile_id="$TARGET_PROFILE"
           test -n "$profile_id" || profile_id="rehearsal-core-v2"
           tree_sha="$(git rev-parse "$SOURCE_SHA^{tree}")"
-          evidence_artifact="ar11-operational-outcome-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"
+          evidence_artifact="ar11-staging-operational-outcome-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"
           python scripts/promotion-operational-outcome-ar11.py \
-            --mode manual \
+            --mode staging \
             --source-sha "$SOURCE_SHA" --tree-sha "$tree_sha" \
             --environment staging --profile-id "$profile_id" \
-            --resolve-state-json "$RUNNER_TEMP/manual-resolve-state.json" \
-            --mutation-state-json "$RUNNER_TEMP/manual-mutation-state.json" \
-            --post-verify-state-json "$RUNNER_TEMP/manual-post-verify-state.json" \
+            --resolve-state-json "$RUNNER_TEMP/staging-resolve-state.json" \
+            --mutation-state-json "$RUNNER_TEMP/staging-mutation-state.json" \
+            --post-verify-state-json "$RUNNER_TEMP/staging-post-verify-state.json" \
             --promotion-verify-json "$RUNNER_TEMP/promotion-verify.json" \
             --evidence-artifact "$evidence_artifact" \
             --output "$RUNNER_TEMP/promotion-operational-outcome.json"
-          terminal_dir="$RUNNER_TEMP/ar11-manual-terminal"
+          terminal_dir="$RUNNER_TEMP/ar11-staging-terminal"
           mkdir -p "$terminal_dir"
           cp "$RUNNER_TEMP/promotion-operational-outcome.json" "$terminal_dir/"
-          for phase_file in manual-resolve-state.json manual-mutation-state.json manual-post-verify-state.json promotion-verify.json; do
+          for phase_file in staging-resolve-state.json staging-mutation-state.json staging-post-verify-state.json promotion-verify.json; do
             if [ -f "$RUNNER_TEMP/$phase_file" ]; then
               cp "$RUNNER_TEMP/$phase_file" "$terminal_dir/"
             fi
@@ -1397,30 +1550,30 @@ jobs:
           status="$(jq -er '.status' "$RUNNER_TEMP/promotion-operational-outcome.json")"
           echo "status=$status" >> "$GITHUB_OUTPUT"
           {
-            echo '## Manual AR11 OperationalOutcome'
+            echo '## Staging AR11 OperationalOutcome'
             echo
             echo '```json'
             jq '{contract,procedure,status,phase,failed_gate,owner,owner_contract,owner_reason_code,recovery_owner,summary,remediation,exact_next_action,source_sha,tree_sha,release_set_id,promotion_id,target_identity,authorization_state,provider_mutation_started,provider_mutation_executed,production_mutation_executed,effect_state,evidence_refs,evidence_digests}' "$RUNNER_TEMP/promotion-operational-outcome.json"
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
 
-      - name: Upload terminal manual AR11 OperationalOutcome evidence
+      - name: Upload terminal staging AR11 OperationalOutcome evidence
         id: outcome_upload
         if: always() && steps.outcome.outcome == 'success'
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
-          name: ar11-operational-outcome-${{ github.run_id }}-${{ github.run_attempt }}
-          path: ${{ runner.temp }}/ar11-manual-terminal
+          name: ar11-staging-operational-outcome-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/ar11-staging-terminal
           if-no-files-found: error
           retention-days: 30
 
-      - name: Enforce terminal manual AR11 disposition after evidence publication
+      - name: Enforce terminal staging AR11 disposition after evidence publication
         if: always()
         run: |
           set -euo pipefail
           test "${{ steps.outcome.outcome }}" = "success"
           test "${{ steps.outcome_upload.outcome }}" = "success"
-          jq -e '.contract == "PROMOTION_OPERATOR_OUTCOME_V1" and .procedure == "AR11_RELEASE_SET_PROMOTION" and .status == "COMPLETED" and .authorization_state == "GITHUB_WORKFLOW_DISPATCH" and .provider_mutation_started == true and .provider_mutation_executed == true and .production_mutation_executed == false and .effect_state == "EFFECT_VERIFIED"' "$RUNNER_TEMP/promotion-operational-outcome.json" >/dev/null
+          jq -e '.contract == "PROMOTION_OPERATOR_OUTCOME_V1" and .procedure == "AR11_RELEASE_SET_PROMOTION" and .status == "COMPLETED" and .authorization_state == "AR11_STANDING_STAGING_READY" and .provider_mutation_started == true and .provider_mutation_executed == true and .production_mutation_executed == false and .effect_state == "EFFECT_VERIFIED"' "$RUNNER_TEMP/promotion-operational-outcome.json" >/dev/null
 
   rollback-negative-evidence:
     name: Prove incompatible or unknown rollback blocks before mutation
@@ -1450,7 +1603,7 @@ jobs:
           main_sha="$(jq -er '.commit.sha' "$RUNNER_TEMP/protected-main.json")"
           test "$GITHUB_SHA" = "$main_sha"
           gh api "repos/$GITHUB_REPOSITORY/actions/runs/$SOURCE_RUN_ID" > "$RUNNER_TEMP/source-run.json"
-          jq -e --arg sha "$main_sha" '.event == "workflow_run" and .status == "completed" and .conclusion == "success" and .head_branch == "main" and .head_sha == $sha and .path == ".github/workflows/release-set-promotion.yml"' "$RUNNER_TEMP/source-run.json" >/dev/null
+          jq -e --arg sha "$main_sha" '.event == "workflow_run" and .run_attempt == 1 and .status == "completed" and .conclusion == "success" and .head_branch == "main" and .head_sha == $sha and (.path == ".github/workflows/release-set-promotion.yml@main" or .path == ".github/workflows/release-set-promotion.yml")' "$RUNNER_TEMP/source-run.json" >/dev/null
           echo "main_sha=$main_sha" >> "$GITHUB_OUTPUT"
 
       - name: Checkout exact current source
@@ -1465,9 +1618,9 @@ jobs:
           set -euo pipefail
           live="$RUNNER_TEMP/live-ready"
           mkdir -p "$live"
-          gh run download "$SOURCE_RUN_ID" --repo "$GITHUB_REPOSITORY" --name "ar11-ready-to-mutate-$RELEASE_SET_ID-${{ steps.bind.outputs.main_sha }}" --dir "$live"
+          gh run download "$SOURCE_RUN_ID" --repo "$GITHUB_REPOSITORY" --name "ar11-ready-to-mutate-$RELEASE_SET_ID-${{ steps.bind.outputs.main_sha }}-$SOURCE_RUN_ID-1" --dir "$live"
           for name in release-set.json release-verify.json compatibility-evidence.json promotion-plan.json promotion-preflight.json pre-snapshot.json ready-to-mutate.json; do test -f "$live/$name"; done
-          jq -e --arg id "$RELEASE_SET_ID" '.release_set_id == $id and .ready == true and .provider_mutation == false' "$live/ready-to-mutate.json" >/dev/null
+          jq -e --arg id "$RELEASE_SET_ID" --arg sha "${{ steps.bind.outputs.main_sha }}" --argjson run "$SOURCE_RUN_ID" '.release_set_id == $id and .source_sha == $sha and .ready_run_id == $run and .ready_run_attempt == 1 and .ready == true and .provider_mutation == false and .production_mutation == false' "$live/ready-to-mutate.json" >/dev/null
           jq '.catalog_schema_revision = null' "$live/pre-snapshot.json" > "$RUNNER_TEMP/controlled-unknown-snapshot.json"
           cargo run --locked --quiet --manifest-path tools/opsctl/Cargo.toml -- \
             --root . promotion preflight --release-set "$live/release-set.json" --source-root . \

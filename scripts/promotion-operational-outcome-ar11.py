@@ -25,7 +25,7 @@ RELEASE_SET_ID = re.compile(r"release-set-v3-sha256-[0-9a-f]{64}")
 SHA256 = re.compile(r"[0-9a-f]{64}")
 CONTRACT = "PROMOTION_OPERATOR_OUTCOME_V1"
 READ_ONLY_PROCEDURE = "AR11_RELEASE_SET_PROMOTION_READ_ONLY"
-MANUAL_PROCEDURE = "AR11_RELEASE_SET_PROMOTION"
+STAGING_PROCEDURE = "AR11_RELEASE_SET_PROMOTION"
 
 
 @dataclass(frozen=True)
@@ -369,33 +369,34 @@ def compose(
         "owner_diagnostic": preflight,
         "summary": (
             "All read-only AR11 owners are READY and immutable READY_TO_MUTATE evidence exists; "
-            "provider mutation remains unauthorized."
+            "no provider mutation occurred in this read-only phase."
         ),
         "remediation": "No read-only remediation is required.",
         "exact_next_action": (
-            "STOP before provider mutation. The repository owner authorizes staging by selecting Run workflow "
-            "on main; that workflow dispatch is the authorization and is bound to the exact candidate and READY evidence."
+            "The protected same-run staging job may proceed under AR11_STANDING_STAGING_READY_V1 "
+            "only when the explicit enable gate, exact READY evidence, staging target pins and "
+            "fresh Worker/D1/source fences all pass. This read-only verdict alone has no effect."
         ),
     }
 
 
-def valid_manual_state(value: dict[str, Any], phase: str, source_sha: str) -> bool:
+def valid_staging_state(value: dict[str, Any], phase: str, source_sha: str) -> bool:
     release_set_id = value.get("release_set_id")
     promotion_id = value.get("promotion_id")
-    dispatch_digest = value.get("dispatch_digest")
+    intent_digest = value.get("intent_digest")
     target_profile = value.get("target_capability_profile_id")
     failed_boundary = value.get("failed_boundary")
     step_outcomes = value.get("step_outcomes")
     return (
         value.get("schema_version") == 1
-        and value.get("kind") == "AR11_MANUAL_PHASE_STATE"
+        and value.get("kind") == "AR11_STAGING_PHASE_STATE"
         and value.get("phase") == phase
         and value.get("source_sha") == source_sha
         and (release_set_id is None or (isinstance(release_set_id, str) and RELEASE_SET_ID.fullmatch(release_set_id)))
         and (promotion_id is None or (isinstance(promotion_id, str) and bool(promotion_id)))
-        and (dispatch_digest is None or (isinstance(dispatch_digest, str) and SHA256.fullmatch(dispatch_digest)))
+        and (intent_digest is None or (isinstance(intent_digest, str) and SHA256.fullmatch(intent_digest)))
         and (target_profile is None or (isinstance(target_profile, str) and bool(target_profile)))
-        and isinstance(value.get("dispatch_authorized"), bool)
+        and value.get("authorization_kind") in {"STANDING_AR11_READY", "NOT_AUTHORIZED"}
         and isinstance(value.get("provider_mutation_started"), bool)
         and isinstance(value.get("provider_mutation_executed"), bool)
         and value.get("production_mutation_executed") is False
@@ -427,7 +428,7 @@ def valid_promotion_verify(
     )
 
 
-def manual_base(
+def staging_base(
     *,
     source_sha: str,
     tree_sha: str,
@@ -435,7 +436,7 @@ def manual_base(
     promotion_id: str | None,
     environment: str,
     profile_id: str,
-    dispatch_authorized: bool,
+    authorization_kind: str,
     provider_mutation_started: bool,
     provider_mutation_executed: bool,
     evidence_refs: dict[str, str],
@@ -444,13 +445,16 @@ def manual_base(
     return {
         "schema_version": 1,
         "contract": CONTRACT,
-        "procedure": MANUAL_PROCEDURE,
+        "procedure": STAGING_PROCEDURE,
         "source_sha": source_sha,
         "tree_sha": tree_sha,
         "release_set_id": release_set_id,
         "promotion_id": promotion_id,
         "target_identity": {"environment": environment, "capability_profile_id": profile_id},
-        "authorization_state": "GITHUB_WORKFLOW_DISPATCH" if dispatch_authorized else "NOT_AUTHORIZED",
+        "authorization_state": (
+            "AR11_STANDING_STAGING_READY"
+            if authorization_kind == "STANDING_AR11_READY" else "NOT_AUTHORIZED"
+        ),
         "provider_mutation_started": provider_mutation_started,
         "provider_mutation_executed": provider_mutation_executed,
         "production_mutation_executed": False,
@@ -460,7 +464,7 @@ def manual_base(
     }
 
 
-def manual_failed_no_effect(base: dict[str, Any], phase: str, diagnostic: dict[str, Any]) -> dict[str, Any]:
+def staging_failed_no_effect(base: dict[str, Any], phase: str, diagnostic: dict[str, Any]) -> dict[str, Any]:
     return {
         **base,
         "status": "FAILED_NO_EFFECT",
@@ -470,13 +474,13 @@ def manual_failed_no_effect(base: dict[str, Any], phase: str, diagnostic: dict[s
         "owner_contract": None,
         "owner_reason_code": None,
         "owner_diagnostic": {"verdict_available": False, **diagnostic},
-        "summary": f"Manual AR11 stopped at {phase} before the provider mutation invocation boundary.",
-        "remediation": "Resolve the exact failed boundary and confirm the provider mutation boundary was not crossed. A new Run workflow click is a new explicit staging authorization.",
-        "exact_next_action": "After reviewing the no-effect evidence, the owner may select Run workflow again on main if the exact candidate and READY evidence are still current. If provider mutation started, use AR-14 recovery instead of retrying.",
+        "summary": f"Staging AR11 stopped at {phase} before the provider mutation invocation boundary.",
+        "remediation": "Repair the exact failed boundary and confirm the provider mutation invocation was never reached. No standing-policy replay is inferred from this outcome.",
+        "exact_next_action": "Inspect the named pre-effect failure; a future accepted-main run must independently prove fresh READY and fences. If mutation started, use AR-14 recovery instead of retrying.",
     }
 
 
-def manual_recovery_required(
+def staging_recovery_required(
     base: dict[str, Any],
     phase: str,
     diagnostic: dict[str, Any],
@@ -497,13 +501,13 @@ def manual_recovery_required(
         "owner_diagnostic": diagnostic,
         "recovery_owner": "AR-14",
         "effect_state": effect_state,
-        "summary": f"Manual AR11 may have crossed the provider mutation boundary and did not prove terminal convergence at {phase}.",
+        "summary": f"Staging AR11 may have crossed the provider mutation boundary and did not prove terminal convergence at {phase}.",
         "remediation": "Use the existing AR-14 recovery inspect/plan/verify authority; preserve the captured provider/promotion evidence and do not perform automatic restore or blind deploy retry.",
         "exact_next_action": "Follow AR-14 read-only recovery inspection against the exact target/evidence before any separately authorized recovery or retry action.",
     }
 
 
-def manual_infrastructure_after_verified(
+def staging_infrastructure_after_verified(
     base: dict[str, Any], phase: str, verify: dict[str, Any], diagnostic: dict[str, Any]
 ) -> dict[str, Any]:
     return {
@@ -522,7 +526,7 @@ def manual_infrastructure_after_verified(
     }
 
 
-def compose_manual_values(
+def compose_staging_values(
     *,
     source_sha: str,
     tree_sha: str,
@@ -538,9 +542,9 @@ def compose_manual_values(
 ) -> dict[str, Any]:
     # Missing or malformed transport cannot prove that the effect was never
     # invoked. A complete, valid mutation-phase receipt explicitly recording
-    # pre-effect termination is the only such proof after a manual dispatch.
-    valid_mutation = mutation is not None and valid_manual_state(mutation, "MUTATE", source_sha)
-    valid_post = post is not None and valid_manual_state(post, "POST_VERIFY", source_sha)
+    # Pre-effect termination is the only such proof after standing staging admission.
+    valid_mutation = mutation is not None and valid_staging_state(mutation, "MUTATE", source_sha)
+    valid_post = post is not None and valid_staging_state(post, "POST_VERIFY", source_sha)
     observed_started = any(
         value is not None and value.get("provider_mutation_started") is True
         for value in (mutation if valid_mutation else None, post if valid_post else None)
@@ -559,18 +563,18 @@ def compose_manual_values(
     )
     phase_records = (("resolve", "RESOLVE_VERIFY", resolve), ("mutation", "MUTATE", mutation), ("post", "POST_VERIFY", post))
     for key, phase, value in phase_records:
-        if value is None or not valid_manual_state(value, phase, source_sha):
-            base = manual_base(
+        if value is None or not valid_staging_state(value, phase, source_sha):
+            base = staging_base(
                 source_sha=source_sha,
                 tree_sha=tree_sha,
                 release_set_id=None,
                 promotion_id=None,
                 environment=environment,
                 profile_id=profile_id,
-                dispatch_authorized=any(
-                    isinstance(record, dict) and record.get("dispatch_authorized") is True
+                authorization_kind="STANDING_AR11_READY" if any(
+                    isinstance(record, dict) and record.get("authorization_kind") == "STANDING_AR11_READY"
                     for record in (resolve, mutation, post)
-                ),
+                ) else "NOT_AUTHORIZED",
                 provider_mutation_started=not pre_effect_proven,
                 provider_mutation_executed=observed_executed,
                 evidence_refs=evidence_refs,
@@ -584,14 +588,14 @@ def compose_manual_values(
                 # unbound owner JSON or incomplete mutation transport.
                 bound = [
                     record for _, record_phase, record in phase_records
-                    if record is not None and valid_manual_state(record, record_phase, source_sha)
-                    and record.get("dispatch_authorized") is True
+                    if record is not None and valid_staging_state(record, record_phase, source_sha)
+                    and record.get("authorization_kind") == "STANDING_AR11_READY"
                     and record.get("target_capability_profile_id") == profile_id
                     and isinstance(record.get("release_set_id"), str)
                     and isinstance(record.get("promotion_id"), str)
-                    and isinstance(record.get("dispatch_digest"), str)
+                    and isinstance(record.get("intent_digest"), str)
                 ]
-                fields = ("release_set_id", "promotion_id", "dispatch_digest")
+                fields = ("release_set_id", "promotion_id", "intent_digest")
                 exact_bound = len(bound) >= 2 and all(len({record[field] for record in bound}) == 1 for field in fields)
                 bound_release = bound[0]["release_set_id"] if exact_bound else None
                 owner_valid = (
@@ -601,7 +605,7 @@ def compose_manual_values(
                 if owner_valid and verify is not None:
                     diagnostic["verdict_available"] = True
                     diagnostic["last_promotion_verify"] = verify
-                    return manual_recovery_required(
+                    return staging_recovery_required(
                         base, f"{phase}_STATE_TRANSPORT_UNVERIFIED", diagnostic,
                         owner="opsctl.promotion.verify",
                         owner_contract="promotion.verify/v1",
@@ -609,8 +613,8 @@ def compose_manual_values(
                     )
                 if verify is not None:
                     diagnostic["unbound_promotion_verify"] = verify
-                return manual_recovery_required(base, f"{phase}_STATE_TRANSPORT_UNVERIFIED", diagnostic)
-            return {**manual_failed_no_effect(base, f"{phase}_STATE_TRANSPORT_UNVERIFIED", diagnostic),
+                return staging_recovery_required(base, f"{phase}_STATE_TRANSPORT_UNVERIFIED", diagnostic)
+            return {**staging_failed_no_effect(base, f"{phase}_STATE_TRANSPORT_UNVERIFIED", diagnostic),
                     "status": "INFRASTRUCTURE_FAILURE"}
 
     assert resolve is not None and mutation is not None and post is not None
@@ -619,45 +623,45 @@ def compose_manual_values(
         or mutation["provider_mutation_executed"] != post["provider_mutation_executed"]
         or (not mutation["provider_mutation_started"] and mutation["provider_mutation_executed"])
     ):
-        base = manual_base(
+        base = staging_base(
             source_sha=source_sha,
             tree_sha=tree_sha,
             release_set_id=None,
             promotion_id=None,
             environment=environment,
             profile_id=profile_id,
-            dispatch_authorized=resolve["dispatch_authorized"],
+            authorization_kind=resolve["authorization_kind"],
             provider_mutation_started=True,
             provider_mutation_executed=observed_executed,
             evidence_refs=evidence_refs,
             evidence_digests=evidence_digests,
         )
-        return manual_recovery_required(
+        return staging_recovery_required(
             base,
             "PHASE_EFFECT_CONTRADICTION",
             {"verdict_available": False, "mutation": mutation, "post": post},
         )
     # A success receipt must prove the *same* source/Release Set, promotion,
-    # dispatch authorization, target profile and intent digest in every phase.
+    # standing authorization, target profile and intent digest in every phase.
     # Nullable fields are allowed for early pre-effect failures only.
-    identity_fields = ("release_set_id", "promotion_id", "dispatch_digest", "target_capability_profile_id")
+    identity_fields = ("release_set_id", "promotion_id", "intent_digest", "target_capability_profile_id")
     identity_values = {field: [record.get(field) for record in (resolve, mutation, post)] for field in identity_fields}
     identity_invalid = (
         any(not all(isinstance(item, str) and item for item in values) or len(set(values)) != 1
             for values in identity_values.values())
-        or any(record["dispatch_authorized"] is not True for record in (resolve, mutation, post))
+        or any(record["authorization_kind"] != "STANDING_AR11_READY" for record in (resolve, mutation, post))
         or any(record.get("target_capability_profile_id") != profile_id for record in (resolve, mutation, post))
     )
     if identity_invalid:
         started = mutation["provider_mutation_started"]
-        base = manual_base(
+        base = staging_base(
             source_sha=source_sha,
             tree_sha=tree_sha,
             release_set_id=None,
             promotion_id=None,
             environment=environment,
             profile_id=profile_id,
-            dispatch_authorized=resolve["dispatch_authorized"],
+            authorization_kind=resolve["authorization_kind"],
             provider_mutation_started=started,
             provider_mutation_executed=mutation["provider_mutation_executed"],
             evidence_refs=evidence_refs,
@@ -667,23 +671,23 @@ def compose_manual_values(
         if verify is not None:
             detail["unbound_promotion_verify"] = verify
         if started:
-            return manual_recovery_required(base, "TARGET_IDENTITY_TRANSPORT", detail)
+            return staging_recovery_required(base, "TARGET_IDENTITY_TRANSPORT", detail)
         if resolve["failed_boundary"]:
-            return manual_failed_no_effect(base, resolve["failed_boundary"], resolve)
+            return staging_failed_no_effect(base, resolve["failed_boundary"], resolve)
         if mutation["failed_boundary"]:
-            return manual_failed_no_effect(base, mutation["failed_boundary"], mutation)
-        return manual_failed_no_effect(base, "TARGET_IDENTITY_TRANSPORT", detail)
+            return staging_failed_no_effect(base, mutation["failed_boundary"], mutation)
+        return staging_failed_no_effect(base, "TARGET_IDENTITY_TRANSPORT", detail)
 
     release_set_id = identity_values["release_set_id"][0]
     promotion_id = identity_values["promotion_id"][0]
-    base = manual_base(
+    base = staging_base(
         source_sha=source_sha,
         tree_sha=tree_sha,
         release_set_id=release_set_id,
         promotion_id=promotion_id,
         environment=environment,
         profile_id=profile_id,
-        dispatch_authorized=resolve["dispatch_authorized"],
+        authorization_kind=resolve["authorization_kind"],
         provider_mutation_started=mutation["provider_mutation_started"],
         provider_mutation_executed=mutation["provider_mutation_executed"],
         evidence_refs=evidence_refs,
@@ -692,31 +696,31 @@ def compose_manual_values(
 
     if resolve["failed_boundary"]:
         if mutation["provider_mutation_started"]:
-            return manual_recovery_required(base, "RESOLVE_EFFECT_CONTRADICTION", resolve)
-        return manual_failed_no_effect(base, resolve["failed_boundary"], resolve)
+            return staging_recovery_required(base, "RESOLVE_EFFECT_CONTRADICTION", resolve)
+        return staging_failed_no_effect(base, resolve["failed_boundary"], resolve)
     if mutation["failed_boundary"]:
         if not mutation["provider_mutation_started"]:
-            return manual_failed_no_effect(base, mutation["failed_boundary"], mutation)
-        return manual_recovery_required(base, mutation["failed_boundary"], mutation)
+            return staging_failed_no_effect(base, mutation["failed_boundary"], mutation)
+        return staging_recovery_required(base, mutation["failed_boundary"], mutation)
     if not mutation["provider_mutation_started"]:
-        return manual_failed_no_effect(base, "MUTATION_INVOCATION_BOUNDARY", mutation)
+        return staging_failed_no_effect(base, "MUTATION_INVOCATION_BOUNDARY", mutation)
     if not mutation["provider_mutation_executed"]:
-        return manual_recovery_required(base, "PROVIDER_DEPLOY", mutation)
-    if not resolve["dispatch_authorized"]:
-        return manual_recovery_required(base, "AUTHORIZATION_INVARIANT", resolve)
+        return staging_recovery_required(base, "PROVIDER_DEPLOY", mutation)
+    if resolve["authorization_kind"] != "STANDING_AR11_READY":
+        return staging_recovery_required(base, "AUTHORIZATION_INVARIANT", resolve)
 
     verify_valid = verify is not None and valid_promotion_verify(verify, environment, profile_id, release_set_id)
     if post["failed_boundary"] and verify_valid and verify is not None and verify["decision"] == "VERIFIED":
-        return manual_infrastructure_after_verified(base, post["failed_boundary"], verify, post)
+        return staging_infrastructure_after_verified(base, post["failed_boundary"], verify, post)
     if post["failed_boundary"]:
-        return manual_recovery_required(base, post["failed_boundary"], post)
+        return staging_recovery_required(base, post["failed_boundary"], post)
     if not verify_valid or verify is None:
-        return manual_recovery_required(base, "PROMOTION_VERIFY", states["verify"])
+        return staging_recovery_required(base, "PROMOTION_VERIFY", states["verify"])
     if verify["decision"] != "VERIFIED":
         blockers = verify["blockers"]
         reason = first(blockers)
         assert reason is not None
-        return manual_recovery_required(
+        return staging_recovery_required(
             base,
             "PROMOTION_VERIFY",
             verify,
@@ -735,17 +739,17 @@ def compose_manual_values(
         "owner_reason_code": "VERIFIED",
         "owner_diagnostic": verify,
         "effect_state": "EFFECT_VERIFIED",
-        "summary": "Manual AR11 provider effect is verified by the existing promotion.verify natural owner.",
+        "summary": "Staging AR11 provider effect is verified by the existing promotion.verify natural owner.",
         "remediation": "No recovery action is required.",
         "exact_next_action": "Record the completed promotion receipt/evidence and return to the current stage owner.",
     }
 
 
-def build_manual_from_files(args: argparse.Namespace) -> dict[str, Any]:
+def build_staging_from_files(args: argparse.Namespace) -> dict[str, Any]:
     records = {
-        "resolve": load_input(args.resolve_state_json, "manual resolve phase state"),
-        "mutation": load_input(args.mutation_state_json, "manual mutation phase state"),
-        "post": load_input(args.post_verify_state_json, "manual post-verify phase state"),
+        "resolve": load_input(args.resolve_state_json, "staging resolve phase state"),
+        "mutation": load_input(args.mutation_state_json, "staging mutation phase state"),
+        "post": load_input(args.post_verify_state_json, "staging post-verify phase state"),
         "verify": load_input(args.promotion_verify_json, "promotion verify owner verdict"),
     }
     evidence_refs: dict[str, str] = {}
@@ -755,7 +759,7 @@ def build_manual_from_files(args: argparse.Namespace) -> dict[str, Any]:
             evidence_refs[key] = f"{args.evidence_artifact}/{record.path.name}"
         if record.digest is not None:
             evidence_digests[key] = record.digest
-    return compose_manual_values(
+    return compose_staging_values(
         source_sha=args.source_sha,
         tree_sha=args.tree_sha,
         environment=args.environment,
@@ -1130,20 +1134,20 @@ def self_test() -> None:
     assert outcome["owner_reason_code"] is None
     assert_zero_effect(outcome)
 
-    manual_source = "a" * 40
-    manual_release = "release-set-v3-sha256-" + "c" * 64
-    manual_promotion = "b" * 64
-    manual_digest = "e" * 64
+    staging_source = "a" * 40
+    staging_release = "release-set-v3-sha256-" + "c" * 64
+    staging_promotion = "b" * 64
+    staging_digest = "e" * 64
     resolve_state = {
         "schema_version": 1,
-        "kind": "AR11_MANUAL_PHASE_STATE",
+        "kind": "AR11_STAGING_PHASE_STATE",
         "phase": "RESOLVE_VERIFY",
-        "source_sha": manual_source,
-        "release_set_id": manual_release,
-        "promotion_id": manual_promotion,
-        "dispatch_digest": manual_digest,
+        "source_sha": staging_source,
+        "release_set_id": staging_release,
+        "promotion_id": staging_promotion,
+        "intent_digest": staging_digest,
         "target_capability_profile_id": "rehearsal-core-v2",
-        "dispatch_authorized": True,
+        "authorization_kind": "STANDING_AR11_READY",
         "provider_mutation_started": False,
         "provider_mutation_executed": False,
         "production_mutation_executed": False,
@@ -1152,14 +1156,14 @@ def self_test() -> None:
     }
     mutation_state = {
         "schema_version": 1,
-        "kind": "AR11_MANUAL_PHASE_STATE",
+        "kind": "AR11_STAGING_PHASE_STATE",
         "phase": "MUTATE",
-        "source_sha": manual_source,
-        "release_set_id": manual_release,
-        "promotion_id": manual_promotion,
-        "dispatch_digest": manual_digest,
+        "source_sha": staging_source,
+        "release_set_id": staging_release,
+        "promotion_id": staging_promotion,
+        "intent_digest": staging_digest,
         "target_capability_profile_id": "rehearsal-core-v2",
-        "dispatch_authorized": True,
+        "authorization_kind": "STANDING_AR11_READY",
         "provider_mutation_started": True,
         "provider_mutation_executed": True,
         "production_mutation_executed": False,
@@ -1168,14 +1172,14 @@ def self_test() -> None:
     }
     post_state = {
         "schema_version": 1,
-        "kind": "AR11_MANUAL_PHASE_STATE",
+        "kind": "AR11_STAGING_PHASE_STATE",
         "phase": "POST_VERIFY",
-        "source_sha": manual_source,
-        "release_set_id": manual_release,
-        "promotion_id": manual_promotion,
-        "dispatch_digest": manual_digest,
+        "source_sha": staging_source,
+        "release_set_id": staging_release,
+        "promotion_id": staging_promotion,
+        "intent_digest": staging_digest,
         "target_capability_profile_id": "rehearsal-core-v2",
-        "dispatch_authorized": True,
+        "authorization_kind": "STANDING_AR11_READY",
         "provider_mutation_started": True,
         "provider_mutation_executed": True,
         "production_mutation_executed": False,
@@ -1188,15 +1192,15 @@ def self_test() -> None:
         "decision": "VERIFIED",
         "verified": True,
         "environment": "staging",
-        "target_release_set_id": manual_release,
+        "target_release_set_id": staging_release,
         "target_capability_profile_id": "rehearsal-core-v2",
         "blockers": [],
         "mutation_executed": False,
     }
-    def manual_case(resolve, mutation, post, verify):
+    def staging_case(resolve, mutation, post, verify):
         records = {"resolve": resolve, "mutation": mutation, "post": post, "verify": verify}
-        return compose_manual_values(
-            source_sha=manual_source,
+        return compose_staging_values(
+            source_sha=staging_source,
             tree_sha="d" * 40,
             environment="staging",
             profile_id="rehearsal-core-v2",
@@ -1214,7 +1218,7 @@ def self_test() -> None:
 
     pre_effect = dict(resolve_state)
     pre_effect["failed_boundary"] = "CANDIDATE_BINDING"
-    pre_effect["dispatch_authorized"] = True
+    pre_effect["authorization_kind"] = "STANDING_AR11_READY"
     not_started = dict(mutation_state)
     not_started["provider_mutation_started"] = False
     not_started["provider_mutation_executed"] = False
@@ -1223,21 +1227,21 @@ def self_test() -> None:
     post_skipped["provider_mutation_started"] = False
     post_skipped["provider_mutation_executed"] = False
     post_skipped["failed_boundary"] = "POST_VERIFY_SKIPPED"
-    outcome = manual_case(pre_effect, not_started, post_skipped, None)
+    outcome = staging_case(pre_effect, not_started, post_skipped, None)
     assert outcome["status"] == "FAILED_NO_EFFECT"
     assert outcome["phase"] == "CANDIDATE_BINDING"
-    assert outcome["authorization_state"] == "GITHUB_WORKFLOW_DISPATCH"
+    assert outcome["authorization_state"] == "AR11_STANDING_STAGING_READY"
     assert_zero_effect(outcome)
 
     # The workflow must still publish three valid phase receipts if accepted-main,
-    # dispatch intent or READY binding fails before identifiers exist.
+    # standing intent or READY binding fails before identifiers exist.
     for early_boundary in ("ACCEPTED_MAIN_RELEASE_RESOLUTION", "CANDIDATE_BINDING", "READY_BINDING"):
         early_phases = [dict(pre_effect), dict(not_started), dict(post_skipped)]
         for phase in early_phases:
-            for field in ("release_set_id", "promotion_id", "dispatch_digest", "target_capability_profile_id"):
+            for field in ("release_set_id", "promotion_id", "intent_digest", "target_capability_profile_id"):
                 phase[field] = None
         early_phases[0]["failed_boundary"] = early_boundary
-        early_outcome = manual_case(*early_phases, None)
+        early_outcome = staging_case(*early_phases, None)
         assert early_outcome["status"] == "FAILED_NO_EFFECT", early_outcome
         assert early_outcome["phase"] == early_boundary, early_outcome
         assert_zero_effect(early_outcome)
@@ -1246,13 +1250,13 @@ def self_test() -> None:
     fence_fail["provider_mutation_started"] = False
     fence_fail["provider_mutation_executed"] = False
     fence_fail["failed_boundary"] = "EXACT_CURRENT_FENCE"
-    outcome = manual_case(resolve_state, fence_fail, post_skipped, None)
+    outcome = staging_case(resolve_state, fence_fail, post_skipped, None)
     assert outcome["status"] == "FAILED_NO_EFFECT" and outcome["effect_state"] == "EXACT_NO_EFFECT"
 
     deploy_fail = dict(mutation_state)
     deploy_fail["provider_mutation_executed"] = False
     deploy_fail["failed_boundary"] = "PROVIDER_DEPLOY"
-    outcome = manual_case(resolve_state, deploy_fail, post_state, None)
+    outcome = staging_case(resolve_state, deploy_fail, post_state, None)
     assert outcome["status"] == "RECOVERY_REQUIRED" and outcome["effect_state"] == "UNKNOWN"
     assert outcome["recovery_owner"] == "AR-14"
 
@@ -1260,14 +1264,14 @@ def self_test() -> None:
     drifted["decision"] = "DRIFTED"
     drifted["verified"] = False
     drifted["blockers"] = ["DEPLOYED_RELEASE_SET_MISMATCH"]
-    outcome = manual_case(resolve_state, mutation_state, post_state, drifted)
+    outcome = staging_case(resolve_state, mutation_state, post_state, drifted)
     assert outcome["status"] == "RECOVERY_REQUIRED"
     assert outcome["effect_state"] == "RECOVERY_REQUIRED"
     assert outcome["owner"] == "opsctl.promotion.verify"
     assert outcome["owner_reason_code"] == "DEPLOYED_RELEASE_SET_MISMATCH"
     assert outcome["owner_diagnostic"]["blockers"] == ["DEPLOYED_RELEASE_SET_MISMATCH"]
 
-    outcome = manual_case(resolve_state, mutation_state, post_state, verified)
+    outcome = staging_case(resolve_state, mutation_state, post_state, verified)
     assert outcome["status"] == "COMPLETED"
     assert outcome["effect_state"] == "EFFECT_VERIFIED"
     assert outcome["provider_mutation_started"] is True
@@ -1278,7 +1282,7 @@ def self_test() -> None:
         {**verified, "target_release_set_id": "release-set-v3-sha256-" + "f" * 64},
         {**verified, "decision": "DRIFTED", "verified": False, "blockers": []},
     ):
-        outcome = manual_case(resolve_state, mutation_state, post_state, malformed_owner)
+        outcome = staging_case(resolve_state, mutation_state, post_state, malformed_owner)
         assert outcome["status"] == "RECOVERY_REQUIRED" and outcome["effect_state"] == "UNKNOWN"
         assert outcome.get("owner_reason_code") is None
 
@@ -1290,8 +1294,8 @@ def self_test() -> None:
         ("release_set_id", "release-set-v3-sha256-" + "f" * 64),
         ("promotion_id", None),
         ("promotion_id", "f" * 64),
-        ("dispatch_digest", None),
-        ("dispatch_digest", "f" * 64),
+        ("intent_digest", None),
+        ("intent_digest", "f" * 64),
         ("target_capability_profile_id", None),
         ("target_capability_profile_id", "some-other-profile"),
     ):
@@ -1301,7 +1305,7 @@ def self_test() -> None:
             (resolve_state, mutation_state, {**post_state, field: substituted}),
         )
         for changed_resolve, changed_mutation, changed_post in phase_updates:
-            outcome = manual_case(changed_resolve, changed_mutation, changed_post, verified)
+            outcome = staging_case(changed_resolve, changed_mutation, changed_post, verified)
             assert outcome["status"] == "RECOVERY_REQUIRED", (field, substituted, outcome)
             assert outcome["effect_state"] == "UNKNOWN", (field, substituted, outcome)
             assert outcome.get("owner_reason_code") is None
@@ -1310,25 +1314,25 @@ def self_test() -> None:
         unbound = [dict(resolve_state), dict(mutation_state), dict(post_state)]
         for phase in unbound:
             phase.update(record)
-        outcome = manual_case(*unbound, verified)
+        outcome = staging_case(*unbound, verified)
         assert outcome["status"] == "RECOVERY_REQUIRED" and outcome["effect_state"] == "UNKNOWN"
         assert outcome["status"] != "COMPLETED"
 
     health_fail = dict(post_state)
     health_fail["failed_boundary"] = "HEALTH_VERIFICATION"
     health_fail["step_outcomes"] = {**post_state["step_outcomes"], "health": "failure"}
-    outcome = manual_case(resolve_state, mutation_state, health_fail, verified)
+    outcome = staging_case(resolve_state, mutation_state, health_fail, verified)
     assert outcome["status"] == "INFRASTRUCTURE_FAILURE"
     assert outcome["effect_state"] == "EFFECT_VERIFIED"
     assert outcome["owner_reason_code"] is None
 
-    outcome = manual_case(resolve_state, mutation_state, post_state, None)
+    outcome = staging_case(resolve_state, mutation_state, post_state, None)
     assert outcome["status"] == "RECOVERY_REQUIRED" and outcome["effect_state"] == "UNKNOWN"
 
     for missing_key in ("resolve", "mutation", "post"):
         phases = {"resolve": resolve_state, "mutation": mutation_state, "post": post_state}
         phases[missing_key] = None
-        outcome = manual_case(phases["resolve"], phases["mutation"], phases["post"], verified)
+        outcome = staging_case(phases["resolve"], phases["mutation"], phases["post"], verified)
         assert outcome["status"] == "RECOVERY_REQUIRED", (missing_key, outcome)
         assert outcome["effect_state"] == "UNKNOWN", (missing_key, outcome)
         assert outcome["provider_mutation_started"] is True, (missing_key, outcome)
@@ -1339,49 +1343,49 @@ def self_test() -> None:
 
         malformed = dict(phases)
         malformed[missing_key] = {"schema_version": 1, "kind": "AR11_PHASE_TRANSPORT_UNVERIFIED", "transport_state": "INVALID"}
-        outcome = manual_case(malformed["resolve"], malformed["mutation"], malformed["post"], verified)
+        outcome = staging_case(malformed["resolve"], malformed["mutation"], malformed["post"], verified)
         assert outcome["status"] == "RECOVERY_REQUIRED" and outcome["effect_state"] == "UNKNOWN", (missing_key, outcome)
         assert outcome["owner_reason_code"] == "VERIFIED", (missing_key, outcome)
 
     # Preserve a DRIFTED natural-owner reason even when transport is incomplete,
     # without upgrading uncertain provider effects into a semantic success.
-    outcome = manual_case(None, mutation_state, post_state, drifted)
+    outcome = staging_case(None, mutation_state, post_state, drifted)
     assert outcome["status"] == "RECOVERY_REQUIRED" and outcome["effect_state"] == "UNKNOWN"
     assert outcome["owner_reason_code"] == "DEPLOYED_RELEASE_SET_MISMATCH"
     assert outcome["owner_diagnostic"]["last_promotion_verify"] == drifted
     other_target_verified = {**verified, "target_release_set_id": "release-set-v3-sha256-" + "f" * 64}
-    outcome = manual_case(None, mutation_state, post_state, other_target_verified)
+    outcome = staging_case(None, mutation_state, post_state, other_target_verified)
     assert outcome["status"] == "RECOVERY_REQUIRED" and outcome["effect_state"] == "UNKNOWN"
     assert outcome["owner"] is None and outcome["owner_reason_code"] is None
     assert outcome["owner_diagnostic"]["unbound_promotion_verify"] == other_target_verified
 
     # An intact, independently captured pre-invocation marker remains sufficient
     # to establish zero effect, even if unrelated post-state transport is lost.
-    outcome = manual_case(resolve_state, not_started, None, None)
+    outcome = staging_case(resolve_state, not_started, None, None)
     assert outcome["status"] == "INFRASTRUCTURE_FAILURE"
     assert_zero_effect(outcome)
 
     contradictory_resolution = dict(resolve_state)
     contradictory_resolution["failed_boundary"] = "CANDIDATE_BINDING"
-    outcome = manual_case(contradictory_resolution, mutation_state, post_state, verified)
+    outcome = staging_case(contradictory_resolution, mutation_state, post_state, verified)
     assert outcome["status"] == "RECOVERY_REQUIRED" and outcome["effect_state"] == "UNKNOWN"
     assert outcome["phase"] == "RESOLVE_EFFECT_CONTRADICTION"
 
     contradictory_post = dict(post_state)
     contradictory_post["provider_mutation_started"] = False
     contradictory_post["provider_mutation_executed"] = False
-    outcome = manual_case(resolve_state, mutation_state, contradictory_post, verified)
+    outcome = staging_case(resolve_state, mutation_state, contradictory_post, verified)
     assert outcome["status"] == "RECOVERY_REQUIRED" and outcome["effect_state"] == "UNKNOWN"
     assert outcome["phase"] == "PHASE_EFFECT_CONTRADICTION"
 
     post_evidence_failed = dict(post_state)
     post_evidence_failed["failed_boundary"] = "POST_EVIDENCE_PUBLICATION"
-    outcome = manual_case(resolve_state, mutation_state, post_evidence_failed, verified)
+    outcome = staging_case(resolve_state, mutation_state, post_evidence_failed, verified)
     assert outcome["status"] == "INFRASTRUCTURE_FAILURE" and outcome["effect_state"] == "EFFECT_VERIFIED"
 
     post_observation_failed = dict(post_state)
     post_observation_failed["failed_boundary"] = "POST_PROVIDER_OBSERVATION"
-    outcome = manual_case(resolve_state, mutation_state, post_observation_failed, None)
+    outcome = staging_case(resolve_state, mutation_state, post_observation_failed, None)
     assert outcome["status"] == "RECOVERY_REQUIRED" and outcome["effect_state"] == "UNKNOWN"
 
     print("AR11 promotion OperationalOutcome fixture matrix passed.")
@@ -1389,7 +1393,7 @@ def self_test() -> None:
 
 def main() -> int:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--mode", choices=("read-only", "manual"), default="read-only")
+    parser.add_argument("--mode", choices=("read-only", "staging"), default="read-only")
     parser.add_argument("--source-sha")
     parser.add_argument("--tree-sha")
     parser.add_argument("--release-set-id")
@@ -1449,7 +1453,7 @@ def main() -> int:
         print("AR11 OperationalOutcome error: release-set-id must be an exact v3 Release Set ID", file=sys.stderr)
         return 2
     try:
-        outcome = build_from_files(args) if args.mode == "read-only" else build_manual_from_files(args)
+        outcome = build_from_files(args) if args.mode == "read-only" else build_staging_from_files(args)
         if args.output.exists():
             raise OSError(f"output already exists: {args.output}")
         args.output.parent.mkdir(parents=True, exist_ok=True)
