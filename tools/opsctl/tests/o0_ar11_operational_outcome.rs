@@ -203,9 +203,14 @@ fn ar11_operational_outcome_fixture_matrix_is_credential_free_and_zero_effect() 
 #[test]
 fn ar11_standing_staging_outcome_cli_proves_composed_effect_boundaries_without_credentials()
 -> Result<(), String> {
-    let resolve_ready = staging_phase_state("RESOLVE_VERIFY", "STANDING_AR11_READY", false, false, None);
+    let resolve_ready =
+        staging_phase_state("RESOLVE_VERIFY", "STANDING_AR11_READY", false, false, None);
     let mutation_not_started = staging_phase_state(
-        "MUTATE", "STANDING_AR11_READY", false, false, Some("EXACT_CURRENT_FENCE"),
+        "MUTATE",
+        "STANDING_AR11_READY",
+        false,
+        false,
+        Some("EXACT_CURRENT_FENCE"),
     );
     let post_skipped = staging_phase_state(
         "POST_VERIFY",
@@ -231,7 +236,10 @@ fn ar11_standing_staging_outcome_cli_proves_composed_effect_boundaries_without_c
     )?;
     assert_eq!(outcome["status"], "FAILED_NO_EFFECT");
     assert_eq!(outcome["phase"], "CANDIDATE_BINDING");
-    assert_eq!(outcome["authorization_state"], "AR11_STANDING_STAGING_READY");
+    assert_eq!(
+        outcome["authorization_state"],
+        "AR11_STANDING_STAGING_READY"
+    );
     assert_eq!(outcome["effect_state"], "EXACT_NO_EFFECT");
     assert_eq!(outcome["provider_mutation_started"], false);
     assert_eq!(outcome["provider_mutation_executed"], false);
@@ -249,7 +257,11 @@ fn ar11_standing_staging_outcome_cli_proves_composed_effect_boundaries_without_c
     assert_eq!(outcome["provider_mutation_started"], false);
 
     let mutation_deploy_failed = staging_phase_state(
-        "MUTATE", "STANDING_AR11_READY", true, false, Some("PROVIDER_DEPLOY"),
+        "MUTATE",
+        "STANDING_AR11_READY",
+        true,
+        false,
+        Some("PROVIDER_DEPLOY"),
     );
     let post_after_started = staging_phase_state(
         "POST_VERIFY",
@@ -307,7 +319,10 @@ fn ar11_standing_staging_outcome_cli_proves_composed_effect_boundaries_without_c
         Some(&verified),
     )?;
     assert_eq!(outcome["status"], "COMPLETED");
-    assert_eq!(outcome["authorization_state"], "AR11_STANDING_STAGING_READY");
+    assert_eq!(
+        outcome["authorization_state"],
+        "AR11_STANDING_STAGING_READY"
+    );
     assert_eq!(outcome["phase"], "POST_VERIFY");
     assert_eq!(outcome["effect_state"], "EFFECT_VERIFIED");
     assert_eq!(outcome["owner"], "opsctl.promotion.verify");
@@ -358,17 +373,18 @@ fn ar11_workflow_terminalizes_after_owner_capture_and_before_final_assertion() -
     assert!(preflight.contains("release verify"));
     assert!(preflight.contains("AR11_READY_TO_MUTATE"));
     assert!(preflight.contains("worker_identity_sha256:$worker_identity_sha256"));
-    assert!(preflight
-        .contains("name: ar11-operational-outcome-${{ github.run_id }}-${{ github.run_attempt }}"));
+    assert!(
+        preflight.contains(
+            "name: ar11-operational-outcome-${{ github.run_id }}-${{ github.run_attempt }}"
+        )
+    );
     assert!(!preflight.contains("secrets.CLOUDFLARE_API_TOKEN"));
 
     let promote = workflow
         .split("  promote:\n")
         .nth(1)
         .and_then(|tail| tail.split("  promotion-outcome:\n").next())
-        .ok_or_else(|| {
-            "single-runner standing staging promotion job must exist".to_string()
-        })?;
+        .ok_or_else(|| "single-runner standing staging promotion job must exist".to_string())?;
     assert!(promote.contains("environment: staging"));
     assert!(promote.contains("actions/artifacts/$READY_ARTIFACT_ID"));
     assert!(promote.contains("needs: [route, preflight-ready]"));
@@ -377,7 +393,9 @@ fn ar11_workflow_terminalizes_after_owner_capture_and_before_final_assertion() -
     assert!(promote.contains("github.run_attempt == 1"));
     assert!(promote.contains("github.event.workflow_run.run_attempt == 1"));
     assert!(promote.contains(".total_count == 1 and (.workflow_runs | length) == 1"));
-    assert!(promote.contains(".workflow_runs[0].id == $run and .workflow_runs[0].run_attempt == 1"));
+    assert!(
+        promote.contains(".workflow_runs[0].id == $run and .workflow_runs[0].run_attempt == 1")
+    );
     assert!(promote.contains("len(runs) != min(total, 100)"));
     assert!(promote.contains("len({run['id'] for run in runs}) != len(runs)"));
     assert!(promote.contains("len({run['run_number'] for run in runs}) != len(runs)"));
@@ -390,18 +408,24 @@ fn ar11_workflow_terminalizes_after_owner_capture_and_before_final_assertion() -
     assert!(promote.contains("github.workflow_run.read_only_ready"));
     assert!(promote.contains("ready_run_attempt"));
     assert!(promote.contains("ready_artifact_id"));
-    assert!(promote.contains("Pin exact standing staging account and Worker before deploy credentials"));
+    assert!(
+        promote.contains("Pin exact standing staging account and Worker before deploy credentials")
+    );
     assert!(promote.contains("docs/evidence/ar11-fc6-cloudflare-observe-token-policy.json"));
     assert!(promote.contains("AR11_EXACT_CURRENT_FENCE"));
     assert!(promote.contains("worker_identity_match:$worker_identity_match"));
     assert!(promote.contains("mutation-worker-binding.json"));
-    assert!(promote.contains("if [ \"$observed_worker_identity_sha256\" = \"$expected_worker_identity_sha256\" ]; then"));
+    assert!(promote.contains(
+        "if [ \"$observed_worker_identity_sha256\" = \"$expected_worker_identity_sha256\" ]; then"
+    ));
     assert!(promote.contains(".promotion_plan_sha256"));
     assert!(promote.contains(".release_verify_sha256"));
     assert!(promote.contains("Recheck live operator kill switch immediately before mutation"));
     assert!(promote.contains("GH_TOKEN: ${{ secrets.AR11_STAGING_VARIABLES_READ_TOKEN }}"));
     assert!(promote.contains("actions/variables/PROFILEBRIDGE_AUTO_STAGING_ENABLED"));
-    assert!(promote.contains(".name == \"PROFILEBRIDGE_AUTO_STAGING_ENABLED\" and .value == \"true\""));
+    assert!(
+        promote.contains(".name == \"PROFILEBRIDGE_AUTO_STAGING_ENABLED\" and .value == \"true\"")
+    );
     assert!(promote.contains("failed_boundary=\"OPERATOR_KILL_SWITCH\""));
     assert!(promote.contains("kill_switch:$kill_switch"));
     assert!(promote.contains("promotion verify"));
@@ -418,8 +442,11 @@ fn ar11_workflow_terminalizes_after_owner_capture_and_before_final_assertion() -
     assert!(staging_terminal.contains(
         "name: ar11-staging-operational-outcome-${{ github.run_id }}-${{ github.run_attempt }}"
     ));
-    assert!(!staging_terminal
-        .contains("name: ar11-operational-outcome-${{ github.run_id }}-${{ github.run_attempt }}"));
+    assert!(
+        !staging_terminal.contains(
+            "name: ar11-operational-outcome-${{ github.run_id }}-${{ github.run_attempt }}"
+        )
+    );
     let rollback = workflow
         .split("  rollback-negative-evidence:\n")
         .nth(1)
@@ -428,8 +455,10 @@ fn ar11_workflow_terminalizes_after_owner_capture_and_before_final_assertion() -
     assert!(rollback.contains(
         "ar11-ready-to-mutate-$RELEASE_SET_ID-${{ steps.bind.outputs.main_sha }}-$SOURCE_RUN_ID-1"
     ));
-    assert!(rollback
-        .contains(".source_sha == $sha and .ready_run_id == $run and .ready_run_attempt == 1"));
+    assert!(
+        rollback
+            .contains(".source_sha == $sha and .ready_run_id == $run and .ready_run_attempt == 1")
+    );
     assert!(rollback.contains(".github/workflows/release-set-promotion.yml@main"));
     for retired_job in [
         "resolve-preflight",
@@ -456,8 +485,14 @@ fn ar11_workflow_terminalizes_after_owner_capture_and_before_final_assertion() -
         })?;
     let live_kill_switch = promote
         .find("Recheck live operator kill switch immediately before mutation")
-        .ok_or_else(|| "live operator stop must be re-read immediately before deploy".to_string())?;
-    assert!(pre_deploy < live_kill_switch && live_kill_switch < deploy_in_job && deploy_in_job < post_verify);
+        .ok_or_else(|| {
+            "live operator stop must be re-read immediately before deploy".to_string()
+        })?;
+    assert!(
+        pre_deploy < live_kill_switch
+            && live_kill_switch < deploy_in_job
+            && deploy_in_job < post_verify
+    );
     assert!(!workflow.contains("promotion-verify.json\" | jq -e '.verified == true"));
 
     let terminalize = workflow
