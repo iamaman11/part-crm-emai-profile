@@ -11,6 +11,8 @@ const BUILD = '.github/workflows/release-set-build.yml';
 const PROMOTION = '.github/workflows/release-set-promotion.yml';
 const CAMOUFOX = '.github/workflows/camoufox-runtime-gate.yml';
 const CAMOUFOX_SCOPE = 'scripts/classify-camoufox-runtime-scope.py';
+const AR11_RUNTIME_DOWNLOADER = 'scripts/download-release-set-ar11.py';
+const AR11_RUNTIME_OVERLAY = 'scripts/release-core-overlay-ar11.py';
 const AUTHORITY = 'architecture/release-architecture-ar11.json';
 const ASSET_MATERIALIZER = 'scripts/release-set-assets-ar11.sh';
 const EXPECTED_PROMOTION_RUN_NAME = "run-name: AR11 Release Set Promotion — ${{ github.event_name == 'workflow_run' && 'READ-ONLY PREFLIGHT' || github.event_name == 'workflow_dispatch' && format('STAGING PROMOTION by {0}', github.actor) || 'INTERNAL ROLLBACK-NEGATIVE EVIDENCE' }}";
@@ -75,6 +77,101 @@ function stepBlock(job, stepName) {
 
 function logicalShellLines(source) {
   return source.replace(/\\\n\s*/g, ' ').split('\n').map((line) => line.trim()).filter(Boolean);
+}
+
+function runtimeSidecarErrors(promotion, downloader, overlay) {
+  const errors = [];
+  if ((promotion.match(/--runtime-manifest-release-id/g) ?? []).length !== 3
+      || (promotion.match(/--runtime-manifest "\$TARGET_RUNTIME_MANIFEST"/g) ?? []).length !== 3) {
+    errors.push('AR11 sidecar must have exactly three bounded download sites and three bound overlay consumers');
+  }
+  const ready = jobBlock(promotion, 'preflight-ready');
+  const manual = jobBlock(promotion, 'promote');
+  const targetStep = stepBlock(ready, 'Verify immutable target before any provider credential');
+  const knownGoodStep = stepBlock(ready, 'Verify current immutable Release Set and build metadata snapshot');
+  const manualStep = stepBlock(manual, 'Re-verify exact immutable Release Set before credentials');
+  const downloads = [
+    ['automatic target', targetStep, '$runtime_id'],
+    ['automatic known-good', knownGoodStep, '$previous_runtime_id'],
+    ['manual target', manualStep, '$runtime_id'],
+  ];
+  for (const [label, step, releaseId] of downloads) {
+    const lines = logicalShellLines(step).filter((line) => !line.startsWith('#'));
+    const destination = releaseId === '$runtime_id' ? '$runtime_sidecar_dir' : '$previous_sidecar_dir';
+    const verify = lines.findIndex((line) => line.startsWith('cargo run --locked --quiet --manifest-path tools/opsctl/Cargo.toml -- ')
+      && line.includes('--root . release verify') && line.includes('--artifact-root "$release_root"'));
+    const verdict = lines.findIndex((line) => line.includes('jq -e') && line.includes('.decision == "VALID"'));
+    const download = lines.findIndex((line) => line.startsWith(`python ${AR11_RUNTIME_DOWNLOADER} `)
+      && line.includes(`--runtime-manifest-release-id "${releaseId}"`)
+      && line.includes(`--destination "${destination}"`));
+    if (verify < 0 || verdict < verify || download <= verdict || !lines.some((line) => line === 'set -euo pipefail')) {
+      errors.push(`${label} sidecar requires an earlier active full opsctl release verify and VALID verdict`);
+    }
+    if (step.includes('continue-on-error: true') || [lines[verify], lines[verdict], lines[download]].some((line) => line && /\|\|\s*true/.test(line))) {
+      errors.push(`${label} sidecar verification or download cannot ignore failures`);
+    }
+  }
+  const initialOverlay = stepBlock(ready, 'Materialize exact target and rendered staging overlay');
+  const manualOverlay = stepBlock(manual, 'Render mutation overlay and prove exact bits dry-run without deploy credential');
+  for (const [label, step] of [['automatic initial', initialOverlay], ['automatic dual', knownGoodStep], ['manual', manualOverlay]]) {
+    const command = logicalShellLines(step).find((line) => line.startsWith('python scripts/release-core-overlay-ar11.py '));
+    if (!command?.includes('--runtime-manifest "$TARGET_RUNTIME_MANIFEST"')) {
+      errors.push(`${label} overlay bypasses the SHA-bound target runtime sidecar`);
+    }
+  }
+  const targetFence = [
+    '[[ "$runtime_id" =~ ^runtime-bundle-v3-sha256-[0-9a-f]{64}$ ]]',
+    'echo "TARGET_RUNTIME_MANIFEST=$runtime_sidecar_dir/runtime-manifest.json" >> "$GITHUB_ENV"',
+  ];
+  for (const [label, step, sourcePath] of [
+    ['automatic', targetStep, '$policy_dir/release-set.json'],
+    ['manual', manualStep, '$release_root/release-set.json'],
+  ]) {
+    errors.push(...requireMarkers(step, [
+      `runtime_id="$(jq -er '.components.runtime_bundle.release_id' "${sourcePath}")"`,
+      ...targetFence,
+    ], `${label} sidecar identity/source binding`));
+  }
+  errors.push(...requireMarkers(knownGoodStep, [
+    'previous_runtime_id="$(jq -er \'.components.runtime_bundle.release_id\' "$current_release_manifest")"',
+    'previous_manifest_sha="$(jq -er \'.components.runtime_bundle.component_manifest_sha256\' "$current_release_manifest")"',
+    'target_runtime_id="$(jq -er \'.components.runtime_bundle.release_id\' "$TARGET_RELEASE_MANIFEST")"',
+    'target_manifest_sha="$(jq -er \'.components.runtime_bundle.component_manifest_sha256\' "$TARGET_RELEASE_MANIFEST")"',
+    'if [ "$previous_runtime_id" = "$target_runtime_id" ]; then',
+    'test "$previous_manifest_sha" = "$target_manifest_sha"',
+    'previous_runtime_manifest="$TARGET_RUNTIME_MANIFEST"',
+    'previous_runtime_manifest_args=(--previous-runtime-manifest "$previous_runtime_manifest")',
+    '"${previous_runtime_manifest_args[@]}"',
+  ], 'known-good sidecar exact identity and digest reuse'));
+  const previousCommand = logicalShellLines(knownGoodStep).find((line) => line.startsWith('python scripts/release-core-overlay-ar11.py '));
+  if (!previousCommand?.includes('"${previous_runtime_manifest_args[@]}"') || !previousCommand.includes('--previous-runtime-release-set')) {
+    errors.push('known-good overlay lacks its independently bound runtime sidecar');
+  }
+  const activePython = (source) => source.split('\n').map((line) => line.trim()).filter((line) => line && !line.startsWith('#'));
+  const overlayLines = activePython(overlay);
+  for (const marker of [
+    'if manifest_sidecar is None:',
+    'if runtime["artifact_path"] == "components/runtime-bundle.tar.gz":',
+    'if manifest_sidecar.is_symlink() or not manifest_sidecar.is_file():',
+    'if not (1 <= manifest_sidecar.stat().st_size <= 2_000_000):',
+    'if hashlib.sha256(raw).hexdigest() != runtime["component_manifest_sha256"]:',
+    'or document.get("release_id") != runtime["release_id"]',
+    'or document.get("schema_version") != 3',
+    'or document.get("kind") != "CAMOUFOX_WINDOWS_RUNTIME_COMPONENT"',
+    'document = json.loads(raw, object_pairs_hook=unique_json_members)',
+  ]) {
+    if (!overlayLines.some((line) => line.includes(marker))) errors.push(`runtime sidecar source lost active fail-closed check ${marker}`);
+  }
+  const downloaderLines = activePython(downloader);
+  for (const marker of [
+    'RUNTIME_COMPONENT_PATTERN = re.compile(',
+    'command.extend(["--pattern", RUNTIME_MANIFEST_ASSET])',
+    'or members[0].is_symlink() or not members[0].is_file()',
+    'or not (1 <= members[0].stat().st_size <= MAX_RUNTIME_MANIFEST_BYTES)',
+  ]) {
+    if (!downloaderLines.some((line) => line.includes(marker))) errors.push(`runtime sidecar transport lost active bounded download check ${marker}`);
+  }
+  return errors;
 }
 
 function secretObservationErrors(source, label) {
@@ -878,10 +975,11 @@ function camoufoxErrors(workflow, classifier) {
   return errors;
 }
 
-function validateAll({ build, promotion, camoufox, camoufoxClassifier, authority }) {
+function validateAll({ build, promotion, camoufox, camoufoxClassifier, downloader, overlay, authority }) {
   return [
     ...buildErrors(build),
     ...promotionErrors(promotion),
+    ...runtimeSidecarErrors(promotion, downloader, overlay),
     ...camoufoxErrors(camoufox, camoufoxClassifier),
     ...authorityErrors(authority),
     ...legacyAuthorityErrors(),
@@ -890,6 +988,34 @@ function validateAll({ build, promotion, camoufox, camoufoxClassifier, authority
 }
 
 function selfTest(files) {
+  const positiveSidecarErrors = runtimeSidecarErrors(files.promotion, files.downloader, files.overlay);
+  if (positiveSidecarErrors.length) throw new Error(`positive runtime sidecar fixture failed: ${positiveSidecarErrors.join('; ')}`);
+  for (const [label, original, replacement] of [
+    ['disabled full verify', '--root . release verify', '--root . release inspect'],
+    ['disabled full verify verdict', '.decision == "VALID"', '.decision != "INVALID"'],
+    ['disabled sidecar download', '--runtime-manifest-release-id "$runtime_id"', '--release-set-id "$runtime_id"'],
+    ['ignored sidecar download failure', '--destination "$runtime_sidecar_dir"', '--destination "$runtime_sidecar_dir" || true'],
+    ['missing target sidecar binding', '--runtime-manifest "$TARGET_RUNTIME_MANIFEST"', '--runtime-manifest "$FORGED_RUNTIME_MANIFEST"'],
+    ['missing known-good digest comparison', 'test "$previous_manifest_sha" = "$target_manifest_sha"', 'test -n "$target_manifest_sha"'],
+    ['known-good identity substitution', 'if [ "$previous_runtime_id" = "$target_runtime_id" ]; then', 'if [ "$previous_runtime_id" != "$target_runtime_id" ]; then'],
+    ['known-good source substitution', 'previous_runtime_id="$(jq -er \'.components.runtime_bundle.release_id\' "$current_release_manifest")"', 'previous_runtime_id="$(jq -er \'.components.runtime_bundle.release_id\' "$TARGET_RELEASE_MANIFEST")"'],
+    ['known-good sidecar route disabled', 'previous_runtime_manifest_args=(--previous-runtime-manifest "$previous_runtime_manifest")', 'previous_runtime_manifest_args=()'],
+  ]) {
+    const altered = files.promotion.replace(original, replacement);
+    if (altered === files.promotion || !runtimeSidecarErrors(altered, files.downloader, files.overlay).length) {
+      throw new Error(`${label} runtime sidecar negative fixture unexpectedly passed`);
+    }
+  }
+  for (const [label, file, oldText, newText] of [
+    ['sidecar SHA validation disabled', 'overlay', 'hashlib.sha256(raw).hexdigest() != runtime["component_manifest_sha256"]', 'False'],
+    ['sidecar release identity disabled', 'overlay', 'document.get("release_id") != runtime["release_id"]', 'False'],
+    ['unbounded sidecar download', 'downloader', 'members[0].stat().st_size <= MAX_RUNTIME_MANIFEST_BYTES', 'True'],
+  ]) {
+    const changed = files[file].replace(oldText, newText);
+    if (changed === files[file] || !runtimeSidecarErrors(files.promotion, file === 'downloader' ? changed : files.downloader, file === 'overlay' ? changed : files.overlay).length) {
+      throw new Error(`${label} runtime sidecar source fixture unexpectedly passed`);
+    }
+  }
   const preflightTerminal = stepBlock(jobBlock(files.promotion, 'preflight-ready'), 'Terminalize one lossless AR11 OperationalOutcome');
   for (const [marker, name] of [
     ['failed_boundary="ACCEPTED_MAIN_RELEASE_RESOLUTION"', 'main resolution'],
@@ -1329,6 +1455,8 @@ const files = {
   promotion: read(PROMOTION),
   camoufox: read(CAMOUFOX),
   camoufoxClassifier: read(CAMOUFOX_SCOPE),
+  downloader: read(AR11_RUNTIME_DOWNLOADER),
+  overlay: read(AR11_RUNTIME_OVERLAY),
   authority: JSON.parse(read(AUTHORITY)),
 };
 const errors = validateAll(files);

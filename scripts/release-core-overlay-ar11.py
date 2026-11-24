@@ -73,10 +73,25 @@ def bounded(value: Any, label: str) -> str:
     return value
 
 
+def unique_json_members(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
+    result: dict[str, Any] = {}
+    for key, value in pairs:
+        if key in result:
+            fail(f"duplicate runtime manifest JSON member: {key}")
+        result[key] = value
+    return result
+
+
 def verified_runtime_inventory(
     release_set_path: Path, archive_path: Path, expected_release_set_id: str | None = None,
+    *, manifest_sidecar: Path | None = None,
 ) -> str:
-    """Read the exact verified immutable Release Set runtime, never a caller fingerprint."""
+    """Read SHA-bound runtime metadata after the workflow's full opsctl release verify.
+
+    The v3 gzip sidecar is the independently published component's exact manifest,
+    not a substitute for opsctl's full archive digest, TAR scan and source proof.
+    Only the historical known-good raw TAR retains its embedded-manifest reader.
+    """
     expected_release_set_id = expected_release_set_id or os.environ.get("RELEASE_SET_ID")
     release = load(release_set_path, "accepted Release Set")
     release_id = release.get("release_set_id")
@@ -107,21 +122,40 @@ def verified_runtime_inventory(
         fail("accepted runtime archive must be a regular file")
     if archive_path.name != Path(runtime["artifact_path"]).name:
         fail("runtime archive filename differs from immutable component identity")
-    try:
-        with tarfile.open(archive_path, "r:*") as archive:
-            entry = archive.getmember("runtime-manifest.json")
-            if not entry.isfile() or not (1 <= entry.size <= 2_000_000):
-                fail("runtime manifest tar member is not a bounded regular file")
-            stream = archive.extractfile(entry)
-            if stream is None:
-                fail("runtime manifest tar member cannot be read")
-            raw = stream.read(2_000_001)
-    except (tarfile.TarError, EOFError, OSError) as error:
-        raise OverlayError("accepted runtime archive is invalid") from error
+    if runtime["artifact_path"] == "components/runtime-bundle.tar.gz":
+        if manifest_sidecar is None:
+            fail("verified v3 runtime requires its SHA-bound standalone manifest")
+        if manifest_sidecar.is_symlink() or not manifest_sidecar.is_file():
+            fail("standalone runtime manifest must be a regular file")
+        if not (1 <= manifest_sidecar.stat().st_size <= 2_000_000):
+            fail("standalone runtime manifest exceeds its bounded size")
+        raw = manifest_sidecar.read_bytes()
+        if not (1 <= len(raw) <= 2_000_000):
+            fail("standalone runtime manifest size changed during read")
+    else:
+        if manifest_sidecar is not None:
+            fail("historical raw TAR must use its embedded verified manifest")
+        if expected_release_set_id == os.environ.get("RELEASE_SET_ID"):
+            fail("historical raw TAR is forbidden for the new target")
+        try:
+            with tarfile.open(archive_path, "r:") as archive:
+                matches = [entry for entry in archive.getmembers()
+                           if entry.name == "runtime-manifest.json"]
+                if len(matches) != 1:
+                    fail("historical runtime TAR must contain exactly one manifest")
+                entry = matches[0]
+                if not entry.isfile() or not (1 <= entry.size <= 2_000_000):
+                    fail("runtime manifest TAR member is not a bounded regular file")
+                stream = archive.extractfile(entry)
+                if stream is None:
+                    fail("runtime manifest TAR member cannot be read")
+                raw = stream.read(2_000_001)
+        except (tarfile.TarError, EOFError, OSError) as error:
+            raise OverlayError("historical runtime TAR is invalid") from error
     if hashlib.sha256(raw).hexdigest() != runtime["component_manifest_sha256"]:
         fail("runtime manifest does not match the verified immutable Release Set")
     try:
-        document = json.loads(raw)
+        document = json.loads(raw, object_pairs_hook=unique_json_members)
     except (ValueError, UnicodeDecodeError) as error:
         raise OverlayError("accepted runtime manifest is malformed") from error
     if (
@@ -259,8 +293,10 @@ def render(
     deploy_manifest: Path,
     runtime_release_set: Path,
     runtime_archive: Path,
+    runtime_manifest: Path,
     previous_runtime_release_set: Path | None = None,
     previous_runtime_archive: Path | None = None,
+    previous_runtime_manifest: Path | None = None,
     expected_previous_release_set_id: str | None = None,
     ready_policy_evidence: Path | None = None,
     environment: str,
@@ -279,11 +315,14 @@ def render(
         fail("known-good runtime must refer to a different immutable Release Set")
     # Keep exact immutable Release Set runtime verification at promotion only.
     # No WORKING/LKG allowlist is injected into the Cloudflare Worker.
-    verified_runtime_inventory(runtime_release_set, runtime_archive)
+    verified_runtime_inventory(runtime_release_set, runtime_archive, manifest_sidecar=runtime_manifest)
     if all(item is not None for item in previous_args):
         verified_runtime_inventory(
             previous_runtime_release_set, previous_runtime_archive, expected_previous_release_set_id,
+            manifest_sidecar=previous_runtime_manifest,
         )
+    elif previous_runtime_manifest is not None:
+        fail("unpaired known-good runtime manifest is forbidden")
     if ready_policy_evidence is not None:
         if expected_previous_release_set_id is None:
             fail("sealed READY evidence requires the exact expected previous Release Set")
@@ -451,6 +490,8 @@ def self_test() -> None:
             member = tarfile.TarInfo("runtime-manifest.json")
             member.size = len(runtime_bytes)
             archive.addfile(member, io.BytesIO(runtime_bytes))
+        runtime_sidecar = root / "runtime-manifest.json"
+        runtime_sidecar.write_bytes(runtime_bytes)
         runtime_release_set = root / "release-set.json"
         runtime_release_set.write_text(json.dumps({
             "schema_version": 3, "release_set_id": release_set_id,
@@ -486,21 +527,156 @@ def self_test() -> None:
         previous = os.environ.get("RELEASE_SET_ID")
         os.environ["RELEASE_SET_ID"] = release_set_id
         try:
-            expected_pin = verified_runtime_inventory(runtime_release_set, runtime_archive)
+            expected_pin = verified_runtime_inventory(
+                runtime_release_set, runtime_archive, manifest_sidecar=runtime_sidecar,
+            )
             old_pin = verified_runtime_inventory(previous_release_set, previous_archive, previous_release_id)
             # Current shipping runtime is compressed, while older immutable
             # known-good components may still use raw TAR. Both must be decoded
             # without relaxing the exact Release Set manifest digest check.
             if runtime_archive.read_bytes()[:3] != bytes.fromhex("1f8b08"):
                 fail("current runtime archive fixture is not the shipping gzip format")
-            bad_archive = root / "broken-runtime.tar.gz"
-            bad_archive.write_bytes(bytes.fromhex("1f8b08") + b"truncated")
+            # The sidecar reader deliberately does not read TAR/gzip suffix bytes.
+            # Full archive SHA, unique TAR inventory and truncated gzip proof
+            # remain mandatory in upstream opsctl release verify.
             try:
-                verified_runtime_inventory(runtime_release_set, bad_archive)
+                verified_runtime_inventory(runtime_release_set, runtime_archive)
             except OverlayError:
                 pass
             else:
-                fail("malformed gzip runtime unexpectedly passed immutable verification")
+                fail("current runtime unexpectedly accepted an absent sidecar")
+            missing_sidecar = root / "missing-runtime-manifest.json"
+            try:
+                verified_runtime_inventory(
+                    runtime_release_set, runtime_archive, manifest_sidecar=missing_sidecar,
+                )
+            except OverlayError:
+                pass
+            else:
+                fail("missing runtime sidecar unexpectedly passed")
+            invalid_sidecar = root / "invalid-runtime-manifest.json"
+            for label, contents in (
+                ("truncated", runtime_bytes[:-3]),
+                ("oversized", b"x" * 2_000_001),
+                ("malformed", b"not-json"),
+                ("duplicate-json", runtime_bytes.replace(
+                    b'"schema_version":3,', b'"schema_version":3,"schema_version":3,', 1,
+                )),
+            ):
+                invalid_sidecar.write_bytes(contents)
+                try:
+                    verified_runtime_inventory(
+                        runtime_release_set, runtime_archive, manifest_sidecar=invalid_sidecar,
+                    )
+                except OverlayError:
+                    pass
+                else:
+                    fail(f"{label} runtime sidecar unexpectedly passed")
+            # A duplicate JSON member must be rejected even if a forged Release
+            # Set points at the SHA of those duplicate bytes.
+            duplicated = runtime_bytes.replace(
+                b'"schema_version":3,', b'"schema_version":3,"schema_version":3,', 1,
+            )
+            duplicate_release_set = root / "duplicate-release-set.json"
+            duplicate_release_set.write_text(runtime_release_set.read_text().replace(
+                hashlib.sha256(runtime_bytes).hexdigest(), hashlib.sha256(duplicated).hexdigest(),
+            ), encoding="utf-8")
+            invalid_sidecar.write_bytes(duplicated)
+            try:
+                verified_runtime_inventory(
+                    duplicate_release_set, runtime_archive, manifest_sidecar=invalid_sidecar,
+                )
+            except OverlayError:
+                pass
+            else:
+                fail("duplicate runtime manifest JSON member unexpectedly passed")
+            wrong_id = json.dumps({**runtime_document, "release_id": "runtime-bundle-v3-sha256-" + "9" * 64}).encode()
+            wrong_id_release_set = root / "wrong-id-release-set.json"
+            wrong_id_release_set.write_text(runtime_release_set.read_text().replace(
+                hashlib.sha256(runtime_bytes).hexdigest(), hashlib.sha256(wrong_id).hexdigest(),
+            ), encoding="utf-8")
+            invalid_sidecar.write_bytes(wrong_id)
+            try:
+                verified_runtime_inventory(
+                    wrong_id_release_set, runtime_archive, manifest_sidecar=invalid_sidecar,
+                )
+            except OverlayError:
+                pass
+            else:
+                fail("runtime sidecar with wrong embedded release ID unexpectedly passed")
+            bad_kind = json.dumps({**runtime_document, "kind": "OTHER"}).encode()
+            bad_kind_release_set = root / "wrong-kind-release-set.json"
+            bad_kind_release_set.write_text(runtime_release_set.read_text().replace(
+                hashlib.sha256(runtime_bytes).hexdigest(), hashlib.sha256(bad_kind).hexdigest(),
+            ), encoding="utf-8")
+            invalid_sidecar.write_bytes(bad_kind)
+            try:
+                verified_runtime_inventory(
+                    bad_kind_release_set, runtime_archive, manifest_sidecar=invalid_sidecar,
+                )
+            except OverlayError:
+                pass
+            else:
+                fail("runtime sidecar with wrong kind unexpectedly passed")
+            wrong_schema = json.dumps({**runtime_document, "schema_version": 2}).encode()
+            wrong_schema_release_set = root / "wrong-schema-release-set.json"
+            wrong_schema_release_set.write_text(runtime_release_set.read_text().replace(
+                hashlib.sha256(runtime_bytes).hexdigest(), hashlib.sha256(wrong_schema).hexdigest(),
+            ), encoding="utf-8")
+            invalid_sidecar.write_bytes(wrong_schema)
+            try:
+                verified_runtime_inventory(
+                    wrong_schema_release_set, runtime_archive, manifest_sidecar=invalid_sidecar,
+                )
+            except OverlayError:
+                pass
+            else:
+                fail("runtime sidecar with wrong schema unexpectedly passed")
+            if hasattr(os, "symlink"):
+                symlink_sidecar = root / "symlink-runtime-manifest.json"
+                try:
+                    symlink_sidecar.symlink_to(runtime_sidecar)
+                except (OSError, NotImplementedError):
+                    pass  # Windows hosts may disable non-admin symlink creation.
+                else:
+                    try:
+                        verified_runtime_inventory(
+                            runtime_release_set, runtime_archive, manifest_sidecar=symlink_sidecar,
+                        )
+                    except OverlayError:
+                        pass
+                    else:
+                        fail("symlink runtime sidecar unexpectedly passed")
+            # The only allowed embedded-manifest path is the previously accepted
+            # known-good raw TAR, and it must reject duplicate/unsafe members.
+            for label, member_names in (
+                ("missing", ["not-a-runtime-manifest.json"]),
+                ("duplicate", ["runtime-manifest.json", "runtime-manifest.json"]),
+                ("unsafe-path", ["../runtime-manifest.json"]),
+            ):
+                fixture_dir = root / f"raw-tar-{label}"
+                fixture_dir.mkdir()
+                invalid_raw = fixture_dir / "runtime-bundle.tar"
+                with tarfile.open(invalid_raw, "w") as archive:
+                    for name in member_names:
+                        member = tarfile.TarInfo(name)
+                        member.size = len(previous_bytes)
+                        archive.addfile(member, io.BytesIO(previous_bytes))
+                try:
+                    verified_runtime_inventory(previous_release_set, invalid_raw, previous_release_id)
+                except OverlayError:
+                    pass
+                else:
+                    fail(f"{label} historical raw TAR unexpectedly passed")
+            try:
+                verified_runtime_inventory(
+                    previous_release_set, previous_archive, previous_release_id,
+                    manifest_sidecar=runtime_sidecar,
+                )
+            except OverlayError:
+                pass
+            else:
+                fail("historical raw TAR unexpectedly accepted a sidecar substitute")
             if old_pin == expected_pin:
                 fail("runtime compatibility fixture did not produce two distinct inventories")
             if expected_pin != hashlib.sha256(
@@ -517,6 +693,7 @@ def self_test() -> None:
                 render(source_config=Path(__file__).resolve().parents[1] / "deploy/cloudflare/wrangler.jsonc",
                        release_root=root, deploy_manifest=manifest_path,
                        runtime_release_set=runtime_release_set, runtime_archive=runtime_archive,
+                       runtime_manifest=runtime_sidecar,
                        previous_runtime_release_set=previous_release_set,
                        previous_runtime_archive=previous_archive,
                        expected_previous_release_set_id=previous_release_id,
@@ -545,6 +722,7 @@ def self_test() -> None:
                 render(source_config=Path(__file__).resolve().parents[1] / "deploy/cloudflare/wrangler.jsonc",
                        release_root=root, deploy_manifest=manifest_path,
                        runtime_release_set=runtime_release_set, runtime_archive=runtime_archive,
+                       runtime_manifest=runtime_sidecar,
                        ready_policy_evidence=ready_file, expected_previous_release_set_id=previous_release_id,
                        environment="staging", output=proof_output)
                 rendered = json.loads(proof_output.read_text(encoding="utf-8"))
@@ -555,6 +733,7 @@ def self_test() -> None:
                     render(source_config=Path(__file__).resolve().parents[1] / "deploy/cloudflare/wrangler.jsonc",
                            release_root=root, deploy_manifest=manifest_path,
                            runtime_release_set=runtime_release_set, runtime_archive=runtime_archive,
+                           runtime_manifest=runtime_sidecar,
                            ready_policy_evidence=ready_file, expected_previous_release_set_id=previous_release_id,
                            environment="staging", output=root / "overlay-unauthorized.json")
                 except OverlayError:
@@ -589,7 +768,9 @@ def self_test() -> None:
                 hashlib.sha256(runtime_bytes).hexdigest(), "f" * 64
             ), encoding="utf-8")
             try:
-                verified_runtime_inventory(runtime_release_set, runtime_archive)
+                verified_runtime_inventory(
+                    runtime_release_set, runtime_archive, manifest_sidecar=runtime_sidecar,
+                )
             except OverlayError:
                 pass
             else:
@@ -611,8 +792,10 @@ def main() -> int:
     parser.add_argument("--deploy-manifest", type=Path)
     parser.add_argument("--runtime-release-set", type=Path)
     parser.add_argument("--runtime-archive", type=Path)
+    parser.add_argument("--runtime-manifest", type=Path)
     parser.add_argument("--previous-runtime-release-set", type=Path)
     parser.add_argument("--previous-runtime-archive", type=Path)
+    parser.add_argument("--previous-runtime-manifest", type=Path)
     parser.add_argument("--expected-previous-release-set-id")
     parser.add_argument("--ready-policy-evidence", type=Path)
     parser.add_argument("--environment", default="staging")
@@ -629,6 +812,7 @@ def main() -> int:
             args.deploy_manifest,
             args.runtime_release_set,
             args.runtime_archive,
+            args.runtime_manifest,
             args.output,
         ):
             fail("source-config, release-root, deploy-manifest and output are required")
@@ -638,8 +822,10 @@ def main() -> int:
             deploy_manifest=args.deploy_manifest,
             runtime_release_set=args.runtime_release_set,
             runtime_archive=args.runtime_archive,
+            runtime_manifest=args.runtime_manifest,
             previous_runtime_release_set=args.previous_runtime_release_set,
             previous_runtime_archive=args.previous_runtime_archive,
+            previous_runtime_manifest=args.previous_runtime_manifest,
             expected_previous_release_set_id=args.expected_previous_release_set_id,
             ready_policy_evidence=args.ready_policy_evidence,
             environment=args.environment,

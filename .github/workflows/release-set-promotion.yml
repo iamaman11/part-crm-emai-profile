@@ -170,6 +170,19 @@ jobs:
             --artifact-root "$release_root" \
             | tee "$RUNNER_TEMP/release-verify.json" \
             | jq -e '.decision == "VALID" and .release_set_schema_version == 3 and .source_accepted == true and .mutation_executed == false' >/dev/null
+          # opsctl alone owns the full archive SHA, unique TAR member and source proof.
+          # The small immutable component sidecar only avoids repeating gzip reads
+          # during later overlay projections on this same runner.
+          runtime_id="$(jq -er '.components.runtime_bundle.release_id' "$policy_dir/release-set.json")"
+          [[ "$runtime_id" =~ ^runtime-bundle-v3-sha256-[0-9a-f]{64}$ ]]
+          runtime_sidecar_dir="$RUNNER_TEMP/runtime-sidecars/$runtime_id"
+          python scripts/download-release-set-ar11.py \
+            --repository "$GITHUB_REPOSITORY" \
+            --runtime-manifest-release-id "$runtime_id" \
+            --destination "$runtime_sidecar_dir"
+          test -f "$runtime_sidecar_dir/runtime-manifest.json"
+          test ! -L "$runtime_sidecar_dir/runtime-manifest.json"
+          echo "TARGET_RUNTIME_MANIFEST=$runtime_sidecar_dir/runtime-manifest.json" >> "$GITHUB_ENV"
 
       - name: Require read-only observation authority only
         id: observation_authority
@@ -212,6 +225,7 @@ jobs:
             --deploy-manifest "$RUNNER_TEMP/deploy-manifest.json" \
             --runtime-release-set "$release_root/release-set.json" \
             --runtime-archive "$release_root/components/runtime-bundle.tar.gz" \
+            --runtime-manifest "$TARGET_RUNTIME_MANIFEST" \
             --environment staging \
             --output "$RUNNER_TEMP/wrangler.staging.json"
           {
@@ -335,6 +349,28 @@ jobs:
             components/runtime-bundle.tar.gz|components/runtime-bundle.tar) ;;
             *) echo "Unknown previous runtime artifact identity" >&2; exit 1 ;;
           esac
+          previous_runtime_manifest_args=()
+          if [ "$previous_runtime_path" = components/runtime-bundle.tar.gz ]; then
+            previous_runtime_id="$(jq -er '.components.runtime_bundle.release_id' "$current_release_manifest")"
+            [[ "$previous_runtime_id" =~ ^runtime-bundle-v3-sha256-[0-9a-f]{64}$ ]]
+            previous_manifest_sha="$(jq -er '.components.runtime_bundle.component_manifest_sha256' "$current_release_manifest")"
+            target_runtime_id="$(jq -er '.components.runtime_bundle.release_id' "$TARGET_RELEASE_MANIFEST")"
+            target_manifest_sha="$(jq -er '.components.runtime_bundle.component_manifest_sha256' "$TARGET_RELEASE_MANIFEST")"
+            if [ "$previous_runtime_id" = "$target_runtime_id" ]; then
+              test "$previous_manifest_sha" = "$target_manifest_sha"
+              previous_runtime_manifest="$TARGET_RUNTIME_MANIFEST"
+            else
+              previous_sidecar_dir="$RUNNER_TEMP/runtime-sidecars/$previous_runtime_id"
+              python scripts/download-release-set-ar11.py \
+                --repository "$GITHUB_REPOSITORY" \
+                --runtime-manifest-release-id "$previous_runtime_id" \
+                --destination "$previous_sidecar_dir"
+              previous_runtime_manifest="$previous_sidecar_dir/runtime-manifest.json"
+            fi
+            test -f "$previous_runtime_manifest"
+            test ! -L "$previous_runtime_manifest"
+            previous_runtime_manifest_args=(--previous-runtime-manifest "$previous_runtime_manifest")
+          fi
           echo "CURRENT_RELEASE_MANIFEST=$current_release_manifest" >> "$GITHUB_ENV"
 
           # The existing known-good source and release have both passed native
@@ -347,8 +383,10 @@ jobs:
             --deploy-manifest "$DEPLOY_MANIFEST" \
             --runtime-release-set "$TARGET_RELEASE_MANIFEST" \
             --runtime-archive "$TARGET_RELEASE_ROOT/components/runtime-bundle.tar.gz" \
+            --runtime-manifest "$TARGET_RUNTIME_MANIFEST" \
             --previous-runtime-release-set "$current_release_manifest" \
             --previous-runtime-archive "$release_root/$previous_runtime_path" \
+            "${previous_runtime_manifest_args[@]}" \
             --expected-previous-release-set-id "$current_id" \
             --environment staging --output "$dual_config"
           echo "WRANGLER_CONFIG=$dual_config" >> "$GITHUB_ENV"
@@ -659,7 +697,7 @@ jobs:
 
       - name: Remove raw provider material
         if: always()
-        run: rm -rf "$RUNNER_TEMP/deploy-manifest.json" "$RUNNER_TEMP/wrangler.staging.json" "$RUNNER_TEMP/target-assets" "$RUNNER_TEMP/target-release-set" "$RUNNER_TEMP/known-good-assets" "$RUNNER_TEMP/known-good-release-set" "$RUNNER_TEMP/secret-list.json"
+        run: rm -rf "$RUNNER_TEMP/deploy-manifest.json" "$RUNNER_TEMP/wrangler.staging.json" "$RUNNER_TEMP/target-assets" "$RUNNER_TEMP/target-release-set" "$RUNNER_TEMP/known-good-assets" "$RUNNER_TEMP/known-good-release-set" "$RUNNER_TEMP/runtime-sidecars" "$RUNNER_TEMP/secret-list.json"
 
   promote:
     name: Execute exact candidate after owner dispatch and READY evidence
@@ -916,6 +954,16 @@ jobs:
             --source-root . --artifact-root "$release_root" \
             > "$RUNNER_TEMP/manual-mutation-release-verify.json"
           jq -e '.decision == "VALID" and .release_set_schema_version == 3 and .source_accepted == true and .mutation_executed == false' "$RUNNER_TEMP/manual-mutation-release-verify.json" >/dev/null
+          runtime_id="$(jq -er '.components.runtime_bundle.release_id' "$release_root/release-set.json")"
+          [[ "$runtime_id" =~ ^runtime-bundle-v3-sha256-[0-9a-f]{64}$ ]]
+          runtime_sidecar_dir="$RUNNER_TEMP/runtime-sidecars/$runtime_id"
+          python scripts/download-release-set-ar11.py \
+            --repository "$GITHUB_REPOSITORY" \
+            --runtime-manifest-release-id "$runtime_id" \
+            --destination "$runtime_sidecar_dir"
+          test -f "$runtime_sidecar_dir/runtime-manifest.json"
+          test ! -L "$runtime_sidecar_dir/runtime-manifest.json"
+          echo "TARGET_RUNTIME_MANIFEST=$runtime_sidecar_dir/runtime-manifest.json" >> "$GITHUB_ENV"
           control_extract="$RUNNER_TEMP/control-release"
           mkdir -p "$control_extract"
           tar -xf "$release_root/components/control-plane.tar" -C "$control_extract"
@@ -972,6 +1020,7 @@ jobs:
             --release-root "$CONTROL_RELEASE_ROOT" --deploy-manifest "$RUNNER_TEMP/deploy-manifest.json" \
             --runtime-release-set "$RUNNER_TEMP/mutation-release-set/release-set.json" \
             --runtime-archive "$RUNNER_TEMP/mutation-release-set/components/runtime-bundle.tar.gz" \
+            --runtime-manifest "$TARGET_RUNTIME_MANIFEST" \
             --ready-policy-evidence "$RUNNER_TEMP/ready/ready-to-mutate.json" \
             --expected-previous-release-set-id "$EXPECTED_CURRENT" \
             --environment staging --output "$RUNNER_TEMP/wrangler.staging.json"
