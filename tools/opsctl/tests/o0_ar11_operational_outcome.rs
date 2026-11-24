@@ -9,6 +9,7 @@ const TREE_SHA: &str = "dddddddddddddddddddddddddddddddddddddddd";
 const RELEASE_SET_ID: &str =
     "release-set-v3-sha256-cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc";
 const PROMOTION_ID: &str = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
+const DISPATCH_DIGEST: &str = "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee";
 const PROFILE_ID: &str = "rehearsal-core-v2";
 const SECRET_SENTINEL: &str = "O0_E2_SECRET_SENTINEL_MUST_NOT_BE_SERIALIZED";
 
@@ -50,6 +51,8 @@ fn manual_phase_state(
         "source_sha": SOURCE_SHA,
         "release_set_id": RELEASE_SET_ID,
         "promotion_id": PROMOTION_ID,
+        "dispatch_digest": DISPATCH_DIGEST,
+        "target_capability_profile_id": PROFILE_ID,
         "dispatch_authorized": dispatch_authorized,
         "provider_mutation_started": provider_mutation_started,
         "provider_mutation_executed": provider_mutation_executed,
@@ -356,7 +359,9 @@ fn ar11_workflow_terminalizes_after_owner_capture_and_before_final_assertion() -
         .split("  promote:\n")
         .nth(1)
         .and_then(|tail| tail.split("  manual-outcome:\n").next())
-        .ok_or_else(|| "single-runner owner-authorized staging promotion job must exist".to_string())?;
+        .ok_or_else(|| {
+            "single-runner owner-authorized staging promotion job must exist".to_string()
+        })?;
     assert!(promote.contains("environment: staging"));
     assert!(promote.contains("actions/artifacts?name=$ready_artifact_name"));
     assert!(promote.contains("needs: route"));
@@ -368,7 +373,12 @@ fn ar11_workflow_terminalizes_after_owner_capture_and_before_final_assertion() -
     assert!(!promote.contains("AUTHORITY_COMMENT"));
     assert!(!promote.contains("authorization_comment_id"));
     assert!(!promote.contains("issues/comments/"));
-    for retired_job in ["resolve-preflight", "resolve-verify", "mutate", "post-verify"] {
+    for retired_job in [
+        "resolve-preflight",
+        "resolve-verify",
+        "mutate",
+        "post-verify",
+    ] {
         assert!(
             !workflow.contains(&format!("  {retired_job}:\n")),
             "per-phase cold runner {retired_job} must not be retained"
@@ -383,7 +393,9 @@ fn ar11_workflow_terminalizes_after_owner_capture_and_before_final_assertion() -
         .ok_or_else(|| "protected deploy step must remain in the promotion job".to_string())?;
     let post_verify = promote
         .find("Re-observe provider and capture promotion.verify natural-owner verdict")
-        .ok_or_else(|| "post-deploy semantic owner must run on the same verified candidate".to_string())?;
+        .ok_or_else(|| {
+            "post-deploy semantic owner must run on the same verified candidate".to_string()
+        })?;
     assert!(pre_deploy < deploy_in_job && deploy_in_job < post_verify);
     assert!(!workflow.contains("promotion-verify.json\" | jq -e '.verified == true"));
 

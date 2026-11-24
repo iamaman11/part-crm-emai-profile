@@ -1229,6 +1229,19 @@ def self_test() -> None:
     assert outcome["authorization_state"] == "GITHUB_WORKFLOW_DISPATCH"
     assert_zero_effect(outcome)
 
+    # The workflow must still publish three valid phase receipts if accepted-main,
+    # dispatch intent or READY binding fails before identifiers exist.
+    for early_boundary in ("ACCEPTED_MAIN_RELEASE_RESOLUTION", "CANDIDATE_BINDING", "READY_BINDING"):
+        early_phases = [dict(pre_effect), dict(not_started), dict(post_skipped)]
+        for phase in early_phases:
+            for field in ("release_set_id", "promotion_id", "dispatch_digest", "target_capability_profile_id"):
+                phase[field] = None
+        early_phases[0]["failed_boundary"] = early_boundary
+        early_outcome = manual_case(*early_phases, None)
+        assert early_outcome["status"] == "FAILED_NO_EFFECT", early_outcome
+        assert early_outcome["phase"] == early_boundary, early_outcome
+        assert_zero_effect(early_outcome)
+
     fence_fail = dict(mutation_state)
     fence_fail["provider_mutation_started"] = False
     fence_fail["provider_mutation_executed"] = False

@@ -20,9 +20,6 @@ const LEGACY_FILES = [
   'scripts/mailbox-secret-resolver-promotion.py',
   'scripts/_mailbox_secret_resolver_promotion_core.py',
 ];
-// Backward-compatible AR11-N-24 certification locator only. The guard below
-// validates the semantic READY->mutation byte-identity role, not this spelling.
-const AR11_N24_CERTIFICATION_LOCATOR = 'cmp --silent "$release_root/release-set.json" "$preflight_root/release-set.json"';
 
 function read(relative) {
   return readFileSync(path.join(ROOT, relative), 'utf8').replace(/\r\n?/g, '\n');
@@ -426,6 +423,19 @@ function promotionErrors(promotion) {
     'failed_boundary="ACCEPTED_MAIN_RELEASE_RESOLUTION"',
     'step_outcomes:{resolve:$resolve',
   ], 'manual resolution failure localization'));
+  for (const [name, label] of [
+    ['Capture manual mutation phase state', 'mutation'],
+    ['Capture manual post-verify phase state', 'post-verify'],
+  ]) {
+    errors.push(...requireMarkers(stepBlock(promote, name), [
+      'test -n "$source_sha" || source_sha="$SOURCE_SHA"',
+      '--arg source_sha "$source_sha"',
+      '--arg dispatch_digest "${{ steps.intent.outputs.dispatch_digest }}"',
+      'release_set_id:(if $release_set_id=="" then null else $release_set_id end)',
+      'target_capability_profile_id:(if $target_profile=="" then null else $target_profile end)',
+      'dispatch_digest:(if $dispatch_digest=="" then null else $dispatch_digest end)',
+    ], `manual ${label} early-failure transport`));
+  }
 
   errors.push(...requireMarkers(promote, [
     'Execute exact candidate after owner dispatch and READY evidence',
@@ -458,7 +468,7 @@ function promotionErrors(promotion) {
   if (releaseVerifications !== 1) {
     errors.push(`one-runner promotion must verify exact release bits once before mutation; observed=${releaseVerifications}`);
   }
-  errors.push(...forbidMarkers(promote, ['promotion plan', 'promotion preflight', 'release compatibility', 'materialize known-good-v2-v3', 'worker-build --release', 'npm run build', 'profile=rehearsal-core-v2"'], 'protected mutation executor'));
+  errors.push(...forbidMarkers(promote, ['promotion plan', 'promotion preflight', 'release compatibility', 'materialize known-good-v2-v3', 'worker-build --release', 'cargo build', 'npm run build', 'profile=rehearsal-core-v2"'], 'protected mutation executor'));
   if ((promotion.match(/secrets\.CLOUDFLARE_API_TOKEN\s*}}/g) ?? []).length !== 1) {
     errors.push('deploy-capable Cloudflare token must be referenced exactly once in the whole promotion workflow');
   }
@@ -473,13 +483,15 @@ function promotionErrors(promotion) {
   errors.push(...requireMarkers(promote, [
     'TARGET_PROFILE',
     'secrets.CLOUDFLARE_OBSERVE_API_TOKEN',
+    "if: always() && steps.deploy.outcome == 'success'",
+    "if: always() && steps.deploy.outcome == 'success' && steps.target_prepare.outcome == 'success'",
     'Re-observe provider and capture promotion.verify natural-owner verdict',
     'promotion verify',
     '--profile "$TARGET_PROFILE"',
     '> "$RUNNER_TEMP/promotion-verify.json"',
     'decision="$(jq -er',
     '$RUNNER_TEMP/promotion-verify.json',
-    "if: steps.observe_verify.outputs.decision == 'VERIFIED'",
+    "if: always() && steps.observe_verify.outputs.decision == 'VERIFIED'",
     'Record authenticated human health handoff after promotion owner reports VERIFIED',
     'kind:"AR11_HUMAN_HEALTH_HANDOFF"',
     'decision:"DEFERRED_TO_V2_B7"',
@@ -687,7 +699,6 @@ function validateAll({ build, promotion, camoufox, camoufoxClassifier, authority
 }
 
 function selfTest(files) {
-  void AR11_N24_CERTIFICATION_LOCATOR;
   const preflightTerminal = stepBlock(jobBlock(files.promotion, 'preflight-ready'), 'Terminalize one lossless AR11 OperationalOutcome');
   for (const [marker, name] of [
     ['failed_boundary="ACCEPTED_MAIN_RELEASE_RESOLUTION"', 'main resolution'],
@@ -808,7 +819,19 @@ function selfTest(files) {
     'Deploy exact Release Set v3 bits after all fences',
     'run: worker-build --release\n      - name: Deploy exact Release Set v3 bits after all fences',
   );
-  if (!promotionErrors(rebuild).some((error) => error.includes('worker-build --release'))) throw new Error('promotion product-rebuild fixture unexpectedly passed');
+  if (!promotionErrors(rebuild).some((error) => error.includes('worker-build --release'))) throw new Error('promotion rebuild fixture unexpectedly passed');
+  const missingFailureCapture = files.promotion.replace(
+    'test -n "$source_sha" || source_sha="$SOURCE_SHA"',
+    'test -n "$source_sha" || source_sha=""',
+  );
+  if (!promotionErrors(missingFailureCapture).some((error) => error.includes('manual mutation early-failure transport'))) {
+    throw new Error('manual early-failure source identity fixture unexpectedly passed');
+  }
+  const cargoRebuild = files.promotion.replace(
+    'Deploy exact Release Set v3 bits after all fences',
+    'run: cargo build --release\n      - name: Deploy exact Release Set v3 bits after all fences',
+  );
+  if (!promotionErrors(cargoRebuild).some((error) => error.includes('cargo build'))) throw new Error('promotion cargo-rebuild fixture unexpectedly passed');
   const mutationBlock = jobBlock(files.promotion, 'promote');
   const brokenMutationBlock = mutationBlock.replace(
     'cmp --silent "$release_root/release-set.json" "$RUNNER_TEMP/ready/release-set.json"',

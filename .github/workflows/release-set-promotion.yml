@@ -1104,6 +1104,8 @@ jobs:
         if: always()
         run: |
           set -euo pipefail
+          source_sha="${{ steps.intent.outputs.main_sha }}"
+          test -n "$source_sha" || source_sha="$SOURCE_SHA"
           failed_boundary=""
           if [ "${{ steps.authorized_checkout.outcome }}" = "failure" ]; then failed_boundary="AUTHORIZED_SOURCE_CHECKOUT"
           elif [ "${{ steps.ready_bind.outcome }}" = "failure" ]; then failed_boundary="READY_FENCE_BINDING"
@@ -1123,20 +1125,20 @@ jobs:
             exact_current_fence="$(cat "$RUNNER_TEMP/exact-current-fence.json")"
           fi
           jq -n \
-            --arg source_sha "${{ steps.intent.outputs.main_sha }}" --arg release_set_id "$RELEASE_SET_ID" --arg promotion_id "${{ steps.ready.outputs.promotion_id }}" --arg target_profile "$TARGET_PROFILE" \
-            --arg failed_boundary "$failed_boundary" --argjson mutation_started "$mutation_started" --argjson mutation_executed "$mutation_executed" --argjson exact_current_fence "$exact_current_fence" \
+            --arg source_sha "$source_sha" --arg release_set_id "$RELEASE_SET_ID" --arg promotion_id "${{ steps.ready.outputs.promotion_id }}" --arg target_profile "$TARGET_PROFILE" \
+            --arg dispatch_digest "${{ steps.intent.outputs.dispatch_digest }}" --arg failed_boundary "$failed_boundary" --argjson mutation_started "$mutation_started" --argjson mutation_executed "$mutation_executed" --argjson exact_current_fence "$exact_current_fence" \
             --arg authorized_checkout "${{ steps.authorized_checkout.outcome }}" --arg ready_bind "${{ steps.ready_bind.outcome }}" \
             --arg target_verify "${{ steps.target_verify.outcome }}" --arg node_runtime "${{ steps.node_runtime.outcome }}" \
             --arg dry_run "${{ steps.dry_run.outcome }}" \
             --arg exact_fence "${{ steps.exact_fence.outcome }}" --arg mutation_start "${{ steps.mutation_start.outcome }}" --arg deploy "${{ steps.deploy.outcome }}" \
-            '{schema_version:1,kind:"AR11_MANUAL_PHASE_STATE",phase:"MUTATE",source_sha:$source_sha,release_set_id:$release_set_id,promotion_id:(if $promotion_id=="" then null else $promotion_id end),target_capability_profile_id:$target_profile,dispatch_authorized:true,dispatch_digest:"${{ steps.intent.outputs.dispatch_digest }}",provider_mutation_started:$mutation_started,provider_mutation_executed:$mutation_executed,production_mutation_executed:false,failed_boundary:(if $failed_boundary=="" then null else $failed_boundary end),exact_current_fence:$exact_current_fence,step_outcomes:{authorized_checkout:$authorized_checkout,ready_bind:$ready_bind,target_verify:$target_verify,node_runtime:$node_runtime,dry_run:$dry_run,exact_fence:$exact_fence,mutation_start:$mutation_start,deploy:$deploy}}' \
+            '{schema_version:1,kind:"AR11_MANUAL_PHASE_STATE",phase:"MUTATE",source_sha:$source_sha,release_set_id:(if $release_set_id=="" then null else $release_set_id end),promotion_id:(if $promotion_id=="" then null else $promotion_id end),target_capability_profile_id:(if $target_profile=="" then null else $target_profile end),dispatch_authorized:true,dispatch_digest:(if $dispatch_digest=="" then null else $dispatch_digest end),provider_mutation_started:$mutation_started,provider_mutation_executed:$mutation_executed,production_mutation_executed:false,failed_boundary:(if $failed_boundary=="" then null else $failed_boundary end),exact_current_fence:$exact_current_fence,step_outcomes:{authorized_checkout:$authorized_checkout,ready_bind:$ready_bind,target_verify:$target_verify,node_runtime:$node_runtime,dry_run:$dry_run,exact_fence:$exact_fence,mutation_start:$mutation_start,deploy:$deploy}}' \
             > "$RUNNER_TEMP/manual-mutation-state.json"
           phase_state_b64="$(base64 -w0 "$RUNNER_TEMP/manual-mutation-state.json")"
           echo "phase_state_b64=$phase_state_b64" >> "$GITHUB_OUTPUT"
 
       - name: Reuse verified target for read-only post-deploy observation
         id: target_prepare
-        if: steps.deploy.outcome == 'success'
+        if: always() && steps.deploy.outcome == 'success'
         run: |
           set -euo pipefail
           # Reuse the byte-verified target and rendered overlay from this runner.
@@ -1157,7 +1159,7 @@ jobs:
 
       - name: Re-observe provider and capture promotion.verify natural-owner verdict
         id: observe_verify
-        if: steps.deploy.outcome == 'success'
+        if: always() && steps.deploy.outcome == 'success' && steps.target_prepare.outcome == 'success'
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_OBSERVE_API_TOKEN }}
         run: |
@@ -1181,7 +1183,7 @@ jobs:
 
       - name: Record authenticated human health handoff after promotion owner reports VERIFIED
         id: health
-        if: steps.observe_verify.outputs.decision == 'VERIFIED'
+        if: always() && steps.observe_verify.outputs.decision == 'VERIFIED'
         run: |
           set -euo pipefail
           jq -n \
@@ -1211,6 +1213,8 @@ jobs:
         if: always()
         run: |
           set -euo pipefail
+          source_sha="${{ steps.intent.outputs.main_sha }}"
+          test -n "$source_sha" || source_sha="$SOURCE_SHA"
           failed_boundary=""
           if [ "${{ steps.deploy.outcome }}" != "success" ]; then failed_boundary="POST_NOT_STARTED_AFTER_MUTATION_GATE"
           elif [ "${{ steps.authorized_checkout.outcome }}" = "failure" ]; then failed_boundary="POST_SOURCE_CHECKOUT"
@@ -1226,12 +1230,12 @@ jobs:
           if [ "${{ steps.deploy.outcome }}" = "success" ]; then mutation_executed=true; fi
           jq -n \
             --argjson mutation_started "$mutation_started" --argjson mutation_executed "$mutation_executed" \
-            --arg source_sha "${{ steps.intent.outputs.main_sha }}" --arg release_set_id "$RELEASE_SET_ID" --arg promotion_id "${{ steps.ready.outputs.promotion_id }}" --arg target_profile "$TARGET_PROFILE" \
-            --arg failed_boundary "$failed_boundary" --arg source_checkout "${{ steps.authorized_checkout.outcome }}" \
+            --arg source_sha "$source_sha" --arg release_set_id "$RELEASE_SET_ID" --arg promotion_id "${{ steps.ready.outputs.promotion_id }}" --arg target_profile "$TARGET_PROFILE" \
+            --arg dispatch_digest "${{ steps.intent.outputs.dispatch_digest }}" --arg failed_boundary "$failed_boundary" --arg source_checkout "${{ steps.authorized_checkout.outcome }}" \
             --arg target_prepare "${{ steps.target_prepare.outcome }}" --arg node_runtime "${{ steps.node_runtime.outcome }}" \
             --arg observe_verify "${{ steps.observe_verify.outcome }}" --arg verify_decision "${{ steps.observe_verify.outputs.decision }}" \
             --arg health "${{ steps.health.outcome }}" --arg post_evidence "${{ steps.post_evidence.outcome }}" \
-            '{schema_version:1,kind:"AR11_MANUAL_PHASE_STATE",phase:"POST_VERIFY",source_sha:$source_sha,release_set_id:$release_set_id,promotion_id:(if $promotion_id=="" then null else $promotion_id end),target_capability_profile_id:$target_profile,dispatch_authorized:true,dispatch_digest:"${{ steps.intent.outputs.dispatch_digest }}",provider_mutation_started:$mutation_started,provider_mutation_executed:$mutation_executed,production_mutation_executed:false,failed_boundary:(if $failed_boundary=="" then null else $failed_boundary end),step_outcomes:{source_checkout:$source_checkout,target_prepare:$target_prepare,node_runtime:$node_runtime,observe_verify:$observe_verify,verify_decision:$verify_decision,health:$health,post_evidence:$post_evidence}}' \
+            '{schema_version:1,kind:"AR11_MANUAL_PHASE_STATE",phase:"POST_VERIFY",source_sha:$source_sha,release_set_id:(if $release_set_id=="" then null else $release_set_id end),promotion_id:(if $promotion_id=="" then null else $promotion_id end),target_capability_profile_id:(if $target_profile=="" then null else $target_profile end),dispatch_authorized:true,dispatch_digest:(if $dispatch_digest=="" then null else $dispatch_digest end),provider_mutation_started:$mutation_started,provider_mutation_executed:$mutation_executed,production_mutation_executed:false,failed_boundary:(if $failed_boundary=="" then null else $failed_boundary end),step_outcomes:{source_checkout:$source_checkout,target_prepare:$target_prepare,node_runtime:$node_runtime,observe_verify:$observe_verify,verify_decision:$verify_decision,health:$health,post_evidence:$post_evidence}}' \
             > "$RUNNER_TEMP/manual-post-verify-state.json"
           phase_state_b64="$(base64 -w0 "$RUNNER_TEMP/manual-post-verify-state.json")"
           echo "phase_state_b64=$phase_state_b64" >> "$GITHUB_OUTPUT"
