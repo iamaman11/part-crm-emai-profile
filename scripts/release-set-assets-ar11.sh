@@ -9,7 +9,7 @@ fail() {
 usage() {
   cat >&2 <<'EOF'
 usage:
-  release-set-assets-ar11.sh materialize <current-v3|known-good-v2-v3> <release-set-id> <asset-root> <release-root>
+  release-set-assets-ar11.sh materialize <current-v3|known-good-v2-v3> <release-set-id> <asset-root> <release-root> [verified-target-release-root]
   release-set-assets-ar11.sh --self-test
 EOF
   exit 2
@@ -37,6 +37,34 @@ inventory_sha() {
       else error("inventory path missing, ambiguous, or sha256 invalid: " + $path)
       end
   ' "$document"
+}
+
+# Only exact, self-consistent immutable runtime identities can share bytes.
+# Empty output means distinct/historical/incomplete evidence: download anew.
+runtime_share_identity() {
+  local document="$1"
+  local runtime_path="$2"
+  jq -ce --arg path "$runtime_path" '
+    . as $release
+    | .components.runtime_bundle as $runtime
+    | [.artifact_inventory[]? | select(.path == $path)] as $assets
+    | select(($assets | length) == 1)
+    | select($release.schema_version == 3
+        and $assets[0].kind == "component"
+        and $runtime.component_id == "runtime_bundle"
+        and ($runtime.release_id | type == "string" and test("^runtime-bundle-v3-sha256-[0-9a-f]{64}$"))
+        and $runtime.artifact_path == $path
+        and ($runtime.artifact_sha256 | type == "string" and test("^[0-9a-f]{64}$"))
+        and ($runtime.artifact_size_bytes | type == "number" and . > 0 and floor == .)
+        and ($runtime.component_manifest_sha256 | type == "string" and test("^[0-9a-f]{64}$"))
+        and $assets[0].sha256 == $runtime.artifact_sha256
+        and $assets[0].size_bytes == $runtime.artifact_size_bytes)
+    | {release_id:$runtime.release_id, artifact_path:$runtime.artifact_path,
+       artifact_sha256:$runtime.artifact_sha256,
+       artifact_size_bytes:$runtime.artifact_size_bytes,
+       component_manifest_sha256:$runtime.component_manifest_sha256,
+       inventory_sha256:$assets[0].sha256, inventory_size_bytes:$assets[0].size_bytes}
+  ' "$document" 2>/dev/null || true
 }
 
 require_v3_core_inventory() {
@@ -83,6 +111,10 @@ materialize() {
   local release_id="$2"
   local asset_root="$3"
   local release_root="$4"
+  local verified_target_root="${5:-}"
+  if [ -n "$verified_target_root" ] && [ "$mode" != known-good-v2-v3 ]; then
+    fail "runtime reuse input is restricted to independently verified known-good materialization"
+  fi
 
   test -d "$asset_root" || fail "asset root unavailable: $asset_root"
   if find "$asset_root" -mindepth 1 -type l -print -quit | grep -q .; then
@@ -196,7 +228,11 @@ materialize() {
     || fail "flat GitHub Release asset set is not exact for publication profile $profile"
 
   mkdir -p "$release_root/components"
+  test ! -L "$release_root" && test ! -L "$release_root/components" \
+    || fail "materialized Release Set directories cannot be symlinks"
   test "$(find "$release_root" -type f | wc -l)" -eq 0 || fail "release root must be empty before materialization"
+  test ! -e "$release_root/$runtime_path" && test ! -L "$release_root/$runtime_path" \
+    || fail "runtime destination already exists before immutable materialization"
   cp "$document" "$release_root/release-set.json"
 
   if [ "$profile" != historical-v2-core ] && inventory_has "$document" capability-policy-v1.json; then
@@ -205,16 +241,47 @@ materialize() {
   cp "$asset_root/control-plane.tar" "$release_root/components/control-plane.tar"
   cp "$asset_root/secret-resolver.tar" "$release_root/components/secret-resolver.tar"
   if [ "$runtime_external" -eq 1 ]; then
-    command -v gh >/dev/null 2>&1 || fail "GitHub CLI is required to hydrate exact runtime component"
-    local runtime_download
-    runtime_download="$(mktemp -d)"
-    if ! gh release download "$runtime_release_id"       --repo "${GITHUB_REPOSITORY:-iamaman11/part-crm-emai-profile}"       --dir "$runtime_download"       --pattern "$runtime_asset"; then
-      rm -rf "$runtime_download"
-      fail "exact runtime component download failed: $runtime_release_id"
+    local reused_runtime=0
+    if [ -n "$verified_target_root" ] && [ "$runtime_path" = components/runtime-bundle.tar.gz ]; then
+      local known_identity target_identity verified_archive expected_sha expected_size
+      known_identity="$(runtime_share_identity "$document" "$runtime_path")"
+      if [ -n "$known_identity" ] && [ -d "$verified_target_root" ] && [ ! -L "$verified_target_root" ] \
+         && [ -d "$verified_target_root/components" ] && [ ! -L "$verified_target_root/components" ] \
+         && [ -f "$verified_target_root/release-set.json" ] && [ ! -L "$verified_target_root/release-set.json" ]; then
+        target_identity="$(runtime_share_identity "$verified_target_root/release-set.json" "$runtime_path")"
+        if [ -n "$target_identity" ] && [ "$known_identity" = "$target_identity" ]; then
+          verified_archive="$verified_target_root/$runtime_path"
+          require_regular_file "$verified_archive"
+          expected_sha="$(jq -r '.artifact_sha256' <<<"$known_identity")"
+          expected_size="$(jq -r '.artifact_size_bytes' <<<"$known_identity")"
+          test "$(stat -c %s "$verified_archive")" = "$expected_size" \
+            || fail "previously verified runtime size changed before reuse"
+          test "$(sha256sum "$verified_archive" | cut -d' ' -f1)" = "$expected_sha" \
+            || fail "previously verified runtime SHA-256 changed before reuse"
+          if ln "$verified_archive" "$release_root/$runtime_path"; then
+            reused_runtime=1
+            echo "AR11 reused exact independently verified runtime $runtime_release_id (no second download/copy)"
+          else
+            test ! -e "$release_root/$runtime_path" && test ! -L "$release_root/$runtime_path" \
+              || fail "runtime hardlink failed with partial destination"
+            echo "AR11 hardlink unavailable; hydrate known-good immutable runtime independently"
+          fi
+        fi
+      fi
     fi
-    require_regular_file "$runtime_download/$runtime_asset"
-    cp "$runtime_download/$runtime_asset" "$release_root/$runtime_path"
-    rm -rf "$runtime_download"
+    if [ "$reused_runtime" -eq 0 ]; then
+      command -v gh >/dev/null 2>&1 || fail "GitHub CLI is required to hydrate exact runtime component"
+      local runtime_download
+      runtime_download="$(mktemp -d)"
+      if ! gh release download "$runtime_release_id" --repo "${GITHUB_REPOSITORY:-iamaman11/part-crm-emai-profile}" \
+           --dir "$runtime_download" --pattern "$runtime_asset"; then
+        rm -rf "$runtime_download"
+        fail "exact runtime component download failed: $runtime_release_id"
+      fi
+      require_regular_file "$runtime_download/$runtime_asset"
+      cp "$runtime_download/$runtime_asset" "$release_root/$runtime_path"
+      rm -rf "$runtime_download"
+    fi
   else
     cp "$asset_root/$runtime_asset" "$release_root/$runtime_path"
   fi
@@ -304,6 +371,17 @@ self_test() {
   mv "$root/v3-external/release-set.tmp" "$root/v3-external/release-set.json"
   rm "$root/v3-external/runtime-bundle.tar.gz"
   printf 'exact-runtime-component' > "$root/runtime-component.tar"
+  local runtime_sha runtime_size
+  runtime_sha="$(sha256sum "$root/runtime-component.tar" | cut -d' ' -f1)"
+  runtime_size="$(stat -c %s "$root/runtime-component.tar")"
+  jq --arg digest "$runtime_sha" --argjson bytes "$runtime_size" '
+    .components.runtime_bundle += {
+      component_id:"runtime_bundle", artifact_sha256:$digest,
+      artifact_size_bytes:$bytes, component_manifest_sha256:("a" * 64)}
+    | (.artifact_inventory[] | select(.path == "components/runtime-bundle.tar.gz"))
+      += {sha256:$digest,size_bytes:$bytes,kind:"component"}
+  ' "$root/v3-external/release-set.json" > "$root/v3-external/release-set.tmp"
+  mv "$root/v3-external/release-set.tmp" "$root/v3-external/release-set.json"
   mkdir -p "$root/fake-bin"
   cat > "$root/fake-bin/gh" <<'EOF'
 #!/usr/bin/env bash
@@ -332,6 +410,7 @@ while [ "$#" -gt 0 ]; do
   esac
 done
 test -n "$destination"
+test "${AR11_RUNTIME_REUSE_GH_FORBID:-0}" != 1
 [[ "$pattern" = runtime-bundle.tar.gz || "$pattern" = runtime-bundle.tar ]]
 mkdir -p "$destination"
 cp "$AR11_RUNTIME_COMPONENT_FIXTURE" "$destination/$pattern"
@@ -339,6 +418,109 @@ EOF
   chmod +x "$root/fake-bin/gh"
   PATH="$root/fake-bin:$PATH"     AR11_RUNTIME_COMPONENT_FIXTURE="$root/runtime-component.tar"     materialize current-v3 "$v3" "$root/v3-external" "$root/v3-external-root"
   cmp --silent "$root/runtime-component.tar" "$root/v3-external-root/components/runtime-bundle.tar.gz"
+
+  # A distinct accepted known-good Release Set can share the immutable bytes
+  # only after the target itself has passed native verification in the caller.
+  local known_good_v3="release-set-v3-sha256-$(printf '4%.0s' {1..64})"
+  cp -R "$root/v3-external" "$root/v3-share"
+  jq --arg id "$known_good_v3" --arg source "$(printf '2%.0s' {1..40})" \
+    '.release_set_id = $id | .source.commit_sha = $source' \
+    "$root/v3-share/release-set.json" > "$root/v3-share/release-set.tmp"
+  mv "$root/v3-share/release-set.tmp" "$root/v3-share/release-set.json"
+  jq --arg id "$known_good_v3" --arg source "$(printf '2%.0s' {1..40})" \
+    '.release_set_id = $id | .source_commit_sha = $source' \
+    "$root/v3-share/windows-delivery-manifest.json" > "$root/v3-share/delivery.tmp"
+  mv "$root/v3-share/delivery.tmp" "$root/v3-share/windows-delivery-manifest.json"
+  PATH="$root/fake-bin:$PATH" AR11_RUNTIME_REUSE_GH_FORBID=1 \
+    materialize known-good-v2-v3 "$known_good_v3" "$root/v3-share" \
+      "$root/v3-share-root" "$root/v3-external-root"
+  test "$root/v3-share-root/components/runtime-bundle.tar.gz" -ef \
+    "$root/v3-external-root/components/runtime-bundle.tar.gz" \
+    || fail "identical independently verified runtime was not hardlinked"
+
+  # No optional proof must keep the ordinary physical download path.
+  PATH="$root/fake-bin:$PATH" AR11_RUNTIME_COMPONENT_FIXTURE="$root/runtime-component.tar" \
+    materialize known-good-v2-v3 "$known_good_v3" "$root/v3-share" "$root/v3-without-proof"
+  test ! "$root/v3-without-proof/components/runtime-bundle.tar.gz" -ef \
+    "$root/v3-external-root/components/runtime-bundle.tar.gz" \
+    || fail "runtime was shared without an independently verified target"
+
+  # Filesystem policy/EXDEV can reject hardlinks even with valid identities.
+  # That is not a license to skip known-good hydration: use the real download.
+  mkdir -p "$root/fake-link-bin"
+  cat > "$root/fake-link-bin/ln" <<'EOF'
+#!/usr/bin/env bash
+exit 1
+EOF
+  chmod +x "$root/fake-link-bin/ln"
+  PATH="$root/fake-link-bin:$root/fake-bin:$PATH" \
+    AR11_RUNTIME_COMPONENT_FIXTURE="$root/runtime-component.tar" \
+    materialize known-good-v2-v3 "$known_good_v3" "$root/v3-share" \
+      "$root/v3-link-unavailable" "$root/v3-external-root"
+  cmp --silent "$root/runtime-component.tar" "$root/v3-link-unavailable/components/runtime-bundle.tar.gz"
+  test ! "$root/v3-link-unavailable/components/runtime-bundle.tar.gz" -ef \
+    "$root/v3-external-root/components/runtime-bundle.tar.gz" \
+    || fail "link failure did not restore the independent download"
+
+  local field mutation fixture
+  for field in release_id artifact_path artifact_sha256 artifact_size_bytes component_manifest_sha256 inventory_digest inventory_size inventory_kind duplicate_inventory; do
+    fixture="$root/mismatch-$field"
+    cp -R "$root/v3-share" "$fixture"
+    case "$field" in
+      release_id) mutation='.components.runtime_bundle.release_id = ("runtime-bundle-v3-sha256-" + ("9" * 64))' ;;
+      artifact_path) mutation='.components.runtime_bundle.artifact_path = "components/runtime-bundle.tar" | (.artifact_inventory[] | select(.path == "components/runtime-bundle.tar.gz").path) = "components/runtime-bundle.tar"' ;;
+      artifact_sha256) mutation='.components.runtime_bundle.artifact_sha256 = ("9" * 64)' ;;
+      artifact_size_bytes) mutation='.components.runtime_bundle.artifact_size_bytes += 1' ;;
+      component_manifest_sha256) mutation='.components.runtime_bundle.component_manifest_sha256 = ("9" * 64)' ;;
+      inventory_digest) mutation='(.artifact_inventory[] | select(.path == "components/runtime-bundle.tar.gz").sha256) = ("9" * 64)' ;;
+      inventory_size) mutation='(.artifact_inventory[] | select(.path == "components/runtime-bundle.tar.gz").size_bytes) += 1' ;;
+      inventory_kind) mutation='(.artifact_inventory[] | select(.path == "components/runtime-bundle.tar.gz").kind) = "untrusted"' ;;
+      duplicate_inventory) mutation='.artifact_inventory += [(.artifact_inventory[] | select(.path == "components/runtime-bundle.tar.gz"))]' ;;
+    esac
+    jq "$mutation" "$fixture/release-set.json" > "$fixture/release-set.tmp"
+    mv "$fixture/release-set.tmp" "$fixture/release-set.json"
+    PATH="$root/fake-bin:$PATH" AR11_RUNTIME_COMPONENT_FIXTURE="$root/runtime-component.tar" \
+      materialize known-good-v2-v3 "$known_good_v3" "$fixture" "$root/mismatch-out-$field" "$root/v3-external-root"
+    local materialized_runtime=runtime-bundle.tar.gz
+    [ "$field" = artifact_path ] && materialized_runtime=runtime-bundle.tar
+    test ! "$root/mismatch-out-$field/components/$materialized_runtime" -ef \
+      "$root/v3-external-root/components/runtime-bundle.tar.gz" \
+      || fail "mismatched $field unexpectedly shared runtime"
+  done
+
+  # A missing required inventory row must fail even before network hydration.
+  cp -R "$root/v3-share" "$root/missing-inventory"
+  jq '.artifact_inventory |= map(select(.path != "components/runtime-bundle.tar.gz"))' \
+    "$root/missing-inventory/release-set.json" > "$root/missing-inventory/release-set.tmp"
+  mv "$root/missing-inventory/release-set.tmp" "$root/missing-inventory/release-set.json"
+  if ( PATH="$root/fake-bin:$PATH" AR11_RUNTIME_COMPONENT_FIXTURE="$root/runtime-component.tar" \
+       materialize known-good-v2-v3 "$known_good_v3" "$root/missing-inventory" \
+         "$root/rejected-missing-inventory" "$root/v3-external-root" ) >/dev/null 2>&1; then
+    fail "missing immutable runtime inventory unexpectedly passed"
+  fi
+
+  for mutation in tampered truncated absent symlink; do
+    fixture="$root/target-$mutation"
+    cp -R "$root/v3-external-root" "$fixture"
+    case "$mutation" in
+      tampered) printf 'other-runtime-component' > "$fixture/components/runtime-bundle.tar.gz" ;;
+      truncated) : > "$fixture/components/runtime-bundle.tar.gz" ;;
+      absent) rm "$fixture/components/runtime-bundle.tar.gz" ;;
+      symlink)
+        rm "$fixture/components/runtime-bundle.tar.gz"
+        ln -s "$root/runtime-component.tar" "$fixture/components/runtime-bundle.tar.gz"
+        ;;
+    esac
+    if [ "$mutation" = tampered ]; then
+      test "$(stat -c %s "$fixture/components/runtime-bundle.tar.gz")" = "$runtime_size" \
+        || fail "tampering fixture must exercise SHA-256 rather than size"
+    fi
+    if ( PATH="$root/fake-bin:$PATH" AR11_RUNTIME_REUSE_GH_FORBID=1 \
+         materialize known-good-v2-v3 "$known_good_v3" "$root/v3-share" \
+           "$root/rejected-$mutation" "$fixture" ) >/dev/null 2>&1; then
+      fail "tampered/invalid previously verified runtime unexpectedly reused: $mutation"
+    fi
+  done
 
   # A published pre-158 v3 source may be raw TAR for read-only known-good.
   cp -R "$root/v3-external" "$root/v3-old-raw"
@@ -402,8 +584,8 @@ EOF
 
 case "${1:-}" in
   materialize)
-    [ "$#" -eq 5 ] || usage
-    materialize "$2" "$3" "$4" "$5"
+    { [ "$#" -eq 5 ] || [ "$#" -eq 6 ]; } || usage
+    materialize "$2" "$3" "$4" "$5" "${6:-}"
     ;;
   --self-test)
     [ "$#" -eq 1 ] || usage
