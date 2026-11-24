@@ -74,13 +74,41 @@ jobs:
           EXPECTED_SOURCE_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
         run: python -c "import os, subprocess; actual = subprocess.check_output(['git', 'rev-parse', 'HEAD'], text=True).strip(); expected = os.environ['EXPECTED_SOURCE_SHA']; assert actual == expected, f'expected {expected}, got {actual}'"
 
+      - name: Probe exact prior FULL Rust Linux evidence
+        id: rust_linux_proof
+        if: github.event_name == 'pull_request'
+        continue-on-error: true
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          GITHUB_EVENT_NAME: ${{ github.event_name }}
+          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: python scripts/accepted-main-pr-reuse.py --pr-quality-rust-linux-proof
+
+      # The probe never substitutes for the acceptance step: independently
+      # recheck current main/PR/previous FULL before any Cargo step is skipped.
+      - name: Certify inherited exact FULL Rust Linux proof
+        if: steps.rust_linux_proof.outcome == 'success'
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          GITHUB_EVENT_NAME: ${{ github.event_name }}
+          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: python scripts/accepted-main-pr-reuse.py --pr-quality-rust-linux-proof
+
       - name: Show pinned toolchain
+        if: steps.rust_linux_proof.outcome != 'success'
         run: rustup show active-toolchain
 
       # Keep OS/toolchain/manifests/flags in the action's hashed key.
       # The independent opsctl Cargo workspace is used by this job as well.
       # Restored artifacts never substitute any check or exact-head test.
       - name: Restore versioned Rust dependencies and opsctl
+        if: steps.rust_linux_proof.outcome != 'success'
         uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2 (immutable)
         with:
           shared-key: profile-bridge-ci-v1
@@ -220,6 +248,10 @@ jobs:
         run: |
           python scripts/check-opsctl-readonly.py
           python scripts/check-opsctl-readonly.py --self-test
+
+      - name: Test AR-6 opsctl Rust and doctor evidence
+        if: steps.rust_linux_proof.outcome != 'success'
+        run: |
           cargo fmt --manifest-path tools/opsctl/Cargo.toml --all -- --check
           cargo clippy --locked --manifest-path tools/opsctl/Cargo.toml --workspace --all-targets -- -D warnings
           cargo test --locked --manifest-path tools/opsctl/Cargo.toml --workspace
@@ -335,6 +367,7 @@ jobs:
         run: python scripts/test-phase2d-query-projections.py
 
       - name: Test Phase 2D query application and synthetic Bridge adapter
+        if: steps.rust_linux_proof.outcome != 'success'
         run: |
           cargo test --locked -p application-ports -p use-cases-query
           cargo test --locked -p profile-bridge fake_mail_query
@@ -346,36 +379,43 @@ jobs:
         run: python scripts/check-phase2e-mailbox-boundaries.py --self-test
 
       - name: Format
+        if: steps.rust_linux_proof.outcome != 'success'
         run: cargo fmt --all -- --check
 
       - name: Clippy native crates
+        if: steps.rust_linux_proof.outcome != 'success'
         run: >-
           cargo clippy --locked --workspace --all-targets
           --exclude browser-profile-control-plane-worker
           --exclude cloudflare-adapters -- -D warnings
 
       - name: Test native crates
+        if: steps.rust_linux_proof.outcome != 'success'
         run: >-
           cargo test --locked --workspace --all-targets
           --exclude browser-profile-control-plane-worker
           --exclude cloudflare-adapters
 
       - name: Test Cloudflare adapter logic
+        if: steps.rust_linux_proof.outcome != 'success'
         env:
           RUSTFLAGS: -Dwarnings
         run: cargo test --locked -p cloudflare-adapters --lib
 
       - name: Test mailbox secret resolver runtime
+        if: steps.rust_linux_proof.outcome != 'success'
         env:
           RUSTFLAGS: -Dwarnings
         run: cargo test --locked -p mailbox-secret-resolver-worker
 
       - name: Check extracted identity application crate for Workers target
+        if: steps.rust_linux_proof.outcome != 'success'
         run: >-
           cargo check --locked --target wasm32-unknown-unknown
           -p use-cases-identity
 
       - name: Check pure crates for Workers target
+        if: steps.rust_linux_proof.outcome != 'success'
         run: >-
           cargo check --locked --target wasm32-unknown-unknown
           -p profile-platform-primitives

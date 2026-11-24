@@ -42,6 +42,26 @@ REQUIRED = frozenset({
 })
 # Exact meaningful steps must have actually RUN, not merely belong to a
 # successful workflow with all expensive jobs skipped by a PR scope filter.
+RUST_LINUX_FULL_STEPS = (
+    "Test AR-6 opsctl Rust and doctor evidence",
+    "Test Phase 2D query application and synthetic Bridge adapter",
+    "Format",
+    "Clippy native crates",
+    "Test native crates",
+    "Test Cloudflare adapter logic",
+    "Test mailbox secret resolver runtime",
+    "Check extracted identity application crate for Workers target",
+    "Check pure crates for Workers target",
+)
+RUST_LINUX_STATIC_REQUIRED = (
+    "Enforce frontend sibling-feature boundaries",
+    "Prove sibling feature internals are rejected",
+    "Verify generated frontend contracts are current",
+    "Prove Phase 2D grant-safe projections and query plans",
+    "Scan tracked files for high-confidence secrets",
+)
+RUST_LINUX_LIGHT_CERT = "Certify inherited exact FULL Rust Linux proof"
+
 CRITICAL: dict[str, dict[str, tuple[str, ...]]] = {
     "camoufox": {
         # One Windows job materializes, proves, packages, clean-extracts and
@@ -71,7 +91,7 @@ CRITICAL: dict[str, dict[str, tuple[str, ...]]] = {
         ),
     },
     "quality": {
-        "Rust Linux and WASM": ("Test native crates",),
+        "Rust Linux and WASM": RUST_LINUX_STATIC_REQUIRED + RUST_LINUX_FULL_STEPS,
         "Cloudflare Worker Release Build": (
             "Build release Worker artifact",
             "Verify Worker artifact",
@@ -144,7 +164,9 @@ WORKFLOW = {
 # expensive native test steps remain mandatory on every other PR.
 NATIVE_REUSED_CRITICAL: dict[str, dict[str, tuple[str, ...]]] = {
     "quality": {
-        "Rust Linux and WASM": ("Test native crates",),
+        # Static/source checks still execute on every PR. Cargo can be FULL,
+        # or exactly inherited with a separately certified FULL proof.
+        "Rust Linux and WASM": RUST_LINUX_STATIC_REQUIRED,
         "Cloudflare Worker Release Build": CRITICAL["quality"]["Cloudflare Worker Release Build"],
         "Rust Windows And Profile Bridge Artifact": (
             "Verify exact source checkout",
@@ -325,6 +347,17 @@ def prove(main_sha: str, gate: str, api: Callable[[str], Any],
             actual[label] = (step.get("status"), step.get("conclusion"))
         require(all(actual.get(step) == ("completed", "success") for step in steps),
                 f"required PR test skipped/missing: {name}")
+        if native_reused and gate == "quality" and name == "Rust Linux and WASM":
+            full = all(actual.get(step) == ("completed", "success")
+                       for step in RUST_LINUX_FULL_STEPS)
+            light = (actual.get(RUST_LINUX_LIGHT_CERT) == ("completed", "success")
+                     and all(actual.get(step) == ("completed", "skipped")
+                             for step in RUST_LINUX_FULL_STEPS))
+            require(full != light, "Quality Rust Linux is neither exact FULL nor proven LIGHT")
+            if full:
+                require(actual.get(RUST_LINUX_LIGHT_CERT) in
+                        (None, ("completed", "skipped")),
+                        "Quality Rust Linux falsely certified inheritance during FULL")
         if native_reused and name == RUNNER_RECEIPT[gate][1]:
             # A continue-on-error step can report conclusion=success despite
             # outcome=failure. The physical fallback must then run. Require
@@ -2199,6 +2232,13 @@ def self_test() -> None:
         for job_name, required_steps in NATIVE_REUSED_CRITICAL[gate].items():
             steps = [{"name": label, "status": "completed", "conclusion": "success"}
                      for label in required_steps]
+            if gate == "quality" and job_name == "Rust Linux and WASM":
+                # Native-reused frontend PR: every Cargo step was truly
+                # skipped; the independent prior-FULL certificate ran.
+                steps.extend({"name": label, "status": "completed", "conclusion": "skipped"}
+                             for label in RUST_LINUX_FULL_STEPS)
+                steps.append({"name": RUST_LINUX_LIGHT_CERT,
+                              "status": "completed", "conclusion": "success"})
             if job_name == RUNNER_RECEIPT[gate][1]:
                 steps.extend({"name": label, "status": "completed", "conclusion": "skipped"}
                              for label in CRITICAL[gate][job_name]
@@ -2225,13 +2265,28 @@ def self_test() -> None:
             new_pages[f"repos/{REPOSITORY}/actions/runs/{run['id']}/artifacts?per_page=100"] = copied_inventory
     require(prove_accepted_native_reuse(new_main, "quality", lambda key: new_pages[key])
             == (new_head, prior_main), "exact new PR inherited Quality proof rejected")
+    # Also preserve the already-valid shape where an unrelated frontend PR
+    # reuses native Windows but still runs every Linux Cargo step physically.
+    full_linux_pages = json.loads(json.dumps(new_pages))
+    quality_run = next(row for row in current_runs["workflow_runs"]
+                       if row["name"] == WORKFLOW["quality"])
+    linux_jobs_url = f"repos/{REPOSITORY}/actions/runs/{quality_run['id']}/jobs?per_page=100"
+    full_linux_job = next(job for job in full_linux_pages[linux_jobs_url]["jobs"]
+                          if job["name"] == "Rust Linux and WASM")
+    for step in full_linux_job["steps"]:
+        step["conclusion"] = "skipped" if step["name"] == RUST_LINUX_LIGHT_CERT else "success"
+    require(prove_accepted_native_reuse(new_main, "quality", lambda key: full_linux_pages[key])
+            == (new_head, prior_main), "genuine Linux FULL on reused-native PR rejected")
     require(prove_accepted_native_reuse(new_main, "local-profile", lambda key: new_pages[key])
             == (new_head, prior_main), "exact new PR inherited Local proof rejected")
     verified_inherited = prove_release_artifacts(new_main, lambda key: new_pages[key])
     require(verified_inherited["native_prior_main_sha"] == prior_main,
             "new PR raw Bridge inherited source not preserved")
     for fault in ("current-bridge-sha", "current-bridge-size", "fake-continue-on-error",
-                  "missing-prior-k1", "missing-prior-k2", "native-changed", "compare-truncated"):
+                  "missing-prior-k1", "missing-prior-k2", "native-changed", "compare-truncated",
+                  "linux-cert-missing", "linux-cert-failure", "linux-fake-native-step",
+                  "linux-run-attempt", "linux-foreign-head", "linux-static-skipped",
+                  "prior-linux-cargo-missing", "prior-linux-static-missing"):
         case = json.loads(json.dumps(new_pages))
         quality_run = next(run for run in current_runs["workflow_runs"]
                            if run["name"] == WORKFLOW["quality"])
@@ -2248,6 +2303,25 @@ def self_test() -> None:
             windows = next(job for job in jobs if job["name"] == RUNNER_RECEIPT["quality"][1])
             next(step for step in windows["steps"]
                  if step["name"] == "Check and test native crates")["conclusion"] = "failure"
+        elif fault in ("linux-cert-missing", "linux-cert-failure", "linux-fake-native-step",
+                       "linux-run-attempt", "linux-foreign-head", "linux-static-skipped"):
+            linux = next(job for job in case[linux_jobs_url]["jobs"]
+                         if job["name"] == "Rust Linux and WASM")
+            if fault == "linux-run-attempt":
+                linux["run_attempt"] += 1
+            elif fault == "linux-foreign-head":
+                linux["head_sha"] = "d" * 40
+            elif fault == "linux-fake-native-step":
+                next(step for step in linux["steps"]
+                     if step["name"] == "Test native crates")["conclusion"] = "success"
+            elif fault == "linux-static-skipped":
+                next(step for step in linux["steps"]
+                     if step["name"] == RUST_LINUX_STATIC_REQUIRED[0])["conclusion"] = "skipped"
+            else:
+                for step in linux["steps"]:
+                    if step["name"] == RUST_LINUX_LIGHT_CERT:
+                        step["conclusion"] = ("skipped" if fault == "linux-cert-missing"
+                                              else "failure")
         elif fault in ("missing-prior-k1", "missing-prior-k2"):
             original_id = quality_run["id"] - 1000 if fault == "missing-prior-k1" else local_run["id"] - 1000
             jobs = case[f"repos/{REPOSITORY}/actions/runs/{original_id}/jobs?per_page=100"]["jobs"]
@@ -2256,6 +2330,12 @@ def self_test() -> None:
                 for step in job["steps"]:
                     if step["name"] == target_step:
                         step["conclusion"] = "skipped"
+        elif fault in ("prior-linux-cargo-missing", "prior-linux-static-missing"):
+            original_jobs = case[f"repos/{REPOSITORY}/actions/runs/{quality_run['id'] - 1000}/jobs?per_page=100"]["jobs"]
+            linux = next(job for job in original_jobs if job["name"] == "Rust Linux and WASM")
+            next(step for step in linux["steps"]
+                 if step["name"] == (RUST_LINUX_FULL_STEPS[0] if fault == "prior-linux-cargo-missing"
+                                      else RUST_LINUX_STATIC_REQUIRED[0]))["conclusion"] = "skipped"
         elif fault == "native-changed":
             case[native_compare_url]["files"][0]["filename"] = "Cargo.lock"
         else:
@@ -2306,7 +2386,8 @@ def self_test() -> None:
                                     as_of=fixture_now)[0] == prior_main
         for fault in ("stale-main", "stale-pr-head", "stale-pr-base",
                       "foreign-head-repo", "foreign-base-repo", "closed-pr",
-                      "native-source", "incomplete-pr-compare", "invalid-event"):
+                      "native-source", "incomplete-pr-compare", "invalid-event",
+                      "prior-linux-test-skipped", "prior-linux-static-skipped"):
             case = json.loads(json.dumps(pr_api))
             if fault == "stale-main":
                 case[f"repos/{REPOSITORY}/git/ref/heads/main"]["object"]["sha"] = "9" * 40
@@ -2324,6 +2405,16 @@ def self_test() -> None:
                 case[pr_compare_url]["files"][0]["filename"] = "apps/profile-bridge/src/main.rs"
             elif fault == "incomplete-pr-compare":
                 case[pr_compare_url]["files"] *= 300
+            elif fault in ("prior-linux-test-skipped", "prior-linux-static-skipped"):
+                original_quality = next(run for run in
+                                        case[f"repos/{REPOSITORY}/actions/runs?head_sha={'c'*40}&event=pull_request&per_page=100"]["workflow_runs"]
+                                        if run["name"] == WORKFLOW["quality"])
+                original_jobs = case[f"repos/{REPOSITORY}/actions/runs/{original_quality['id']}/jobs?per_page=100"]["jobs"]
+                linux = next(job for job in original_jobs if job["name"] == "Rust Linux and WASM")
+                required_step = (RUST_LINUX_FULL_STEPS[4] if fault == "prior-linux-test-skipped"
+                                 else RUST_LINUX_STATIC_REQUIRED[2])
+                next(step for step in linux["steps"]
+                     if step["name"] == required_step)["conclusion"] = "skipped"
             else:
                 os.environ["GITHUB_EVENT_NAME"] = "push"
             try:
@@ -2693,6 +2784,7 @@ def main() -> int:
     parser.add_argument("--runtime-publication-state", choices=("reuse", "absent", "resume"))
     parser.add_argument("--runtime-output-dir", type=Path)
     parser.add_argument("--pr-native-proof", action="store_true")
+    parser.add_argument("--pr-quality-rust-linux-proof", action="store_true")
     parser.add_argument("--pr-d1-proof", action="store_true")
     parser.add_argument("--pr-camoufox-byte-proof", action="store_true")
     parser.add_argument("--pr-native-certify", action="store_true")
@@ -2706,7 +2798,8 @@ def main() -> int:
         self_test()
     routes = sum((args.gate is not None, args.release_component is not None,
                   args.pr_camoufox_byte_proof,
-                  args.pr_native_proof, args.pr_d1_proof, args.pr_native_certify,
+                  args.pr_native_proof, args.pr_d1_proof,
+                  args.pr_quality_rust_linux_proof, args.pr_native_certify,
                   args.pr_native_bridge is not None,
                   args.native_runner_receipt is not None))
     if routes == 0:
@@ -2755,6 +2848,26 @@ def main() -> int:
             with args.github_output.open("a", encoding="utf-8") as output:
                 output.write(f"d1_light={'true' if verified else 'false'}\n")
         return 0  # An absent/ambiguous proof always executes FULL on this PR.
+    if args.pr_quality_rust_linux_proof:
+        # Reuses the existing exact-tree native source/closure attestor. It
+        # independently proves a prior genuinely executed FULL Quality Linux
+        # (all nine Cargo steps) and FULL Local Windows source, not a LIGHT
+        # predecessor, before any current-head Rust compilation is skipped.
+        try:
+            token = os.environ.get("GITHUB_TOKEN")
+            require(bool(token), "Quality Rust Linux proof needs read-only GitHub authority")
+            prior, receipt = prove_open_native_pr(api_reader(token), graph_api_only=False)
+            print(f"QUALITY_RUST_LINUX_PRIOR_FULL_PROVEN=PASS;"
+                  f"PR_HEAD={os.environ['PR_HEAD_SHA']};prior_FULL_main={prior};"
+                  f"prior_quality_run={receipt['quality_run_id']};"
+                  f"attempt={receipt['quality_run_attempt']}")
+            return 0
+        except (Unconfirmed, KeyError, ValueError, TypeError, AssertionError,
+                urllib.error.URLError, OSError, subprocess.SubprocessError,
+                UnicodeError) as error:
+            print(f"QUALITY_RUST_LINUX_PRIOR_FULL_UNAVAILABLE ({type(error).__name__}): "
+                  f"{error}; execute all FULL Rust Linux Cargo steps")
+            return 1
     if args.pr_native_proof or args.pr_native_certify or args.pr_native_bridge is not None:
         verified = False
         try:
