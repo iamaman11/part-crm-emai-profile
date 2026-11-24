@@ -36,18 +36,27 @@ REQUIRED = frozenset({
 # successful workflow with all expensive jobs skipped by a PR scope filter.
 CRITICAL: dict[str, dict[str, tuple[str, ...]]] = {
     "camoufox": {
-        # The single Windows owner runs the official browser, native Bridge,
-        # packaged Reader and encrypted state tests on the exact runtime.
-        "Profile Bridge Windows regression": (
-            "Materialize official browser and verified offline fpgen model",
-            "Read actual compressed official runtime via shipping Rust delivery reader",
-            "Run Windows Bridge regressions through production crates",
-            "Prove native state survives encrypted Save and cold Reopen",
+        # Keep these names bound to the *current* executable Windows steps.
+        # The real browser, immutable package and shipping reader are separate
+        # jobs; the final protected status depends on all three.
+        "Rust Bridge contracts (browser-independent)": (
+            "Run existing Rust Bridge tests",
         ),
-        # The old required cold-launch status must fail closed unless that
-        # same physical Windows owner completed successfully.
+        "Build and verify official Windows Camoufox runtime": (
+            "Materialize official browser and verified offline fpgen model",
+            "Prove official Firefox native restored tabs and POST safety on exact runtime",
+            "Package exact compressed Release Set runtime input",
+            "Upload exact-head official runtime for downstream Windows proofs",
+        ),
+        "Rust shipping reader verifies exact compressed Windows runtime": (
+            "Run Windows Bridge library tests and production archive reader",
+        ),
+        "Profile Bridge Windows regression": (
+            "Run official Camoufox Playwright user Open and native file-lock proof through production Bridge crates",
+        ),
+        # A successful meta status cannot replace the underlying real tests.
         "Real Camoufox cold-launch proof": (
-            "Require real official Camoufox and Bridge Windows proof",
+            "Require exact official Camoufox and Bridge Windows proof",
         ),
     },
     "quality": {
@@ -308,6 +317,31 @@ def self_test() -> None:
                 pass
             else:
                 raise AssertionError(f"{gate}: accepted unsafe proof: {mutation}")
+        # The source workflow splits the native proof across several jobs.
+        # Missing or skipped evidence in *any* job must force a full replay.
+        for required_job, required_steps in CRITICAL[gate].items():
+            jobpath = next(k for k in pages if k.endswith("/jobs?per_page=100"))
+            for mutation, skipped_step in [("missing", None)] + [
+                ("skipped", name) for name in required_steps
+            ]:
+                clone = json.loads(json.dumps(pages))
+                jobs = clone[jobpath]["jobs"]
+                target = next(job for job in jobs if job["name"] == required_job)
+                if mutation == "missing":
+                    jobs.remove(target)
+                    clone[jobpath]["total_count"] -= 1
+                else:
+                    next(step for step in target["steps"] if step["name"] == skipped_step)[
+                        "conclusion"
+                    ] = "skipped"
+                try:
+                    prove("a" * 40, gate, lambda path: clone[path])
+                except Unconfirmed:
+                    pass
+                else:
+                    raise AssertionError(
+                        f"{gate}: accepted {mutation} evidence: {required_job}/{skipped_step}"
+                    )
     # Fail-closed historical reuse: current PR has all 18 successful checks
     # but SKIPPED heavy jobs, while older accepted main has exact real proof.
     now, _ = fixture("camoufox")
