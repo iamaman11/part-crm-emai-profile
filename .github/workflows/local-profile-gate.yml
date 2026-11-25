@@ -289,6 +289,9 @@ jobs:
         uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2 (immutable)
         with:
           shared-key: profile-bridge-ci-v1
+          workspaces: |
+            . -> target
+            tools/opsctl -> target
           cache-on-failure: 'true'
 
       - name: Prove K2 256/512 MiB file streaming on Windows with peak RAM and disk limits
