@@ -475,8 +475,12 @@ function promotionErrors(promotion) {
     '.schema_version == 2 and .command == "promotion.preflight"',
     'recovery_strategy:$recovery_strategy',
     '--arg recovery_strategy "$(jq -er',
-    'Prove bounded Worker and D1 quiescence',
-    'sleep 30',
+    'Re-observe live Worker identity and D1 ledger before READY',
+    "steps.current_readback.outcome == 'success'",
+    'provider_observation:{method:"INDEPENDENT_LIVE_READBACK",worker_identity_stable:true,d1_ledger_stable:true}',
+    '.provider_observation.method == "INDEPENDENT_LIVE_READBACK"',
+    '.provider_observation.worker_identity_stable == true',
+    '.provider_observation.d1_ledger_stable == true',
     'cmp --silent "$RUNNER_TEMP/worker-binding-before.json" "$RUNNER_TEMP/worker-binding-after.json"',
     'cmp --silent "$RUNNER_TEMP/d1-names-before.json" "$RUNNER_TEMP/d1-names-after.json"',
     'kind:"AR11_READY_TO_MUTATE"',
@@ -507,6 +511,42 @@ function promotionErrors(promotion) {
     '.production_mutation_executed == false',
     '.effect_state == "EXACT_NO_EFFECT"',
   ], 'pre-authorization READY proof'));
+  const baselineStep = stepBlock(ready, 'Observe existing Worker, D1 head, resources and secret bindings');
+  const secondStep = stepBlock(ready, 'Re-observe live Worker identity and D1 ledger before READY');
+  const afterWorker = 'http_code="$(curl --silent --show-error --output "$RUNNER_TEMP/deployments-after-api.json"';
+  const afterVersion = 'python scripts/deployment-identity-ar11.py --observe-version';
+  const afterD1 = 'npx --yes wrangler@4.94.0 d1 execute CATALOG_DB --remote';
+  const workerCmp = 'cmp --silent "$RUNNER_TEMP/worker-binding-before.json" "$RUNNER_TEMP/worker-binding-after.json"';
+  const d1Cmp = 'cmp --silent "$RUNNER_TEMP/d1-names-before.json" "$RUNNER_TEMP/d1-names-after.json"';
+  if (!baselineStep.includes('> "$RUNNER_TEMP/worker-binding-before.json"')
+      || !baselineStep.includes('> "$RUNNER_TEMP/catalog-ledger-before.json"')
+      || !baselineStep.includes('python - "$RUNNER_TEMP/catalog-ledger-before.json" "$RUNNER_TEMP/d1-names-before.json"')
+      || !baselineStep.includes('d1_head="$(jq -er')) {
+    errors.push('native Worker/D1 readback is missing its independent baseline observations');
+  }
+  if (!secondStep.includes(afterWorker) || !secondStep.includes(afterVersion)
+      || !secondStep.includes(afterD1) || !secondStep.includes(workerCmp)
+      || !secondStep.includes(d1Cmp) || !secondStep.includes('test "$http_code" = 200')
+      || secondStep.indexOf(afterWorker) >= secondStep.indexOf(afterVersion)
+      || secondStep.indexOf(afterVersion) >= secondStep.indexOf(workerCmp)
+      || secondStep.indexOf(afterD1) >= secondStep.indexOf(d1Cmp)) {
+    errors.push('native Worker/D1 readback must independently observe, verify and compare both providers');
+  }
+  if (ready.indexOf('Capture native compatibility, plan and rollback-aware preflight') < 0
+      || ready.indexOf('Capture native compatibility, plan and rollback-aware preflight') >= ready.indexOf('Re-observe live Worker identity and D1 ledger before READY')) {
+    errors.push('native Worker/D1 readback must follow actual typed policy preflight');
+  }
+  if (/\b(?:sleep|usleep|timeout)\s+\d+\b/.test(ready) || ready.includes('worker-d1-baseline-clock')) {
+    errors.push('read-only Worker/D1 proof must not use an artificial timing barrier');
+  }
+  if (promotion.includes('fetch-depth: 0')) {
+    errors.push('AR11 exact-commit checkouts must not fetch unused full history');
+  }
+  if (!jobBlock(promotion, 'promote').includes('.provider_observation.method == "INDEPENDENT_LIVE_READBACK"')
+      || !jobBlock(promotion, 'promote').includes('.provider_observation.worker_identity_stable == true')
+      || !jobBlock(promotion, 'promote').includes('.provider_observation.d1_ledger_stable == true')) {
+    errors.push('staging READY binder must require independently verified native readback');
+  }
   errors.push(...forbidMarkers(ready, [
     'secrets.CLOUDFLARE_API_TOKEN }}',
     'deployments: write',
@@ -1222,6 +1262,28 @@ function validateAll({ build, promotion, camoufox, camoufoxClassifier, downloade
 }
 
 function selfTest(files) {
+  for (const [label, original, replacement] of [
+    ['missing second Worker GET', 'http_code="$(curl --silent --show-error --output "$RUNNER_TEMP/deployments-after-api.json"', 'http_code="$(echo 200'],
+    ['missing second Worker version verification', 'python scripts/deployment-identity-ar11.py --observe-version', 'echo skipped-version-identity'],
+    ['missing D1 live readback', 'npx --yes wrangler@4.94.0 d1 execute CATALOG_DB --remote', 'echo stale-d1-ledger'],
+    ['missing second Worker comparison', 'cmp --silent "$RUNNER_TEMP/worker-binding-before.json" "$RUNNER_TEMP/worker-binding-after.json"', 'echo worker-comparison-bypassed'],
+    ['missing second D1 comparison', 'cmp --silent "$RUNNER_TEMP/d1-names-before.json" "$RUNNER_TEMP/d1-names-after.json"', 'echo d1-comparison-bypassed'],
+    ['forged READY readback proof', 'provider_observation:{method:"INDEPENDENT_LIVE_READBACK",worker_identity_stable:true,d1_ledger_stable:true}', 'provider_observation:{method:"INDEPENDENT_LIVE_READBACK",worker_identity_stable:true,d1_ledger_stable:false}'],
+    ['non-readback staging READY accepted', '.provider_observation.method == "INDEPENDENT_LIVE_READBACK"', 'true'],
+    ['serial sleep reintroduced', 'Re-observe live Worker identity and D1 ledger before READY', 'Re-observe live Worker identity and D1 ledger before READY\n          sleep 30'],
+    ['unneeded deep checkout restored', 'fetch-depth: 1', 'fetch-depth: 0'],
+  ]) {
+    const secondReadbackFixture = label === 'missing second Worker GET'
+      || label === 'missing second Worker version verification'
+      || label === 'missing D1 live readback';
+    const secondReadbackStep = stepBlock(jobBlock(files.promotion, 'preflight-ready'), 'Re-observe live Worker identity and D1 ledger before READY');
+    const altered = secondReadbackFixture
+      ? files.promotion.replace(secondReadbackStep, secondReadbackStep.replace(original, replacement))
+      : files.promotion.replace(original, replacement);
+    if (altered === files.promotion || !promotionErrors(altered).length) {
+      throw new Error(`unsafe ${label} native readback/depth fixture passed`);
+    }
+  }
   for (const [label, original, replacement] of [
     ['missing main PR physical byte proof', 'python scripts/accepted-main-pr-reuse.py --release-component runtime', 'Write-Host "pretend physical bytes existed"'],
     ['missing main runtime published byte equality', 'published runtime bytes differ from exactly physically tested PR bytes', 'runtime bytes assumed equal'],
