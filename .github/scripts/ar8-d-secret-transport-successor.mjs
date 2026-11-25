@@ -162,7 +162,7 @@ function promotionPolicyErrors(promotion) {
     'test "$READY_ARTIFACT_NAME" = "$ready_artifact_name"',
     'STAGING_PROMOTION_STANDING_INTENT',
     'AR11_STANDING_STAGING_READY_V1',
-    'github.workflow_run.read_only_ready',
+    'github.current_run.read_only_ready',
     'intent_digest',
     'AR11_STANDING_STAGING_READY',
     'promotion preflight',
@@ -172,7 +172,7 @@ function promotionPolicyErrors(promotion) {
     if (!promotion.includes(marker)) errors.push(`current Release Set promotion is missing semantic invariant ${JSON.stringify(marker)}`);
   }
   for (const retired of [
-    'workflow_dispatch:', 'STAGING_PROMOTION_DISPATCH_INTENT',
+    'STAGING_PROMOTION_DISPATCH_INTENT',
     'GITHUB_WORKFLOW_DISPATCH', "'github.workflow_dispatch'",
   ]) {
     if (promotion.includes(retired)) errors.push(`current Release Set promotion retained retired manual staging authorization ${retired}`);

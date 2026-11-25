@@ -147,7 +147,7 @@ function validateReleasePromotion(authority) {
     || policy?.standing_staging_only_after_same_run_read_only_ready !== true
     || policy?.ready_to_mutate_evidence_required_for_standing_promotion !== true
     || policy?.standing_intent_binds_same_run_ready_evidence !== true
-    || policy?.owner_manual_dispatch_retired !== true
+    || policy?.ordinary_zero_input_staging_retry !== true
     || ['read_only_ready_before_manual_dispatch', 'workflow_dispatch_is_staging_authorization',
       'owner_only_manual_dispatch', 'dispatch_intent_binds_ready_evidence',
       'ready_to_mutate_evidence_required_for_dispatch'].some((key) => key in policy)

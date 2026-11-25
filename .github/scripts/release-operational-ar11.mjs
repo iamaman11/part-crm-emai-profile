@@ -13,10 +13,9 @@ const CAMOUFOX = '.github/workflows/ci.yml';
 const CAMOUFOX_SCOPE = 'scripts/classify-camoufox-runtime-scope.py';
 const AR11_RUNTIME_DOWNLOADER = 'scripts/download-release-set-ar11.py';
 const AR11_RUNTIME_OVERLAY = 'scripts/release-core-overlay-ar11.py';
-const STANDING_RUN_PROOF = 'scripts/ar11-standing-run-proof.py';
 const AUTHORITY = 'architecture/release-architecture-ar11.json';
 const ASSET_MATERIALIZER = 'scripts/release-set-assets-ar11.sh';
-const EXPECTED_PROMOTION_RUN_NAME = "run-name: AR11 Release Set Promotion — ${{ github.event_name == 'workflow_run' && 'STAGING READY/AUTO PROMOTION' || 'INTERNAL ROLLBACK-NEGATIVE EVIDENCE' }}";
+const EXPECTED_PROMOTION_RUN_NAME = "run-name: AR11 Release Set Promotion — ${{ github.event_name == 'workflow_run' && 'STAGING AUTO' || github.event_name == 'workflow_dispatch' && 'STAGING RETRY' || 'INTERNAL ROLLBACK-NEGATIVE EVIDENCE' }}";
 const READ_ONLY_TERMINAL_DISPOSITION = '(.status == "READ_ONLY_READY" or .status == "NOOP" or .status == "BLOCKED")';
 const CAMOUFOX_ACTIVE_PHYSICAL_COMMANDS = [
   ['runtime-package-windows', 'Materialize official browser and verified offline fpgen model', 'python scripts/camouhost-runtime-build-windows.py build'],
@@ -351,7 +350,7 @@ function authorityErrors(authority) {
     'standing_staging_only_after_same_run_read_only_ready',
     'ready_to_mutate_evidence_required_for_standing_promotion',
     'standing_intent_binds_same_run_ready_evidence',
-    'owner_manual_dispatch_retired',
+    'ordinary_zero_input_staging_retry',
     'staging_environment_main_only',
     'expected_current_refence_immediately_before_mutation',
     'd1_refence_immediately_before_mutation',
@@ -390,68 +389,23 @@ function authorityErrors(authority) {
   return errors;
 }
 
-function standingPredecessorProofErrors(source) {
-  // Exact pre-effect recovery is admitted only after a canonical, completed
-  // failed run whose complete job/step topology proves credentials and deploy
-  // were never reached. Keep the source contract under the negative matrix.
-  return requireMarkers(source, [
-    'type(total) is int and total >= 2 and isinstance(runs, list)',
-    'len(runs) == min(total, 100)',
-    'run.get("event") == "workflow_run"',
-    'run.get("head_branch") == "main"',
-    'len({run["id"] for run in runs}) == len(runs)',
-    'len({run["run_number"] for run in runs}) == len(runs)',
-    'current[0].get("run_attempt") == 1',
-    'current[0].get("status") == "in_progress"',
-    'earlier = [run for run in runs if run["run_number"] < current[0]["run_number"]]',
-    'previous = max(earlier, key=lambda run: run["run_number"])',
-    'previous.get("status") == "completed"',
-    'previous.get("run_attempt") == 1',
-    'if previous.get("conclusion") == "success":',
-    'require(previous.get("conclusion") == "failure", "unknown previous outcome")',
-    'count == len(EXPECTED_JOBS)',
-    'and {job.get("name") for job in jobs} == EXPECTED_JOBS',
-    'and job.get("run_id") == previous["id"]',
-    'exactly_one(jobs, ROUTE).get("conclusion") == "success"',
-    'exactly_one(jobs, PREFLIGHT).get("conclusion") == "success"',
-    'exactly_one(jobs, ROLLBACK).get("conclusion") == "skipped"',
-    'exactly_one(jobs, TERMINAL).get("conclusion") == "failure"',
-    'promote.get("status") == "completed" and promote.get("conclusion") == "failure"',
-    'exactly_one(steps, RESOLVE).get("conclusion") == "success"',
-    'bind.get("conclusion") == "failure"',
-    'exactly_one(steps, name).get("conclusion") == "skipped"',
-    'for name in (BEFORE_CREDENTIALS, MUTATION_BOUNDARY, DEPLOY)',
-    'bind.get("conclusion") == "success" and pin.get("conclusion") == "failure"',
-    '[step["name"] for step in actual_prefix] == list(PIN_SUCCESS_PREFIX)',
-    'all(step.get("conclusion") == "success" for step in actual_prefix)',
-    'for name in PIN_SKIPPED',
-    'and exactly_one(steps, name)["number"] > pin_number',
-    'len({step["number"] for step in steps}) == len(steps)',
-    'step["number"] < failure_number',
-    'step["name"] in prefix',
-    'step.get("conclusion") == "skipped"',
-    '(step["name"] in SAFE_POST_FAILURE and step.get("conclusion") == "success")',
-    'raise EvidenceRejected(message)',
-  ], 'AR14 exact pre-effect predecessor proof');
-}
-
 function promotionErrors(promotion) {
   const errors = [];
   const runNameLine = promotion.split('\n').find((line) => line.startsWith('run-name: '));
   if (runNameLine !== EXPECTED_PROMOTION_RUN_NAME) {
-    errors.push('promotion run-name must distinguish standing staging auto-promotion from internal rollback-negative evidence');
+    errors.push('promotion run-name must distinguish automatic, manual retry and internal evidence');
   }
   errors.push(...requireMarkers(promotion, [
     'workflow_run:',
+    'workflow_dispatch:',
     '- Release Set Build',
     'workflow_call:',
     'concurrency:',
     'group: release-set-promotion-staging',
     'cancel-in-progress: false',
   ], 'Release Set promotion'));
-  if (promotion.includes('workflow_dispatch:') || promotion.includes('GITHUB_WORKFLOW_DISPATCH')
-      || promotion.includes('STAGING_PROMOTION_DISPATCH_INTENT')) {
-    errors.push('standing auto-promotion cannot retain manual workflow-dispatch authority');
+  if (promotion.includes('STAGING_PROMOTION_DISPATCH_INTENT') || promotion.includes('GITHUB_WORKFLOW_DISPATCH')) {
+    errors.push('staging retry created an alternate promotion authority');
   }
 
   errors.push(...forbidMarkers(promotion, [
@@ -486,8 +440,10 @@ function promotionErrors(promotion) {
     'READY_SOURCE_EVENT: ${{ github.event.workflow_run.event }}',
     "echo 'mode=preflight'",
     "echo 'mode=rollback-negative'",
+    'elif [ "$GITHUB_EVENT_NAME" = workflow_dispatch ]; then\n            test "$GITHUB_REF" = refs/heads/main',
+    'echo "source_sha=$GITHUB_SHA"',
   ], 'promotion invocation router'));
-  errors.push(...forbidMarkers(route, ["echo 'mode=promote'", 'workflow_dispatch', 'secrets.', 'wrangler deploy', 'environment: staging'], 'promotion invocation router'));
+  errors.push(...forbidMarkers(route, ["echo 'mode=promote'", 'secrets.', 'wrangler deploy', 'environment: staging'], 'promotion invocation router'));
 
   errors.push(...requireMarkers(ready, [
     'Resolve unique immutable Release Set for exact protected main',
@@ -623,6 +579,7 @@ function promotionErrors(promotion) {
     "needs.preflight-ready.result == 'success'",
     "needs.preflight-ready.outputs.terminal_status == 'READ_ONLY_READY'",
     'github.run_attempt == 1',
+    "github.event_name == 'workflow_dispatch'",
     'github.event.workflow_run.run_attempt == 1',
     "vars.PROFILEBRIDGE_AUTO_STAGING_ENABLED == 'true'",
     'Bind standing staging authority to exact same-run READY evidence',
@@ -631,27 +588,13 @@ function promotionErrors(promotion) {
     'READY_ARTIFACT_ID: ${{ needs.preflight-ready.outputs.ready_artifact_id }}',
     'READY_ARTIFACT_DIGEST: ${{ needs.preflight-ready.outputs.ready_artifact_digest }}',
     'READY_EVIDENCE_SHA256_EXPECTED: ${{ needs.preflight-ready.outputs.ready_evidence_sha256 }}',
-    'test "$GITHUB_EVENT_NAME" = workflow_run',
+    'workflow_run) test "${{ github.event.workflow_run.run_attempt }}" = 1',
+    'workflow_dispatch) test "$GITHUB_REF" = refs/heads/main',
+    'test "$GITHUB_RUN_ATTEMPT" = 1',
     'test "${{ needs.preflight-ready.result }}" = success',
     'test "${{ needs.preflight-ready.outputs.terminal_status }}" = READ_ONLY_READY',
     'test "$main_sha" = "$READY_SOURCE_SHA"',
     'test "$release_set_id" = "$READY_RELEASE_SET_ID"',
-    'actions/workflows/release-set-promotion.yml/runs?head_sha=$main_sha&event=workflow_run',
-    '.total_count == 1 and (.workflow_runs | length) == 1',
-    '.workflow_runs[0].id == $run and .workflow_runs[0].run_attempt == 1',
-    '.workflow_runs[0].event == "workflow_run"',
-    '.workflow_runs[0].head_sha == $sha',
-    '.workflow_runs[0].status == "in_progress"',
-    'actions/workflows/release-set-promotion.yml/runs?event=workflow_run&branch=main&per_page=100',
-    '(.workflow_runs | map(select(.id == $current)) | .[0].run_number)',
-    '[.workflow_runs[] | select(.run_number < $number)]',
-    'max_by(.run_number).id',
-    'actions/runs/$predecessor_run_id/jobs?per_page=100',
-    'python scripts/ar11-standing-run-proof.py',
-    '--history "$RUNNER_TEMP/prior-standing-promotion-runs.json"',
-    '--jobs "$RUNNER_TEMP/prior-staging-run-jobs.json"',
-    '--current-run-id "$GITHUB_RUN_ID"',
-    'prior-standing-proof.json',
     'test "$(git rev-parse HEAD)" = "$main_sha"',
     '[[ "$READY_ARTIFACT_DIGEST" =~ ^[0-9a-f]{64}$ ]]',
     'ready_artifact_api_digest="sha256:$READY_ARTIFACT_DIGEST"',
@@ -666,7 +609,7 @@ function promotionErrors(promotion) {
     'GITHUB_RUN_ID',
     'READY evidence does not match the exact accepted main and Release Set',
     'STAGING_PROMOTION_STANDING_INTENT',
-    "'github.workflow_run.read_only_ready'",
+    "'github.current_run.read_only_ready'",
     "'AR11_STANDING_STAGING_READY_V1'",
     'READY_RUN_ID',
     'READY_ARTIFACT_NAME',
@@ -697,6 +640,16 @@ function promotionErrors(promotion) {
     '"browser-profile-control-plane-staging"',
     '"staging.alegria.by"',
   ], 'standing READY binder'));
+  errors.push(...forbidMarkers(promote, [
+    'scripts/ar11-standing-run-proof.py',
+    'prior-standing-promotion-runs.json',
+    'prior-staging-run-jobs.json',
+    'same-source-promotion-runs.json',
+  ], 'provider-state retry must not depend on historical GitHub jobs'));
+  if (!/^  workflow_dispatch:\n  workflow_run:/m.test(promotion)
+      || /  workflow_dispatch:\n\s+inputs:/m.test(promotion)) {
+    errors.push('ordinary manual staging retry must be zero-input and share the canonical workflow');
+  }
   const readyBindStep = stepBlock(promote, 'Bind standing staging authority to exact same-run READY evidence');
   const readyDownloadStep = stepBlock(promote, 'Verify exact downloaded READY_TO_MUTATE evidence');
   errors.push(...forbidMarkers(`${readyBindStep}\n${readyDownloadStep}`, [
@@ -1291,11 +1244,10 @@ function camoufoxErrors(workflow, classifier) {
   return errors;
 }
 
-function validateAll({ build, promotion, camoufox, camoufoxClassifier, downloader, overlay, standingProof, authority }) {
+function validateAll({ build, promotion, camoufox, camoufoxClassifier, downloader, overlay, authority }) {
   return [
     ...buildErrors(build),
     ...promotionErrors(promotion),
-    ...standingPredecessorProofErrors(standingProof),
     ...runtimeSidecarErrors(promotion, downloader, overlay),
     ...camoufoxErrors(camoufox, camoufoxClassifier),
     ...authorityErrors(authority),
@@ -1407,72 +1359,21 @@ function selfTest(files) {
   if (!promotionErrors(ambiguousRunName).some((error) => error.includes('run-name must distinguish'))) {
     throw new Error('ambiguous promotion run-name fixture unexpectedly passed');
   }
-  const manualTrigger = files.promotion.replace('  workflow_call:\n', '  workflow_dispatch:\n  workflow_call:\n');
-  if (!promotionErrors(manualTrigger).some((error) => error.includes('manual workflow-dispatch authority'))) throw new Error('retired manual dispatch fixture passed');
+  const manualWithInput = files.promotion.replace('  workflow_dispatch:\n', '  workflow_dispatch:\n    inputs:\n      release_set_id:\n        type: string\n');
+  if (!promotionErrors(manualWithInput).some((error) => error.includes('zero-input'))) throw new Error('operator-supplied release identity fixture passed');
+  const missingManualMainRef = files.promotion.replace('test "$GITHUB_REF" = refs/heads/main', 'test -n "$GITHUB_REF"');
+  if (!promotionErrors(missingManualMainRef).some((error) => error.includes('promotion invocation router'))) throw new Error('non-main manual dispatch fixture passed');
   const bypassedReadyGate = files.promotion.replace("needs.preflight-ready.outputs.terminal_status == 'READ_ONLY_READY'", "needs.preflight-ready.outputs.terminal_status != 'BLOCKED'");
   if (!promotionErrors(bypassedReadyGate).some((error) => error.includes('standing READY binder'))) throw new Error('NOOP/BLOCKED READY-gate bypass fixture passed');
   const removedAutoKillSwitch = files.promotion.replace("vars.PROFILEBRIDGE_AUTO_STAGING_ENABLED == 'true'", 'true');
   if (!promotionErrors(removedAutoKillSwitch).some((error) => error.includes('standing READY binder'))) throw new Error('automatic staging kill-switch bypass fixture passed');
   const rerunBypass = files.promotion.replace('github.event.workflow_run.run_attempt == 1', 'github.event.workflow_run.run_attempt >= 1');
   if (!promotionErrors(rerunBypass).some((error) => error.includes('standing READY binder'))) throw new Error('workflow re-run staging bypass fixture passed');
-  const sameSourceReplay = files.promotion.replace('.total_count == 1 and (.workflow_runs | length) == 1', '.total_count >= 1');
-  if (!promotionErrors(sameSourceReplay).some((error) => error.includes('standing READY binder'))) throw new Error('same-source replay staging bypass fixture passed');
-  // Preserve the cross-source replay and failed-run exact-effect negative gates.
-  const missingHistoryProof = files.promotion.replace(
-    'python scripts/ar11-standing-run-proof.py',
-    'echo "unverified predecessor accepted"',
-  );
-  if (!promotionErrors(missingHistoryProof).some((error) => error.includes('standing READY binder'))) {
-    throw new Error('unverified cross-source predecessor bypass fixture passed');
-  }
-  const priorRunNumberGuardRemoved = files.promotion.replace(
-    'max_by(.run_number).id',
-    'min_by(.run_number).id',
-  );
-  if (priorRunNumberGuardRemoved === files.promotion
-      || !promotionErrors(priorRunNumberGuardRemoved).some((error) => error.includes('standing READY binder'))) {
-    throw new Error('cross-source immediate predecessor selector bypass fixture passed');
-  }
-  const removedHistoryBound = files.standingProof.replace(
-    'len(runs) == min(total, 100)', 'len(runs) <= 100',
-  );
-  if (!standingPredecessorProofErrors(removedHistoryBound).some((error) => error.includes('AR14 exact pre-effect'))) {
-    throw new Error('unbounded/truncated canonical predecessor history fixture passed');
-  }
-  const acceptedUnknownEffect = files.standingProof.replace(
-    'require(previous.get("conclusion") == "failure", "unknown previous outcome")',
-    'pass  # unknown predecessor outcome is accepted',
-  );
-  if (!standingPredecessorProofErrors(acceptedUnknownEffect).some((error) => error.includes('AR14 exact pre-effect'))) {
-    throw new Error('unknown previous effect bypass fixture passed');
-  }
-  const bypassedDeployFence = files.standingProof.replace(
-    'for name in (BEFORE_CREDENTIALS, MUTATION_BOUNDARY, DEPLOY)',
-    'for name in ()',
-  );
-  if (!standingPredecessorProofErrors(bypassedDeployFence).some((error) => error.includes('AR14 exact pre-effect'))) {
-    throw new Error('provider deployment boundary bypass fixture passed');
-  }
-  const bypassedPinSkippedFence = files.standingProof.replace(
-    'for name in PIN_SKIPPED',
-    'for name in ()',
-  );
-  if (!standingPredecessorProofErrors(bypassedPinSkippedFence).some((error) => error.includes('AR14 exact pre-effect'))) {
-    throw new Error('staging pin mutation/deploy skipped-state bypass fixture passed');
-  }
-  const bypassedPinSuccessPrefix = files.standingProof.replace(
-    '[step["name"] for step in actual_prefix] == list(PIN_SUCCESS_PREFIX)',
-    'true',
-  );
-  if (!standingPredecessorProofErrors(bypassedPinSuccessPrefix).some((error) => error.includes('AR14 exact pre-effect'))) {
-    throw new Error('staging pin safe-prefix bypass fixture passed');
-  }
-  const standingSelfTest = spawnSync('python3', [STANDING_RUN_PROOF, '--self-test'], {
-    cwd: ROOT, encoding: 'utf8',
-  });
-  if (standingSelfTest.status !== 0) {
-    throw new Error('AR14 exact pre-effect proof negative tests failed: ' + standingSelfTest.stderr);
-  }
+  const removedRunAttemptFence = files.promotion.replace('test "$GITHUB_RUN_ATTEMPT" = 1', 'test "$GITHUB_RUN_ATTEMPT" -ge 1');
+  if (!promotionErrors(removedRunAttemptFence).some((error) => error.includes('standing READY binder'))) throw new Error('manual rerun attempt bypass fixture passed');
+  const importedHistoricalGate = files.promotion.replace('          # GitHub\'s historical job status is not provider state.',
+    '          python scripts/ar11-standing-run-proof.py --history arbitrary.json');
+  if (!promotionErrors(importedHistoricalGate).some((error) => error.includes('historical GitHub jobs'))) throw new Error('retired history-based gate fixture passed');
   const allowedWorkflowPath = '(.path == ".github/workflows/release-set-promotion.yml@main" or .path == ".github/workflows/release-set-promotion.yml")';
   for (const [pathValue, accepted] of [
     ['.github/workflows/release-set-promotion.yml@main', true],
@@ -1556,7 +1457,7 @@ function selfTest(files) {
         || intent.ready_run_id !== readyRunId || intent.ready_run_attempt !== readyAttempt
         || intent.ready_artifact_name !== readyArtifact
         || intent.ready_evidence_sha256 !== 'd'.repeat(64)
-        || intent.authorization.mechanism !== 'github.workflow_run.read_only_ready'
+        || intent.authorization.mechanism !== 'github.current_run.read_only_ready'
         || intent.authorization.policy !== 'AR11_STANDING_STAGING_READY_V1'
         || intent.authorization.ready_artifact_id !== artifactId
         || intent.authorization.ready_artifact_digest !== artifactDigest
@@ -2040,7 +1941,6 @@ const files = {
   camoufoxClassifier: read(CAMOUFOX_SCOPE),
   downloader: read(AR11_RUNTIME_DOWNLOADER),
   overlay: read(AR11_RUNTIME_OVERLAY),
-  standingProof: read(STANDING_RUN_PROOF),
   authority: JSON.parse(read(AUTHORITY)),
 };
 const errors = validateAll(files);
@@ -2049,4 +1949,4 @@ if (errors.length > 0) {
   process.exit(1);
 }
 if (process.argv.includes('--self-test')) selfTest(files);
-else console.log('AR-11 release operational authority passed: protected-main read-only READY/BLOCKED terminalizes before same-run standing staging promotion; exact run/attempt/asset/READY SHA bind the immutable Release Set to staging only; no manual workflow_dispatch, exact-current Worker/D1 re-fence, protected deploy credential and lossless effect outcome; Camoufox PR replay is fail-closed.');
+else console.log('AR-11 release operational authority passed: automatic staging and zero-input same-release retry share exact current-run READY, immutable Release Set, provider Worker/D1 re-fence and one terminal effect outcome; no historical GitHub job gate or Production mutation.');

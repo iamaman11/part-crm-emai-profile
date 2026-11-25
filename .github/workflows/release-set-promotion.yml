@@ -1,8 +1,11 @@
 name: Release Set Promotion
 
-run-name: AR11 Release Set Promotion — ${{ github.event_name == 'workflow_run' && 'STAGING READY/AUTO PROMOTION' || 'INTERNAL ROLLBACK-NEGATIVE EVIDENCE' }}
+run-name: AR11 Release Set Promotion — ${{ github.event_name == 'workflow_run' && 'STAGING AUTO' || github.event_name == 'workflow_dispatch' && 'STAGING RETRY' || 'INTERNAL ROLLBACK-NEGATIVE EVIDENCE' }}
 
 on:
+  # Ordinary one-click retry of the unique immutable Release Set for protected
+  # main. No operator-supplied SHA, target, credential or recovery argument.
+  workflow_dispatch:
   workflow_run:
     workflows:
       - Release Set Build
@@ -67,6 +70,12 @@ jobs:
             [[ "$READY_SOURCE_SHA" =~ ^[0-9a-f]{40}$ ]]
             echo 'mode=preflight' >> "$GITHUB_OUTPUT"
             echo "source_sha=$READY_SOURCE_SHA" >> "$GITHUB_OUTPUT"
+          elif [ "$GITHUB_EVENT_NAME" = workflow_dispatch ]; then
+            test "$GITHUB_REF" = refs/heads/main
+            test "$GITHUB_REPOSITORY" = iamaman11/part-crm-emai-profile
+            [[ "$GITHUB_SHA" =~ ^[0-9a-f]{40}$ ]]
+            echo 'mode=preflight' >> "$GITHUB_OUTPUT"
+            echo "source_sha=$GITHUB_SHA" >> "$GITHUB_OUTPUT"
           elif [ "$GITHUB_EVENT_NAME" = workflow_call ]; then
             test "$INTERNAL_OPERATION" = rollback-negative
             test "$GITHUB_REF" = refs/heads/main
@@ -711,7 +720,7 @@ jobs:
     needs: [route, preflight-ready]
     # Repository-level variable only: job.if is evaluated before the staging
     # Environment's variables are made available. Unset means no deploy.
-    if: needs.route.outputs.mode == 'preflight' && needs.preflight-ready.result == 'success' && needs.preflight-ready.outputs.terminal_status == 'READ_ONLY_READY' && needs.preflight-ready.outputs.ready_artifact_id != '' && github.run_attempt == 1 && github.event.workflow_run.run_attempt == 1 && vars.PROFILEBRIDGE_AUTO_STAGING_ENABLED == 'true'
+    if: needs.route.outputs.mode == 'preflight' && needs.preflight-ready.result == 'success' && needs.preflight-ready.outputs.terminal_status == 'READ_ONLY_READY' && needs.preflight-ready.outputs.ready_artifact_id != '' && github.run_attempt == 1 && (github.event_name == 'workflow_dispatch' || (github.event_name == 'workflow_run' && github.event.workflow_run.run_attempt == 1 && vars.PROFILEBRIDGE_AUTO_STAGING_ENABLED == 'true'))
     runs-on: ubuntu-latest
     environment: staging
     permissions:
@@ -783,7 +792,15 @@ jobs:
           READY_RELEASE_SET_ID: ${{ needs.preflight-ready.outputs.release_set_id }}
         run: |
           set -euo pipefail
-          test "$GITHUB_EVENT_NAME" = workflow_run
+          # Both ordinary surfaces use the same current-run READY and fresh
+          # provider fences. A failed run is never replayed: dispatch creates
+          # a fresh run with new live observation and a new one-shot intent.
+          case "$GITHUB_EVENT_NAME" in
+            workflow_run) test "${{ github.event.workflow_run.run_attempt }}" = 1 ;;
+            workflow_dispatch) test "$GITHUB_REF" = refs/heads/main ;;
+            *) exit 1 ;;
+          esac
+          test "$GITHUB_RUN_ATTEMPT" = 1
           test "${{ needs.preflight-ready.result }}" = success
           test "${{ needs.preflight-ready.outputs.terminal_status }}" = READ_ONLY_READY
           main_sha="$SOURCE_SHA"
@@ -791,38 +808,12 @@ jobs:
           test "$main_sha" = "$SELECTED_MAIN_SHA"
           test "$main_sha" = "$READY_SOURCE_SHA"
           test "$(git rev-parse HEAD)" = "$main_sha"
-          # A second workflow run for the same accepted SHA must not replay an
-          # earlier UNKNOWN provider effect, even if both have attempt number 1.
-          gh api "repos/$GITHUB_REPOSITORY/actions/workflows/release-set-promotion.yml/runs?head_sha=$main_sha&event=workflow_run&per_page=100" \
-            > "$RUNNER_TEMP/same-source-promotion-runs.json"
-          jq -e --argjson run "$GITHUB_RUN_ID" --arg sha "$main_sha" '
-            .total_count == 1 and (.workflow_runs | length) == 1
-            and .workflow_runs[0].id == $run and .workflow_runs[0].run_attempt == 1
-            and .workflow_runs[0].event == "workflow_run"
-            and .workflow_runs[0].head_sha == $sha
-            and .workflow_runs[0].status == "in_progress"
-          ' "$RUNNER_TEMP/same-source-promotion-runs.json" >/dev/null
-          # Inductive cross-SHA safety: the immediately preceding canonical
-          # main workflow_run must have settled successfully on attempt one.
-          # A lost deploy ACK makes that run fail, so every newer candidate
-          # stops until separately governed recovery. Do not key authority on
-          # a mutable human-visible run-name or page through a capped search.
-          gh api "repos/$GITHUB_REPOSITORY/actions/workflows/release-set-promotion.yml/runs?event=workflow_run&branch=main&per_page=100" \
-            > "$RUNNER_TEMP/prior-standing-promotion-runs.json"
-          # AR-14 accepts only a GitHub-proven failure before credentials and mutation.
-          predecessor_run_id="$(jq -er --argjson current "$GITHUB_RUN_ID" '
-            (.workflow_runs | map(select(.id == $current)) | .[0].run_number) as $number
-            | [.workflow_runs[] | select(.run_number < $number)]
-            | max_by(.run_number).id
-          ' "$RUNNER_TEMP/prior-standing-promotion-runs.json")"
-          [[ "$predecessor_run_id" =~ ^[1-9][0-9]*$ ]]
-          gh api "repos/$GITHUB_REPOSITORY/actions/runs/$predecessor_run_id/jobs?per_page=100" \
-            > "$RUNNER_TEMP/prior-staging-run-jobs.json"
-          python scripts/ar11-standing-run-proof.py \
-            --history "$RUNNER_TEMP/prior-standing-promotion-runs.json" \
-            --jobs "$RUNNER_TEMP/prior-staging-run-jobs.json" \
-            --current-run-id "$GITHUB_RUN_ID" \
-            | tee "$RUNNER_TEMP/prior-standing-proof.json"
+          # GitHub's historical job status is not provider state. A preceding
+          # run may have lost its deploy ACK (or GitHub may report contradictory
+          # job status); neither can authorize a blind replay. The fresh
+          # independent Worker/D1 observation, typed decision and the
+          # immediate pre-mutation exact-current fence below decide whether
+          # this *new* attempt can act. Unknown or changed live state refuses.
           release_set_id="$SELECTED_RELEASE_SET_ID"
           [[ "$release_set_id" =~ ^release-set-v3-sha256-[0-9a-f]{64}$ ]]
           test "$release_set_id" = "$READY_RELEASE_SET_ID"
@@ -876,7 +867,7 @@ jobs:
               'schema_version': 1,
               'kind': 'STAGING_PROMOTION_STANDING_INTENT',
               'authorization': {
-                  'mechanism': 'github.workflow_run.read_only_ready',
+                  'mechanism': 'github.current_run.read_only_ready',
                   'policy': 'AR11_STANDING_STAGING_READY_V1',
                   'run_id': int(ready_run_id),
                   'run_attempt': int(ready_run_attempt),
@@ -934,7 +925,7 @@ jobs:
         run: |
           set -euo pipefail
           gh api "repos/$GITHUB_REPOSITORY/actions/runs/$READY_RUN_ID" > "$RUNNER_TEMP/ready-run.json"
-          jq -e --arg sha "$MAIN_SHA" --argjson run "$GITHUB_RUN_ID" --argjson attempt "$GITHUB_RUN_ATTEMPT" '.id == $run and .run_attempt == $attempt and .event == "workflow_run" and .status == "in_progress" and .head_branch == "main" and .head_sha == $sha and (.path == ".github/workflows/release-set-promotion.yml@main" or .path == ".github/workflows/release-set-promotion.yml")' "$RUNNER_TEMP/ready-run.json" >/dev/null
+          jq -e --arg sha "$MAIN_SHA" --arg event "$GITHUB_EVENT_NAME" --argjson run "$GITHUB_RUN_ID" --argjson attempt "$GITHUB_RUN_ATTEMPT" '.id == $run and .run_attempt == $attempt and .event == $event and .status == "in_progress" and .head_branch == "main" and .head_sha == $sha and (.path == ".github/workflows/release-set-promotion.yml@main" or .path == ".github/workflows/release-set-promotion.yml")' "$RUNNER_TEMP/ready-run.json" >/dev/null
           ready_root="$RUNNER_TEMP/ready"
           test -f "$ready_root/ready-to-mutate.json"
           for name in ready-to-mutate.json release-set.json accepted-source-evidence.json release-verify.json compatibility-evidence.json promotion-plan.json promotion-preflight.json pre-snapshot.json d1-names-after.json; do test -f "$ready_root/$name"; done
