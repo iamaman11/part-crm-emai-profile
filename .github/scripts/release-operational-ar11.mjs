@@ -429,7 +429,8 @@ function standingPredecessorProofErrors(source) {
     'len({step["number"] for step in steps}) == len(steps)',
     'step["number"] < failure_number',
     'step["name"] in prefix',
-    'step["name"] in SAFE_POST_FAILURE',
+    'step.get("conclusion") == "skipped"',
+    '(step["name"] in SAFE_POST_FAILURE and step.get("conclusion") == "success")',
     'raise EvidenceRejected(message)',
   ], 'AR14 exact pre-effect predecessor proof');
 }
