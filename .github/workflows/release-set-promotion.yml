@@ -762,6 +762,14 @@ jobs:
           } >> "$GITHUB_OUTPUT"
           echo "RELEASE_SET_ID=$release_set_id" >> "$GITHUB_ENV"
 
+      - name: Checkout exact authorized source
+        id: authorized_checkout
+        uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a
+        with:
+          ref: ${{ steps.resolve.outputs.main_sha }}
+          fetch-depth: 1
+          persist-credentials: false
+
       - name: Bind standing staging authority to exact same-run READY evidence
         id: intent
         env:
@@ -782,6 +790,7 @@ jobs:
           [[ "$main_sha" =~ ^[0-9a-f]{40}$ ]]
           test "$main_sha" = "$SELECTED_MAIN_SHA"
           test "$main_sha" = "$READY_SOURCE_SHA"
+          test "$(git rev-parse HEAD)" = "$main_sha"
           # A second workflow run for the same accepted SHA must not replay an
           # earlier UNKNOWN provider effect, even if both have attempt number 1.
           gh api "repos/$GITHUB_REPOSITORY/actions/workflows/release-set-promotion.yml/runs?head_sha=$main_sha&event=workflow_run&per_page=100" \
@@ -800,51 +809,32 @@ jobs:
           # a mutable human-visible run-name or page through a capped search.
           gh api "repos/$GITHUB_REPOSITORY/actions/workflows/release-set-promotion.yml/runs?event=workflow_run&branch=main&per_page=100" \
             > "$RUNNER_TEMP/prior-standing-promotion-runs.json"
-          python - "$RUNNER_TEMP/prior-standing-promotion-runs.json" "$GITHUB_RUN_ID" <<'PY'
-          import json, sys
-          payload = json.load(open(sys.argv[1], encoding='utf-8'))
-          runs = payload.get('workflow_runs')
-          total = payload.get('total_count')
-          if (not isinstance(total, int) or total < 2 or not isinstance(runs, list)
-                  or len(runs) != min(total, 100)):
-              raise SystemExit('canonical promotion run history is not a bounded list')
-          if any(run.get('event') != 'workflow_run' or run.get('head_branch') != 'main'
-                 or not isinstance(run.get('run_number'), int) or run['run_number'] < 1
-                 or not isinstance(run.get('id'), int) for run in runs):
-              raise SystemExit('canonical promotion run list contains untrusted or malformed entries')
-          if (len({run['id'] for run in runs}) != len(runs)
-                  or len({run['run_number'] for run in runs}) != len(runs)):
-              raise SystemExit('canonical promotion history has duplicate identities')
-          current = [run for run in runs if run.get('id') == int(sys.argv[2])]
-          if len(current) != 1 or current[0].get('run_attempt') != 1 or current[0].get('status') != 'in_progress':
-              raise SystemExit('current canonical promotion run is not unique in recent history')
-          number = current[0].get('run_number')
-          if not isinstance(number, int):
-              raise SystemExit('canonical promotion run number missing')
-          previous = sorted(
-              (run for run in runs if run['run_number'] < number),
-              key=lambda run: run['run_number'], reverse=True,
-          )
-          if not previous:
-              raise SystemExit('no exact prior canonical main promotion run to establish replay baseline')
-          predecessor = previous[0]
-          if (predecessor.get('event') != 'workflow_run'
-                  or predecessor.get('head_branch') != 'main'
-                  or predecessor.get('status') != 'completed'
-                  or predecessor.get('conclusion') != 'success'
-                  or predecessor.get('run_attempt') != 1):
-              raise SystemExit('prior canonical main promotion run is unresolved; AR-14 recovery required')
-          PY
+          # AR-14 accepts only a GitHub-proven failure before credentials and mutation.
+          predecessor_run_id="$(jq -er --argjson current "$GITHUB_RUN_ID" '
+            (.workflow_runs | map(select(.id == $current)) | .[0].run_number) as $number
+            | [.workflow_runs[] | select(.run_number < $number)]
+            | max_by(.run_number).id
+          ' "$RUNNER_TEMP/prior-standing-promotion-runs.json")"
+          [[ "$predecessor_run_id" =~ ^[1-9][0-9]*$ ]]
+          gh api "repos/$GITHUB_REPOSITORY/actions/runs/$predecessor_run_id/jobs?per_page=100" \
+            > "$RUNNER_TEMP/prior-staging-run-jobs.json"
+          python scripts/ar11-standing-run-proof.py \
+            --history "$RUNNER_TEMP/prior-standing-promotion-runs.json" \
+            --jobs "$RUNNER_TEMP/prior-staging-run-jobs.json" \
+            --current-run-id "$GITHUB_RUN_ID" \
+            | tee "$RUNNER_TEMP/prior-standing-proof.json"
           release_set_id="$SELECTED_RELEASE_SET_ID"
           [[ "$release_set_id" =~ ^release-set-v3-sha256-[0-9a-f]{64}$ ]]
           test "$release_set_id" = "$READY_RELEASE_SET_ID"
           [[ "$READY_ARTIFACT_ID" =~ ^[1-9][0-9]*$ ]]
           [[ "$READY_EVIDENCE_SHA256_EXPECTED" =~ ^[0-9a-f]{64}$ ]]
-          [[ "$READY_ARTIFACT_DIGEST" =~ ^sha256:[0-9a-f]{64}$ ]]
+          # upload-artifact v4 emits bare hex; REST artifact.digest uses sha256:hex.
+          [[ "$READY_ARTIFACT_DIGEST" =~ ^[0-9a-f]{64}$ ]]
+          ready_artifact_api_digest="sha256:$READY_ARTIFACT_DIGEST"
           ready_artifact_name="ar11-ready-to-mutate-$release_set_id-$main_sha-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"
           test "$READY_ARTIFACT_NAME" = "$ready_artifact_name"
           gh api "repos/$GITHUB_REPOSITORY/actions/artifacts/$READY_ARTIFACT_ID" > "$RUNNER_TEMP/current-ready-artifact.json"
-          jq -e --arg name "$ready_artifact_name" --arg sha "$main_sha" --arg digest "$READY_ARTIFACT_DIGEST" --argjson run "$GITHUB_RUN_ID" --argjson artifact_id "$READY_ARTIFACT_ID" '
+          jq -e --arg name "$ready_artifact_name" --arg sha "$main_sha" --arg digest "$ready_artifact_api_digest" --argjson run "$GITHUB_RUN_ID" --argjson artifact_id "$READY_ARTIFACT_ID" '
             .id == $artifact_id and .name == $name and .expired == false
             and .workflow_run.id == $run and .workflow_run.head_sha == $sha
             and .digest == $digest
@@ -855,7 +845,7 @@ jobs:
           test -f "$candidate_root/ready-to-mutate.json"
           ready_evidence_sha256="$(sha256sum "$candidate_root/ready-to-mutate.json" | cut -d' ' -f1)"
           test "$ready_evidence_sha256" = "$READY_EVIDENCE_SHA256_EXPECTED"
-          python - "$candidate_root/ready-to-mutate.json" "$main_sha" "$release_set_id" "$GITHUB_RUN_ID" "$GITHUB_RUN_ATTEMPT" "$READY_ARTIFACT_ID" "$ready_artifact_name" "$READY_ARTIFACT_DIGEST" "$ready_evidence_sha256" "$RUNNER_TEMP/standing-intent.json" <<'PY'
+          python - "$candidate_root/ready-to-mutate.json" "$main_sha" "$release_set_id" "$GITHUB_RUN_ID" "$GITHUB_RUN_ATTEMPT" "$READY_ARTIFACT_ID" "$ready_artifact_name" "$ready_artifact_api_digest" "$ready_evidence_sha256" "$RUNNER_TEMP/standing-intent.json" <<'PY'
           import json, os, re, sys
           ready_path, main_sha, target, ready_run_id, ready_run_attempt, artifact_id, ready_artifact_name, artifact_digest, ready_evidence_sha256, output_path = sys.argv[1:]
           ready = json.load(open(ready_path, encoding='utf-8'))
@@ -971,14 +961,6 @@ jobs:
             echo "READY_EVIDENCE_SHA256=$READY_EVIDENCE_SHA256"
             echo "INTENT_DIGEST=${{ steps.intent.outputs.intent_digest }}"
           } >> "$GITHUB_ENV"
-
-      - name: Checkout exact authorized source
-        id: authorized_checkout
-        uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a
-        with:
-          ref: ${{ steps.intent.outputs.main_sha }}
-          fetch-depth: 1
-          persist-credentials: false
 
       - name: Restore opsctl Rust compilation cache for read-only resolution
         uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2 (immutable)
