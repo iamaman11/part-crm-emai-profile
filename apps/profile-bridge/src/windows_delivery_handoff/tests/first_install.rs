@@ -273,7 +273,10 @@ fn completed_recovery_admits_only_a_newer_verified_installation() -> TestResult 
     assert_eq!(installed.state().last_failure(), None);
     assert!(!installed.state().active_health_confirmed());
     assert_eq!(
-        installed.state().last_activation().map(|activation| activation.outcome),
+        installed
+            .state()
+            .last_activation()
+            .map(|activation| activation.outcome),
         Some(DeliveryActivationOutcome::PendingHealth)
     );
     assert_eq!(
