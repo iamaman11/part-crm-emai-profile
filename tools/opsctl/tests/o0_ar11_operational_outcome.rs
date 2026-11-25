@@ -425,7 +425,8 @@ fn ar11_workflow_terminalizes_after_owner_capture_and_before_final_assertion() -
         r#"[step["name"] for step in actual_prefix] == list(PIN_SUCCESS_PREFIX)"#,
         "for name in PIN_SKIPPED",
         r#"len({step["number"] for step in steps}) == len(steps)"#,
-        "step[\"name\"] in SAFE_POST_FAILURE",
+        r#"step.get("conclusion") == "skipped""#,
+        r#"(step["name"] in SAFE_POST_FAILURE and step.get("conclusion") == "success")"#,
     ] {
         assert!(
             predecessor_proof.contains(guard),
