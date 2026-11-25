@@ -2635,6 +2635,9 @@ jobs:
       - name: Prove lossless AR11 terminal projection at CLI/file boundary
         run: python scripts/promotion-operational-outcome-ar11.py --self-test
 
+      - name: Prove AR11 standing predecessor and AR14 pre-effect refusal
+        run: python scripts/ar11-standing-run-proof.py --self-test
+
   # Source gate: repository-quality-audit-gate.yml
   repository-quality-quality-audit:
     permissions:
