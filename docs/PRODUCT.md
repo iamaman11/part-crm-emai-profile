@@ -2,7 +2,9 @@
 
 **Статус:** normative architecture boundary  
 **Дата:** 2026-11-09  
-**Канонический план:** [Issue #830](https://github.com/iamaman11/part-crm-emai-profile/issues/830)
+**Историческое основание:** [Issue #830](https://github.com/iamaman11/part-crm-emai-profile/issues/830) — не текущий план.
+
+**Текущий этап и checkpoint:** [Issue #266](https://github.com/iamaman11/part-crm-emai-profile/issues/266) выбирает единственный CURRENT Issue и точный checkpoint
 
 ## 1. Единое приложение
 
