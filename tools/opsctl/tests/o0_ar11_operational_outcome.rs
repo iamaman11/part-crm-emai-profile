@@ -358,7 +358,8 @@ fn ar11_workflow_terminalizes_after_owner_capture_and_before_final_assertion() -
     assert!(workflow.contains("AR11_STANDING_STAGING_READY_V1"));
     assert!(workflow.contains("AR11_STANDING_STAGING_READY"));
     assert!(workflow.contains("intent_digest"));
-    assert!(!workflow.contains("workflow_dispatch:"));
+    assert!(workflow.contains("  workflow_dispatch:\n  workflow_run:"));
+    assert!(!workflow.contains("  workflow_dispatch:\n    inputs:"));
     assert!(!workflow.contains("GITHUB_WORKFLOW_DISPATCH"));
     assert!(!workflow.contains("STAGING_PROMOTION_DISPATCH_INTENT"));
     assert!(workflow.contains("EXPECTED_CURRENT"));
@@ -392,51 +393,18 @@ fn ar11_workflow_terminalizes_after_owner_capture_and_before_final_assertion() -
     assert!(promote.contains("vars.PROFILEBRIDGE_AUTO_STAGING_ENABLED == 'true'"));
     assert!(promote.contains("github.run_attempt == 1"));
     assert!(promote.contains("github.event.workflow_run.run_attempt == 1"));
-    assert!(promote.contains(".total_count == 1 and (.workflow_runs | length) == 1"));
-    assert!(
-        promote.contains(".workflow_runs[0].id == $run and .workflow_runs[0].run_attempt == 1")
-    );
-    // The canonical cross-source replay fence is implemented by an offline
-    // fail-closed adapter, loaded only after the authorized main checkout.
-    // Verify both the workflow invocation and the adapter's source contract.
-    let predecessor_proof = fs::read_to_string(root.join("scripts/ar11-standing-run-proof.py"))
-        .map_err(|error| format!("standing predecessor proof must exist: {error}"))?;
-    assert!(promote.contains("python scripts/ar11-standing-run-proof.py"));
-    assert!(promote.contains("--history \"$RUNNER_TEMP/prior-standing-promotion-runs.json\""));
-    assert!(promote.contains("--jobs \"$RUNNER_TEMP/prior-staging-run-jobs.json\""));
-    assert!(promote.contains("--current-run-id \"$GITHUB_RUN_ID\""));
-    assert!(promote.contains("max_by(.run_number).id"));
-    assert!(promote.contains("actions/runs/$predecessor_run_id/jobs?per_page=100"));
+    assert!(promote.contains("github.event_name == 'workflow_dispatch'"));
+    assert!(promote.contains("workflow_dispatch) test \"$GITHUB_REF\" = refs/heads/main"));
+    assert!(promote.contains("test \"$GITHUB_RUN_ATTEMPT\" = 1"));
+    assert!(!promote.contains("ar11-standing-run-proof.py"));
+    assert!(!promote.contains("prior-standing-promotion-runs.json"));
+    assert!(!promote.contains("prior-staging-run-jobs.json"));
     assert!(promote.contains("test \"$(git rev-parse HEAD)\" = \"$main_sha\""));
     assert!(promote.contains("ready_artifact_api_digest=\"sha256:$READY_ARTIFACT_DIGEST\""));
-    for guard in [
-        "len(runs) == min(total, 100)",
-        r#"len({run["id"] for run in runs}) == len(runs)"#,
-        r#"len({run["run_number"] for run in runs}) == len(runs)"#,
-        r#"earlier = [run for run in runs if run["run_number"] < current[0]["run_number"]]"#,
-        r#"previous = max(earlier, key=lambda run: run["run_number"])"#,
-        r#"if previous.get("conclusion") == "success":"#,
-        r#"require(previous.get("conclusion") == "failure", "unknown previous outcome")"#,
-        r#"previous.get("run_attempt") == 1"#,
-        r#"count == len(EXPECTED_JOBS)"#,
-        r#"bind.get("conclusion") == "failure""#,
-        "for name in (BEFORE_CREDENTIALS, MUTATION_BOUNDARY, DEPLOY)",
-        r#"bind.get("conclusion") == "success" and pin.get("conclusion") == "failure""#,
-        r#"[step["name"] for step in actual_prefix] == list(PIN_SUCCESS_PREFIX)"#,
-        "for name in PIN_SKIPPED",
-        r#"len({step["number"] for step in steps}) == len(steps)"#,
-        r#"step.get("conclusion") == "skipped""#,
-        r#"(step["name"] in SAFE_POST_FAILURE and step.get("conclusion") == "success")"#,
-    ] {
-        assert!(
-            predecessor_proof.contains(guard),
-            "fail-closed predecessor proof lost mandatory canonical evidence guard: {guard}"
-        );
-    }
     assert!(!promote.contains(".display_title == $title"));
     assert!(promote.contains(".github/workflows/release-set-promotion.yml@main"));
     assert!(promote.contains("STAGING_PROMOTION_STANDING_INTENT"));
-    assert!(promote.contains("github.workflow_run.read_only_ready"));
+    assert!(promote.contains("github.current_run.read_only_ready"));
     assert!(promote.contains("ready_run_attempt"));
     assert!(promote.contains("ready_artifact_id"));
     assert!(
