@@ -65,11 +65,19 @@ SNAPSHOT_REQUIRED_FRAGMENTS = (
     'WORKSPACE_SNAPSHOT_MAGIC: &[u8; 8] = b"BPGW0001"',
     "MAX_WORKSPACE_SNAPSHOT_BYTES: usize = 67_108_864",
     "pub(crate) fn encode_workspace_snapshot(",
-    "#[cfg(test)]\npub(crate) fn materialize_workspace_snapshot(",
-    "pub(crate) fn materialize_workspace_snapshot_with_pre_publish(",
+    "pub(crate) fn materialize_workspace_snapshot_streaming_with_pre_publish(",
+    "pub(crate) fn materialize_profile_current_snapshot_streaming_with_pre_publish(",
+    "fn materialize_workspace_snapshot_streaming_to(",
+    "fn materialize_stream_into_staging(",
+    "fn verify_streamed_workspace(",
     "before_publish(&staging)?",
-    "fn parse_workspace_snapshot(",
-    "validate_windows_relative_path",
+    "validate_windows_relative_path(&relative)?",
+    "verify_streamed_workspace(&staging, &entries)?",
+    "let workspace = publish_verified_staging(",
+    "verify_streamed_workspace(&workspace, &entries)?",
+    "source.read(&mut eof)",
+    "hash.finalize()) != expected.plaintext_digest",
+    "remove_owned_staging(&staging_path)",
     "TargetAlreadyExists",
 )
 
@@ -79,6 +87,13 @@ SNAPSHOT_FORBIDDEN_FRAGMENTS = (
     "R2Bucket",
     "PROFILE_GENERATIONS",
     "GenerationObjectUploadPort",
+    "pub(crate) fn materialize_workspace_snapshot_with_pre_publish(",
+    "pub(crate) fn materialize_profile_current_snapshot_with_pre_publish(",
+    "fn materialize_workspace_snapshot_to(",
+    "fn materialize_into_staging(",
+    "fn verify_materialized_snapshot(",
+    "fn parse_workspace_snapshot(",
+    "struct SnapshotEntry<'",
 )
 
 PUBLISH_REQUIRED_FRAGMENTS = (
@@ -195,14 +210,31 @@ def generation_snapshot_failures(source: str) -> list[str]:
 
 
 def generation_snapshot_self_test(source: str) -> list[str]:
+    failures: list[str] = []
     fixture = source.replace("67_108_864", "67_108_865", 1)
-    failures = generation_snapshot_failures(fixture)
+    detected = generation_snapshot_failures(fixture)
     if not any(
         "MAX_WORKSPACE_SNAPSHOT_BYTES: usize = 67_108_864" in failure
-        for failure in failures
+        for failure in detected
     ):
-        return ["generation-snapshot max-size drift fixture unexpectedly passed"]
-    return []
+        failures.append("generation-snapshot max-size drift fixture unexpectedly passed")
+    # The old in-memory parser is gone. Each of these distinct gates must
+    # fail the same permanent check if removed from the one streamed owner.
+    for required in (
+        "validate_windows_relative_path(&relative)?",
+        "verify_streamed_workspace(&staging, &entries)?",
+        "before_publish(&staging)?",
+        "verify_streamed_workspace(&workspace, &entries)?",
+        "source.read(&mut eof)",
+        "hash.finalize()) != expected.plaintext_digest",
+    ):
+        if required not in source:
+            failures.append(f"streamed snapshot negative fixture source missing: {required}")
+            continue
+        changed = source.replace(required, "streamed_guard_removed", 1)
+        if not any(required in failure for failure in generation_snapshot_failures(changed)):
+            failures.append(f"missing streamed snapshot gate unexpectedly accepted: {required}")
+    return failures
 
 
 def braced_function_body(production: str, marker: str) -> str:

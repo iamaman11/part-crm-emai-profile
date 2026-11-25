@@ -284,16 +284,17 @@ def check_sources(sources: dict[str, str]) -> list[str]:
         if requirement not in finish:
             failures.append(f"exact committed Sync finalizer lost its native/marker gate: {requirement}")
 
-    classic_restore = function_body(authoritative, "fn ensure_authoritative_generation_to<")
+    # The Restore entry point must select one descriptor-verified tempfile and
+    # delegate exactly once. Its obsolete buffered/materializing owner was
+    # removed; the native writer gate lives in the streamed owner below.
+    restore_entry = function_body(authoritative, "fn ensure_authoritative_generation_to<")
     streamed_restore = function_body(authoritative, "fn materialize_streamed_authoritative_generation<")
     if (
         "pub fn reconcile_closed_draft_with_confirmed_current<" not in authoritative
         or "pub(crate) fn reconcile_closed_ready_with_confirmed_current<" not in authoritative
-        or not guarded_effects(
-            classic_restore,
-            (("verify_workspace_matches_snapshot(", True),
-             ("confirm_closed_current_matches_cloud(", True)),
-        )
+        or restore_entry.count(".download_generation_object_to_temporary_file(") != 1
+        or restore_entry.count("materialize_streamed_authoritative_generation(") != 1
+        or ".download_generation_object(" in restore_entry
         or not guarded_effects(
             streamed_restore,
             (("verify_workspace_matches_streamed_snapshot(", True),
@@ -406,6 +407,27 @@ def self_test(sources: dict[str, str]) -> list[str]:
         modified[owner] = modified[owner].replace(before, after)
         if not any(expected in failure for failure in check_sources(modified)):
             failures.append(f"native ownership negative fixture unexpectedly passed: {expected}")
+    # A missing streamed Restore handoff or a missing verified tempfile GET is
+    # rejected even if the sole materializer still holds its native lock.
+    for before, after in (
+        ("materialize_streamed_authoritative_generation(",
+         "disconnected_streamed_materialization("),
+        (".download_generation_object_to_temporary_file(",
+         ".download_generation_object("),
+    ):
+        entry = function_body(sources["authoritative"], "fn ensure_authoritative_generation_to<")
+        if before not in entry:
+            failures.append(f"streamed Restore negative fixture source missing: {before}")
+            continue
+        modified = dict(sources)
+        modified["authoritative"] = sources["authoritative"].replace(
+            entry, entry.replace(before, after, 1), 1
+        )
+        if not any(
+            "confirmed-current DRAFT/READY reconciliation must use the shared Bridge recovery owner"
+            in failure for failure in check_sources(modified)
+        ):
+            failures.append(f"missing streamed Restore handoff unexpectedly accepted: {before}")
     for owner, marker, expected in (
         ("generation", "pub fn sync_closed_local_draft<",
          "closed DRAFT Sync must use the shared same-device Bridge recovery owner"),
@@ -413,8 +435,6 @@ def self_test(sources: dict[str, str]) -> list[str]:
          "closed READY Sync must use the shared same-device Bridge recovery owner"),
         ("shipping", "fn rebase_local_current_after_exact_successor(",
          "same-device successor rebase must change only the marker under the native writer gate"),
-        ("authoritative", "fn ensure_authoritative_generation_to<",
-         "confirmed-current DRAFT/READY reconciliation must use the shared Bridge recovery owner"),
         ("authoritative", "fn materialize_streamed_authoritative_generation<",
          "confirmed-current DRAFT/READY reconciliation must use the shared Bridge recovery owner"),
     ):
