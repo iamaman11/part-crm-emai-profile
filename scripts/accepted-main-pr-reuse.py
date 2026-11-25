@@ -123,13 +123,12 @@ CRITICAL: dict[str, dict[str, tuple[str, ...]]] = {
     },
     "local-profile": {
         "Local Profile Linux": ("Test local profile lifecycle",),
-        "Local Profile Windows": (
+        "Local Profile Windows Core": (
             "Test local profile lifecycle",
             "Prove OS-owned Restore scratch cleanup after Windows process death",
             "Prove native Open diagnostic cause on Windows",
             "Prove READY v11-to-v12 lost-Commit recovery and dirty-byte refusal",
             "Prove Windows Playwright Ready health confirmation through native process stderr",
-            "Prove K2 256/512 MiB file streaming on Windows with peak RAM and disk limits",
             "Prove Windows release CMS verifier",
             "Prove application delivery signing without OS certificate-store changes",
             "Build AR-6 opsctl on Windows",
@@ -138,6 +137,13 @@ CRITICAL: dict[str, dict[str, tuple[str, ...]]] = {
             "Upload FULL Local Windows runner identity receipt",
             "Verify uploaded FULL Local runner identity digest",
         ),
+        "Local Profile Windows K2": (
+            "Verify exact source checkout",
+            "Prove K2 256/512 MiB file streaming on Windows with peak RAM and disk limits",
+        ),
+        # This is the existing branch-protected status context. Its success
+        # must be downstream of both independently executing Windows jobs.
+        "Local Profile Windows": ("Require both exact-head Windows proof jobs",),
     },
     "d1": {
         "Native opsctl and pinned Wrangler D1 proof": (
@@ -183,16 +189,21 @@ NATIVE_REUSED_CRITICAL: dict[str, dict[str, tuple[str, ...]]] = {
     },
     "local-profile": {
         "Local Profile Linux": ("Test local profile lifecycle",),
-        "Local Profile Windows": (
+        "Local Profile Windows Core": (
             "Verify exact source checkout",
             "Certify unchanged exact prior FULL native physical proof",
         ),
+        "Local Profile Windows K2": (
+            "Verify exact source checkout",
+            "Certify unchanged exact prior FULL native physical proof",
+        ),
+        "Local Profile Windows": ("Require both exact-head Windows proof jobs",),
     },
 }
 
 RUNNER_RECEIPT = {
     "quality": ("quality-native-runner.json", "Rust Windows And Profile Bridge Artifact"),
-    "local-profile": ("local-native-runner.json", "Local Profile Windows"),
+    "local-profile": ("local-native-runner.json", "Local Profile Windows Core"),
 }
 
 
@@ -363,7 +374,10 @@ def prove(main_sha: str, gate: str, api: Callable[[str], Any],
                 require(actual.get(RUST_LINUX_LIGHT_CERT) in
                         (None, ("completed", "skipped")),
                         "Quality Rust Linux falsely certified inheritance during FULL")
-        if native_reused and name == RUNNER_RECEIPT[gate][1]:
+        if native_reused and (
+            name == RUNNER_RECEIPT[gate][1]
+            or (gate == "local-profile" and name == "Local Profile Windows K2")
+        ):
             # A continue-on-error step can report conclusion=success despite
             # outcome=failure. The physical fallback must then run. Require
             # every FULL-only step truly skipped before accepting inheritance;
@@ -1601,7 +1615,68 @@ def fixture(gate: str) -> tuple[dict[str, Any], Callable[[str], Any]]:
     return pages, lambda path: pages[path]
 
 
+def assert_local_windows_graph(source: str) -> None:
+    """Keep the existing protected status downstream of BOTH real Windows jobs.
+
+    No new status context or branch-protection mutation is needed. Source
+    regression must fail the already-required admission self-test before a
+    misleading green Local Profile Windows aggregate can be accepted.
+    """
+    headers = list(re.finditer(r"(?m)^  ([a-z][a-z0-9-]*):\s*$", source))
+    blocks = {item.group(1): source[item.end():headers[index + 1].start()
+                                     if index + 1 < len(headers) else len(source)]
+              for index, item in enumerate(headers)}
+    core = blocks.get("local-profile-windows-core", "")
+    k2 = blocks.get("local-profile-windows-k2", "")
+    aggregate = blocks.get("local-profile-windows", "")
+    physical = "Prove K2 256/512 MiB file streaming on Windows with peak RAM and disk limits"
+    for job, name in ((core, "Local Profile Windows Core"),
+                      (k2, "Local Profile Windows K2")):
+        require(f"    name: {name}\n" in job and "    runs-on: windows-latest\n" in job
+                and "    needs: accepted-pr-proof\n" in job,
+                f"local Windows {name} is not its exact-source independent runner")
+        require("    if: always() && " in job
+                and "      - name: Verify exact source checkout\n" in job
+                and "      - name: Certify unchanged exact prior FULL native physical proof\n" in job,
+                f"local Windows {name} admission or safe FULL fallback missing")
+    require(f"      - name: {physical}\n" not in core
+            and f"      - name: {physical}\n" in k2
+            and "        run: python scripts/test-k2-large-native-streaming.py\n" in k2
+            and "        if: steps.native-prior.outcome != 'success'\n" in k2,
+            "K2 must execute physically on its own Windows runner on FULL")
+    require("      - name: Write FULL Local Windows runner identity receipt\n" in core
+            and "      - name: Write FULL Local Windows runner identity receipt\n" not in k2,
+            "local physical receipt must have exactly one Windows producer")
+    require("    name: Local Profile Windows\n" in aggregate
+            and "    needs: [accepted-pr-proof, local-profile-windows-core, local-profile-windows-k2]\n" in aggregate
+            and "    if: always() && " in aggregate
+            and "      - name: Require both exact-head Windows proof jobs\n" in aggregate
+            and '          test "$ADMISSION" = success\n' in aggregate
+            and '          test "$CORE" = success\n' in aggregate
+            and '          test "$K2" = success\n' in aggregate
+            and '          test "$CORE_MODE" = "$K2_MODE"\n' in aggregate,
+            "protected Local Profile Windows context can bypass a physical job")
+
+
 def self_test() -> None:
+    graph = (Path(__file__).resolve().parent.parent
+             / ".github/workflows/local-profile-gate.yml").read_text(encoding="utf-8")
+    assert_local_windows_graph(graph)
+    for unsafe, repaired in (
+        ("local-profile-windows-core, local-profile-windows-k2", "local-profile-windows-core"),
+        ('test "$K2" = success', 'test "$K2" = skipped'),
+        ('test "$CORE_MODE" = "$K2_MODE"', 'true # ignore mixed modes'),
+        ("    name: Local Profile Windows\n", "    name: Local Profile Windows Unprotected\n"),
+        ("        run: python scripts/test-k2-large-native-streaming.py\n", "        run: echo K2 skipped\n"),
+    ):
+        require(unsafe in graph, f"negative aggregate/K2 fixture not present: {unsafe}")
+        try:
+            assert_local_windows_graph(graph.replace(unsafe, repaired, 1))
+        except Unconfirmed:
+            pass
+        else:
+            raise AssertionError(f"unsafe protected K2 graph accepted: {unsafe}")
+
     d1_pages, d1_api = fixture("d1")
     d1_candidate = "c" * 40
     d1_run: dict[str, Any] = {}
@@ -2442,7 +2517,9 @@ def self_test() -> None:
                              for label in RUST_LINUX_FULL_STEPS)
                 steps.append({"name": RUST_LINUX_LIGHT_CERT,
                               "status": "completed", "conclusion": "success"})
-            if job_name == RUNNER_RECEIPT[gate][1]:
+            if job_name == RUNNER_RECEIPT[gate][1] or (
+                gate == "local-profile" and job_name == "Local Profile Windows K2"
+            ):
                 steps.extend({"name": label, "status": "completed", "conclusion": "skipped"}
                              for label in CRITICAL[gate][job_name]
                              if label not in required_steps)
@@ -2489,7 +2566,10 @@ def self_test() -> None:
                   "missing-prior-k1", "missing-prior-k2", "native-changed", "compare-truncated",
                   "linux-cert-missing", "linux-cert-failure", "linux-fake-native-step",
                   "linux-run-attempt", "linux-foreign-head", "linux-static-skipped",
-                  "prior-linux-cargo-missing", "prior-linux-static-missing"):
+                  "prior-linux-cargo-missing", "prior-linux-static-missing",
+                  "k2-current-missing", "k2-current-skipped", "k2-current-failed",
+                  "k2-current-attempt", "k2-current-head", "k2-cert-missing",
+                  "k2-fake-full", "k2-aggregator-skipped"):
         case = json.loads(json.dumps(new_pages))
         quality_run = next(run for run in current_runs["workflow_runs"]
                            if run["name"] == WORKFLOW["quality"])
@@ -2533,6 +2613,36 @@ def self_test() -> None:
                 for step in job["steps"]:
                     if step["name"] == target_step:
                         step["conclusion"] = "skipped"
+        elif fault.startswith("k2-"):
+            job_key = f"repos/{REPOSITORY}/actions/runs/{local_run['id']}/jobs?per_page=100"
+            inventory = case[job_key]
+            jobs = inventory["jobs"]
+            k2 = next(job for job in jobs if job["name"] == "Local Profile Windows K2")
+            if fault == "k2-current-missing":
+                jobs.remove(k2)
+                inventory["total_count"] -= 1
+            elif fault in ("k2-current-skipped", "k2-current-failed"):
+                k2["conclusion"] = ("skipped" if fault.endswith("skipped") else "failure")
+            elif fault == "k2-current-attempt":
+                k2["run_attempt"] += 1
+            elif fault == "k2-current-head":
+                k2["head_sha"] = "d" * 40
+            elif fault == "k2-aggregator-skipped":
+                aggregator = next(job for job in jobs
+                                  if job["name"] == "Local Profile Windows")
+                aggregator["steps"][0]["conclusion"] = "skipped"
+            else:
+                step = next(step for step in k2["steps"]
+                            if step["name"] == "Certify unchanged exact prior FULL native physical proof")
+                if fault == "k2-cert-missing":
+                    step["conclusion"] = "skipped"
+                else:
+                    # An inherited K2 cannot simultaneously claim its expensive
+                    # physical Rust test was FULL on the current PR attempt.
+                    k2["steps"].append({
+                        "name": "Prove K2 256/512 MiB file streaming on Windows with peak RAM and disk limits",
+                        "status": "completed", "conclusion": "success",
+                    })
         elif fault in ("prior-linux-cargo-missing", "prior-linux-static-missing"):
             original_jobs = case[f"repos/{REPOSITORY}/actions/runs/{quality_run['id'] - 1000}/jobs?per_page=100"]["jobs"]
             linux = next(job for job in original_jobs if job["name"] == "Rust Linux and WASM")
@@ -2544,7 +2654,10 @@ def self_test() -> None:
         else:
             case[native_compare_url]["files"] *= 300
         try:
-            prove_release_artifacts(new_main, lambda key: case[key])
+            if fault.startswith("k2-"):
+                prove_accepted_native_reuse(new_main, "local-profile", lambda key: case[key])
+            else:
+                prove_release_artifacts(new_main, lambda key: case[key])
         except (Unconfirmed, KeyError):
             pass
         else:
