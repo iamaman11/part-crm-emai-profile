@@ -13,6 +13,7 @@ const CAMOUFOX = '.github/workflows/ci.yml';
 const CAMOUFOX_SCOPE = 'scripts/classify-camoufox-runtime-scope.py';
 const AR11_RUNTIME_DOWNLOADER = 'scripts/download-release-set-ar11.py';
 const AR11_RUNTIME_OVERLAY = 'scripts/release-core-overlay-ar11.py';
+const STANDING_RUN_PROOF = 'scripts/ar11-standing-run-proof.py';
 const AUTHORITY = 'architecture/release-architecture-ar11.json';
 const ASSET_MATERIALIZER = 'scripts/release-set-assets-ar11.sh';
 const EXPECTED_PROMOTION_RUN_NAME = "run-name: AR11 Release Set Promotion — ${{ github.event_name == 'workflow_run' && 'STAGING READY/AUTO PROMOTION' || 'INTERNAL ROLLBACK-NEGATIVE EVIDENCE' }}";
@@ -389,6 +390,44 @@ function authorityErrors(authority) {
   return errors;
 }
 
+function standingPredecessorProofErrors(source) {
+  // Exact pre-effect recovery is admitted only after a canonical, completed
+  // failed run whose complete job/step topology proves credentials and deploy
+  // were never reached. Keep the source contract under the negative matrix.
+  return requireMarkers(source, [
+    'type(total) is int and total >= 2 and isinstance(runs, list)',
+    'len(runs) == min(total, 100)',
+    'run.get("event") == "workflow_run"',
+    'run.get("head_branch") == "main"',
+    'len({run["id"] for run in runs}) == len(runs)',
+    'len({run["run_number"] for run in runs}) == len(runs)',
+    'current[0].get("run_attempt") == 1',
+    'current[0].get("status") == "in_progress"',
+    'earlier = [run for run in runs if run["run_number"] < current[0]["run_number"]]',
+    'previous = max(earlier, key=lambda run: run["run_number"])',
+    'previous.get("status") == "completed"',
+    'previous.get("run_attempt") == 1',
+    'if previous.get("conclusion") == "success":',
+    'require(previous.get("conclusion") == "failure", "unknown previous outcome")',
+    'count == len(EXPECTED_JOBS)',
+    'and {job.get("name") for job in jobs} == EXPECTED_JOBS',
+    'and job.get("run_id") == previous["id"]',
+    'exactly_one(jobs, ROUTE).get("conclusion") == "success"',
+    'exactly_one(jobs, PREFLIGHT).get("conclusion") == "success"',
+    'exactly_one(jobs, ROLLBACK).get("conclusion") == "skipped"',
+    'exactly_one(jobs, TERMINAL).get("conclusion") == "failure"',
+    'promote.get("status") == "completed" and promote.get("conclusion") == "failure"',
+    'exactly_one(steps, RESOLVE).get("conclusion") == "success"',
+    'exactly_one(steps, BIND).get("conclusion") == "failure"',
+    'exactly_one(steps, name).get("conclusion") == "skipped"',
+    'for name in (BEFORE_CREDENTIALS, MUTATION_BOUNDARY, DEPLOY)',
+    'step["number"] < bind_number',
+    'step["name"] in SAFE_PRE_BIND',
+    'step["name"] in SAFE_POST_FAILURE',
+    'raise EvidenceRejected(message)',
+  ], 'AR14 exact pre-effect predecessor proof');
+}
+
 function promotionErrors(promotion) {
   const errors = [];
   const runNameLine = promotion.split('\n').find((line) => line.startsWith('run-name: '));
@@ -597,27 +636,19 @@ function promotionErrors(promotion) {
     '.workflow_runs[0].head_sha == $sha',
     '.workflow_runs[0].status == "in_progress"',
     'actions/workflows/release-set-promotion.yml/runs?event=workflow_run&branch=main&per_page=100',
-    'python - "$RUNNER_TEMP/prior-standing-promotion-runs.json" "$GITHUB_RUN_ID"',
-    "runs = payload.get('workflow_runs')",
-    "total = payload.get('total_count')",
-    'not isinstance(total, int) or total < 2 or not isinstance(runs, list)',
-    'len(runs) != min(total, 100)',
-    "run.get('event') != 'workflow_run' or run.get('head_branch') != 'main'",
-    "run['run_number'] < 1",
-    "not isinstance(run.get('id'), int)",
-    "len({run['id'] for run in runs}) != len(runs)",
-    "len({run['run_number'] for run in runs}) != len(runs)",
-    "current[0].get('run_attempt') != 1",
-    "current[0].get('status') != 'in_progress'",
-    "current[0].get('run_number')",
-    "run['run_number'] < number",
-    "if not previous:",
-    "predecessor = previous[0]",
-    "predecessor.get('event') != 'workflow_run'",
-    "predecessor.get('head_branch') != 'main'",
-    "predecessor.get('status') != 'completed'",
-    "predecessor.get('conclusion') != 'success'",
-    "predecessor.get('run_attempt') != 1",
+    '(.workflow_runs | map(select(.id == $current)) | .[0].run_number)',
+    '[.workflow_runs[] | select(.run_number < $number)]',
+    'max_by(.run_number).id',
+    'actions/runs/$predecessor_run_id/jobs?per_page=100',
+    'python scripts/ar11-standing-run-proof.py',
+    '--history "$RUNNER_TEMP/prior-standing-promotion-runs.json"',
+    '--jobs "$RUNNER_TEMP/prior-staging-run-jobs.json"',
+    '--current-run-id "$GITHUB_RUN_ID"',
+    'prior-standing-proof.json',
+    'test "$(git rev-parse HEAD)" = "$main_sha"',
+    '[[ "$READY_ARTIFACT_DIGEST" =~ ^[0-9a-f]{64}$ ]]',
+    'ready_artifact_api_digest="sha256:$READY_ARTIFACT_DIGEST"',
+    '--arg digest "$ready_artifact_api_digest"',
     'actions/artifacts/$READY_ARTIFACT_ID',
     '.id == $artifact_id and .name == $name and .expired == false',
     '.workflow_run.id == $run and .workflow_run.head_sha == $sha',
@@ -1253,10 +1284,11 @@ function camoufoxErrors(workflow, classifier) {
   return errors;
 }
 
-function validateAll({ build, promotion, camoufox, camoufoxClassifier, downloader, overlay, authority }) {
+function validateAll({ build, promotion, camoufox, camoufoxClassifier, downloader, overlay, standingProof, authority }) {
   return [
     ...buildErrors(build),
     ...promotionErrors(promotion),
+    ...standingPredecessorProofErrors(standingProof),
     ...runtimeSidecarErrors(promotion, downloader, overlay),
     ...camoufoxErrors(camoufox, camoufoxClassifier),
     ...authorityErrors(authority),
@@ -1378,62 +1410,47 @@ function selfTest(files) {
   if (!promotionErrors(rerunBypass).some((error) => error.includes('standing READY binder'))) throw new Error('workflow re-run staging bypass fixture passed');
   const sameSourceReplay = files.promotion.replace('.total_count == 1 and (.workflow_runs | length) == 1', '.total_count >= 1');
   if (!promotionErrors(sameSourceReplay).some((error) => error.includes('standing READY binder'))) throw new Error('same-source replay staging bypass fixture passed');
-  const priorUnknownEffect = files.promotion.replace(
-    "predecessor.get('conclusion') != 'success'",
-    "predecessor.get('conclusion') == 'ignored'",
+  // Preserve the cross-source replay and failed-run exact-effect negative gates.
+  const missingHistoryProof = files.promotion.replace(
+    'python scripts/ar11-standing-run-proof.py',
+    'echo "unverified predecessor accepted"',
   );
-  if (priorUnknownEffect === files.promotion
-      || !promotionErrors(priorUnknownEffect).some((error) => error.includes('standing READY binder'))) {
-    throw new Error('unresolved cross-source auto-promotion effect bypass fixture passed');
+  if (!promotionErrors(missingHistoryProof).some((error) => error.includes('standing READY binder'))) {
+    throw new Error('unverified cross-source predecessor bypass fixture passed');
   }
   const priorRunNumberGuardRemoved = files.promotion.replace(
-    "run['run_number'] < number",
-    "run['run_number'] >= number",
+    'max_by(.run_number).id',
+    'min_by(.run_number).id',
   );
   if (priorRunNumberGuardRemoved === files.promotion
       || !promotionErrors(priorRunNumberGuardRemoved).some((error) => error.includes('standing READY binder'))) {
     throw new Error('cross-source immediate predecessor selector bypass fixture passed');
   }
-  const historyStep = stepBlock(jobBlock(files.promotion, 'promote'), 'Bind standing staging authority to exact same-run READY evidence');
-  const historyBlock = historyStep.match(/python - "\$RUNNER_TEMP\/prior-standing-promotion-runs\.json" "\$GITHUB_RUN_ID" <<'PY'\n([\s\S]*?)\n          PY/);
-  if (!historyBlock) throw new Error('cross-source canonical workflow history guard Python executable is missing');
-  const historySource = historyBlock[1].split('\n').map((line) => {
-    if (!line.startsWith('          ')) throw new Error('cross-source history guard Python indentation is invalid');
-    return line.slice(10);
-  }).join('\n');
-  const historyFixtureDir = mkdtempSync(path.join(tmpdir(), 'ar11-standing-history-'));
-  try {
-    const historyPath = path.join(historyFixtureDir, 'workflow-runs.json');
-    const current = { id: 98765, run_number: 1001, run_attempt: 1, event: 'workflow_run', head_branch: 'main', status: 'in_progress', display_title: 'arbitrary current title' };
-    const previous = { id: 98764, run_number: 1000, run_attempt: 1, event: 'workflow_run', head_branch: 'main', status: 'completed', conclusion: 'success', display_title: 'renamed predecessor title' };
-    const runHistory = (runs, total = runs.length) => {
-      writeFileSync(historyPath, JSON.stringify({ total_count: total, workflow_runs: runs }));
-      return spawnSync('python', ['-c', historySource, historyPath, String(current.id)], { encoding: 'utf8' });
-    };
-    if (runHistory([current, previous]).status !== 0) throw new Error('valid current and successful immediate predecessor were rejected');
-    const unsafe = [
-      ['malformed history object', null, 2],
-      ['empty history', [], 0],
-      ['missing current run', [previous], 2],
-      ['missing predecessor', [current], 1],
-      ['failed immediate predecessor despite older success', [current, { ...previous, status: 'completed', conclusion: 'failure' }, { ...previous, id: 98763, run_number: 999 }], 3],
-      ['cancelled predecessor', [current, { ...previous, conclusion: 'cancelled' }], 2],
-      ['unfinished predecessor', [current, { ...previous, status: 'in_progress', conclusion: null }], 2],
-      ['replayed predecessor', [current, { ...previous, run_attempt: 2 }], 2],
-      ['foreign main predecessor', [current, { ...previous, head_branch: 'other' }], 2],
-      ['non-workflow_run predecessor', [current, { ...previous, event: 'workflow_dispatch' }], 2],
-      ['duplicate current id', [current, { ...previous, id: current.id }], 2],
-      ['duplicate run number', [current, { ...previous, run_number: current.run_number }], 2],
-      ['untyped current run number', [{ ...current, run_number: null }, previous], 2],
-      ['untyped total count', [current, previous], '2'],
-      ['truncated first page', [current, previous], 101],
-      ['current absent at 1001-run limit', Array.from({ length: 100 }, (_, i) => ({ ...previous, id: 11000 + i, run_number: 1100 - i })), 1001],
-    ];
-    for (const [label, runs, total] of unsafe) {
-      if (runHistory(runs, total).status === 0) throw new Error(`unsafe ${label} canonical promotion history was accepted`);
-    }
-  } finally {
-    rmSync(historyFixtureDir, { recursive: true, force: true });
+  const removedHistoryBound = files.standingProof.replace(
+    'len(runs) == min(total, 100)', 'len(runs) <= 100',
+  );
+  if (!standingPredecessorProofErrors(removedHistoryBound).some((error) => error.includes('AR14 exact pre-effect'))) {
+    throw new Error('unbounded/truncated canonical predecessor history fixture passed');
+  }
+  const acceptedUnknownEffect = files.standingProof.replace(
+    'require(previous.get("conclusion") == "failure", "unknown previous outcome")',
+    'pass  # unknown predecessor outcome is accepted',
+  );
+  if (!standingPredecessorProofErrors(acceptedUnknownEffect).some((error) => error.includes('AR14 exact pre-effect'))) {
+    throw new Error('unknown previous effect bypass fixture passed');
+  }
+  const bypassedDeployFence = files.standingProof.replace(
+    'for name in (BEFORE_CREDENTIALS, MUTATION_BOUNDARY, DEPLOY)',
+    'for name in ()',
+  );
+  if (!standingPredecessorProofErrors(bypassedDeployFence).some((error) => error.includes('AR14 exact pre-effect'))) {
+    throw new Error('provider deployment boundary bypass fixture passed');
+  }
+  const standingSelfTest = spawnSync('python3', [STANDING_RUN_PROOF, '--self-test'], {
+    cwd: ROOT, encoding: 'utf8',
+  });
+  if (standingSelfTest.status !== 0) {
+    throw new Error('AR14 exact pre-effect proof negative tests failed: ' + standingSelfTest.stderr);
   }
   const allowedWorkflowPath = '(.path == ".github/workflows/release-set-promotion.yml@main" or .path == ".github/workflows/release-set-promotion.yml")';
   for (const [pathValue, accepted] of [
@@ -2002,6 +2019,7 @@ const files = {
   camoufoxClassifier: read(CAMOUFOX_SCOPE),
   downloader: read(AR11_RUNTIME_DOWNLOADER),
   overlay: read(AR11_RUNTIME_OVERLAY),
+  standingProof: read(STANDING_RUN_PROOF),
   authority: JSON.parse(read(AUTHORITY)),
 };
 const errors = validateAll(files);
