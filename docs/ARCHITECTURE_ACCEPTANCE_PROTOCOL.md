@@ -42,15 +42,19 @@ That suffix does not apply to CAP transaction selection or create a second sourc
 ## No duplicate heavyweight CI for tree-identical accepted main
 
 Run all applicable heavy checks on the exact PR candidate **before merging**.
+The one read-only PR/main source owner is `.github/workflows/ci.yml`, with the same
+22 protected job-context names governed by `architecture/github-governance.json`.
 After a guarded single-parent squash merge, the Camoufox, Quality, Local Profile and D1
-workflows may reuse those checks only if `scripts/accepted-main-pr-reuse.py`
+proof jobs may reuse those checks only if `scripts/accepted-main-pr-reuse.py`
 independently verifies all of the following from the GitHub API:
 
 - the merged PR targets the repository's `main`, its base matches the accepted
   commit's sole parent, and its merge SHA is that accepted commit;
 - the accepted commit and tested PR HEAD have the exact same Git tree SHA;
-- all 18 permanent required PR workflows completed successfully on that
-  candidate, and the named expensive tests actually ran and succeeded.
+- the one candidate `CI` run completed successfully at its verified run ID/attempt,
+  all 22 protected context jobs completed successfully on that exact SHA, and
+  the named expensive tests actually ran and succeeded (or have their separate,
+  exact inherited-proof certificate where explicitly permitted).
 
 For D1, this also requires the exact pre-merge FULL Linux and Windows jobs,
 the original GitHub report ZIP verified byte-for-byte against its SHA-256,

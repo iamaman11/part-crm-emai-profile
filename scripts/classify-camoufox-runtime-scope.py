@@ -181,7 +181,7 @@ def run_self_test() -> None:
         ),
         (
             "gate-change-is-heavy",
-            [".github/workflows/camoufox-runtime-gate.yml"],
+            [".github/workflows/ci.yml"],
             True,
         ),
         (

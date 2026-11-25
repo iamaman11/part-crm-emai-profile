@@ -180,8 +180,8 @@ generation IDs, object keys, key IDs, nonces, plaintext digests or profile data.
 
 ## 10. Permanent Evidence
 
-`.github/workflows/encrypted-generation-gate.yml` runs on pull requests and
-`main`:
+The `Encrypted Generation Linux And WASM` and `Encrypted Generation Windows`
+jobs in `.github/workflows/ci.yml` run on pull requests and `main`:
 
 - Step 9 policy compilation and positive enforcement;
 - deliberate key-output negative fixture;
@@ -189,8 +189,9 @@ generation IDs, object keys, key IDs, nonces, plaintext digests or profile data.
 - adversarial encrypted generation tests on Linux and Windows;
 - pure crate compilation for `wasm32-unknown-unknown`.
 
-The repository Quality Gate continues to run the complete workspace, existing
-architecture/contract/D1/Worker/Windows tests and release artifact checks.
+The same CI source owner retains the complete-workspace Rust, architecture,
+contract, D1, Worker, Windows and release-artifact jobs under their existing
+protected status names.
 
 ## 11. Explicit Limitations
 

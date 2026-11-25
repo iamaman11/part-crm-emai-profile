@@ -20,9 +20,11 @@ paths fail closed.
 
 The immutable accepted machine-readable candidate is preserved in the accepted merge
 [`architecture/github-governance-ar7.json`](https://github.com/iamaman11/part-crm-emai-profile/blob/3492273cb9237850e3fa27343cc5edbdb0f66aa1/architecture/github-governance-ar7.json).
-The permanent repository gate is
-[`.github/workflows/github-governance-gate.yml`](../.github/workflows/github-governance-gate.yml),
-with deterministic policy logic in
+The current required source check `GitHub Governance Contract` runs in
+[`ci.yml`](../.github/workflows/ci.yml); hosted governance observation and
+reconciliation retain their independent
+[`github-governance-gate.yml`](../.github/workflows/github-governance-gate.yml).
+Deterministic policy logic remains in
 [`.github/scripts/github-governance.mjs`](../.github/scripts/github-governance.mjs).
 
 ## 2. Promotion authority

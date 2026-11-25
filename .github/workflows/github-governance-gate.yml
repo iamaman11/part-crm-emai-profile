@@ -1,7 +1,6 @@
 name: GitHub Governance Gate
 
 on:
-  pull_request:
   push:
     branches:
       - main
@@ -19,7 +18,9 @@ concurrency:
 
 jobs:
   contract:
-    name: GitHub Governance Contract
+    # The required PR/main check is owned by ci.yml. Keep this distinct
+    # fail-closed preflight before hosted governance observations/reconciliation.
+    name: GitHub Hosted Governance Preflight
     runs-on: ubuntu-24.04
     steps:
       - name: Checkout exact candidate source

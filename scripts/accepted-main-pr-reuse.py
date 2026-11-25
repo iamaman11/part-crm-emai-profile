@@ -32,17 +32,9 @@ from typing import Any
 
 REPOSITORY = "iamaman11/part-crm-emai-profile"
 SHA = re.compile(r"^[0-9a-f]{40}$")
-# Permanent PR workflows required by the current repository acceptance contract.
-REQUIRED = frozenset({
-    "Bridge Host Operations Gate", "Camoufox Runtime Gate",
-    "Certification Gate", "Cross-Component Acceptance Gate",
-    "D1 Evolution Gate", "Encrypted Generation Gate",
-    "External Evidence Gate", "External Review Attestation Gate",
-    "Frontend Gate", "GitHub Governance Gate", "Local Profile Gate",
-    "Profile Generation Gate", "Quality Gate", "Release Architecture Gate",
-    "Repository Quality Audit Gate", "Resolver D1 First Bootstrap",
-    "Runtime Bundle Gate", "V2 Staging Envelope Observation",
-})
+# One exact PR workflow run owns the protected result and all source evidence.
+CI_WORKFLOW = "CI"
+REQUIRED = frozenset({CI_WORKFLOW})
 # Exact meaningful steps must have actually RUN, not merely belong to a
 # successful workflow with all expensive jobs skipped by a PR scope filter.
 RUST_LINUX_FULL_STEPS = (
@@ -125,6 +117,7 @@ CRITICAL: dict[str, dict[str, tuple[str, ...]]] = {
         "Local Profile Linux": ("Test local profile lifecycle",),
         "Local Profile Windows Core": (
             "Test local profile lifecycle",
+            "Prove Windows lost-Commit K1 exact sparse WAL successor",
             "Prove OS-owned Restore scratch cleanup after Windows process death",
             "Prove native Open diagnostic cause on Windows",
             "Prove READY v11-to-v12 lost-Commit recovery and dirty-byte refusal",
@@ -165,12 +158,7 @@ CRITICAL: dict[str, dict[str, tuple[str, ...]]] = {
         ),
     },
 }
-WORKFLOW = {
-    "camoufox": "Camoufox Runtime Gate",
-    "quality": "Quality Gate",
-    "local-profile": "Local Profile Gate",
-    "d1": "D1 Evolution Gate",
-}
+WORKFLOW = {gate: CI_WORKFLOW for gate in CRITICAL}
 
 # A native-unaffected PR is not allowed to present a green-only surrogate.
 # Its own Windows jobs must have executed the exact inherited-EXE verification,
@@ -234,8 +222,60 @@ def required_workflow_paths() -> dict[str, str]:
             if name in REQUIRED:
                 require(name not in paths, f"duplicate required workflow name: {name}")
                 paths[name] = f".github/workflows/{source.name}"
-    require(set(paths) == REQUIRED, "required workflow path missing from exact source")
+    require(paths == {CI_WORKFLOW: ".github/workflows/ci.yml"},
+            "exact consolidated CI workflow path missing from source")
     return paths
+
+
+def protected_required_jobs() -> frozenset[str]:
+    """Read the exact 22 protected contexts from their single desired-state owner."""
+    source = Path(__file__).resolve().parent.parent / "architecture/github-governance.json"
+    contract = json.loads(source.read_text(encoding="utf-8"))
+    require(contract.get("repository") == REPOSITORY, "foreign GitHub governance contract")
+    jobs = contract.get("main", {}).get("required_checks")
+    require(isinstance(jobs, list) and len(jobs) == 22
+            and all(isinstance(job, str) and bool(job) for job in jobs)
+            and len(set(jobs)) == len(jobs),
+            "protected required jobs missing or ambiguous")
+    return frozenset(jobs)
+
+
+def expected_pr_jobs() -> dict[str, str]:
+    """Bind every consolidated CI source job, not only protected contexts.
+
+    The D1 accepted-main router is the one intentionally skipped PR job.
+    Everything else must genuinely complete successfully, including unprotected
+    security/scope/proof jobs. Scope may skip expensive *steps*, never a job.
+    """
+    source = Path(__file__).resolve().parent.parent / ".github/workflows/ci.yml"
+    contents = source.read_text(encoding="utf-8")
+    require("\njobs:\n" in contents, "CI source lacks job inventory")
+    body = contents.split("\njobs:\n", 1)[1]
+    headers = list(re.finditer(r"(?m)^  ([a-z][a-z0-9-]*):[ \t]*$", body))
+    require(len(headers) == 35, "consolidated CI source job inventory drift")
+    expected: dict[str, str] = {}
+    for index, header in enumerate(headers):
+        job_id = header.group(1)
+        block = body[header.end():headers[index + 1].start()
+                     if index + 1 < len(headers) else len(body)]
+        names = re.findall(r"(?m)^    name: (.+)$", block)
+        require(len(names) == 1, f"CI job name missing/ambiguous: {job_id}")
+        name = names[0].strip().strip("'\"")
+        require(bool(name) and name not in expected,
+                f"duplicate/empty CI source job name: {name}")
+        # Exactly one PR-only skip is a native GitHub event condition, not
+        # a successful-but-unexecuted proof or a job-side shell bypass.
+        if job_id == "d1-evolution-accepted-pr-proof":
+            require(re.search(r"(?m)^    if: github.event_name == 'push'$", block)
+                    is not None, "D1 router must be push-only")
+            expected[name] = "skipped"
+        else:
+            expected[name] = "success"
+    require("Prove exact accepted FULL D1 PR evidence" in expected
+            and expected["Prove exact accepted FULL D1 PR evidence"] == "skipped"
+            and protected_required_jobs().issubset(expected),
+            "unmatched protected or PR-only CI source jobs")
+    return expected
 
 
 def api_reader(token: str) -> Callable[[str], Any]:
@@ -325,15 +365,6 @@ def prove(main_sha: str, gate: str, api: Callable[[str], Any],
             and run["run_attempt"] >= 1,
             f"PR workflow path/repository/attempt mismatch: {name}",
         )
-    # A successful, exact-tree PR with its heavy steps skipped is only a
-    # candidate for a separately proven, unchanged prior-runtime receipt.
-    # It must never be used as a standalone physical proof.
-    if not require_steps:
-        require(not native_reused, "ambiguous combined proof-mode bypass")
-        require(gate == "camoufox", "only Camoufox has unchanged-input proof reuse")
-        return candidate
-    if native_reused:
-        require(gate in NATIVE_REUSED_CRITICAL, "native reuse not permitted for gate")
     source_run = latest[WORKFLOW[gate]]
     jobs = api(f"{root}/actions/runs/{source_run['id']}/jobs?per_page=100")
     require(
@@ -343,12 +374,37 @@ def prove(main_sha: str, gate: str, api: Callable[[str], Any],
         "incomplete PR job inventory",
     )
     by_name: dict[str, dict[str, Any]] = {}
+    protected = protected_required_jobs()
+    expected_jobs = expected_pr_jobs()
     expected_critical = NATIVE_REUSED_CRITICAL[gate] if native_reused else CRITICAL[gate]
     for job in jobs["jobs"]:
         name = job.get("name")
-        if name in expected_critical:
-            require(name not in by_name, f"duplicate required PR job: {name}")
-            by_name[name] = job
+        require(name in expected_jobs and name not in by_name,
+                f"unknown/duplicate source CI PR job: {name}")
+        by_name[name] = job
+    require(set(by_name) == set(expected_jobs) and jobs["total_count"] == len(by_name),
+            "complete 35-job source CI PR inventory missing")
+    for name, expected_conclusion in expected_jobs.items():
+        job = by_name[name]
+        require(job.get("status") == "completed"
+                and job.get("conclusion") == expected_conclusion,
+                f"source CI PR job not in required state: {name}")
+        require(job.get("run_id") == source_run["id"]
+                and job.get("run_attempt") == source_run["run_attempt"]
+                and job.get("head_sha") == candidate
+                and job.get("workflow_name") == CI_WORKFLOW,
+                f"source CI PR job run/attempt/head/workflow mismatch: {name}")
+    for name in protected:
+        require(by_name[name]["conclusion"] == "success",
+                f"protected PR status is not success: {name}")
+    # A complete exact-tree CI run with skipped heavy Camoufox steps can
+    # certify only its source identity, never physical execution by itself.
+    if not require_steps:
+        require(not native_reused, "ambiguous combined proof-mode bypass")
+        require(gate == "camoufox", "only Camoufox has unchanged-input proof reuse")
+        return candidate
+    if native_reused:
+        require(gate in NATIVE_REUSED_CRITICAL, "native reuse not permitted for gate")
     for name, steps in expected_critical.items():
         job = by_name.get(name, {})
         require(
@@ -1119,7 +1175,7 @@ def prove_unchanged_prior_camoufox(
 ) -> str:
     """Trust a past *executed* official Windows proof only if every diff is safe.
 
-    The current accepted main PR has already passed exact-tree/18-workflow
+    The current accepted main PR has already passed exact-tree/single-CI-run
     validation. Past proof comes from the existing GitHub PR run and exact-tree
     PR-merge receipt; no new registry, signing, cache, or source-of-truth.
     """
@@ -1275,7 +1331,7 @@ def prove_unchanged_prior_native(
     """Find one previously completed FULL Quality *and* Local proof source.
 
     No transitive proof chaining: every accepted ancestor is verified against
-    both genuinely executed physical Windows jobs, 18 successful workflows,
+    both genuinely executed physical Windows jobs, one successful 35-job CI run,
     exact original PR tree/run/attempt and native-independent tree diff.
     """
     require(bool(SHA.fullmatch(source_sha) and SHA.fullmatch(base_sha)),
@@ -1461,7 +1517,7 @@ def prove_accepted_d1_full(main_sha: str, api: Callable[[str], Any], token: str,
                            *, as_of: datetime | None = None) -> tuple[str, dict[str, Any]]:
     """Reuse one pre-merge FULL PR D1 witness, including the original ZIP bytes.
 
-    All 18 PR workflows and both real D1 jobs/critical steps must have run.
+    The exact 35-job CI run and both real D1 jobs/critical steps must have run.
     A rerun or uploaded artifact after merge is not evidence for the accepted
     transaction, even if its eventual GitHub conclusion is green.
     """
@@ -1576,14 +1632,19 @@ def fixture(gate: str) -> tuple[dict[str, Any], Callable[[str], Any]]:
         for i, name in enumerate(sorted(REQUIRED))
     ]
     gate_run = next(run for run in runs if run["name"] == WORKFLOW[gate])
+    critical_jobs = {name: steps for group in CRITICAL.values()
+                     for name, steps in group.items()}
+    all_jobs = {name: critical_jobs.get(name, ()) for name in expected_pr_jobs()}
+    all_jobs.update(critical_jobs)
     jobs = [
-        {"name": name, "status": "completed", "conclusion": "success",
+        {"name": name, "status": "completed",
+         "conclusion": expected_pr_jobs()[name],
          "run_id": gate_run["id"], "run_attempt": gate_run["run_attempt"],
          "head_sha": head, "workflow_name": WORKFLOW[gate],
          "started_at": "2026-10-31T00:00:00Z", "completed_at": "2026-10-31T00:10:00Z",
          "steps": [{"name": step, "status": "completed", "conclusion": "success"}
                    for step in steps]}
-        for name, steps in CRITICAL[gate].items()
+        for name, steps in sorted(all_jobs.items())
     ]
     artifact_inventory = []
     if gate == "quality":
@@ -1636,6 +1697,21 @@ def fixture(gate: str) -> tuple[dict[str, Any], Callable[[str], Any]]:
     return pages, lambda path: pages[path]
 
 
+def normalized_local_windows_graph(source: str) -> str:
+    """Prove namespaced CI dependencies before applying the exact graph audit.
+
+    The original independent Core/K2 graph keeps its semantic contract; the
+    only intentional change is prefixing each source-local ID under one CI.
+    """
+    for old in ("accepted-pr-proof", "local-profile-windows-core",
+                "local-profile-windows-k2", "local-profile-windows"):
+        new = f"local-profile-{old}"
+        require(re.search(rf"(?m)^  {re.escape(new)}:[ \t]*$", source)
+                is not None, f"missing namespaced Local Profile job: {new}")
+        source = source.replace(new, old)
+    return source
+
+
 def assert_local_windows_graph(source: str) -> None:
     """Keep the existing protected status downstream of BOTH real Windows jobs.
 
@@ -1665,6 +1741,14 @@ def assert_local_windows_graph(source: str) -> None:
         return "\n".join(line for line in body.strip("\n").splitlines()
                          if not line.lstrip().startswith("#")).strip("\n")
 
+    def actual_job_header(job: str) -> str:
+        # Consolidated CI gives every source job an explicit permissions map.
+        # That map precedes the source-original needs/if/name/runner fields.
+        require(job.startswith("    permissions:\n"),
+                "CI job omitted its independent permissions policy")
+        return re.sub(r"\A    permissions:\n(?:      [a-z-]+: [a-z]+\n)+",
+                      "", job, count=1)
+
     for job, name in ((core, "Local Profile Windows Core"),
                       (k2, "Local Profile Windows K2")):
         required_header = (
@@ -1676,7 +1760,7 @@ def assert_local_windows_graph(source: str) -> None:
             "      proof_mode: ${{ steps.native-prior.outcome == 'success' && 'INHERITED' || 'FULL' }}\n"
             "    steps:\n"
         )
-        require(job.startswith(required_header)
+        require(actual_job_header(job).startswith(required_header)
                 and not re.search(r"(?m)^    continue-on-error:", job),
                 f"local Windows {name} is not its exact-source independent runner")
         checkout = step_body(job, "Checkout")
@@ -1717,6 +1801,27 @@ def assert_local_windows_graph(source: str) -> None:
     require("      - name: Write FULL Local Windows runner identity receipt\n" in core
             and "      - name: Write FULL K2 Windows runner identity receipt\n" in k2,
             "Core and K2 must each witness their own physical Windows runner")
+    for label, exact_test in (
+        ("Prove Windows lost-Commit K1 exact sparse WAL successor",
+         "shipping_generation_successor_control::tests::"
+         "fresh_lone_intent_first_seals_then_commit_and_next_claim_finishes_active_exact"),
+        ("Prove Windows release CMS verifier",
+         "production_verifier_accepts_only_exact_pinned_application_signature"),
+    ):
+        guarded = step_body(core, label)
+        require(all(fragment in guarded for fragment in (
+            "        if: steps.native-prior.outcome != 'success'",
+            "        shell: pwsh",
+            "          $ErrorActionPreference = 'Stop'",
+            "          $PSNativeCommandUseErrorActionPreference = $true",
+            exact_test,
+            "--exact",
+            "--list 2>&1",
+            "Count -ne 1",
+            "if ($LASTEXITCODE -ne 0",
+            "1 passed; 0 failed; 0 ignored;",
+        )) and guarded.count("if ($LASTEXITCODE -ne 0") == 2,
+                f"Windows {label} lacks exact one-match/one-pass proof")
     required_aggregate = (
         "    needs: [accepted-pr-proof, local-profile-windows-core, local-profile-windows-k2]\n"
         f"    if: {admission}\n"
@@ -1737,7 +1842,10 @@ def assert_local_windows_graph(source: str) -> None:
         '          test "$CORE_MODE" = "$K2_MODE"\n'
         '          test "$CORE_MODE" = FULL || test "$CORE_MODE" = INHERITED'
     )
-    require(aggregate.strip("\n") == required_aggregate,
+    aggregate = actual_job_header(aggregate)
+    aggregate = "\n".join(line for line in aggregate.strip("\n").splitlines()
+                          if not line.lstrip().startswith("#")).rstrip("\n")
+    require(aggregate == required_aggregate,
             "protected Local Profile Windows context can bypass a physical job")
 
 
@@ -1747,8 +1855,8 @@ def self_test() -> None:
     assert native_runner_receipt_scopes(False, False) == (
         "local-profile", "local-profile-k2",
     )
-    graph = (Path(__file__).resolve().parent.parent
-             / ".github/workflows/local-profile-gate.yml").read_text(encoding="utf-8")
+    graph = normalized_local_windows_graph((Path(__file__).resolve().parent.parent
+             / ".github/workflows/ci.yml").read_text(encoding="utf-8"))
     assert_local_windows_graph(graph)
     for unsafe, repaired in (
         ("local-profile-windows-core, local-profile-windows-k2", "local-profile-windows-core"),
@@ -1777,6 +1885,11 @@ def self_test() -> None:
          "      - name: Prove K2 256/512 MiB file streaming on Windows with peak RAM and disk limits\n"
          "        if: steps.native-prior.outcome != 'success'\n"
          "        continue-on-error: true\n"),
+        ("Count -ne 1", "Count -lt 0"),
+        ("1 passed; 0 failed; 0 ignored;", "0 passed; 0 failed; 0 ignored;"),
+        ("--list 2>&1", "--list # skipped"),
+        ("shipping_generation_successor_control::tests::fresh_lone_intent_first_seals_then_commit_and_next_claim_finishes_active_exact",
+         "wrong_k1_no_test"),
         ("          ref: ${{ github.event.pull_request.head.sha || github.sha }}",
          "          ref: main"),
         ("    runs-on: windows-latest\n    outputs:",
@@ -1791,7 +1904,11 @@ def self_test() -> None:
     ):
         require(unsafe in graph, f"negative aggregate/K2 fixture not present: {unsafe}")
         mutated = graph.replace(unsafe, repaired, 1)
-        if unsafe.startswith("          ref: "):
+        if (unsafe.startswith("          ref: ")
+                or unsafe in ("Count -ne 1", "1 passed; 0 failed; 0 ignored;",
+                              "--list 2>&1",
+                              "shipping_generation_successor_control::tests::"
+                              "fresh_lone_intent_first_seals_then_commit_and_next_claim_finishes_active_exact")):
             prefix, local = graph.split("  local-profile-windows-core:\n", 1)
             mutated = (prefix + "  local-profile-windows-core:\n"
                        + local.replace(unsafe, repaired, 1))
@@ -1819,7 +1936,8 @@ def self_test() -> None:
             next(step for job in jobs for step in job["steps"]
                  if step["name"] == target)["conclusion"] = "skipped"
         elif fault == "missing-windows":
-            jobs.pop(next(i for i, job in enumerate(jobs) if "Windows" in job["name"]))
+            jobs.pop(next(i for i, job in enumerate(jobs)
+                          if job["name"] == "Native opsctl D1 CLI portability on Windows"))
         else:
             jobs.append(dict(jobs[0]))
         try:
@@ -1949,14 +2067,18 @@ def self_test() -> None:
                          if step["name"] == "Execute reusable D1 fault and recovery harness")[
                              "conclusion"] = "skipped"
                 elif fault == "missing-windows":
-                    jobs[:] = [job for job in jobs if "Windows" not in job["name"]]
+                    jobs[:] = [job for job in jobs
+                               if job["name"] != "Native opsctl D1 CLI portability on Windows"]
                     case[d1_jobs_key]["total_count"] = len(jobs)
                 elif fault == "post-merge-run":
                     next(run for run in case[runs_key]["workflow_runs"]
                          if run["name"] == WORKFLOW["d1"])["updated_at"] = "2026-10-31T02:00:00Z"
                 elif fault in ("post-merge-linux", "post-merge-windows"):
-                    next(job for job in jobs if ("Windows" in job["name"])
-                         == (fault == "post-merge-windows"))["completed_at"] = "2026-10-31T02:00:00Z"
+                    producer = ("Native opsctl D1 CLI portability on Windows"
+                                if fault == "post-merge-windows"
+                                else "Native opsctl and pinned Wrangler D1 proof")
+                    next(job for job in jobs if job["name"] == producer)[
+                        "completed_at"] = "2026-10-31T02:00:00Z"
                 elif fault == "zip-after-linux":
                     artifact["created_at"] = "2026-10-31T00:11:00Z"
                 elif fault == "post-merge-zip":
@@ -2152,7 +2274,9 @@ def self_test() -> None:
             jobs.append(dict(jobs[0]))
             case[release_job_path]["total_count"] += 1
         elif failure == "duplicate-step":
-            jobs[0]["steps"].append(dict(jobs[0]["steps"][0]))
+            producer = next(job for job in jobs
+                            if job["name"] == "Cloudflare Worker Release Build")
+            producer["steps"].append(dict(producer["steps"][0]))
         elif failure == "missing-artifact":
             inventory["artifacts"].pop(0)
             inventory["total_count"] -= 1
@@ -2167,7 +2291,7 @@ def self_test() -> None:
             target["workflow_run"]["id"] += 1
         elif failure == "post-merge-rerun":
             run_path = next(key for key in case if key.endswith("&event=pull_request&per_page=100"))
-            next(run for run in case[run_path]["workflow_runs"] if run["name"] == "Quality Gate")[
+            next(run for run in case[run_path]["workflow_runs"] if run["name"] == CI_WORKFLOW)[
                 "updated_at"] = "2026-11-01T00:00:00Z"
         elif failure == "bad-digest":
             target["digest"] = "sha256:missing"
@@ -2185,6 +2309,60 @@ def self_test() -> None:
             pass
         else:
             raise AssertionError(f"unsafe PR compiled release reuse accepted: {failure}")
+    # One successful aggregate status cannot hide a skipped, renamed, stale,
+    # duplicated or absent unprotected source job. Every PR-side constituent
+    # job is admitted by exact identity, not by only the 22 protected names.
+    inventory_pages, _ = fixture("quality")
+    inventory_key = next(key for key in inventory_pages if key.endswith("/jobs?per_page=100"))
+    for fault in ("unprotected-skipped", "unprotected-missing", "unprotected-failed",
+                  "unprotected-stale-attempt", "unprotected-foreign-workflow",
+                  "unprotected-renamed", "unprotected-duplicate", "unknown-job",
+                  "protected-skipped", "protected-missing", "protected-stale-run",
+                  "d1-router-falsely-green", "d1-router-missing", "truncated-jobs"):
+        case = json.loads(json.dumps(inventory_pages))
+        inventory = case[inventory_key]
+        rows = inventory["jobs"]
+        unprotected = next(row for row in rows
+                           if row["name"] == "Bridge Host Ops Linux Policy")
+        protected = next(row for row in rows if row["name"] == "React Operator UI")
+        skipped = next(row for row in rows
+                       if row["name"] == "Prove exact accepted FULL D1 PR evidence")
+        if fault == "unprotected-skipped":
+            unprotected["conclusion"] = "skipped"
+        elif fault == "unprotected-missing":
+            rows.remove(unprotected)
+        elif fault == "unprotected-failed":
+            unprotected["conclusion"] = "failure"
+        elif fault == "unprotected-stale-attempt":
+            unprotected["run_attempt"] += 1
+        elif fault == "unprotected-foreign-workflow":
+            unprotected["workflow_name"] = "Other Workflow"
+        elif fault == "unprotected-renamed":
+            unprotected["name"] += " unprotected"
+        elif fault == "unprotected-duplicate":
+            rows.append(dict(unprotected))
+        elif fault == "unknown-job":
+            rows.append(dict(unprotected, name="Unreviewed CI admission"))
+        elif fault == "protected-skipped":
+            protected["conclusion"] = "skipped"
+        elif fault == "protected-missing":
+            rows.remove(protected)
+        elif fault == "protected-stale-run":
+            protected["run_id"] += 1
+        elif fault == "d1-router-falsely-green":
+            skipped["conclusion"] = "success"
+        elif fault == "d1-router-missing":
+            rows.remove(skipped)
+        else:
+            inventory["total_count"] = 101
+        inventory["total_count"] = (101 if fault == "truncated-jobs" else len(rows))
+        try:
+            prove("a" * 40, "quality", lambda key: case[key])
+        except Unconfirmed:
+            pass
+        else:
+            raise AssertionError(f"consolidated CI accepted unsafe source job: {fault}")
+
     for gate in CRITICAL:
         pages, read = fixture(gate)
         require(prove("a" * 40, gate, read) == "c" * 40, "valid squash receipt rejected")
@@ -2212,7 +2390,9 @@ def self_test() -> None:
                 target["conclusion"] = "failure"
             else:
                 jobpath = next(k for k in clone if k.endswith("/jobs?per_page=100"))
-                clone[jobpath]["jobs"][0]["steps"][0]["conclusion"] = "skipped"
+                target = next(job for job in clone[jobpath]["jobs"]
+                              if job["name"] in CRITICAL[gate])
+                target["steps"][0]["conclusion"] = "skipped"
             try:
                 prove("a" * 40, gate, lambda path: clone[path])
             except Unconfirmed:
@@ -2259,7 +2439,8 @@ def self_test() -> None:
             elif mutation in ("foreign-job-run", "foreign-job-head", "foreign-job-workflow",
                               "stale-job-attempt"):
                 jobpath = next(k for k in clone if k.endswith("/jobs?per_page=100"))
-                job = clone[jobpath]["jobs"][0]
+                job = next(job for job in clone[jobpath]["jobs"]
+                           if job["name"] in CRITICAL[gate])
                 if mutation == "foreign-job-run":
                     job["run_id"] += 1
                 elif mutation == "foreign-job-head":
@@ -2274,7 +2455,9 @@ def self_test() -> None:
                     clone[suffix]["jobs"].pop()
                     clone[suffix]["total_count"] -= 1
                 else:
-                    clone[suffix]["jobs"][0]["steps"][0]["conclusion"] = "skipped"
+                    target = next(job for job in clone[suffix]["jobs"]
+                                  if job["name"] in CRITICAL[gate])
+                    target["steps"][0]["conclusion"] = "skipped"
             try:
                 prove("a" * 40, gate, lambda path: clone[path])
             except Unconfirmed:
@@ -2311,7 +2494,7 @@ def self_test() -> None:
                     raise AssertionError(
                         f"{gate}: accepted {mutation} evidence: {required_job}/{skipped_step}"
                     )
-    # Fail-closed historical reuse: current PR has all 18 successful checks
+    # Fail-closed historical reuse: current PR has all 22 protected checks
     # but SKIPPED heavy jobs, while older accepted main has exact real proof.
     now, _ = fixture("camoufox")
     root = f"repos/{REPOSITORY}"
@@ -2389,7 +2572,7 @@ def self_test() -> None:
     for unsafe in (
         ["runtime/camouhost/real.py"],
         ["apps/profile-bridge/src/main.rs"],
-        [".github/workflows/camoufox-runtime-gate.yml"],
+        [".github/workflows/ci.yml"],
         ["scripts/classify-camoufox-runtime-scope.py"],
     ):
         try:
@@ -2412,7 +2595,9 @@ def self_test() -> None:
     else:
         raise AssertionError("failed prior PR workflow reused")
     prior_camoufox["conclusion"] = "success"
-    now[prior_jobs]["jobs"][0]["steps"][0]["conclusion"] = "skipped"
+    prior_real = next(job for job in now[prior_jobs]["jobs"]
+                      if job["name"] == "Profile Bridge Windows regression")
+    prior_real["steps"][0]["conclusion"] = "skipped"
     try:
         prove_unchanged_prior_camoufox(
             now_sha, base_sha, api, lambda _: [base_sha],
@@ -2440,7 +2625,7 @@ def self_test() -> None:
         ["docs/INSTALL.md"], ["README.md"], ["frontend/public/logo.svg"],
         ["frontend/src/app/icon.svg"], ["Cargo.toml"], ["Cargo.lock"],
         ["apps/profile-bridge/src/main.rs"],
-        [".github/workflows/quality-gate.yml"],
+        [".github/workflows/ci.yml"],
         ["scripts/accepted-main-pr-reuse.py"],
         ["frontend/src/router.tsx", "crates/contracts/src/lib.rs"],
         ["frontend/src/../app/main.tsx"], ["frontend/src/foo\\bar.ts"],
@@ -2555,14 +2740,19 @@ def self_test() -> None:
             else:
                 raise AssertionError(f"untrusted native runner artifact accepted: {gate}/{fault}")
 
-    # Two previous required Windows workflows must have executed on ONE
-    # accepted source. A green Quality-only or Local-only proof is insufficient.
+    # Both previous required Windows proof groups must have executed on ONE
+    # accepted CI run. A green Quality-only or Local-only proof is insufficient.
     quality_pages, _ = fixture("quality")
     local_pages, _ = fixture("local-profile")
-    two_full = dict(quality_pages)
+    two_full = json.loads(json.dumps(quality_pages))
     for key, value in local_pages.items():
-        if key.endswith("/jobs?per_page=100") or key.endswith("/artifacts?per_page=100"):
-            two_full[key] = value
+        if key.endswith("/artifacts?per_page=100"):
+            local_receipts = [artifact for artifact in value["artifacts"]
+                              if artifact["name"] in
+                              {RUNNER_RECEIPT["local-profile"][0],
+                               RUNNER_RECEIPT["local-profile-k2"][0]}]
+            two_full[key]["artifacts"].extend(local_receipts)
+            two_full[key]["total_count"] = len(two_full[key]["artifacts"])
     full_api = lambda key: two_full[key]
     assert prove_unchanged_prior_native(
         "a" * 40, "a" * 40, full_api,
@@ -2622,6 +2812,15 @@ def self_test() -> None:
         "sha": "b" * 40, "parents": [], "commit": {"tree": {"sha": "0" * 40}},
     }
     new_pages[f"repos/{REPOSITORY}/actions/runs?head_sha={new_head}&event=pull_request&per_page=100"] = current_runs
+    # All 35 source jobs belong to the same CI run; update provenance once.
+    old_id = current_runs["workflow_runs"][0]["id"] - 1000
+    new_id = old_id + 1000
+    current_job_path = f"repos/{REPOSITORY}/actions/runs/{new_id}/jobs?per_page=100"
+    new_pages[current_job_path] = json.loads(json.dumps(
+        two_full[f"repos/{REPOSITORY}/actions/runs/{old_id}/jobs?per_page=100"]))
+    for job in new_pages[current_job_path]["jobs"]:
+        job["run_id"] = new_id
+        job["head_sha"] = new_head
     native_compare_url = f"repos/{REPOSITORY}/compare/{prior_main}...{new_main}"
     new_pages[native_compare_url] = {
         "base_commit": {"sha": prior_main},
@@ -2657,9 +2856,9 @@ def self_test() -> None:
                 "started_at": "2026-10-31T00:00:00Z",
                 "completed_at": "2026-10-31T00:10:00Z", "steps": steps,
             })
-        new_pages[f"repos/{REPOSITORY}/actions/runs/{run['id']}/jobs?per_page=100"] = {
-            "total_count": len(current_jobs), "jobs": current_jobs,
-        }
+        existing = new_pages[current_job_path]["jobs"]
+        replacements = {job["name"]: job for job in current_jobs}
+        existing[:] = [replacements.get(job["name"], job) for job in existing]
         if gate == "quality":
             old_inventory = two_full[f"repos/{REPOSITORY}/actions/runs/{run['id'] - 1000}/artifacts?per_page=100"]
             copied_inventory = json.loads(json.dumps(old_inventory))
@@ -3080,7 +3279,7 @@ def self_test() -> None:
         reject(lambda: runtime_proof_artifacts(main_sha, lambda key: changed[key],
                                                release_id), fault)
 
-    # Inherited LIGHT success comes from current exact-tree 18/18 plus the
+    # Inherited LIGHT success comes from current exact-tree 35-job CI plus the
     # previous accepted main FULL physical receipt, with only documented
     # Camoufox-unrelated changes (including exact frontend/src TS/CSS).
     light_main, light_head = "6" * 40, "7" * 40
@@ -3417,7 +3616,7 @@ def main() -> int:
                     try:
                         # The current PR may legitimately skip heavy browser tests
                         # for an audited unrelated change. Require its exact-tree
-                        # merge + all 18 successful workflow receipts first.
+                        # merge + all 35 exact CI source job outcomes first.
                         prove(main_sha, args.gate, api, require_steps=False)
                         checked_out = subprocess.check_output(
                             ["git", "rev-parse", "HEAD"], text=True

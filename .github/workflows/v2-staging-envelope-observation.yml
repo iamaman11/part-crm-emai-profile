@@ -1,7 +1,6 @@
 name: V2 Staging Envelope Observation
 
 on:
-  pull_request:
   push:
     branches:
       - main
@@ -17,7 +16,9 @@ concurrency:
 
 jobs:
   contract:
-    name: V2 Staging Envelope Contract
+    # The required source contract runs in ci.yml; this remains the distinct
+    # hosted-only preflight for staging observation on accepted main.
+    name: V2 Hosted Observation Preflight
     runs-on: ubuntu-24.04
     steps:
       - name: Checkout exact candidate source
