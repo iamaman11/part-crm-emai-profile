@@ -104,11 +104,13 @@ jobs:
       - name: Test local profile lifecycle
         run: cargo test --locked -p profile-bridge --features synthetic-test-bin local_profile
 
-  local-profile-windows:
+  local-profile-windows-core:
     needs: accepted-pr-proof
     if: always() && (github.event_name == 'pull_request' || needs.accepted-pr-proof.result != 'success' || needs.accepted-pr-proof.outputs.reuse != 'true')
-    name: Local Profile Windows
+    name: Local Profile Windows Core
     runs-on: windows-latest
+    outputs:
+      proof_mode: ${{ steps.native-prior.outcome == 'success' && 'INHERITED' || 'FULL' }}
     steps:
       - name: Require successful accepted PR proof routing
         shell: pwsh
@@ -179,10 +181,6 @@ jobs:
           cargo test --locked -p profile-bridge --features synthetic-test-bin --lib local_browser_open::tests -- --include-ignored
           if ($LASTEXITCODE -ne 0) { throw 'native Playwright Ready health-confirmation tests failed' }
 
-      - name: Prove K2 256/512 MiB file streaming on Windows with peak RAM and disk limits
-        if: steps.native-prior.outcome != 'success'
-        run: python scripts/test-k2-large-native-streaming.py
-
       - name: Prove Windows release CMS verifier
         if: steps.native-prior.outcome != 'success'
         run: cargo test --locked -p profile-bridge --test windows_delivery_signature_acceptance -- --exact production_verifier_accepts_only_exact_pinned_application_signature
@@ -242,3 +240,111 @@ jobs:
           if (-not $env:UPLOADED_DIGEST -or $env:UPLOADED_DIGEST -ne $expected) {
             throw 'FULL Local Windows runner receipt upload SHA mismatch'
           }
+
+  # K2 compiles a separate release-profile Rust test and streams 256/512/543 MiB.
+  # Its independent Windows runner never shares temp fixtures or Cargo locks
+  # with Core; the original required status is gated on BOTH physical jobs.
+  local-profile-windows-k2:
+    needs: accepted-pr-proof
+    if: always() && (github.event_name == 'pull_request' || needs.accepted-pr-proof.result != 'success' || needs.accepted-pr-proof.outputs.reuse != 'true')
+    name: Local Profile Windows K2
+    runs-on: windows-latest
+    outputs:
+      proof_mode: ${{ steps.native-prior.outcome == 'success' && 'INHERITED' || 'FULL' }}
+    steps:
+      - name: Require successful accepted PR proof routing
+        shell: pwsh
+        run: |
+          if ('${{ needs.accepted-pr-proof.result }}' -ne 'success') { throw 'Accepted PR proof routing did not succeed' }
+
+      - name: Checkout
+        uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+
+      - name: Verify exact source checkout
+        env:
+          EXPECTED_SOURCE_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: python -c "import os, subprocess; actual = subprocess.check_output(['git', 'rev-parse', 'HEAD'], text=True).strip(); expected = os.environ['EXPECTED_SOURCE_SHA']; assert actual == expected, f'expected {expected}, got {actual}'"
+
+      - name: Set up pinned Python for K2 resource accounting
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
+        with:
+          python-version: '3.12.10'
+
+      - name: Certify unchanged exact prior FULL native physical proof
+        if: github.event_name == 'pull_request' && needs.accepted-pr-proof.outputs.native_unaffected == 'true'
+        id: native-prior
+        continue-on-error: true
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: python scripts/accepted-main-pr-reuse.py --pr-native-certify
+
+      - name: Restore versioned Rust dependencies for K2
+        if: steps.native-prior.outcome != 'success'
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2 (immutable)
+        with:
+          shared-key: profile-bridge-ci-v1
+          workspaces: |
+            . -> target
+            tools/opsctl -> target
+          cache-on-failure: 'true'
+
+      - name: Prove K2 256/512 MiB file streaming on Windows with peak RAM and disk limits
+        if: steps.native-prior.outcome != 'success'
+        run: python scripts/test-k2-large-native-streaming.py
+
+      - name: Write FULL K2 Windows runner identity receipt
+        if: github.event_name == 'pull_request' && steps.native-prior.outcome != 'success'
+        shell: pwsh
+        env:
+          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: python scripts/accepted-main-pr-reuse.py --native-runner-receipt local-profile-k2 --receipt-output "$env:RUNNER_TEMP/local-k2-native-runner.json"
+
+      - name: Upload FULL K2 Windows runner identity receipt
+        if: github.event_name == 'pull_request' && steps.native-prior.outcome != 'success'
+        id: k2-native-runner-upload
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: local-k2-native-runner.json
+          path: ${{ runner.temp }}/local-k2-native-runner.json
+          archive: false
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Verify uploaded FULL K2 runner identity digest
+        if: github.event_name == 'pull_request' && steps.native-prior.outcome != 'success'
+        shell: pwsh
+        env:
+          UPLOADED_DIGEST: ${{ steps.k2-native-runner-upload.outputs.artifact-digest }}
+        run: |
+          $expected = (Get-FileHash -Algorithm SHA256 "$env:RUNNER_TEMP/local-k2-native-runner.json").Hash.ToLowerInvariant()
+          if (-not $env:UPLOADED_DIGEST -or $env:UPLOADED_DIGEST -ne $expected) {
+            throw 'FULL K2 Windows runner receipt upload SHA mismatch'
+          }
+
+  # Preserve the exact protected GitHub status name. A green Core alone must
+  # never make a PR mergeable while its independent physical K2 is still live.
+  local-profile-windows:
+    needs: [accepted-pr-proof, local-profile-windows-core, local-profile-windows-k2]
+    if: always() && (github.event_name == 'pull_request' || needs.accepted-pr-proof.result != 'success' || needs.accepted-pr-proof.outputs.reuse != 'true')
+    name: Local Profile Windows
+    runs-on: ubuntu-latest
+    steps:
+      - name: Require both exact-head Windows proof jobs
+        env:
+          ADMISSION: ${{ needs.accepted-pr-proof.result }}
+          CORE: ${{ needs.local-profile-windows-core.result }}
+          K2: ${{ needs.local-profile-windows-k2.result }}
+          CORE_MODE: ${{ needs.local-profile-windows-core.outputs.proof_mode }}
+          K2_MODE: ${{ needs.local-profile-windows-k2.outputs.proof_mode }}
+        run: |
+          test "$ADMISSION" = success
+          test "$CORE" = success
+          test "$K2" = success
+          test "$CORE_MODE" = "$K2_MODE"
+          test "$CORE_MODE" = FULL || test "$CORE_MODE" = INHERITED
