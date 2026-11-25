@@ -1102,8 +1102,8 @@ fn open_under_profile_admission(
 mod tests {
     use super::{
         BeforeLaunch, CAMOUHOST_LAUNCH_READY_EVENT, ENTRYPOINT, LOCK, LocalOpenError,
-        ReadyConfirmation, classify_camouhost_diagnostic, local_generation,
-        mark_local_unsynced, observe_runtime_ready_line, open_or_create_workspace,
+        ReadyConfirmation, classify_camouhost_diagnostic, local_generation, mark_local_unsynced,
+        observe_runtime_ready_line, open_or_create_workspace,
         recheck_workspace_after_writer_admission, run_python_with_executable,
     };
     use crate::generation_initialization::{InitialProfileOpen, InitialProfileStatus};
@@ -1136,7 +1136,11 @@ mod tests {
         );
         assert_eq!(
             classify_camouhost_diagnostic("camouhost_stage phase=launch step=browser_entered"),
-            Some((Stage::CamouhostBrowserEntered, Outcome::Observed, Cause::None))
+            Some((
+                Stage::CamouhostBrowserEntered,
+                Outcome::Observed,
+                Cause::None
+            ))
         );
         for (category, cause) in [
             ("dependency", Cause::RuntimeDependency),
@@ -1155,7 +1159,11 @@ mod tests {
         }
         assert_eq!(
             classify_camouhost_diagnostic("camouhost_failure phase=startup category=dependency"),
-            Some((Stage::CamouhostStartup, Outcome::Failed, Cause::RuntimeDependency))
+            Some((
+                Stage::CamouhostStartup,
+                Outcome::Failed,
+                Cause::RuntimeDependency
+            ))
         );
         assert_eq!(
             classify_camouhost_diagnostic("camouhost_failure phase=close category=browser_closed"),
