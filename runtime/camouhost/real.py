@@ -158,15 +158,11 @@ async (request) => {
                 }
               } catch (_) {}
             }
-            const attributes = {};
             const actualAttributes = gl.getContextAttributes();
-            if (actualAttributes) {
-              for (const key of spec.context_attributes) {
-                if (Object.prototype.hasOwnProperty.call(actualAttributes, key)) {
-                  attributes[key] = normalize(actualAttributes[key]);
-                }
-              }
-            }
+            // Camoufox removed the spoofed contextAttributes properties in
+            // 156.0.1-beta.37. Observe the browser's real attributes without
+            // pretending they are generated fingerprint settings.
+            const attributes = actualAttributes ? normalize(actualAttributes) : {};
             const debug = gl.getExtension('WEBGL_debug_renderer_info');
             return {
               vendor: debug ? gl.getParameter(debug.UNMASKED_VENDOR_WEBGL) : gl.getParameter(gl.VENDOR),
@@ -540,16 +536,17 @@ def stable_probe_digest(page: Any) -> str:
 WEBGL_REQUIRED_KEYS = (
     "webGl:parameters",
     "webGl:shaderPrecisionFormats",
-    "webGl:contextAttributes",
 )
 WEBGL2_OPTIONAL_KEYS = (
     "webGl2:parameters",
     "webGl2:shaderPrecisionFormats",
-    "webGl2:contextAttributes",
 )
 
 
 def generation_webgl2_enabled(config: dict[str, Any]) -> bool:
+    # Removed upstream in 156.0.1-beta.37: no longer an SDK fingerprint surface.
+    if "webGl:contextAttributes" in config or "webGl2:contextAttributes" in config:
+        raise RuntimeContractError("materialized removed WebGL context attribute settings")
     for key in WEBGL_REQUIRED_KEYS:
         if not isinstance(config.get(key), dict):
             raise RuntimeContractError(f"materialized {key} observation surface is invalid")
@@ -576,12 +573,10 @@ def browser_visible_probe_request(config: dict[str, Any]) -> dict[str, Any]:
         "webgl": {
             "parameters": list(config["webGl:parameters"].keys()),
             "shader_precision": list(config["webGl:shaderPrecisionFormats"].keys()),
-            "context_attributes": list(config["webGl:contextAttributes"].keys()),
         },
         "webgl2": {
             "parameters": list(config["webGl2:parameters"].keys()),
             "shader_precision": list(config["webGl2:shaderPrecisionFormats"].keys()),
-            "context_attributes": list(config["webGl2:contextAttributes"].keys()),
         } if enabled_webgl2 else None,
         "fonts": copy.deepcopy(fonts),
         "voices_applicable": "voices" in config,
@@ -717,7 +712,9 @@ def locked_firefox_major(lock: dict[str, Any]) -> int:
     version = browser.get("version") if isinstance(browser, dict) else None
     if not isinstance(version, str):
         raise RuntimeContractError("browser lock is invalid")
-    match = re.fullmatch(r"([1-9][0-9]*)\.[0-9]+\.[0-9]+-beta\.[0-9]+", version)
+    # Official Camoufox tags use both Firefox 158.0.1 and 159.0 release forms.
+    # Accept those two version shapes, not arbitrary strings or an unpinned channel.
+    match = re.fullmatch(r"([1-9][0-9]*)\.[0-9]+(?:\.[0-9]+)?-beta\.[1-9][0-9]*", version)
     if match is None:
         raise RuntimeContractError("browser lock version is unsupported")
     return int(match.group(1))

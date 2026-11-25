@@ -573,6 +573,10 @@ fn run_python_with_input(
         .arg(action)
         .arg(folder)
         .current_dir(runtime_root)
+        // The SDK may spawn more embedded Python processes while opening
+        // Firefox. Keep their imports from creating mutable __pycache__ files
+        // inside the exact integrity-pinned runtime as well.
+        .env("PYTHONDONTWRITEBYTECODE", "1")
         .env("CAMOUHOST_RUNTIME_LOCK", runtime_root.join(LOCK))
         .env("CAMOUHOST_EXECUTION_MODE", "user-native")
         .env("CAMOUHOST_HEADLESS_MODE", "false")
