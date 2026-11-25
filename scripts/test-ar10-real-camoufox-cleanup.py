@@ -888,9 +888,10 @@ def prove_failure_observation_contract() -> None:
             result = asyncio.run(runtime.run_local_profile(Path("unused"), None, True))
         assert result == 5
         assert stdout.getvalue() == ""
-        assert stderr.getvalue().strip() == (
-            f"camouhost_failure phase=launch category={category}"
-        )
+        assert stderr.getvalue().splitlines() == [
+            "camouhost_stage phase=launch step=identity_requested",
+            f"camouhost_failure phase=launch category={category}",
+        ]
         assert "secret" not in stdout.getvalue() + stderr.getvalue()
     timeout = type("TimeoutError", (Exception,), {})("secret-url-key-profile-content")
     frames = [f"hello|{IPC_VERSION}", f"launch|{SESSION}", f"observe_browser_visible|{SESSION}",
