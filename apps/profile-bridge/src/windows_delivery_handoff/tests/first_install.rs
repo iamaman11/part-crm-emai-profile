@@ -195,6 +195,99 @@ fn ordinary_installer_updates_pending_or_healthy_installation_without_resetting_
 }
 
 #[test]
+fn completed_recovery_admits_only_a_newer_verified_installation() -> TestResult {
+    let fixture = fixture("install-after-arrived-recovery", false)?;
+    let coordinator = arrived_interrupted_health_fixture(&fixture)?;
+    assert_eq!(
+        coordinator.recover_or_resume_started_with(43, &fixture.second_executable, |_| Ok(()))?,
+        DeliveryHandoffRestartDisposition::TransferScheduled
+    );
+    let (new_candidate, bridge, runtime) = candidate(&fixture._directory.0, 3, '3')?;
+    let new_identity = new_candidate.identity();
+    let new_stage = stage_verified_delivery(
+        &fixture.staging,
+        &new_candidate,
+        &bridge,
+        &runtime,
+        &mut MemoryArchiveReader::for_release("third"),
+    )?;
+    let new_executable = new_stage
+        .profile_bridge_root()
+        .join(PROFILE_BRIDGE_EXECUTABLE);
+
+    let started = DeliveryStateStore::open(&fixture.state_root)?;
+    assert!(started.state().active_health_confirmed());
+    assert_eq!(started.state().active(), Some(&fixture.first));
+    assert_eq!(started.state().last_known_good(), None);
+    assert_eq!(
+        started.state().last_failure().map(|failure| failure.kind),
+        Some(DeliveryFailureKind::InterruptedActivation)
+    );
+    assert_eq!(
+        installation_candidate(started.state(), started.handoff(), Some(&new_identity)),
+        Err(DeliveryHandoffError::FirstInstallationConflict)
+    );
+    drop(started);
+
+    let guard = DeliveryActivationGuard::acquire(&fixture.materialization)?;
+    coordinator.complete_arrival(&guard, &fixture.first_executable)?;
+    let mut store = DeliveryStateStore::open(&fixture.state_root)?;
+    let arrived = store.handoff().cloned().ok_or("missing recovery arrival")?;
+    assert_eq!(arrived.kind(), DeliveryHandoffKind::Recovery);
+    assert_eq!(arrived.outcome(), DeliveryHandoffOutcome::Arrived);
+    assert_eq!(arrived.source_candidate(), &fixture.second);
+    assert_eq!(arrived.target(), &fixture.first);
+    for older in [&fixture.first, &fixture.second] {
+        assert_eq!(
+            installation_candidate(store.state(), Some(&arrived), Some(older)),
+            Err(DeliveryHandoffError::FirstInstallationConflict)
+        );
+    }
+    assert_eq!(
+        installation_candidate(store.state(), None, Some(&new_identity)),
+        Err(DeliveryHandoffError::FirstInstallationConflict)
+    );
+    assert_eq!(
+        installation_candidate(store.state(), Some(&arrived), Some(&new_identity)),
+        Ok(Some(fixture.first.clone()))
+    );
+
+    let mut staged = store.state().clone();
+    staged.stage(&new_candidate)?;
+    store.persist_preserving_handoff(&staged)?;
+    drop(store);
+    assert_eq!(
+        coordinator.complete_installation(&guard, &fixture.second_executable),
+        Err(DeliveryHandoffError::CurrentExecutableMismatch)
+    );
+    let unchanged = DeliveryStateStore::open(&fixture.state_root)?;
+    assert_eq!(unchanged.state(), &staged);
+    assert_eq!(unchanged.handoff(), Some(&arrived));
+    drop(unchanged);
+
+    coordinator.complete_installation(&guard, &new_executable)?;
+    let installed = DeliveryStateStore::open(&fixture.state_root)?;
+    assert_eq!(installed.state().active(), Some(&new_identity));
+    assert_eq!(installed.state().activation_generation(), 3);
+    assert_eq!(installed.state().staged(), None);
+    assert_eq!(installed.state().last_failure(), None);
+    assert!(!installed.state().active_health_confirmed());
+    assert_eq!(
+        installed.state().last_activation().map(|activation| activation.outcome),
+        Some(DeliveryActivationOutcome::PendingHealth)
+    );
+    assert_eq!(
+        installed.handoff().map(DeliveryHandoffEvidence::kind),
+        Some(DeliveryHandoffKind::Activation)
+    );
+    assert_eq!(
+        installed.handoff().map(DeliveryHandoffEvidence::outcome),
+        Some(DeliveryHandoffOutcome::Arrived)
+    );
+    Ok(())
+}
+
+#[test]
 fn first_installation_cannot_replace_update_or_recovery_history() -> TestResult {
     for started in [false, true] {
         let fixture = fixture(

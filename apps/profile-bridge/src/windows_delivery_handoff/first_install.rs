@@ -2,13 +2,13 @@ use super::{DeliveryHandoffError, DeliveryHandoffOutcome};
 #[cfg(any(windows, test))]
 use std::path::Path;
 
-/// Admit pristine setup or an arrived installation; interrupted health needs a newer target.
+/// Admit pristine setup, an arrived installation, or a completed recovery with a newer target.
 pub(crate) fn installation_candidate(
     state: &crate::windows_delivery::DeliveryState,
     handoff: Option<&crate::windows_delivery_store::DeliveryHandoffEvidence>,
     target: Option<&crate::windows_delivery::DeliveryIdentity>,
 ) -> Result<Option<crate::windows_delivery::DeliveryIdentity>, DeliveryHandoffError> {
-    use crate::windows_delivery::DeliveryActivationOutcome;
+    use crate::windows_delivery::{DeliveryActivationOutcome, DeliveryFailureKind};
     use crate::windows_delivery_store::DeliveryHandoffKind;
     state
         .validate_persisted()
@@ -37,7 +37,30 @@ pub(crate) fn installation_candidate(
                         _ => false,
                     }
             });
-        if !arrived || !installable {
+        // After a rollback, the active identity is the confirmed healthy predecessor,
+        // while the journal intentionally retains the failed activation and recovery.
+        // Only an arrived recovery of that exact failed attempt admits a signed
+        // candidate newer than the failed release. Preparation verifies its signature;
+        // completion reopens the staged files and verifies the running executable.
+        let recovered_update = state.active_health_confirmed()
+            && state.last_known_good().is_none()
+            && state.last_failure().is_some_and(|failure| {
+                failure.kind == DeliveryFailureKind::InterruptedActivation
+                    && target.is_some_and(|target| target.sequence > failure.candidate.sequence)
+                    && state.last_activation().is_some_and(|activation| {
+                        activation.attempt == state.activation_generation()
+                            && activation.candidate == failure.candidate
+                            && activation.outcome == DeliveryActivationOutcome::RolledBack
+                    })
+                    && handoff.is_some_and(|evidence| {
+                        evidence.kind() == DeliveryHandoffKind::Recovery
+                            && evidence.outcome() == DeliveryHandoffOutcome::Arrived
+                            && evidence.source_candidate() == &failure.candidate
+                            && evidence.source_attempt() == state.activation_generation()
+                            && evidence.target() == active
+                    })
+            });
+        if !(arrived && installable || recovered_update) {
             return Err(DeliveryHandoffError::FirstInstallationConflict);
         }
         return Ok(Some(active.clone()));
