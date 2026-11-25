@@ -15,7 +15,7 @@ const AR11_RUNTIME_DOWNLOADER = 'scripts/download-release-set-ar11.py';
 const AR11_RUNTIME_OVERLAY = 'scripts/release-core-overlay-ar11.py';
 const AUTHORITY = 'architecture/release-architecture-ar11.json';
 const ASSET_MATERIALIZER = 'scripts/release-set-assets-ar11.sh';
-const EXPECTED_PROMOTION_RUN_NAME = "run-name: AR11 Release Set Promotion — ${{ github.event_name == 'workflow_run' && 'READ-ONLY PREFLIGHT' || github.event_name == 'workflow_dispatch' && format('STAGING PROMOTION by {0}', github.actor) || 'INTERNAL ROLLBACK-NEGATIVE EVIDENCE' }}";
+const EXPECTED_PROMOTION_RUN_NAME = "run-name: AR11 Release Set Promotion — ${{ github.event_name == 'workflow_run' && 'STAGING READY/AUTO PROMOTION' || 'INTERNAL ROLLBACK-NEGATIVE EVIDENCE' }}";
 const READ_ONLY_TERMINAL_DISPOSITION = '(.status == "READ_ONLY_READY" or .status == "NOOP" or .status == "BLOCKED")';
 const CAMOUFOX_ACTIVE_PHYSICAL_COMMANDS = [
   ['runtime-package-windows', 'Materialize official browser and verified offline fpgen model', 'python scripts/camouhost-runtime-build-windows.py build'],
@@ -231,7 +231,17 @@ function immediateMutationFenceErrors(mutate) {
     'credential_class:"READ_ONLY_OBSERVE"',
     'provider_mutation:false',
     'production_mutation:false',
-    'sub_fences:{deployment_read:$deployment_read,release_set_match:$release_set_match,capability_profile_match:$capability_profile_match,d1_read:$d1_read,d1_match:$d1_match}',
+    'sub_fences:{main_read:$main_read,main_match:$main_match,deployment_read:$deployment_read,release_set_match:$release_set_match,capability_profile_match:$capability_profile_match,worker_identity_match:$worker_identity_match,d1_read:$d1_read,d1_match:$d1_match}',
+    'observed_worker_identity_sha256:',
+    'expected_worker_identity_sha256:$expected_worker_identity_sha256',
+    'expected_worker_identity_sha256="$(jq -er \'.worker_identity_sha256\' "$RUNNER_TEMP/ready/ready-to-mutate.json")"',
+    'jq -S --slurpfile observed "$RUNNER_TEMP/mutation-current-deployment.json"',
+    'script_etag:$observed[0].current_version.resources.script.etag',
+    '> "$RUNNER_TEMP/mutation-worker-binding.json"',
+    'observed_worker_identity_sha256="$(sha256sum "$RUNNER_TEMP/mutation-worker-binding.json" | cut -d\' \' -f1)"',
+    'if [ "$observed_worker_identity_sha256" = "$expected_worker_identity_sha256" ]; then',
+    'worker_identity_match=success',
+    'worker_identity_match=failure',
     '> "$RUNNER_TEMP/exact-current-fence.json"',
   ], 'protected mutation read-only exact-current fence'));
   errors.push(...forbidMarkers(fence, [
@@ -262,7 +272,8 @@ function deployCredentialBoundaryErrors(promotion, promote) {
   if (promotionCount !== 1 || promoteCount !== 1 || !deployStep.includes(token)) {
     errors.push(`deploy-capable credential must be referenced exactly once and only by the one deploy step; workflow=${promotionCount} promote=${promoteCount}`);
   }
-  if (!(readyIndex >= 0 && dryRunIndex > readyIndex && fenceIndex > dryRunIndex && deployIndex > fenceIndex)) {
+  if (!(readyIndex >= 0 && dryRunIndex > readyIndex && fenceIndex > dryRunIndex
+      && deployIndex > fenceIndex)) {
     errors.push('deploy-capable credential must remain behind bound READY, exact-bits dry-run and immediate predeploy fence');
   }
   const earlierSteps = promote.slice(0, deployIndex >= 0 ? deployIndex : promote.length);
@@ -336,11 +347,10 @@ function authorityErrors(authority) {
   const policy = authority?.promotion_policy ?? {};
   const requiredTrue = [
     'build_once',
-    'read_only_ready_before_manual_dispatch',
-    'ready_to_mutate_evidence_required_for_dispatch',
-    'dispatch_intent_binds_ready_evidence',
-    'workflow_dispatch_is_staging_authorization',
-    'owner_only_manual_dispatch',
+    'standing_staging_only_after_same_run_read_only_ready',
+    'ready_to_mutate_evidence_required_for_standing_promotion',
+    'standing_intent_binds_same_run_ready_evidence',
+    'owner_manual_dispatch_retired',
     'staging_environment_main_only',
     'expected_current_refence_immediately_before_mutation',
     'd1_refence_immediately_before_mutation',
@@ -350,7 +360,15 @@ function authorityErrors(authority) {
   for (const key of requiredTrue) {
     if (policy[key] !== true) errors.push(`AR-11 promotion policy requires ${key}=true`);
   }
-  for (const obsolete of ['read_only_ready_before_mutation_authorization', 'ready_to_mutate_evidence_required_for_authorization', 'authorization_binds_ready_evidence']) {
+  if (policy.standing_staging_authorization !== 'AR11_STANDING_STAGING_READY_V1') {
+    errors.push('AR-11 staging policy must bind exact standing owner authorization');
+  }
+  for (const obsolete of [
+    'read_only_ready_before_manual_dispatch', 'ready_to_mutate_evidence_required_for_dispatch',
+    'dispatch_intent_binds_ready_evidence', 'workflow_dispatch_is_staging_authorization',
+    'owner_only_manual_dispatch', 'read_only_ready_before_mutation_authorization',
+    'ready_to_mutate_evidence_required_for_authorization', 'authorization_binds_ready_evidence',
+  ]) {
     if (obsolete in policy) errors.push(`AR-11 promotion policy retains obsolete comment-authorization field ${obsolete}`);
   }
   if (policy.promotion_rebuild !== false || policy.opsctl_provider_mutation !== false) {
@@ -375,21 +393,20 @@ function promotionErrors(promotion) {
   const errors = [];
   const runNameLine = promotion.split('\n').find((line) => line.startsWith('run-name: '));
   if (runNameLine !== EXPECTED_PROMOTION_RUN_NAME) {
-    errors.push('promotion run-name must distinguish read-only preflight, actor-attributed manual staging dispatch, and internal rollback-negative evidence');
+    errors.push('promotion run-name must distinguish standing staging auto-promotion from internal rollback-negative evidence');
   }
   errors.push(...requireMarkers(promotion, [
     'workflow_run:',
     '- Release Set Build',
-    'workflow_dispatch:',
     'workflow_call:',
     'concurrency:',
     'group: release-set-promotion-staging',
     'cancel-in-progress: false',
   ], 'Release Set promotion'));
-  if ((promotion.match(/\n  workflow_dispatch:/g) ?? []).length !== 1) errors.push('promotion must expose exactly one zero-field manual dispatch');
-  const trigger = promotion.split('\npermissions:', 1)[0];
-  const manual = trigger.split('\n  workflow_dispatch:', 2)[1]?.split('\n  workflow_call:', 1)[0] ?? '';
-  if (manual.includes('inputs:')) errors.push('manual promotion dispatch must remain zero-input');
+  if (promotion.includes('workflow_dispatch:') || promotion.includes('GITHUB_WORKFLOW_DISPATCH')
+      || promotion.includes('STAGING_PROMOTION_DISPATCH_INTENT')) {
+    errors.push('standing auto-promotion cannot retain manual workflow-dispatch authority');
+  }
 
   errors.push(...forbidMarkers(promotion, [
     'pull_request_target:',
@@ -408,9 +425,9 @@ function promotionErrors(promotion) {
   const route = jobBlock(promotion, 'route');
   const ready = jobBlock(promotion, 'preflight-ready');
   const promote = jobBlock(promotion, 'promote');
-  const manualOutcome = jobBlock(promotion, 'manual-outcome');
+  const stagingOutcome = jobBlock(promotion, 'promotion-outcome');
   const rollback = jobBlock(promotion, 'rollback-negative-evidence');
-  for (const [name, block] of Object.entries({ route, 'preflight-ready': ready, promote, 'manual-outcome': manualOutcome, 'rollback-negative-evidence': rollback })) {
+  for (const [name, block] of Object.entries({ route, 'preflight-ready': ready, promote, 'promotion-outcome': stagingOutcome, 'rollback-negative-evidence': rollback })) {
     if (!block) errors.push(`Release Set promotion is missing structural job ${name}`);
   }
   for (const retired of ['resolve-preflight', 'resolve-verify', 'mutate', 'post-verify']) {
@@ -422,11 +439,9 @@ function promotionErrors(promotion) {
     'READY_SOURCE_SHA: ${{ github.event.workflow_run.head_sha }}',
     'READY_SOURCE_EVENT: ${{ github.event.workflow_run.event }}',
     "echo 'mode=preflight'",
-    "echo 'mode=promote'",
     "echo 'mode=rollback-negative'",
-    "if: github.event_name != 'workflow_dispatch' || github.actor == github.repository_owner",
   ], 'promotion invocation router'));
-  errors.push(...forbidMarkers(route, ['secrets.', 'wrangler deploy', 'environment: staging'], 'promotion invocation router'));
+  errors.push(...forbidMarkers(route, ["echo 'mode=promote'", 'workflow_dispatch', 'secrets.', 'wrangler deploy', 'environment: staging'], 'promotion invocation router'));
 
   errors.push(...requireMarkers(ready, [
     'Resolve unique immutable Release Set for exact protected main',
@@ -471,6 +486,8 @@ function promotionErrors(promotion) {
     '--arg target_profile "${{ steps.policy.outputs.target_profile }}"',
     '--arg admission_mode "${{ steps.policy.outputs.admission_mode }}"',
     'secret_bindings_verified:true',
+    'worker_identity_sha256:$worker_identity_sha256',
+    'worker_identity_sha="$(sha256sum "$RUNNER_TEMP/worker-binding-after.json" | cut -d\' \' -f1)"',
     'provider_mutation:false',
     'production_mutation:false',
     'ar11-ready-to-mutate-$RELEASE_SET_ID-$SOURCE_SHA',
@@ -479,6 +496,7 @@ function promotionErrors(promotion) {
     '--profile-id "$effective_target_profile"',
     '--output "$RUNNER_TEMP/promotion-operational-outcome.json"',
     'Upload terminal AR11 OperationalOutcome evidence',
+    'evidence_artifact="ar11-operational-outcome-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"',
     'name: ar11-operational-outcome-${{ github.run_id }}-${{ github.run_attempt }}',
     'Enforce terminal AR11 disposition after evidence publication',
     '.contract == "PROMOTION_OPERATOR_OUTCOME_V1"',
@@ -515,25 +533,75 @@ function promotionErrors(promotion) {
 
   errors.push(...requireMarkers(promote, [
     'environment: staging',
-    'Bind the explicit GitHub dispatch to unique accepted-main READY evidence',
+    'needs: [route, preflight-ready]',
+    "needs.preflight-ready.result == 'success'",
+    "needs.preflight-ready.outputs.terminal_status == 'READ_ONLY_READY'",
+    'github.run_attempt == 1',
+    'github.event.workflow_run.run_attempt == 1',
+    "vars.PROFILEBRIDGE_AUTO_STAGING_ENABLED == 'true'",
+    'Bind standing staging authority to exact same-run READY evidence',
     'SELECTED_MAIN_SHA:',
     'SELECTED_RELEASE_SET_ID:',
-    'actions/artifacts?name=$ready_artifact_name',
-    '.total_count == 1 and (.artifacts | length) == 1',
-    '.artifacts[0].workflow_run.head_sha == $sha',
-    'candidate-ready-run.json',
+    'READY_ARTIFACT_ID: ${{ needs.preflight-ready.outputs.ready_artifact_id }}',
+    'READY_ARTIFACT_DIGEST: ${{ needs.preflight-ready.outputs.ready_artifact_digest }}',
+    'READY_EVIDENCE_SHA256_EXPECTED: ${{ needs.preflight-ready.outputs.ready_evidence_sha256 }}',
+    'test "$GITHUB_EVENT_NAME" = workflow_run',
+    'test "${{ needs.preflight-ready.result }}" = success',
+    'test "${{ needs.preflight-ready.outputs.terminal_status }}" = READ_ONLY_READY',
+    'test "$main_sha" = "$READY_SOURCE_SHA"',
+    'test "$release_set_id" = "$READY_RELEASE_SET_ID"',
+    'actions/workflows/release-set-promotion.yml/runs?head_sha=$main_sha&event=workflow_run',
+    '.total_count == 1 and (.workflow_runs | length) == 1',
+    '.workflow_runs[0].id == $run and .workflow_runs[0].run_attempt == 1',
+    '.workflow_runs[0].event == "workflow_run"',
+    '.workflow_runs[0].head_sha == $sha',
+    '.workflow_runs[0].status == "in_progress"',
+    'actions/workflows/release-set-promotion.yml/runs?event=workflow_run&branch=main&per_page=100',
+    'python - "$RUNNER_TEMP/prior-standing-promotion-runs.json" "$GITHUB_RUN_ID"',
+    "runs = payload.get('workflow_runs')",
+    "total = payload.get('total_count')",
+    'not isinstance(total, int) or total < 2 or not isinstance(runs, list)',
+    'len(runs) != min(total, 100)',
+    "run.get('event') != 'workflow_run' or run.get('head_branch') != 'main'",
+    "run['run_number'] < 1",
+    "not isinstance(run.get('id'), int)",
+    "len({run['id'] for run in runs}) != len(runs)",
+    "len({run['run_number'] for run in runs}) != len(runs)",
+    "current[0].get('run_attempt') != 1",
+    "current[0].get('status') != 'in_progress'",
+    "current[0].get('run_number')",
+    "run['run_number'] < number",
+    "if not previous:",
+    "predecessor = previous[0]",
+    "predecessor.get('event') != 'workflow_run'",
+    "predecessor.get('head_branch') != 'main'",
+    "predecessor.get('status') != 'completed'",
+    "predecessor.get('conclusion') != 'success'",
+    "predecessor.get('run_attempt') != 1",
+    'actions/artifacts/$READY_ARTIFACT_ID',
+    '.id == $artifact_id and .name == $name and .expired == false',
+    '.workflow_run.id == $run and .workflow_run.head_sha == $sha',
+    'ready_run_attempt',
+    'ready_artifact_id',
+    'ready_artifact_digest',
+    'GITHUB_RUN_ATTEMPT',
+    'GITHUB_RUN_ID',
     'READY evidence does not match the exact accepted main and Release Set',
-    'STAGING_PROMOTION_DISPATCH_INTENT',
-    "'github.workflow_dispatch'",
+    'STAGING_PROMOTION_STANDING_INTENT',
+    "'github.workflow_run.read_only_ready'",
+    "'AR11_STANDING_STAGING_READY_V1'",
     'READY_RUN_ID',
     'READY_ARTIFACT_NAME',
     'READY_EVIDENCE_SHA256',
-    'dispatch_digest',
+    'intent_digest',
     'Verify exact downloaded READY_TO_MUTATE evidence',
     'native_recovery="$(jq -er',
     '.recovery_strategy == $recovery',
     "jq -er '.promotion_preflight_sha256'",
-    'gh run download "$ready_run_id"',
+    'test "$(sha256sum "$ready_root/promotion-plan.json" | cut -d\' \' -f1)" = "$(jq -er \'.promotion_plan_sha256\' "$ready_root/ready-to-mutate.json")"',
+    'test "$(sha256sum "$ready_root/release-verify.json" | cut -d\' \' -f1)" = "$(jq -er \'.release_verify_sha256\' "$ready_root/ready-to-mutate.json")"',
+    'gh run download "$GITHUB_RUN_ID"',
+    '(.path == ".github/workflows/release-set-promotion.yml@main" or .path == ".github/workflows/release-set-promotion.yml")',
     'target_capability_profile_id',
     'expected_current_capability_profile_id',
     'target_profile="$(jq -er',
@@ -544,43 +612,50 @@ function promotionErrors(promotion) {
     'ready == true',
     'provider_mutation == false',
     'Re-verify exact immutable Release Set before credentials',
-  ], 'dispatch READY binder'));
-  const readyBindStep = stepBlock(promote, 'Bind the explicit GitHub dispatch to unique accepted-main READY evidence');
+    'Pin exact standing staging account and Worker before deploy credentials',
+    'EXPECTED_STAGING_ACCOUNT_ID: ${{ vars.AR11_STAGING_ACCOUNT_ID }}',
+    'docs/evidence/ar11-fc6-cloudflare-observe-token-policy.json',
+    '(.control_plane.account_id // .account_id) == $expected',
+    '"browser-profile-control-plane-staging"',
+    '"staging.alegria.by"',
+  ], 'standing READY binder'));
+  const readyBindStep = stepBlock(promote, 'Bind standing staging authority to exact same-run READY evidence');
   const readyDownloadStep = stepBlock(promote, 'Verify exact downloaded READY_TO_MUTATE evidence');
   errors.push(...forbidMarkers(`${readyBindStep}\n${readyDownloadStep}`, [
     'secrets.CLOUDFLARE_', 'wrangler deploy', 'promotion plan', 'promotion preflight',
     'SCOPED_EXCEPTION', 'AUTHORITY_COMMENT', 'WORKER_PROMOTION_AUTHORIZATION_V2',
     'authorization_comment_id', 'issues/comments/', 'branches/main',
     'STAGING_CANDIDATE', 'issues/870', 'issues: read',
-  ], 'dispatch READY binder'));
-  const manualResolve = stepBlock(promote, 'Capture manual resolve phase state');
-  errors.push(...requireMarkers(manualResolve, [
+  ], 'standing READY binder'));
+  const stagingResolve = stepBlock(promote, 'Capture staging resolve phase state');
+  errors.push(...requireMarkers(stagingResolve, [
     'steps.resolve.outcome',
     'failed_boundary="ACCEPTED_MAIN_RELEASE_RESOLUTION"',
     'step_outcomes:{resolve:$resolve',
-  ], 'manual resolution failure localization'));
+  ], 'staging resolution failure localization'));
   for (const [name, label] of [
-    ['Capture manual mutation phase state', 'mutation'],
-    ['Capture manual post-verify phase state', 'post-verify'],
+    ['Capture staging mutation phase state', 'mutation'],
+    ['Capture staging post-verify phase state', 'post-verify'],
   ]) {
     errors.push(...requireMarkers(stepBlock(promote, name), [
       'test -n "$source_sha" || source_sha="$SOURCE_SHA"',
       '--arg source_sha "$source_sha"',
-      '--arg dispatch_digest "${{ steps.intent.outputs.dispatch_digest }}"',
+      '--arg intent_digest "${{ steps.intent.outputs.intent_digest }}"',
       'release_set_id:(if $release_set_id=="" then null else $release_set_id end)',
       'target_capability_profile_id:(if $target_profile=="" then null else $target_profile end)',
-      'dispatch_digest:(if $dispatch_digest=="" then null else $dispatch_digest end)',
-    ], `manual ${label} early-failure transport`));
+      'intent_digest:(if $intent_digest=="" then null else $intent_digest end)',
+      'authorization_kind:"STANDING_AR11_READY"',
+    ], `staging ${label} early-failure transport`));
   }
 
   errors.push(...requireMarkers(promote, [
-    'Execute exact candidate after owner dispatch and READY evidence',
+    'Execute exact staging candidate after same-run READY evidence',
     'environment: staging',
     'TARGET_PROFILE',
     'EXPECTED_CURRENT_PROFILE',
-    'DISPATCH_DIGEST',
-    '[[ "$DISPATCH_DIGEST" =~ ^[0-9a-f]{64}$ ]]',
-    'dispatch_digest:$dispatch_digest',
+    'INTENT_DIGEST',
+    '[[ "$INTENT_DIGEST" =~ ^[0-9a-f]{64}$ ]]',
+    'intent_digest:$intent_digest',
     'Bind previously verified READY evidence before provider credentials',
     'AR11_MUTATION_FENCE',
     'target_capability_profile_id:$target_profile',
@@ -596,6 +671,13 @@ function promotionErrors(promotion) {
   errors.push(...readyMutationByteIdentityErrors(promote));
   errors.push(...immediateMutationFenceErrors(promote));
   errors.push(...deployCredentialBoundaryErrors(promotion, promote));
+  const deployCommands = logicalShellLines(promotion).filter((line) => /\bwrangler@4\.94\.0 deploy\b/.test(line));
+  const realDeployCommands = deployCommands.filter((line) => !/\s--dry-run\b/.test(line));
+  const deployStep = stepBlock(promote, 'Deploy exact Release Set v3 bits after all fences');
+  if (deployCommands.length !== 2 || realDeployCommands.length !== 1
+      || !logicalShellLines(deployStep).includes(realDeployCommands[0] ?? '__MISSING_REAL_DEPLOY__')) {
+    errors.push(`one-runner promotion must execute exactly one real Worker deploy, scoped to the protected deploy step, plus one dry-run; total=${deployCommands.length} real=${realDeployCommands.length}`);
+  }
   const currentMaterializations = (promote.match(/release-set-assets-ar11\.sh materialize current-v3/g) ?? []).length;
   if (currentMaterializations !== 1) {
     errors.push(`one-runner promotion must materialize the verified immutable target exactly once; observed=${currentMaterializations}`);
@@ -609,12 +691,19 @@ function promotionErrors(promotion) {
     errors.push('deploy-capable Cloudflare token must be referenced exactly once in the whole promotion workflow');
   }
   const readyBind = promote.indexOf('Bind previously verified READY evidence before provider credentials');
+  const stagingTargetPin = promote.indexOf('Pin exact standing staging account and Worker before deploy credentials');
   const deployCredential = promote.indexOf('CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}');
   const refence = promote.indexOf('Re-fence Worker identity and D1 head immediately before mutation');
   const actualDeploy = promote.indexOf('Deploy exact Release Set v3 bits after all fences');
-  if (!(readyBind >= 0 && refence > readyBind && actualDeploy > refence && deployCredential > actualDeploy)) {
-    errors.push('mutation order must be READY binding -> read-only immediate re-fence -> scoped deploy credential');
+  if (!(readyBind >= 0 && stagingTargetPin > readyBind && refence > stagingTargetPin
+      && actualDeploy > refence && deployCredential > actualDeploy)) {
+    errors.push('mutation order must be READY binding -> staging target pin -> exact-current re-fence -> scoped deploy credential');
   }
+  errors.push(...forbidMarkers(promote, [
+    'AR11_STAGING_VARIABLES_READ_TOKEN',
+    'actions/variables/PROFILEBRIDGE_AUTO_STAGING_ENABLED',
+    'Recheck live operator kill switch immediately before mutation',
+  ], 'no extra runtime variable-read credential'));
 
   errors.push(...requireMarkers(promote, [
     'TARGET_PROFILE',
@@ -648,14 +737,17 @@ function promotionErrors(promotion) {
   ], 'post-deploy verifier'));
   errors.push(...secretObservationErrors(postObservationStep, 'post-deploy verifier'));
 
-  errors.push(...requireMarkers(manualOutcome, [
-    "if: always() && needs.route.outputs.mode == 'promote'",
+  errors.push(...requireMarkers(stagingOutcome, [
+    "needs: [route, promote]",
+    "if: always() && needs.route.outputs.mode == 'preflight' && needs.promote.result != 'skipped'",
     'TARGET_PROFILE:',
-    'Terminalize one lossless manual AR11 OperationalOutcome',
-    '--mode manual',
+    'Terminalize one lossless staging AR11 OperationalOutcome',
+    '--mode staging',
     '--profile-id "$profile_id"',
-    'Upload terminal manual AR11 OperationalOutcome evidence',
-    'Enforce terminal manual AR11 disposition after evidence publication',
+    'Upload terminal staging AR11 OperationalOutcome evidence',
+    'evidence_artifact="ar11-staging-operational-outcome-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"',
+    'name: ar11-staging-operational-outcome-${{ github.run_id }}-${{ github.run_attempt }}',
+    'Enforce terminal staging AR11 disposition after evidence publication',
     '.contract == "PROMOTION_OPERATOR_OUTCOME_V1"',
     '.procedure == "AR11_RELEASE_SET_PROMOTION"',
     '.status == "COMPLETED"',
@@ -663,22 +755,31 @@ function promotionErrors(promotion) {
     '.provider_mutation_executed == true',
     '.production_mutation_executed == false',
     '.effect_state == "EFFECT_VERIFIED"',
-    '.authorization_state == "GITHUB_WORKFLOW_DISPATCH"',
-    'DISPATCH_AUTHORIZED:',
-    'DISPATCH_DIGEST:',
-  ], 'manual terminal outcome'));
-  errors.push(...forbidMarkers(manualOutcome, ['secrets.CLOUDFLARE_', 'wrangler deploy --', 'environment: production', '--profile-id rehearsal-core-v2'], 'manual terminal outcome'));
-  const manualTerminalize = manualOutcome.indexOf('Terminalize one lossless manual AR11 OperationalOutcome');
-  const manualUpload = manualOutcome.indexOf('Upload terminal manual AR11 OperationalOutcome evidence');
-  const manualEnforce = manualOutcome.indexOf('Enforce terminal manual AR11 disposition after evidence publication');
-  if (!(manualTerminalize >= 0 && manualUpload > manualTerminalize && manualEnforce > manualUpload)) {
-    errors.push('manual AR11 must terminalize -> publish evidence -> enforce final disposition');
+    '.authorization_state == "AR11_STANDING_STAGING_READY"',
+    'INTENT_DIGEST:',
+  ], 'staging terminal outcome'));
+  const readOnlyTerminalArtifact = stepBlock(ready, 'Upload terminal AR11 OperationalOutcome evidence')
+    .match(/^\s*name: (ar11-[^\n]+)$/m)?.[1];
+  const stagingTerminalArtifact = stepBlock(stagingOutcome, 'Upload terminal staging AR11 OperationalOutcome evidence')
+    .match(/^\s*name: (ar11-[^\n]+)$/m)?.[1];
+  if (!readOnlyTerminalArtifact || !stagingTerminalArtifact || readOnlyTerminalArtifact === stagingTerminalArtifact) {
+    errors.push('read-only and staging terminal evidence must use distinct artifact names in the same workflow run');
+  }
+  errors.push(...forbidMarkers(stagingOutcome, ['secrets.CLOUDFLARE_', 'wrangler deploy --', 'environment: production', '--profile-id rehearsal-core-v2'], 'staging terminal outcome'));
+  const stagingTerminalize = stagingOutcome.indexOf('Terminalize one lossless staging AR11 OperationalOutcome');
+  const stagingUpload = stagingOutcome.indexOf('Upload terminal staging AR11 OperationalOutcome evidence');
+  const stagingEnforce = stagingOutcome.indexOf('Enforce terminal staging AR11 disposition after evidence publication');
+  if (!(stagingTerminalize >= 0 && stagingUpload > stagingTerminalize && stagingEnforce > stagingUpload)) {
+    errors.push('staging AR11 must terminalize -> publish evidence -> enforce final disposition');
   }
 
   errors.push(...requireMarkers(rollback, [
     "if: needs.route.outputs.mode == 'rollback-negative'",
     'event == "workflow_run"',
-    'ar11-ready-to-mutate-$RELEASE_SET_ID-',
+    '.run_attempt == 1',
+    'ar11-ready-to-mutate-$RELEASE_SET_ID-${{ steps.bind.outputs.main_sha }}-$SOURCE_RUN_ID-1',
+    '.source_sha == $sha and .ready_run_id == $run and .ready_run_attempt == 1',
+    '(.path == ".github/workflows/release-set-promotion.yml@main" or .path == ".github/workflows/release-set-promotion.yml")',
     'ROLLBACK_COMPATIBILITY_UNKNOWN',
     'credential_values_accessed == false',
   ], 'rollback-negative evidence'));
@@ -1170,24 +1271,28 @@ function selfTest(files) {
       throw new Error(`read-only ${name} error localization removal unexpectedly passed`);
     }
   }
-  const manualResolve = stepBlock(jobBlock(files.promotion, 'promote'), 'Capture manual resolve phase state');
+  const stagingResolve = stepBlock(jobBlock(files.promotion, 'promote'), 'Capture staging resolve phase state');
   for (const [marker, name] of [
     ['failed_boundary="ACCEPTED_MAIN_RELEASE_RESOLUTION"', 'main resolution'],
     ['step_outcomes:{resolve:$resolve', 'resolve evidence'],
   ]) {
-    if (!manualResolve.includes(marker)) throw new Error(`manual ${name} diagnostic fixture target is missing`);
-    const withoutDiagnostic = files.promotion.replace(manualResolve, manualResolve.replace(marker, 'diagnostic_was_removed'));
-    if (!promotionErrors(withoutDiagnostic).some((error) => error.includes('manual resolution failure localization'))) {
-      throw new Error(`manual ${name} error localization removal unexpectedly passed`);
+    if (!stagingResolve.includes(marker)) throw new Error(`staging ${name} diagnostic fixture target is missing`);
+    const withoutDiagnostic = files.promotion.replace(stagingResolve, stagingResolve.replace(marker, 'diagnostic_was_removed'));
+    if (!promotionErrors(withoutDiagnostic).some((error) => error.includes('staging resolution failure localization'))) {
+      throw new Error(`staging ${name} error localization removal unexpectedly passed`);
     }
   }
   const missingRecovery = files.promotion.replace('.recovery_strategy == $recovery', 'true');
-  if (!promotionErrors(missingRecovery).some((error) => error.includes('dispatch READY binder'))) {
+  if (!promotionErrors(missingRecovery).some((error) => error.includes('standing READY binder'))) {
     throw new Error('missing native recovery binding fixture passed');
   }
   const missingRecoveryProjection = files.promotion.replace('recovery_strategy:$recovery_strategy', 'recovery_strategy:null');
   if (!promotionErrors(missingRecoveryProjection).some((error) => error.includes('pre-authorization READY proof'))) {
     throw new Error('missing native recovery projection fixture passed');
+  }
+  const missingWorkerIdentityProof = files.promotion.replace('worker_identity_sha256:$worker_identity_sha256', 'worker_identity_sha256:null');
+  if (!promotionErrors(missingWorkerIdentityProof).some((error) => error.includes('pre-authorization READY proof'))) {
+    throw new Error('missing READY-bound full Worker identity fingerprint fixture passed');
   }
   const badSecret = files.promotion.replace('secret list --format json', 'secret list --name "$worker_name" --format json');
   if (secretObservationErrors(jobBlock(badSecret, 'preflight-ready'), 'fixture').length === 0) {
@@ -1197,21 +1302,117 @@ function selfTest(files) {
   if (!promotionErrors(ambiguousRunName).some((error) => error.includes('run-name must distinguish'))) {
     throw new Error('ambiguous promotion run-name fixture unexpectedly passed');
   }
-  const missingOwnerGuard = files.promotion.replace("if: github.event_name != 'workflow_dispatch' || github.actor == github.repository_owner", "if: always()");
-  if (!promotionErrors(missingOwnerGuard).some((error) => error.includes('promotion invocation router'))) throw new Error('missing owner access guard fixture passed');
+  const manualTrigger = files.promotion.replace('  workflow_call:\n', '  workflow_dispatch:\n  workflow_call:\n');
+  if (!promotionErrors(manualTrigger).some((error) => error.includes('manual workflow-dispatch authority'))) throw new Error('retired manual dispatch fixture passed');
+  const bypassedReadyGate = files.promotion.replace("needs.preflight-ready.outputs.terminal_status == 'READ_ONLY_READY'", "needs.preflight-ready.outputs.terminal_status != 'BLOCKED'");
+  if (!promotionErrors(bypassedReadyGate).some((error) => error.includes('standing READY binder'))) throw new Error('NOOP/BLOCKED READY-gate bypass fixture passed');
+  const removedAutoKillSwitch = files.promotion.replace("vars.PROFILEBRIDGE_AUTO_STAGING_ENABLED == 'true'", 'true');
+  if (!promotionErrors(removedAutoKillSwitch).some((error) => error.includes('standing READY binder'))) throw new Error('automatic staging kill-switch bypass fixture passed');
+  const rerunBypass = files.promotion.replace('github.event.workflow_run.run_attempt == 1', 'github.event.workflow_run.run_attempt >= 1');
+  if (!promotionErrors(rerunBypass).some((error) => error.includes('standing READY binder'))) throw new Error('workflow re-run staging bypass fixture passed');
+  const sameSourceReplay = files.promotion.replace('.total_count == 1 and (.workflow_runs | length) == 1', '.total_count >= 1');
+  if (!promotionErrors(sameSourceReplay).some((error) => error.includes('standing READY binder'))) throw new Error('same-source replay staging bypass fixture passed');
+  const priorUnknownEffect = files.promotion.replace(
+    "predecessor.get('conclusion') != 'success'",
+    "predecessor.get('conclusion') == 'ignored'",
+  );
+  if (priorUnknownEffect === files.promotion
+      || !promotionErrors(priorUnknownEffect).some((error) => error.includes('standing READY binder'))) {
+    throw new Error('unresolved cross-source auto-promotion effect bypass fixture passed');
+  }
+  const priorRunNumberGuardRemoved = files.promotion.replace(
+    "run['run_number'] < number",
+    "run['run_number'] >= number",
+  );
+  if (priorRunNumberGuardRemoved === files.promotion
+      || !promotionErrors(priorRunNumberGuardRemoved).some((error) => error.includes('standing READY binder'))) {
+    throw new Error('cross-source immediate predecessor selector bypass fixture passed');
+  }
+  const historyStep = stepBlock(jobBlock(files.promotion, 'promote'), 'Bind standing staging authority to exact same-run READY evidence');
+  const historyBlock = historyStep.match(/python - "\$RUNNER_TEMP\/prior-standing-promotion-runs\.json" "\$GITHUB_RUN_ID" <<'PY'\n([\s\S]*?)\n          PY/);
+  if (!historyBlock) throw new Error('cross-source canonical workflow history guard Python executable is missing');
+  const historySource = historyBlock[1].split('\n').map((line) => {
+    if (!line.startsWith('          ')) throw new Error('cross-source history guard Python indentation is invalid');
+    return line.slice(10);
+  }).join('\n');
+  const historyFixtureDir = mkdtempSync(path.join(tmpdir(), 'ar11-standing-history-'));
+  try {
+    const historyPath = path.join(historyFixtureDir, 'workflow-runs.json');
+    const current = { id: 98765, run_number: 1001, run_attempt: 1, event: 'workflow_run', head_branch: 'main', status: 'in_progress', display_title: 'arbitrary current title' };
+    const previous = { id: 98764, run_number: 1000, run_attempt: 1, event: 'workflow_run', head_branch: 'main', status: 'completed', conclusion: 'success', display_title: 'renamed predecessor title' };
+    const runHistory = (runs, total = runs.length) => {
+      writeFileSync(historyPath, JSON.stringify({ total_count: total, workflow_runs: runs }));
+      return spawnSync('python', ['-c', historySource, historyPath, String(current.id)], { encoding: 'utf8' });
+    };
+    if (runHistory([current, previous]).status !== 0) throw new Error('valid current and successful immediate predecessor were rejected');
+    const unsafe = [
+      ['malformed history object', null, 2],
+      ['empty history', [], 0],
+      ['missing current run', [previous], 2],
+      ['missing predecessor', [current], 1],
+      ['failed immediate predecessor despite older success', [current, { ...previous, status: 'completed', conclusion: 'failure' }, { ...previous, id: 98763, run_number: 999 }], 3],
+      ['cancelled predecessor', [current, { ...previous, conclusion: 'cancelled' }], 2],
+      ['unfinished predecessor', [current, { ...previous, status: 'in_progress', conclusion: null }], 2],
+      ['replayed predecessor', [current, { ...previous, run_attempt: 2 }], 2],
+      ['foreign main predecessor', [current, { ...previous, head_branch: 'other' }], 2],
+      ['non-workflow_run predecessor', [current, { ...previous, event: 'workflow_dispatch' }], 2],
+      ['duplicate current id', [current, { ...previous, id: current.id }], 2],
+      ['duplicate run number', [current, { ...previous, run_number: current.run_number }], 2],
+      ['untyped current run number', [{ ...current, run_number: null }, previous], 2],
+      ['untyped total count', [current, previous], '2'],
+      ['truncated first page', [current, previous], 101],
+      ['current absent at 1001-run limit', Array.from({ length: 100 }, (_, i) => ({ ...previous, id: 11000 + i, run_number: 1100 - i })), 1001],
+    ];
+    for (const [label, runs, total] of unsafe) {
+      if (runHistory(runs, total).status === 0) throw new Error(`unsafe ${label} canonical promotion history was accepted`);
+    }
+  } finally {
+    rmSync(historyFixtureDir, { recursive: true, force: true });
+  }
+  const allowedWorkflowPath = '(.path == ".github/workflows/release-set-promotion.yml@main" or .path == ".github/workflows/release-set-promotion.yml")';
+  for (const [pathValue, accepted] of [
+    ['.github/workflows/release-set-promotion.yml@main', true],
+    ['.github/workflows/release-set-promotion.yml', true],
+    ['.github/workflows/release-set-promotion.yml@evil', false],
+    ['.github/workflows/other.yml@main', false],
+  ]) {
+    const verdict = spawnSync('jq', ['-e', allowedWorkflowPath], {
+      input: JSON.stringify({ path: pathValue }), encoding: 'utf8',
+    });
+    if ((verdict.status === 0) !== accepted) throw new Error(`canonical workflow path guard incorrectly accepted/rejected ${pathValue}`);
+  }
+  const hostileWorkflowPath = files.promotion.replaceAll(allowedWorkflowPath, '(.path == ".github/workflows/release-set-promotion.yml@evil")');
+  if (hostileWorkflowPath === files.promotion
+      || !promotionErrors(hostileWorkflowPath).some((error) => error.includes('standing READY binder'))
+      || !promotionErrors(hostileWorkflowPath).some((error) => error.includes('rollback-negative evidence'))) {
+    throw new Error('hostile workflow path delegation fixture unexpectedly passed');
+  }
+  const targetPinBypass = files.promotion.replace('(.control_plane.account_id // .account_id) == $expected', 'true');
+  if (!promotionErrors(targetPinBypass).some((error) => error.includes('standing READY binder'))) throw new Error('staging target-account pin bypass fixture passed');
   const promoteJob = jobBlock(files.promotion, 'promote');
+  for (const [label, digestField, evidenceFile] of [
+    ['promotion plan', 'promotion_plan_sha256', 'promotion-plan.json'],
+    ['immutable release verify', 'release_verify_sha256', 'release-verify.json'],
+  ]) {
+    const check = `test "$(sha256sum "$ready_root/${evidenceFile}" | cut -d' ' -f1)" = "$(jq -er '.${digestField}' "$ready_root/ready-to-mutate.json")"`;
+    if (!promoteJob.includes(check)) throw new Error(`${label} READY sidecar digest fixture target is missing`);
+    const forgedDigest = files.promotion.replace(check, 'test true');
+    if (!promotionErrors(forgedDigest).some((error) => error.includes('standing READY binder'))) {
+      throw new Error(`${label} READY sidecar digest bypass fixture passed`);
+    }
+  }
   if (!promoteJob.includes('environment: staging')) throw new Error('staging promotion fixture cannot locate its Environment');
   const missingStagingEnvironment = files.promotion.replace(promoteJob, promoteJob.replace('    environment: staging\n', ''));
-  if (!promotionErrors(missingStagingEnvironment).some((error) => error.includes('dispatch READY binder'))) throw new Error('missing staging resolver Environment guard fixture passed');
-  const missingUniqueReady = files.promotion.replaceAll('.total_count == 1 and (.artifacts | length) == 1', 'true');
-  if (!promotionErrors(missingUniqueReady).some((error) => error.includes('dispatch READY binder'))) throw new Error('ambiguous READY artifact fixture passed');
-  const staleIssueSelector = files.promotion.replace('candidate-ready-run.json', 'candidate-ready-run.json\\n          gh api "repos/$GITHUB_REPOSITORY/issues/870"');
-  if (!promotionErrors(staleIssueSelector).some((error) => error.includes('dispatch READY binder'))) throw new Error('old Issue-body selector fixture passed');
-  const readyBinder = stepBlock(promoteJob, 'Bind the explicit GitHub dispatch to unique accepted-main READY evidence');
-  const pythonBlock = readyBinder.match(/<<'PY'\n([\s\S]*?)\n          PY/);
-  if (!pythonBlock) throw new Error('READY dispatch intent Python executable is missing');
+  if (!promotionErrors(missingStagingEnvironment).some((error) => error.includes('standing READY binder'))) throw new Error('missing staging resolver Environment guard fixture passed');
+  const missingArtifactIdentity = files.promotion.replace('.id == $artifact_id and .name == $name and .expired == false', 'true');
+  if (!promotionErrors(missingArtifactIdentity).some((error) => error.includes('standing READY binder'))) throw new Error('unbound READY artifact ID/name fixture passed');
+  const missingArtifactRun = files.promotion.replace('.workflow_run.id == $run and .workflow_run.head_sha == $sha', 'true');
+  if (!promotionErrors(missingArtifactRun).some((error) => error.includes('standing READY binder'))) throw new Error('foreign READY artifact run fixture passed');
+  const readyBinder = stepBlock(promoteJob, 'Bind standing staging authority to exact same-run READY evidence');
+  const pythonBlock = readyBinder.match(/python - "\$candidate_root\/ready-to-mutate\.json"[^\n]*<<'PY'\n([\s\S]*?)\n          PY/);
+  if (!pythonBlock) throw new Error('standing READY intent Python executable is missing');
   const pythonSource = pythonBlock[1].split('\n').map((line) => {
-    if (!line.startsWith('          ')) throw new Error('READY dispatch intent Python indentation is invalid');
+    if (!line.startsWith('          ')) throw new Error('standing READY intent Python indentation is invalid');
     return line.slice(10);
   }).join('\n');
   const fixtureRoot = mkdtempSync(path.join(tmpdir(), 'ar11-ready-binder-'));
@@ -1219,11 +1420,16 @@ function selfTest(files) {
     const mainSha = 'a'.repeat(40);
     const releaseId = 'release-set-v3-sha256-' + 'b'.repeat(64);
     const currentId = 'release-set-v3-sha256-' + 'c'.repeat(64);
-    const readyArtifact = 'ar11-ready-to-mutate-' + releaseId + '-' + mainSha;
+    const readyRunId = 98765;
+    const readyAttempt = 2;
+    const artifactId = 54321;
+    const artifactDigest = 'sha256:' + 'f'.repeat(64);
+    const readyArtifact = 'ar11-ready-to-mutate-' + releaseId + '-' + mainSha + '-' + readyRunId + '-' + readyAttempt;
     const readyPath = path.join(fixtureRoot, 'ready.json');
     const intentPath = path.join(fixtureRoot, 'intent.json');
     const ready = {
       schema_version: 1, kind: 'AR11_READY_TO_MUTATE', ready: true, environment: 'staging',
+      ready_run_id: readyRunId, ready_run_attempt: readyAttempt,
       source_sha: mainSha, release_set_id: releaseId, expected_current_release_set_id: currentId,
       target_capability_profile_id: 'rehearsal-core-v2',
       expected_current_capability_profile_id: 'rehearsal-core-v1',
@@ -1231,33 +1437,42 @@ function selfTest(files) {
     };
     const runBinder = (candidate) => {
       writeFileSync(readyPath, JSON.stringify(candidate));
-      return spawnSync('python', ['-c', pythonSource, readyPath, mainSha, releaseId, '12345', readyArtifact, 'd'.repeat(64), intentPath], {
+      return spawnSync('python', ['-c', pythonSource, readyPath, mainSha, releaseId,
+        String(readyRunId), String(readyAttempt), String(artifactId), readyArtifact, artifactDigest,
+        'd'.repeat(64), intentPath], {
         encoding: 'utf8',
-        env: { ...process.env, GITHUB_ACTOR: 'owner', GITHUB_RUN_ID: '98765', GITHUB_REF: 'refs/heads/main' },
+        env: { ...process.env, GITHUB_ACTOR: 'owner', GITHUB_RUN_ID: String(readyRunId), GITHUB_RUN_ATTEMPT: String(readyAttempt), GITHUB_REF: 'refs/heads/main' },
       });
     };
     const valid = runBinder(ready);
-    if (valid.status !== 0) throw new Error('valid READY dispatch fixture failed: ' + valid.stderr);
+    if (valid.status !== 0) throw new Error('valid standing READY fixture failed: ' + valid.stderr);
     const intent = JSON.parse(readFileSync(intentPath, 'utf8'));
-    if (intent.kind !== 'STAGING_PROMOTION_DISPATCH_INTENT' || intent.release_set_id !== releaseId
+    if (intent.kind !== 'STAGING_PROMOTION_STANDING_INTENT' || intent.release_set_id !== releaseId
         || intent.source_sha !== mainSha || intent.expected_current_release_set_id !== currentId
-        || intent.ready_run_id !== 12345 || intent.ready_artifact_name !== readyArtifact
+        || intent.ready_run_id !== readyRunId || intent.ready_run_attempt !== readyAttempt
+        || intent.ready_artifact_name !== readyArtifact
         || intent.ready_evidence_sha256 !== 'd'.repeat(64)
-        || intent.authorization.mechanism !== 'github.workflow_dispatch'
+        || intent.authorization.mechanism !== 'github.workflow_run.read_only_ready'
+        || intent.authorization.policy !== 'AR11_STANDING_STAGING_READY_V1'
+        || intent.authorization.ready_artifact_id !== artifactId
+        || intent.authorization.ready_artifact_digest !== artifactDigest
         || intent.target_capability_profile_id !== ready.target_capability_profile_id
         || intent.expected_current_capability_profile_id !== ready.expected_current_capability_profile_id) {
-      throw new Error('valid READY dispatch fixture failed to bind exact immutable evidence');
+      throw new Error('valid standing READY fixture failed to bind exact immutable evidence');
     }
     const rejected = [
       ['source SHA drift', { ...ready, source_sha: 'e'.repeat(40) }],
       ['target Release Set drift', { ...ready, release_set_id: 'release-set-v3-sha256-' + 'e'.repeat(64) }],
       ['non-ready evidence', { ...ready, ready: false }],
-      ['provider effect before dispatch', { ...ready, provider_mutation: true }],
+      ['wrong READY run id', { ...ready, ready_run_id: readyRunId + 1 }],
+      ['wrong READY attempt', { ...ready, ready_run_attempt: readyAttempt + 1 }],
+      ['provider effect before standing authorization', { ...ready, provider_mutation: true }],
       ['untyped current Release Set', { ...ready, expected_current_release_set_id: null }],
       ['untyped capability profile', { ...ready, target_capability_profile_id: null }],
+      ['unapproved staging profile', { ...ready, target_capability_profile_id: 'production-core-v2' }],
     ];
     for (const [label, candidate] of rejected) {
-      if (runBinder(candidate).status === 0) throw new Error('unsafe ' + label + ' READY dispatch fixture passed');
+      if (runBinder(candidate).status === 0) throw new Error('unsafe ' + label + ' standing READY fixture passed');
     }
   } finally {
     rmSync(fixtureRoot, { recursive: true, force: true });
@@ -1284,8 +1499,8 @@ function selfTest(files) {
     'test -n "$source_sha" || source_sha="$SOURCE_SHA"',
     'test -n "$source_sha" || source_sha=""',
   );
-  if (!promotionErrors(missingFailureCapture).some((error) => error.includes('manual mutation early-failure transport'))) {
-    throw new Error('manual early-failure source identity fixture unexpectedly passed');
+  if (!promotionErrors(missingFailureCapture).some((error) => error.includes('staging mutation early-failure transport'))) {
+    throw new Error('staging early-failure source identity fixture unexpectedly passed');
   }
   const cargoRebuild = files.promotion.replace(
     'Deploy exact Release Set v3 bits after all fences',
@@ -1344,9 +1559,28 @@ function selfTest(files) {
   if (!promotionErrors(deployTokenFence).some((error) => error.includes('read-only exact-current fence'))) {
     throw new Error('deploy-token exact-current read fence fixture unexpectedly passed');
   }
+  const currentFenceStep = stepBlock(mutationBlock, 'Re-fence Worker identity and D1 head immediately before mutation');
+  for (const [label, original, weakened] of [
+    ['full fingerprint comparison', 'if [ "$observed_worker_identity_sha256" = "$expected_worker_identity_sha256" ]; then', 'if [ "$observed_release_set" = "$EXPECTED_CURRENT" ]; then'],
+    ['canonical Worker script etag', 'script_etag:$observed[0].current_version.resources.script.etag', 'script_etag:null'],
+  ]) {
+    if (!currentFenceStep.includes(original)) throw new Error(`${label} exact-current fixture target is missing`);
+    const weakFenceStep = currentFenceStep.replace(original, weakened);
+    const weakFence = files.promotion.replace(currentFenceStep, weakFenceStep);
+    if (!promotionErrors(weakFence).some((error) => error.includes('read-only exact-current fence'))) {
+      throw new Error(`${label} mutation-time Worker drift bypass fixture passed`);
+    }
+  }
   const missingFenceProjection = files.promotion.replace('exact_current_fence:$exact_current_fence', 'exact_current_fence:null');
   if (!promotionErrors(missingFenceProjection).some((error) => error.includes('lossless exact-current fence projection'))) {
     throw new Error('lossy exact-current fence projection fixture unexpectedly passed');
+  }
+  const secondDeployAfterEvidence = files.promotion.replace(
+    '      - name: Terminalize one lossless staging AR11 OperationalOutcome',
+    '      - name: Unsafe post-verify retry fixture\n        run: npx --yes wrangler@4.94.0 deploy --config "$RUNNER_TEMP/wrangler.staging.json" --env staging\n\n      - name: Terminalize one lossless staging AR11 OperationalOutcome',
+  );
+  if (!promotionErrors(secondDeployAfterEvidence).some((error) => error.includes('exactly one real Worker deploy'))) {
+    throw new Error('post-verified duplicate Worker deploy fixture unexpectedly passed');
   }
   const missingReadOnlyTerminalization = files.promotion.replace('Terminalize one lossless AR11 OperationalOutcome', 'Read-only terminalization fixture removed');
   if (!promotionErrors(missingReadOnlyTerminalization).some((error) => error.includes('pre-authorization READY proof'))) {
@@ -1361,13 +1595,45 @@ function selfTest(files) {
   if (!promotionErrors(blockedTerminalDispositionRemoved).some((error) => error.includes('pre-authorization READY proof'))) {
     throw new Error('missing semantic BLOCKED terminal disposition fixture unexpectedly passed');
   }
-  const missingManualTerminalization = files.promotion.replace('Terminalize one lossless manual AR11 OperationalOutcome', 'Terminalization fixture removed');
-  if (!promotionErrors(missingManualTerminalization).some((error) => error.includes('manual terminal outcome'))) {
-    throw new Error('missing manual terminalization fixture unexpectedly passed');
+  const missingStagingTerminalization = files.promotion.replace('Terminalize one lossless staging AR11 OperationalOutcome', 'Terminalization fixture removed');
+  if (!promotionErrors(missingStagingTerminalization).some((error) => error.includes('staging terminal outcome'))) {
+    throw new Error('missing staging terminalization fixture unexpectedly passed');
   }
-  const weakManualSuccess = files.promotion.replace('.status == "COMPLETED"', '.status == "RECOVERY_REQUIRED"');
-  if (!promotionErrors(weakManualSuccess).some((error) => error.includes('manual terminal outcome'))) {
-    throw new Error('manual success-without-COMPLETED fixture unexpectedly passed');
+  const clashingTerminalArtifact = files.promotion.replace(
+    'name: ar11-staging-operational-outcome-${{ github.run_id }}-${{ github.run_attempt }}',
+    'name: ar11-operational-outcome-${{ github.run_id }}-${{ github.run_attempt }}',
+  );
+  if (clashingTerminalArtifact === files.promotion
+      || !promotionErrors(clashingTerminalArtifact).some((error) => error.includes('distinct artifact names'))) {
+    throw new Error('duplicate same-run read-only/staging terminal artifact fixture unexpectedly passed');
+  }
+  const rollbackOldArtifactName = files.promotion.replace(
+    'ar11-ready-to-mutate-$RELEASE_SET_ID-${{ steps.bind.outputs.main_sha }}-$SOURCE_RUN_ID-1',
+    'ar11-ready-to-mutate-$RELEASE_SET_ID-${{ steps.bind.outputs.main_sha }}',
+  );
+  if (rollbackOldArtifactName === files.promotion
+      || !promotionErrors(rollbackOldArtifactName).some((error) => error.includes('rollback-negative evidence'))) {
+    throw new Error('rollback-negative stale READY artifact-name fixture unexpectedly passed');
+  }
+  const rollbackUnboundReadyAttempt = files.promotion.replace(
+    '.source_sha == $sha and .ready_run_id == $run and .ready_run_attempt == 1',
+    '.source_sha == $sha and .ready_run_id == $run',
+  );
+  if (rollbackUnboundReadyAttempt === files.promotion
+      || !promotionErrors(rollbackUnboundReadyAttempt).some((error) => error.includes('rollback-negative evidence'))) {
+    throw new Error('rollback-negative unbound READY run-attempt fixture unexpectedly passed');
+  }
+  const rollbackReRun = files.promotion.replace(
+    '.event == "workflow_run" and .run_attempt == 1 and .status == "completed"',
+    '.event == "workflow_run" and .run_attempt >= 1 and .status == "completed"',
+  );
+  if (rollbackReRun === files.promotion
+      || !promotionErrors(rollbackReRun).some((error) => error.includes('rollback-negative evidence'))) {
+    throw new Error('rollback-negative replayed source run fixture unexpectedly passed');
+  }
+  const weakStagingSuccess = files.promotion.replace('.status == "COMPLETED"', '.status == "RECOVERY_REQUIRED"');
+  if (!promotionErrors(weakStagingSuccess).some((error) => error.includes('staging terminal outcome'))) {
+    throw new Error('staging success-without-COMPLETED fixture unexpectedly passed');
   }
   const legacyFixture = legacyAuthorityErrors((candidate) => candidate === path.join(ROOT, LEGACY_FILES[0]));
   if (legacyFixture.length !== 1 || !legacyFixture[0].includes('legacy D3 operational authority must be retired after Rust cutover')) {
@@ -1655,7 +1921,7 @@ function selfTest(files) {
     throw new Error('Camoufox unknown fail-closed fixture removal passed');
   }
   const weakAuthority = structuredClone(files.authority);
-  weakAuthority.promotion_policy.read_only_ready_before_mutation_authorization = false;
+  weakAuthority.promotion_policy.standing_staging_only_after_same_run_read_only_ready = false;
   if (authorityErrors(weakAuthority).length === 0) throw new Error('authorization-before-READY authority fixture passed');
   const weakRuntimeAuthority = structuredClone(files.authority);
   weakRuntimeAuthority.promotion_policy.pr_runtime_unknown_path_policy = 'CHEAP';
@@ -1678,4 +1944,4 @@ if (errors.length > 0) {
   process.exit(1);
 }
 if (process.argv.includes('--self-test')) selfTest(files);
-else console.log('AR-11 release operational authority passed: automatic read-only READY/BLOCKED terminalizes before the explicit owner workflow_dispatch; unique accepted-main Release Set and immutable READY evidence bind to that dispatch; GitHub Environment restricts staging to main; exact-current Worker/D1 re-fence prevents replay after success; provider mutation remains behind the exact-bits dry-run and credential boundary; Camoufox PR replay is fail-closed and runtime-impact-aware.');
+else console.log('AR-11 release operational authority passed: protected-main read-only READY/BLOCKED terminalizes before same-run standing staging promotion; exact run/attempt/asset/READY SHA bind the immutable Release Set to staging only; no manual workflow_dispatch, exact-current Worker/D1 re-fence, protected deploy credential and lossless effect outcome; Camoufox PR replay is fail-closed.');

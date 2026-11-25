@@ -157,26 +157,35 @@ function promotionPolicyErrors(promotion) {
     'workflow_run:',
     '- Release Set Build',
     'AR11_READY_TO_MUTATE',
-    'actions/artifacts?name=$ready_artifact_name',
-    'STAGING_PROMOTION_DISPATCH_INTENT',
-    "'github.workflow_dispatch'",
-    'dispatch_digest',
-    'GITHUB_WORKFLOW_DISPATCH',
+    'actions/artifacts/$READY_ARTIFACT_ID',
+    '.workflow_run.id == $run and .workflow_run.head_sha == $sha',
+    'test "$READY_ARTIFACT_NAME" = "$ready_artifact_name"',
+    'STAGING_PROMOTION_STANDING_INTENT',
+    'AR11_STANDING_STAGING_READY_V1',
+    'github.workflow_run.read_only_ready',
+    'intent_digest',
+    'AR11_STANDING_STAGING_READY',
     'promotion preflight',
     'promotion verify',
     'release-set-promotion-staging',
   ]) {
     if (!promotion.includes(marker)) errors.push(`current Release Set promotion is missing semantic invariant ${JSON.stringify(marker)}`);
   }
+  for (const retired of [
+    'workflow_dispatch:', 'STAGING_PROMOTION_DISPATCH_INTENT',
+    'GITHUB_WORKFLOW_DISPATCH', "'github.workflow_dispatch'",
+  ]) {
+    if (promotion.includes(retired)) errors.push(`current Release Set promotion retained retired manual staging authorization ${retired}`);
+  }
 
   const preflightJob = promotion.indexOf('\n  preflight-ready:\n');
   const ready = promotion.indexOf('kind:"AR11_READY_TO_MUTATE"', preflightJob);
   const promoteJob = promotion.indexOf('\n  promote:\n');
-  const dispatchBinding = promotion.indexOf('Bind the explicit GitHub dispatch to unique accepted-main READY evidence', promoteJob);
+  const standingBinding = promotion.indexOf('STAGING_PROMOTION_STANDING_INTENT', promoteJob);
   const deploy = promotion.indexOf('Deploy exact Release Set v3 bits after all fences', promoteJob);
   const deployCredential = promotion.indexOf('CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}', deploy);
-  if (!(preflightJob >= 0 && ready > preflightJob && promoteJob > ready && dispatchBinding > promoteJob && deploy > dispatchBinding && deployCredential > deploy)) {
-    errors.push('release successor must order read-only READY -> owner workflow_dispatch/candidate binding -> deploy credential -> mutation');
+  if (!(preflightJob >= 0 && ready > preflightJob && promoteJob > ready && standingBinding > promoteJob && deploy > standingBinding && deployCredential > deploy)) {
+    errors.push('release successor must order read-only READY -> same-run standing intent -> deploy credential -> mutation');
   }
   return errors;
 }
@@ -254,14 +263,14 @@ function selfTest() {
     if (promotionPolicyErrors(renamedPromotion).length !== 0) throw new Error('cosmetic AR11 label unexpectedly defines successor ordering');
   }
   const deployCredential = 'CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}';
-  const dispatchBinding = 'Bind the explicit GitHub dispatch to unique accepted-main READY evidence';
-  if (!promotion.includes(dispatchBinding) || !promotion.includes(deployCredential)) {
-    throw new Error('owner dispatch READY/deploy credential fixture cannot locate its targets');
+  const standingBinding = 'STAGING_PROMOTION_STANDING_INTENT';
+  if (!promotion.includes(standingBinding) || !promotion.includes(deployCredential)) {
+    throw new Error('standing READY/deploy credential fixture cannot locate its targets');
   }
   const withoutDeployCredential = promotion.replace(deployCredential, 'SCOPED_DEPLOY_TOKEN_REMOVED_FOR_ORDER_FIXTURE');
-  const reorderedPromotion = withoutDeployCredential.replace(dispatchBinding, `${deployCredential}\n      - name: ${dispatchBinding}`);
+  const reorderedPromotion = withoutDeployCredential.replace(standingBinding, `${deployCredential}\n${standingBinding}`);
   if (!promotionPolicyErrors(reorderedPromotion).some((error) => error.includes('must order read-only READY'))) {
-    throw new Error('deploy-credential-before-dispatch-binding negative fixture passed');
+    throw new Error('deploy-credential-before-standing-binding negative fixture passed');
   }
 
   const operationalSelfTest = run('node', [AR11_CHECKER, '--self-test'], { check: false });
