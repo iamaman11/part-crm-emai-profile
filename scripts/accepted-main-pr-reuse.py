@@ -968,6 +968,16 @@ def verify_full_runner_receipt(artifact: dict[str, Any], token: str) -> None:
         require_full_runner_identity(receipt, artifact, current_windows_runner_identity())
 
 
+def native_runner_receipt_scopes(pr_native_proof: bool,
+                                 pr_native_bridge: bool) -> tuple[str, ...]:
+    """A Linux PR probe selects raw receipts; Windows consumers verify images."""
+    if pr_native_proof:
+        return ()
+    if pr_native_bridge:
+        return ("quality",)
+    return ("local-profile", "local-profile-k2")
+
+
 def prepare_release_component(main_sha: str, component: str, api: Callable[[str], Any]) -> None:
     """Prove all PR artifacts; download exact native-equivalent compiler bytes.
 
@@ -1650,8 +1660,10 @@ def assert_local_windows_graph(source: str) -> None:
         matches = [index for index, item in enumerate(headers) if item.group(1) == name]
         require(len(matches) == 1, f"required Windows step missing/duplicate: {name}")
         index = matches[0]
-        return job[headers[index].end():headers[index + 1].start()
-                   if index + 1 < len(headers) else len(job)].strip("\n")
+        body = job[headers[index].end():headers[index + 1].start()
+                   if index + 1 < len(headers) else len(job)]
+        return "\n".join(line for line in body.strip("\n").splitlines()
+                         if not line.lstrip().startswith("#")).strip("\n")
 
     for job, name in ((core, "Local Profile Windows Core"),
                       (k2, "Local Profile Windows K2")):
@@ -1683,8 +1695,19 @@ def assert_local_windows_graph(source: str) -> None:
             "expected = os.environ['EXPECTED_SOURCE_SHA']; "
             'assert actual == expected, f\'expected {expected}, got {actual}\'"'
         ), f"local Windows {name} source equality bypassed")
-        require("      - name: Certify unchanged exact prior FULL native physical proof\n" in job,
-                f"local Windows {name} independent prior-proof certification missing")
+        certificate = step_body(job, "Certify unchanged exact prior FULL native physical proof")
+        require(certificate == (
+            "        if: github.event_name == 'pull_request' && needs.accepted-pr-proof.outputs.native_unaffected == 'true'\n"
+            "        id: native-prior\n"
+            "        continue-on-error: true\n"
+            "        env:\n"
+            "          GITHUB_TOKEN: ${{ github.token }}\n"
+            "          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}\n"
+            "          PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}\n"
+            "          PR_NUMBER: ${{ github.event.pull_request.number }}\n"
+            "        run: python scripts/accepted-main-pr-reuse.py --pr-native-certify"
+        ) and len(re.findall(r"(?m)^\s+continue-on-error:\s*true\s*$", job)) == 1,
+                f"local Windows {name} prior-certifier forged or physical failure ignored")
     require(f"      - name: {physical}\n" not in core
             and step_body(k2, physical) == (
                 "        if: steps.native-prior.outcome != 'success'\n"
@@ -1719,6 +1742,11 @@ def assert_local_windows_graph(source: str) -> None:
 
 
 def self_test() -> None:
+    assert native_runner_receipt_scopes(True, False) == ()
+    assert native_runner_receipt_scopes(False, True) == ("quality",)
+    assert native_runner_receipt_scopes(False, False) == (
+        "local-profile", "local-profile-k2",
+    )
     graph = (Path(__file__).resolve().parent.parent
              / ".github/workflows/local-profile-gate.yml").read_text(encoding="utf-8")
     assert_local_windows_graph(graph)
@@ -1753,6 +1781,13 @@ def self_test() -> None:
          "          ref: main"),
         ("    runs-on: windows-latest\n    outputs:",
          "    runs-on: windows-latest\n    continue-on-error: true\n    outputs:"),
+        ("        run: python scripts/accepted-main-pr-reuse.py --pr-native-certify\n",
+         "        run: exit 0\n"),
+        ("      - name: Prove K2 256/512 MiB file streaming on Windows with peak RAM and disk limits\n"
+         "        if: steps.native-prior.outcome != 'success'\n",
+         "      - name: Prove K2 256/512 MiB file streaming on Windows with peak RAM and disk limits\n"
+         "        if: steps.native-prior.outcome != 'success'\n"
+         "        continue-on-error: true\n"),
     ):
         require(unsafe in graph, f"negative aggregate/K2 fixture not present: {unsafe}")
         mutated = graph.replace(unsafe, repaired, 1)
@@ -3296,13 +3331,10 @@ def main() -> int:
                 api, graph_api_only=not args.pr_native_proof,
             )
             bridge = receipt["artifacts"]["bridge"]
-            if not args.pr_native_proof:
-                gate = "quality" if args.pr_native_bridge is not None else "local-profile"
+            for gate in native_runner_receipt_scopes(
+                args.pr_native_proof, args.pr_native_bridge is not None,
+            ):
                 verify_full_runner_receipt(select_full_runner_receipt(prior, gate, api), token)
-            if gate == "local-profile":
-                verify_full_runner_receipt(
-                    select_full_runner_receipt(prior, "local-profile-k2", api), token,
-                )
             if args.pr_native_bridge is not None:
                 destination = args.pr_native_bridge.absolute()
                 require(not destination.exists() and not destination.is_symlink(),
