@@ -2,7 +2,7 @@
 
 **Status:** normative target architecture  
 **Date:** 2026-08-30
-**For:** developers, reviewers, operators and future CRM integration work
+**For:** CRM developers, reviewers and operators
 
 This document defines stable architecture boundaries and invariants. It does **not** define
 implementation order. The sole repository owner of order/gates is
@@ -11,13 +11,15 @@ the one active transaction and accepted-main evidence. `DEVELOPMENT_PLAN.md` is 
 
 ## 1. System Boundary
 
-Browser Profile Platform is a standalone product and future external CRM bounded context.
-It owns browser profiles, generations, sessions, profile-client assignments, profile ACL,
-certification, mailbox runtime integration and cloud/local lifecycle.
+CRM is one modular application. Browser Profiles is an embedded CRM module, not a standalone
+product/service or a future external CRM bounded context. CRM owns client and profile business
+workflows, profile-client assignments, membership/grants, profile ACL, certification and mailbox
+integration. Within that application the Browser Profiles module owns profile generations, sessions
+and cloud/local browser lifecycle without becoming a second client or authorization authority.
 
-Before CRM integration, the standalone Client Registry owns client cards. After CRM cutover,
-CRM Party/Customer Master may become authoritative for client master fields while this
-platform keeps an opaque `party_ref`/external reference and profile-runtime ownership.
+Client Registry is the current internal CRM owner of client records and contact fields. Profile
+Catalog owns profile identities and assignments, while Identity & Access owns membership/grants.
+No future Party/Customer Master cutover or external CRM migration is assumed by this architecture.
 
 Cloudflare, D1, R2, Durable Objects, Windows, Python and Camoufox are adapters/runtime
 technologies, never sources of domain policy.
@@ -46,7 +48,7 @@ Web UI
               -> separate Camoufox process
 ```
 
-Standalone v1 has no required VM/backend daemon, PostgreSQL or Keycloak. Workers executes
+The current CRM application has no required VM/backend daemon, PostgreSQL or Keycloak. Workers executes
 control-plane code only. Camoufox execution and browser files stay on Windows. The ordinary user
 browser remains an independent native process: the Bridge does not supervise its process tree or
 manipulate its tabs/pages; it observes only the native writer lock and Firefox-owned shutdown checkpoint.
@@ -185,7 +187,6 @@ Adapters implement ports and map provider/storage/runtime behavior:
 - Windows: CNG/DPAPI, filesystem, process tree, custom protocol, updater;
 - Camouhost: typed IPC to Python/Camoufox;
 - mailbox providers: Phase 2E accepted Gmail API/IMAP cloud adapters; Phase 2F accepts the browser/Bridge lane at repository-local deterministic evidence while real browser/provider execution remains External;
-- CRM: future Party/OIDC/PostgreSQL integration adapters.
 
 Adapters may depend inward on domain/application types. They may not redefine domain policy
 or expose provider SDK types across inner boundaries.
@@ -250,7 +251,7 @@ only and is not part of the shipping Profile Bridge API or default compile graph
 | Mailbox message body | Provider/authorized transient projection by default | not canonical D1/R2 storage in initial design |
 | Device local state | Profile Bridge | encrypted workspace + local SQLite cache/outbox |
 
-D1 is the standalone business/catalog authority. Durable Object is **not** a parallel catalog;
+D1 is the current CRM application's business/catalog authority. Durable Object is **not** a parallel catalog;
 it serializes session work, issues monotonic fencing and keeps minimal recoverable coordinator
 state. Session transitions belong to `session-domain`, not `profile-domain`.
 
@@ -368,7 +369,7 @@ decision.
 
 ## 10. D1 Isolation Rules
 
-Standalone isolation is explicit because D1 has no PostgreSQL RLS:
+Tenant isolation is explicit because D1 has no PostgreSQL RLS:
 
 - first production deployment may be one organization with multiple users/default-deny grants;
 - tenant-owned keys/uniqueness include `tenant_id`;
@@ -381,8 +382,8 @@ Standalone isolation is explicit because D1 has no PostgreSQL RLS:
 - multi-tenant expansion beyond the accepted deployment model requires an explicit ADR or
   catalog-adapter strategy.
 
-A future PostgreSQL CRM adapter may add FORCE RLS as defense in depth without changing domain
-contracts.
+The current D1 boundary relies on typed tenant-scoped application and repository enforcement;
+it does not claim PostgreSQL row-level security.
 
 ## 11. Identity And Device Trust
 
@@ -582,7 +583,6 @@ crates/
   use-cases-query/
   use-cases-mailboxes/
   use-cases-devices/
-  # later: crm projection as justified
   cloudflare-adapters/
   windows-adapters/
 
@@ -615,31 +615,30 @@ until a dedicated extraction is separately scoped and accepted.
 - long-lived device bearer/bucket credential;
 - generic remote `exec` instead of typed device command;
 - message body in ordinary logs/audit/events/telemetry/support;
-- direct CRM table/entity dependency from Profile Platform core;
+- inner domain/application dependency on a concrete external CRM table, entity or adapter;
 - reporting ordinary interactive save success from browser close, upload alone or local state alone;
 - caller/local generation selection, newest-local heuristic or fallback to a superseded generation on
   reopen;
 - a parallel manual register -> verify -> activate save protocol beside the canonical successor commit;
 - treating generic abort/error cleanup as a confirmed clean Coordinator release.
 
-## 18. CRM Boundary
+## 18. Internal CRM / Browser Profiles Module Boundary
 
-CRM integration preserves platform IDs/contracts/state machines and replaces/adapts outer
-ownership only where explicitly cut over.
+CRM contains the Client Registry, Identity & Access, Profile Catalog and Browser Profiles
+capabilities. Client records and grants remain owned by their current CRM capability owners;
+Profile Catalog owns assignments and active generation identity. The Browser Profiles module
+uses those decisions through typed application ports and owns only the browser/runtime lifecycle,
+not a second client catalog, ACL policy or CRM application.
 
-Default synchronization is versioned event/projection based and async-first. This does not
-require every user-triggered HTTP acknowledgement to be asynchronous. Core domain/application
-code never imports CRM implementation details.
+Versioned events and read projections may connect these internal capabilities without becoming
+new business authorities. Their delivery may be asynchronous, while ordinary user commands still
+return the accepted synchronous HTTP result. Inner domain/application code never imports concrete
+Cloudflare, Windows, browser or hypothetical third-party CRM implementations.
 
-Possible adapter replacements after accepted cutover:
-
-```text
-Cloudflare Access -> CRM OIDC identity adapter
-D1 catalog        -> PostgreSQL/SQLx + FORCE RLS adapter
-local ClientRegistry -> CRM Party projection/command adapter
-```
-
-R2 generations, session state machine and Profile Bridge browser lifecycle remain independent.
+Cloudflare Access/Worker/D1/R2, the Durable Object coordinator and Windows Rust/Camouhost remain
+the current deployment and runtime adapters of this same modular application. An external CRM,
+identity or database integration would require a separately approved contract and migration; it
+is not a predetermined cutover or a parallel product boundary.
 
 ## 19. Documentation Authority / Reading Order
 
