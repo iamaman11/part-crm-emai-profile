@@ -28,7 +28,8 @@ readiness автоматически.
 - `evidence/external/records/` — immutable production metadata records;
 - `tests/external-evidence/fixtures/` — canonical positive и deliberately negative
   fixtures;
-- `.github/workflows/external-evidence-gate.yml` — постоянный CI gate.
+- `.github/workflows/ci.yml`, job `External Evidence Metadata` — постоянный
+  protected CI proof для этого evidence owner.
 
 Executable validator является источником истины для точных enum/check values.
 Изменение gate contract требует review того же уровня, что изменение security

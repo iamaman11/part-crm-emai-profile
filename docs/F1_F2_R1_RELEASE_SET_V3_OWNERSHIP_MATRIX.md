@@ -117,7 +117,10 @@ The v2 reader cannot be deleted at the same moment the v3 writer is introduced. 
 
 ### 3.6 Current architecture/CI caller
 
-`.github/workflows/release-architecture-gate.yml` runs `python scripts/release-set-ar11.py self-test` before Rust `opsctl` release tests. This is another current caller that must stop treating the Python v2 writer as semantic authority before R7 retirement.
+The `Release capability and promotion policy` job in `.github/workflows/ci.yml`
+runs `python scripts/release-set-ar11.py self-test` before Rust `opsctl` release
+tests. This current caller must not treat the Python v2 writer as semantic
+authority before R7 retirement.
 
 ## 4. Release Set v3 single-owner matrix
 
@@ -276,7 +279,7 @@ Known current caller families that must be explicitly re-checked during R5-R7:
     - v2 regex/version assertions
     - v2 publication wording
 
-.github/workflows/release-architecture-gate.yml
+.github/workflows/ci.yml (Release capability and promotion policy job)
     - Python v2 self-test
     - AR-11 behavioural certification paths that may encode v2 assumptions
 

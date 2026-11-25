@@ -5,6 +5,8 @@ from __future__ import annotations
 
 import argparse
 import importlib.util
+import json
+import re
 import shutil
 import subprocess
 import tempfile
@@ -15,13 +17,13 @@ ROOT = Path(__file__).resolve().parents[1]
 BOOTSTRAP = Path("scripts/mailbox-secret-resolver-d1-bootstrap.py")
 RELEASE = Path("scripts/mailbox-secret-resolver-release.py")
 MIGRATIONS = Path("migrations/resolver-d1")
-QUALITY = Path(".github/workflows/resolver-d1-first-bootstrap.yml")
+QUALITY = Path(".github/workflows/ci.yml")
 IMPLEMENTATION = Path("architecture/pre2j-d3-resolver-d1-first-bootstrap-implementation.json")
 ALLOWED_IMPLEMENTATION_PATHS = {
     "architecture/pre2j-d3-resolver-d1-first-bootstrap-implementation.json",
     "scripts/mailbox-secret-resolver-d1-bootstrap.py",
     "scripts/check-pre2j-d3-resolver-d1-first-bootstrap-implementation.py",
-    ".github/workflows/resolver-d1-first-bootstrap.yml",
+    ".github/workflows/ci.yml",
 }
 FORBIDDEN_UNCHANGED_PATHS = {
     "architecture/pre2j-d3-resolver-d1-first-bootstrap-authority.json",
@@ -61,6 +63,14 @@ def read(path: Path) -> str:
 
 def quality_workflow_errors(text: str) -> list[str]:
     errors: list[str] = []
+    # A unified CI run owns several independent jobs. Verify the exact
+    # first-bootstrap job, not markers that might occur in unrelated jobs.
+    jobs = list(re.finditer(r"(?m)^  ([A-Za-z0-9_-]+):\s*$", text))
+    matching = [index for index, match in enumerate(jobs) if match.group(1) == "resolver-d1-policy"]
+    if len(matching) != 1:
+        return ["exactly one resolver-d1-policy CI job is required"]
+    index = matching[0]
+    source = text[jobs[index].start():jobs[index + 1].start() if index + 1 < len(jobs) else len(text)]
     for marker in (
         "scripts/mailbox-secret-resolver-d1-bootstrap.py",
         "scripts/check-pre2j-d3-resolver-d1-first-bootstrap-implementation.py",
@@ -72,9 +82,30 @@ def quality_workflow_errors(text: str) -> list[str]:
         "mailbox-secret-resolver-d1-bootstrap.py build --development-working-tree",
         "artifacts/mailbox-secret-resolver-d1-first-bootstrap/bootstrap.sql",
     ):
-        if marker not in text:
-            errors.append(f"first-bootstrap workflow proof is missing {marker!r}")
+        if marker not in source:
+            errors.append(f"first-bootstrap CI job proof is missing {marker!r}")
     return errors
+
+
+def implementation_contract_errors(contract: Any) -> list[str]:
+    """Keep only the CURRENT owner path live; historical SHAs remain evidence."""
+    expected_roots = [str(IMPLEMENTATION), str(BOOTSTRAP),
+                      "scripts/check-pre2j-d3-resolver-d1-first-bootstrap-implementation.py",
+                      str(QUALITY)]
+    if (not isinstance(contract, dict)
+            or contract.get("schema_version") != 1
+            or contract.get("external_mutations") is not False
+            or contract.get("implementation_roots") != expected_roots):
+        return ["first-bootstrap implementation roots or no-effect contract drifted"]
+    return []
+
+
+def implementation_errors() -> list[str]:
+    try:
+        contract = json.loads(read(IMPLEMENTATION))
+    except (ValueError, OSError) as error:
+        return [f"first-bootstrap implementation contract could not be read: {error}"]
+    return implementation_contract_errors(contract)
 
 
 def release_alignment_errors(bootstrap: Any, release: Any) -> list[str]:
@@ -115,6 +146,7 @@ def composite_release_alignment_self_test(bootstrap: Any, release: Any) -> None:
 
 def current_errors() -> list[str]:
     errors: list[str] = []
+    errors.extend(implementation_errors())
     bootstrap = load_module(BOOTSTRAP, "resolver_first_bootstrap")
     release = load_module(RELEASE, "resolver_release")
     try:
@@ -135,7 +167,10 @@ def diff_errors(base_ref: str) -> list[str]:
     base_has_marker = (
         git("cat-file", "-e", f"{base_ref}:{IMPLEMENTATION}", check=False).returncode == 0
     )
-    if base_has_marker and str(IMPLEMENTATION) not in changed:
+    # Once the accepted base contains this bootstrap marker, changes belong
+    # to their CURRENT stage owner, not the historical first-bootstrap scope.
+    # Current source + CI-owner checks above still fail closed every time.
+    if base_has_marker:
         return []
     errors: list[str] = []
     forbidden = sorted(
@@ -170,6 +205,12 @@ def self_test() -> None:
     quality = read(QUALITY)
     if not quality_workflow_errors(quality.replace("FIRST_BOOTSTRAP_BASE", "REMOVED")):
         fail("first-bootstrap workflow base-ref negative fixture unexpectedly passed")
+    if not quality_workflow_errors(quality.replace("  resolver-d1-policy:", "  resolver-d1-removed:")):
+        fail("missing first-bootstrap CI job negative fixture unexpectedly passed")
+    wrong = json.loads(read(IMPLEMENTATION))
+    wrong["implementation_roots"][-1] = ".github/workflows/obsolete.yml"
+    if not implementation_contract_errors(wrong):
+        fail("obsolete first-bootstrap owner fixture unexpectedly passed")
     print("Resolver D1 first-bootstrap implementation negative policy self-test passed.")
 
 

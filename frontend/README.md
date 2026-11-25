@@ -8,7 +8,7 @@ Repository-local React operator surface for the standalone browser-profile contr
 - Routing: TanStack Router.
 - Authorization and lifecycle decisions remain in the Rust Worker/domain core.
 - No credential material is persisted in Web Storage.
-- `.github/workflows/frontend-gate.yml` is the read-only acceptance lane for clean install, strict TypeScript, unit tests, production build, source credential-persistence scanning, and Static Assets output.
+- `.github/workflows/ci.yml`, job `React Operator UI`, is the read-only acceptance lane for clean install, strict TypeScript, unit tests, production build, source credential-persistence scanning, and Static Assets output.
 
 Build commands:
 

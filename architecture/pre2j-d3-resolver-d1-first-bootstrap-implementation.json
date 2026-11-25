@@ -16,7 +16,7 @@
     "architecture/pre2j-d3-resolver-d1-first-bootstrap-implementation.json",
     "scripts/mailbox-secret-resolver-d1-bootstrap.py",
     "scripts/check-pre2j-d3-resolver-d1-first-bootstrap-implementation.py",
-    ".github/workflows/resolver-d1-first-bootstrap.yml"
+    ".github/workflows/ci.yml"
   ],
   "openapi_v1_changed": false,
   "parent_issue": 251,

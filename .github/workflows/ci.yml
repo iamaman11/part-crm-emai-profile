@@ -1,0 +1,3022 @@
+# One exact-head source/contract CI. Runtime publication and provider effects
+# remain in separately governed workflows with their own authorization.
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+
+# Job-level permissions exactly mirror each source gate; a merged workflow
+# must never union privileges across independent consumers.
+permissions: {}
+
+concurrency:
+  group: source-ci-${{ github.event_name }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+
+  # Source gate: bridge-host-ops-gate.yml
+  bridge-host-ops-policy-linux:
+    permissions:
+      contents: read
+    name: Bridge Host Ops Linux Policy
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout exact candidate source
+        uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Verify exact source checkout
+        env:
+          EXPECTED_SOURCE_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: python -c "import os, subprocess; actual = subprocess.check_output(['git', 'rev-parse', 'HEAD'], text=True).strip(); expected = os.environ['EXPECTED_SOURCE_SHA']; assert actual == expected, f'expected {expected}, got {actual}'"
+
+      # OS-isolated Cargo cache; this job still checks and tests exact source.
+      - name: Restore Bridge host Rust compilation cache
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2, immutable
+        with:
+          shared-key: bridge-host-ops-v1
+          workspaces: |
+            . -> target
+            platform/windows-device-key -> target
+
+      - name: Show pinned toolchain
+        run: rustup show active-toolchain
+
+      - name: Verify native device-key adapter and current device policy
+        run: |
+          cargo fmt --manifest-path platform/windows-device-key/Cargo.toml --all -- --check
+          cargo clippy --locked --manifest-path platform/windows-device-key/Cargo.toml --all-targets -- -D warnings
+          cargo test --locked --manifest-path platform/windows-device-key/Cargo.toml
+          cargo test --locked -p device-domain
+  bridge-host-ops-windows-compile:
+    permissions:
+      contents: read
+    name: Bridge Host Ops Windows Compile
+    runs-on: windows-latest
+    steps:
+      - name: Checkout exact candidate source
+        uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Verify exact source checkout
+        env:
+          EXPECTED_SOURCE_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: python -c "import os, subprocess; actual = subprocess.check_output(['git', 'rev-parse', 'HEAD'], text=True).strip(); expected = os.environ['EXPECTED_SOURCE_SHA']; assert actual == expected, f'expected {expected}, got {actual}'"
+
+      # OS-isolated Cargo cache; this job still checks and tests exact source.
+      - name: Restore Bridge host Rust compilation cache
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2, immutable
+        with:
+          shared-key: bridge-host-ops-v1
+          workspaces: |
+            . -> target
+            platform/windows-device-key -> target
+
+      - name: Show pinned toolchain
+        shell: pwsh
+        run: rustup show active-toolchain
+
+      - name: Prove native Windows CNG device proof through Profile Bridge
+        shell: pwsh
+        run: |
+          $PSNativeCommandUseErrorActionPreference = $true
+          cargo fmt --manifest-path platform/windows-device-key/Cargo.toml --all -- --check
+          cargo clippy --locked --manifest-path platform/windows-device-key/Cargo.toml --all-targets -- -D warnings
+          cargo test --locked --manifest-path platform/windows-device-key/Cargo.toml
+          cargo test --locked -p profile-bridge --test windows_device_pop
+
+  # Source gate: camoufox-runtime-gate.yml
+  camoufox-scope:
+    permissions:
+      actions: read
+      contents: read
+      pull-requests: read
+    name: Classify Camoufox proof scope fail closed
+    runs-on: ubuntu-24.04
+    outputs:
+      heavy: ${{ steps.scope.outputs.heavy }}
+    steps:
+      - name: Checkout exact candidate source with history
+        uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          fetch-depth: 0
+          filter: blob:none
+          persist-credentials: false
+
+      - name: Verify exact source checkout
+        env:
+          EXPECTED_SOURCE_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: python -c "import os, subprocess; actual = subprocess.check_output(['git', 'rev-parse', 'HEAD'], text=True).strip(); expected = os.environ['EXPECTED_SOURCE_SHA']; assert actual == expected, f'expected {expected}, got {actual}'"
+
+      - name: Classify accepted-main or mechanically proven runtime-unrelated PR
+        id: scope
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+          GITHUB_TOKEN: ${{ github.token }}
+          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$HEAD_SHA"
+          if [ "$GITHUB_EVENT_NAME" = push ]; then
+            test "$GITHUB_REF" = refs/heads/main
+            # The full real Windows/Camoufox proof was already run on the PR
+            # only when GitHub independently proves an exact-tree PR merge,
+            # one complete 35-job CI run and completed real browser test steps.
+            # Missing evidence always falls back to the complete main replay.
+            python3.12 scripts/accepted-main-pr-reuse.py --self-test
+            python3.12 scripts/accepted-main-pr-reuse.py --gate camoufox --github-output "$RUNNER_TEMP/accepted-pr-reuse.txt"
+            if grep -qx 'reuse=true' "$RUNNER_TEMP/accepted-pr-reuse.txt"; then
+              echo 'heavy=false' >> "$GITHUB_OUTPUT"
+              echo 'Exact main tree and PR browser proofs match: reuse certified.'
+            else
+              echo 'heavy=true' >> "$GITHUB_OUTPUT"
+              echo 'No exact verified PR proof: full main Camoufox replay required.'
+            fi
+            exit 0
+          fi
+          test "$GITHUB_EVENT_NAME" = pull_request
+          [[ "$BASE_SHA" =~ ^[0-9a-f]{40}$ ]]
+          git cat-file -e "$BASE_SHA^{commit}"
+          # --no-renames retains both sides of moves (including runtime -> docs);
+          # -z preserves exact names, including whitespace and newlines.
+          git diff --no-renames --name-only -z "$BASE_SHA...$HEAD_SHA" > "$RUNNER_TEMP/changed-paths.txt"
+          test -s "$RUNNER_TEMP/changed-paths.txt"
+          python3.12 -m py_compile scripts/classify-camoufox-runtime-scope.py
+          python3.12 scripts/classify-camoufox-runtime-scope.py --self-test
+          python3.12 scripts/classify-camoufox-runtime-scope.py \
+            --paths-file "$RUNNER_TEMP/changed-paths.txt" \
+            --github-output "$RUNNER_TEMP/camoufox-classified.txt"
+          if grep -qx 'heavy=true' "$RUNNER_TEMP/camoufox-classified.txt"; then
+            echo 'heavy=true' >> "$GITHUB_OUTPUT"
+          elif grep -qx 'heavy=false' "$RUNNER_TEMP/camoufox-classified.txt"; then
+            # A filename-only LIGHT verdict is not sufficient. Require the
+            # current protected main to own a prior FULL physical receipt for
+            # the exact currently published runtime SHA. Missing/expired or
+            # conflicting proof deterministically selects real Windows tests.
+            if python3.12 scripts/accepted-main-pr-reuse.py --pr-camoufox-byte-proof; then
+              echo 'heavy=false' >> "$GITHUB_OUTPUT"
+            else
+              echo 'heavy=true' >> "$GITHUB_OUTPUT"
+              echo 'No published-byte physical receipt: execute complete Gate.'
+            fi
+          else
+            echo 'Camoufox classifier produced no single fail-closed verdict' >&2
+            exit 1
+          fi
+  camoufox-real-runtime-linux:
+    permissions:
+      actions: read
+      contents: read
+      pull-requests: read
+    name: Rust Bridge contracts (browser-independent)
+    needs: camoufox-scope
+    if: always()
+    runs-on: ubuntu-24.04
+    timeout-minutes: 35
+    steps:
+      - name: Require successful scope classification
+        run: test "${{ needs.camoufox-scope.result }}" = success
+
+      - name: Checkout exact candidate
+        uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+
+      - name: Verify exact source checkout
+        env:
+          EXPECTED_SOURCE_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: python -c "import os, subprocess; actual = subprocess.check_output(['git', 'rev-parse', 'HEAD'], text=True).strip(); expected = os.environ['EXPECTED_SOURCE_SHA']; assert actual == expected, f'expected {expected}, got {actual}'"
+
+      - name: Run existing Rust Bridge tests
+        if: needs.camoufox-scope.outputs.heavy == 'true'
+        run: cargo test --locked -p profile-bridge --lib
+  camoufox-runtime-package-windows:
+    permissions:
+      actions: read
+      contents: read
+      pull-requests: read
+    # Keep the existing protected job context while combining both owners.
+    name: Profile Bridge Windows regression
+    # One runner keeps the exact packaged bytes local. The native Bridge proof
+    # is last: its Firefox child may outlive the Rust test process.
+    needs: camoufox-scope
+    # Keep one protected context: HEAVY uses Windows for both physical suites;
+    # independently SHA-attested LIGHT only needs the Ubuntu scope guard.
+    # Invalid/failed scope still runs the guard and must fail closed.
+    if: always()
+    runs-on: ${{ needs.camoufox-scope.outputs.heavy == 'true' && 'windows-2025' || 'ubuntu-24.04' }}
+    timeout-minutes: 20
+    steps:
+      - name: Require successful scope classification
+        shell: pwsh
+        run: |
+          if ('${{ needs.camoufox-scope.result }}' -ne 'success') { throw 'Camoufox scope classification failed' }
+          if ('${{ needs.camoufox-scope.outputs.heavy }}' -notin @('true','false')) { throw 'invalid Camoufox proof scope' }
+          if ('${{ needs.camoufox-scope.outputs.heavy }}' -eq 'false') { Write-Host 'Runtime-unrelated PR: exact scope classification is sufficient.' }
+
+      - name: Checkout exact candidate
+        if: needs.camoufox-scope.outputs.heavy == 'true'
+        uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+
+      - name: Verify exact source checkout
+        if: needs.camoufox-scope.outputs.heavy == 'true'
+        env:
+          EXPECTED_SOURCE_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: python -c "import os, subprocess; actual = subprocess.check_output(['git', 'rev-parse', 'HEAD'], text=True).strip(); expected = os.environ['EXPECTED_SOURCE_SHA']; assert actual == expected, f'expected {expected}, got {actual}'"
+
+      - name: Set up exact build Python
+        if: needs.camoufox-scope.outputs.heavy == 'true'
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
+        with:
+          python-version: '3.12.10'
+
+      - name: Restore versioned Rust dependencies
+        if: needs.camoufox-scope.outputs.heavy == 'true'
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6
+        with:
+          shared-key: profile-bridge-ci-v1
+          workspaces: |
+            . -> target
+          cache-on-failure: 'true'
+
+      - name: Validate existing runtime owners
+        if: needs.camoufox-scope.outputs.heavy == 'true'
+        shell: pwsh
+        run: |
+          python -m py_compile runtime/camouhost/real.py runtime/camouhost/native_process.py scripts/camouhost-runtime-build-windows.py scripts/camouhost-runtime-package.py scripts/test-camouhost-native-process.py scripts/test-camouhost-native-ipc.py scripts/test-camouhost-execution-modes.py
+          if ($LASTEXITCODE -ne 0) { throw 'runtime Python compile failed' }
+          python scripts/test-camouhost-native-process.py
+          if ($LASTEXITCODE -ne 0) { throw 'native Camoufox process boundary regression failed' }
+          python scripts/test-camouhost-native-ipc.py
+          if ($LASTEXITCODE -ne 0) { throw 'native Camouhost IPC regression failed' }
+          python scripts/test-camouhost-execution-modes.py
+          if ($LASTEXITCODE -ne 0) { throw 'Camouhost execution-mode regression failed' }
+          python scripts/camouhost-runtime-build-windows.py self-test
+          if ($LASTEXITCODE -ne 0) { throw 'official runtime materializer self-test failed' }
+          python scripts/camouhost-runtime-package.py self-test
+          if ($LASTEXITCODE -ne 0) { throw 'compressed runtime packager self-test failed' }
+
+      - name: Materialize official browser and verified offline fpgen model
+        if: needs.camoufox-scope.outputs.heavy == 'true'
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          # The published component is the byte owner. Only missing/unfinished
+          # components need a new build; the PR later hands those tested bytes
+          # to accepted main without a second materializer.
+          $identityPath = Join-Path $env:RUNNER_TEMP 'runtime-input-identity.json'
+          python scripts/camouhost-runtime-package.py identity --output "$identityPath"
+          if ($LASTEXITCODE -ne 0) { throw 'runtime source identity failed' }
+          $identity = Get-Content -LiteralPath $identityPath -Raw | ConvertFrom-Json
+          $releaseId = $identity.release_id
+          if ($releaseId -notmatch '^runtime-bundle-v3-sha256-[0-9a-f]{64}$') { throw 'invalid runtime input release identity' }
+          $probePath = Join-Path $env:RUNNER_TEMP 'runtime-release-probe.json'
+          python scripts/github-release-publication.py probe --repository "$env:GITHUB_REPOSITORY" --release-id "$releaseId" --expected-asset runtime-bundle.tar.gz --expected-asset runtime-manifest.json --output "$probePath"
+          if ($LASTEXITCODE -ne 0) { throw 'runtime release probe failed' }
+          $probe = Get-Content -LiteralPath $probePath -Raw | ConvertFrom-Json
+          if ($probe.release_id -cne $releaseId) { throw 'runtime release probe identity changed' }
+          Set-Content -LiteralPath (Join-Path $env:RUNNER_TEMP 'runtime-release-id.txt') -Value $releaseId -NoNewline -Encoding ascii
+          if ($probe.state -eq 'reuse') {
+            $archive = Join-Path $env:RUNNER_TEMP 'runtime-bundle.tar.gz'
+            $manifest = Join-Path $env:RUNNER_TEMP 'runtime-manifest.json'
+            if ((Test-Path -LiteralPath $archive) -or (Test-Path -LiteralPath $manifest)) { throw 'published runtime download destination is not clean' }
+            gh release download "$releaseId" --repo "$env:GITHUB_REPOSITORY" --dir "$env:RUNNER_TEMP" --pattern runtime-bundle.tar.gz --pattern runtime-manifest.json
+            if ($LASTEXITCODE -ne 0) { throw 'published runtime download failed' }
+            $releasePath = Join-Path $env:RUNNER_TEMP 'runtime-release.json'
+            gh api "repos/$env:GITHUB_REPOSITORY/releases/tags/$releaseId" > $releasePath
+            if ($LASTEXITCODE -ne 0) { throw 'runtime release receipt missing' }
+            $release = Get-Content -LiteralPath $releasePath -Raw | ConvertFrom-Json
+            if ($release.tag_name -cne $releaseId -or $release.draft -ne $false -or $release.prerelease -ne $false) { throw 'runtime release identity/publication flags changed' }
+            $assets = @($release.assets)
+            if ($assets.Count -ne 2) { throw 'runtime release asset inventory mismatch' }
+            foreach ($name in @('runtime-bundle.tar.gz','runtime-manifest.json')) {
+              $assetCandidates = @($assets | Where-Object { $_.name -ceq $name -and $_.state -ceq 'uploaded' })
+              if ($assetCandidates.Count -ne 1 -or $assetCandidates[0].digest -notmatch '^sha256:[0-9a-f]{64}$') { throw "runtime release asset identity missing: $name" }
+              $path = Join-Path $env:RUNNER_TEMP $name
+              if (-not (Test-Path -LiteralPath $path -PathType Leaf)) { throw "runtime release asset missing: $name" }
+              if ((Get-Item -LiteralPath $path).Length -ne $assetCandidates[0].size) { throw "runtime release size drift: $name" }
+              $actual = (Get-FileHash -Algorithm SHA256 -LiteralPath $path).Hash.ToLowerInvariant()
+              if ($assetCandidates[0].digest -cne "sha256:$actual") { throw "runtime release byte digest drift: $name" }
+            }
+            Set-Content -LiteralPath (Join-Path $env:RUNNER_TEMP 'runtime-acquisition.txt') -Value 'published' -NoNewline -Encoding ascii
+            Write-Host "Reusing exact published runtime bytes: $releaseId"
+            exit 0
+          }
+          if ($probe.state -notin @('absent','resume')) { throw 'unknown runtime component publication state' }
+          $root = Join-Path $env:RUNNER_TEMP 'camouhost-runtime'
+          $buildPython = (Get-Command python).Source
+          python scripts/camouhost-runtime-build-windows.py build --runtime-lock runtime/camouhost/runtime-lock.json --runtime-source runtime/camouhost/real.py --output "$root" --build-python "$buildPython"
+          if ($LASTEXITCODE -ne 0) { throw 'official Windows runtime build failed' }
+          Set-Content -LiteralPath (Join-Path $env:RUNNER_TEMP 'runtime-acquisition.txt') -Value 'built' -NoNewline -Encoding ascii
+
+      - name: Package exact compressed Release Set runtime input
+        if: needs.camoufox-scope.outputs.heavy == 'true'
+        shell: pwsh
+        run: |
+          $root = Join-Path $env:RUNNER_TEMP 'camouhost-runtime'
+          $archive = Join-Path $env:RUNNER_TEMP 'runtime-bundle.tar.gz'
+          $manifest = Join-Path $env:RUNNER_TEMP 'runtime-manifest.json'
+          $acquisition = (Get-Content -LiteralPath (Join-Path $env:RUNNER_TEMP 'runtime-acquisition.txt') -Raw).Trim()
+          if ($acquisition -eq 'built') {
+            python scripts/camouhost-runtime-package.py package --runtime-root "$root" --archive "$archive" --manifest "$manifest"
+            if ($LASTEXITCODE -ne 0) { throw 'runtime archive package failed' }
+          } elseif ($acquisition -ne 'published') { throw 'unknown runtime acquisition source' }
+          if (-not (Test-Path -LiteralPath $archive -PathType Leaf) -or -not (Test-Path -LiteralPath $manifest -PathType Leaf)) { throw 'runtime archive or manifest missing' }
+          if ((Get-Item $archive).Length -ge 2GB) { throw 'runtime compressed archive exceeds release asset limit' }
+          python scripts/camouhost-runtime-package.py verify-manifest --manifest "$manifest" > $null
+          if ($LASTEXITCODE -ne 0) { throw 'compressed runtime manifest invalid' }
+          # Preserve an exact compressed-byte identity across local packaging,
+          # extraction and both physical Rust proofs without remote transport.
+          $archiveSha = (Get-FileHash -Algorithm SHA256 -LiteralPath $archive).Hash.ToLowerInvariant()
+          if ($archiveSha -notmatch '^[0-9a-f]{64}$') { throw 'runtime archive SHA-256 is invalid' }
+          Set-Content -LiteralPath (Join-Path $env:RUNNER_TEMP 'runtime-bundle.sha256') -Value $archiveSha -NoNewline -Encoding ascii
+          $manifestSha = (Get-FileHash -Algorithm SHA256 -LiteralPath $manifest).Hash.ToLowerInvariant()
+          Set-Content -LiteralPath (Join-Path $env:RUNNER_TEMP 'runtime-manifest.sha256') -Value $manifestSha -NoNewline -Encoding ascii
+
+      - name: Extract and verify exact official runtime
+        if: needs.camoufox-scope.outputs.heavy == 'true'
+        shell: pwsh
+        run: |
+          $archive = Join-Path $env:RUNNER_TEMP 'runtime-bundle.tar.gz'
+          $externalManifest = Join-Path $env:RUNNER_TEMP 'runtime-manifest.json'
+          if (-not (Test-Path -LiteralPath $archive -PathType Leaf) -or
+              -not (Test-Path -LiteralPath $externalManifest -PathType Leaf)) {
+            throw 'packaged official runtime archive or detached manifest is missing'
+          }
+          $expectedArchiveSha = (Get-Content -LiteralPath (Join-Path $env:RUNNER_TEMP 'runtime-bundle.sha256') -Raw).Trim()
+          $actualArchiveSha = (Get-FileHash -Algorithm SHA256 -LiteralPath $archive).Hash.ToLowerInvariant()
+          if ($actualArchiveSha -cne $expectedArchiveSha) { throw 'runtime archive bytes changed after packaging' }
+          $root = Join-Path $env:RUNNER_TEMP 'camouhost-delivered-runtime'
+          if (Test-Path -LiteralPath $root) { throw 'shipping extraction must use a clean directory' }
+          New-Item -ItemType Directory -Path $root -ErrorAction Stop | Out-Null
+          tar.exe -xzf $archive -C $root
+          if ($LASTEXITCODE -ne 0) { throw 'official runtime archive extraction failed' }
+          $embedded = Join-Path $root 'runtime-manifest.json'
+          if (-not (Test-Path -LiteralPath $embedded -PathType Leaf)) { throw 'embedded runtime manifest missing' }
+          if ((Get-FileHash -Algorithm SHA256 $embedded).Hash -ne (Get-FileHash -Algorithm SHA256 $externalManifest).Hash) {
+            throw 'embedded runtime manifest differs from exact packaged manifest'
+          }
+          python scripts/camouhost-runtime-package.py verify-manifest --manifest $externalManifest > $null
+          if ($LASTEXITCODE -ne 0) { throw 'exact runtime manifest verification failed' }
+          & (Join-Path $root 'python/python.exe') -I -c "from camoufox.fpgen_model import is_pinned; assert is_pinned(), 'model not pinned'"
+          if ($LASTEXITCODE -ne 0) { throw 'offline fpgen model pin failed' }
+
+      - name: Prove official Firefox native restored tabs and POST safety on exact runtime
+        if: needs.camoufox-scope.outputs.heavy == 'true'
+        shell: pwsh
+        run: |
+          # POST replay is tested against the SAME clean-extracted archive
+          # whose exact bytes the shipping reader and native Bridge will use.
+          $root = Join-Path $env:RUNNER_TEMP 'camouhost-delivered-runtime'
+          $python = Join-Path $root 'python/python.exe'
+          $log = Join-Path $env:RUNNER_TEMP 'native-sessionstore-restore.log'
+          python scripts/test-ar10-real-camoufox-cleanup.py `
+            --native-restore-only `
+            --python "$python" `
+            --camouhost "$(Join-Path $root 'camouhost/real.py')" `
+            --runtime-lock "$(Join-Path $root 'camouhost/runtime-lock.json')" `
+            --headless false 2>&1 | Tee-Object -FilePath $log
+          if ($LASTEXITCODE -ne 0) { throw 'real native Firefox SessionStore / POST restore failed' }
+          $text = Get-Content -Raw -LiteralPath $log
+          if ($text -notmatch 'native_restore_proof stage=passed safe_get=PASS post_replay=0 user_post_after_admission=PASS' -or
+              $text -notmatch 'AR10_NATIVE_FIREFOX_SESSIONSTORE=PHYSICAL_PASS') {
+            throw 'REAL_NATIVE_FIREFOX_SESSIONSTORE_POST_PROOF_NOT_EXECUTED'
+          }
+
+      - name: Run physical shipping reader and native Bridge Open on exact packaged runtime
+        if: needs.camoufox-scope.outputs.heavy == 'true'
+        # An orphaned Firefox must not strand a required PR proof for 90 min.
+        timeout-minutes: 8
+        shell: pwsh
+        run: |
+          $archive = Join-Path $env:RUNNER_TEMP 'runtime-bundle.tar.gz'
+          $manifest = Join-Path $env:RUNNER_TEMP 'runtime-manifest.json'
+          if (-not (Test-Path -LiteralPath $archive -PathType Leaf) -or
+              -not (Test-Path -LiteralPath $manifest -PathType Leaf)) {
+            throw 'exact packaged archive or manifest is missing'
+          }
+          # The preceding SessionStore/POST test executes embedded Python and
+          # can rewrite imported .pyc caches. Bridge delivery must consume a
+          # pristine copy of the SAME proven archive, never that mutable tree.
+          $root = Join-Path $env:RUNNER_TEMP 'camouhost-bridge-clean-runtime'
+          if (Test-Path -LiteralPath $root) { throw 'Bridge runtime extraction must use a clean directory' }
+          $expectedArchiveSha = (Get-Content -LiteralPath (Join-Path $env:RUNNER_TEMP 'runtime-bundle.sha256') -Raw).Trim()
+          $actualArchiveSha = (Get-FileHash -Algorithm SHA256 -LiteralPath $archive).Hash.ToLowerInvariant()
+          if ($actualArchiveSha -cne $expectedArchiveSha) { throw 'physical runtime archive changed after SessionStore proof' }
+          New-Item -ItemType Directory -Path $root -ErrorAction Stop | Out-Null
+          tar.exe -xzf $archive -C $root
+          if ($LASTEXITCODE -ne 0) { throw 'clean Bridge runtime extraction failed' }
+          if ((Get-FileHash -Algorithm SHA256 (Join-Path $root 'runtime-manifest.json')).Hash -ne (Get-FileHash -Algorithm SHA256 $manifest).Hash) {
+            throw 'clean Bridge runtime embedded manifest mismatch'
+          }
+          if (-not (Test-Path -LiteralPath (Join-Path $root 'python/python.exe') -PathType Leaf)) {
+            throw 'clean Bridge runtime embedded Python missing'
+          }
+          $env:AR10_PACKAGED_RUNTIME_ARCHIVE = $archive
+          $env:AR10_PACKAGED_RUNTIME_MANIFEST = $manifest
+          $env:AR10_REAL_CAMOUFOX = '1'
+          $env:AR10_PYTHON = Join-Path $root 'python/python.exe'
+          $env:AR10_RUNTIME_ROOT = $root
+          $env:AR10_REAL_CAMOUFOX_HEADLESS = 'false'
+          $log = Join-Path $env:RUNNER_TEMP 'real-shipping-reader-and-native-open.log'
+          # A detached Firefox grandchild can retain stdout and block a live
+          # PowerShell Tee pipeline indefinitely; redirect with native cmd.
+          $testCommand = 'cargo test --locked -p profile-bridge --test real_camoufox_runtime -- --skip published_windows_runtime_is_consumed_by_shipping_selector --test-threads=2 --show-output > "' + $log + '" 2>&1'
+          & "$env:WINDIR\System32\cmd.exe" /d /s /c $testCommand
+          $cargoExit = $LASTEXITCODE
+          if (-not (Test-Path -LiteralPath $log -PathType Leaf)) { throw 'physical Rust test log is missing' }
+          Get-Content -LiteralPath $log -Tail 40
+          if ($cargoExit -ne 0) { throw "physical shipping and Bridge Rust tests failed: exit=$cargoExit" }
+          $text = Get-Content -Raw -LiteralPath $log
+          if ($text -notmatch 'running 2 tests' -or
+              $text -notmatch 'test result: ok\. 2 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out;' -or
+              $text -notmatch '(?m)^test shipping_windows_runtime_archive_is_readable_by_production_delivery_reader \.\.\. ok\r?$' -or
+              $text -notmatch '(?m)^test bridge_preflight_launches_real_camoufox_and_acquires_native_profile_lock \.\.\. ok\r?$' -or
+              $text -notmatch 'REAL_SHIPPING_ARCHIVE_READER=PASS;FILES=[0-9]+;COMPRESSED_BYTES=[0-9]+' -or
+              $text -notmatch 'AR10_NATIVE_OPEN_LOCK=PASS;elapsed_ms=[0-9]+') {
+            throw 'REAL_SHIPPING_READER_OR_BRIDGE_NATIVE_OPEN_PHYSICAL_PROOF_NOT_EXECUTED'
+          }
+
+      - name: Bind exact physically tested runtime archive and manifest SHA
+        if: needs.camoufox-scope.outputs.heavy == 'true'
+        id: custody
+        shell: pwsh
+        env:
+          TESTED_SOURCE_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          $archive = Join-Path $env:RUNNER_TEMP 'runtime-bundle.tar.gz'
+          $manifest = Join-Path $env:RUNNER_TEMP 'runtime-manifest.json'
+          $origin = (Get-Content -LiteralPath (Join-Path $env:RUNNER_TEMP 'runtime-acquisition.txt') -Raw).Trim()
+          $releaseId = (Get-Content -LiteralPath (Join-Path $env:RUNNER_TEMP 'runtime-release-id.txt') -Raw).Trim()
+          $expectedArchiveSha = (Get-Content -LiteralPath (Join-Path $env:RUNNER_TEMP 'runtime-bundle.sha256') -Raw).Trim()
+          $expectedManifestSha = (Get-Content -LiteralPath (Join-Path $env:RUNNER_TEMP 'runtime-manifest.sha256') -Raw).Trim()
+          if ($origin -notin @('built','published') -or $env:TESTED_SOURCE_SHA -notmatch '^[0-9a-f]{40}$' -or $releaseId -notmatch '^runtime-bundle-v3-sha256-[0-9a-f]{64}$') { throw 'runtime custody identity invalid' }
+          $actualArchiveSha = (Get-FileHash -Algorithm SHA256 -LiteralPath $archive).Hash.ToLowerInvariant()
+          $actualManifestSha = (Get-FileHash -Algorithm SHA256 -LiteralPath $manifest).Hash.ToLowerInvariant()
+          if ($actualArchiveSha -cne $expectedArchiveSha -or $actualManifestSha -cne $expectedManifestSha) { throw 'physically tested runtime bytes drifted' }
+          $archiveSize = (Get-Item -LiteralPath $archive).Length
+          $manifestSize = (Get-Item -LiteralPath $manifest).Length
+          if ($archiveSize -le 0 -or $archiveSize -ge 2GB -or $manifestSize -le 0) { throw 'physically tested runtime asset size invalid' }
+          @{
+            schema_version = 1
+            kind = 'CAMOUFOX_WINDOWS_PHYSICAL_RUNTIME_RECEIPT'
+            source_commit_sha = $env:TESTED_SOURCE_SHA
+            run_id = [UInt64]$env:GITHUB_RUN_ID
+            run_attempt = [UInt64]$env:GITHUB_RUN_ATTEMPT
+            release_id = $releaseId
+            origin = $origin
+            archive_sha256 = $actualArchiveSha
+            archive_size_bytes = [UInt64]$archiveSize
+            manifest_sha256 = $actualManifestSha
+            manifest_size_bytes = [UInt64]$manifestSize
+          } | ConvertTo-Json -Depth 5 | Set-Content -LiteralPath (Join-Path $env:RUNNER_TEMP 'camoufox-runtime-proof.json') -Encoding utf8NoBOM
+          "origin=$origin" >> $env:GITHUB_OUTPUT
+          Write-Host "CAMOUFOX_PHYSICAL_RUNTIME_SHA256=$actualArchiveSha;RELEASE_ID=$releaseId;ORIGIN=$origin"
+
+      - name: Upload exact PR-tested runtime archive only on publication miss
+        if: needs.camoufox-scope.outputs.heavy == 'true' && github.event_name == 'pull_request' && steps.custody.outputs.origin == 'built'
+        id: runtime-archive-upload
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: camoufox-runtime-bundle-${{ github.event.pull_request.head.sha }}
+          path: ${{ runner.temp }}/runtime-bundle.tar.gz
+          archive: false
+          if-no-files-found: error
+          retention-days: 7
+
+      - name: Upload exact PR-tested runtime manifest only on publication miss
+        if: needs.camoufox-scope.outputs.heavy == 'true' && github.event_name == 'pull_request' && steps.custody.outputs.origin == 'built'
+        id: runtime-manifest-upload
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: camoufox-runtime-manifest-${{ github.event.pull_request.head.sha }}
+          path: ${{ runner.temp }}/runtime-manifest.json
+          archive: false
+          if-no-files-found: error
+          retention-days: 7
+
+      - name: Verify physical PR runtime uploads match exact tested SHA
+        if: needs.camoufox-scope.outputs.heavy == 'true' && github.event_name == 'pull_request'
+        shell: pwsh
+        env:
+          ARCHIVE_UPLOAD_SHA: ${{ steps.runtime-archive-upload.outputs.artifact-digest }}
+          MANIFEST_UPLOAD_SHA: ${{ steps.runtime-manifest-upload.outputs.artifact-digest }}
+          ORIGIN: ${{ steps.custody.outputs.origin }}
+        run: |
+          $receipt = Get-Content -LiteralPath (Join-Path $env:RUNNER_TEMP 'camoufox-runtime-proof.json') -Raw | ConvertFrom-Json
+          if ($env:ORIGIN -eq 'built') {
+            if ($env:ARCHIVE_UPLOAD_SHA -cne $receipt.archive_sha256 -or $env:MANIFEST_UPLOAD_SHA -cne $receipt.manifest_sha256) { throw 'uploaded runtime bytes differ from physically tested SHA' }
+          } elseif ($env:ORIGIN -eq 'published') {
+            if ($env:ARCHIVE_UPLOAD_SHA -or $env:MANIFEST_UPLOAD_SHA) { throw 'published runtime reuse unexpectedly uploaded duplicate archives' }
+          } else { throw 'unknown physical runtime upload origin' }
+
+      - name: Upload SHA-bound physical runtime proof receipt
+        if: needs.camoufox-scope.outputs.heavy == 'true' && github.event_name == 'pull_request'
+        id: runtime-proof-upload
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: camoufox-runtime-proof-${{ github.event.pull_request.head.sha }}
+          path: ${{ runner.temp }}/camoufox-runtime-proof.json
+          archive: false
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Verify uploaded physical runtime proof receipt digest
+        if: needs.camoufox-scope.outputs.heavy == 'true' && github.event_name == 'pull_request'
+        shell: pwsh
+        env:
+          RECEIPT_UPLOAD_SHA: ${{ steps.runtime-proof-upload.outputs.artifact-digest }}
+        run: |
+          $actual = (Get-FileHash -Algorithm SHA256 -LiteralPath (Join-Path $env:RUNNER_TEMP 'camoufox-runtime-proof.json')).Hash.ToLowerInvariant()
+          if ($env:RECEIPT_UPLOAD_SHA -cne $actual) { throw 'uploaded physical runtime proof receipt digest mismatch' }
+  camoufox-camoufox-required-proof:
+    permissions:
+      actions: read
+      contents: read
+      pull-requests: read
+    # Branch protection retains the canonical cold-launch status name. The
+    # single Windows job performs every physical proof on one packaged runtime.
+    name: Real Camoufox cold-launch proof
+    needs: [camoufox-scope, camoufox-runtime-package-windows]
+    if: always()
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Require exact official Camoufox and Bridge Windows proof
+        run: |
+          test "${{ needs.camoufox-scope.result }}" = success
+          test "${{ needs.camoufox-runtime-package-windows.result }}" = success
+
+  # Source gate: certification-gate.yml
+  certification-certification-linux:
+    permissions:
+      contents: read
+    name: Certification Linux And WASM
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+
+      - name: Verify exact source checkout
+        env:
+          EXPECTED_SOURCE_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: python -c "import os, subprocess; actual = subprocess.check_output(['git', 'rev-parse', 'HEAD'], text=True).strip(); expected = os.environ['EXPECTED_SOURCE_SHA']; assert actual == expected, f'expected {expected}, got {actual}'"
+
+      # Build cache is never a substitute for exact-head tests or an
+      # independently validated platform/security gate outcome.
+      - name: Restore pinned Rust build cache
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6
+        with:
+          shared-key: profile-bridge-ci-v1
+
+      - name: Compile Step 10 policy
+        run: python -m py_compile scripts/check-step10-certification.py
+
+      - name: Enforce Step 10 certification boundary
+        run: python scripts/check-step10-certification.py
+
+      - name: Prove raw-signal output fixture is rejected
+        run: |
+          if python scripts/check-step10-certification.py --root tests/certification/fixtures/raw-signal-output; then
+            echo "Raw-signal output fixture unexpectedly passed." >&2
+            exit 1
+          fi
+
+      - name: Prove certification-owned device authority fixture is rejected
+        run: |
+          if python scripts/check-step10-certification.py --root tests/certification/fixtures/certification-device-authority; then
+            echo "Certification-owned device authority fixture unexpectedly passed." >&2
+            exit 1
+          fi
+
+      - name: Format
+        run: cargo fmt --all -- --check
+
+      - name: Clippy certification crate
+        run: cargo clippy --locked -p certification-domain --all-targets -- -D warnings
+
+      - name: Test certification matrix and update contracts
+        run: cargo test --locked -p certification-domain
+
+      - name: Add Workers WASM target
+        run: rustup target add wasm32-unknown-unknown
+
+      - name: Check pure certification crate for Workers WASM
+        run: cargo check --locked -p certification-domain --target wasm32-unknown-unknown
+  certification-certification-windows:
+    permissions:
+      contents: read
+    name: Certification Windows
+    runs-on: windows-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+
+      - name: Verify exact source checkout
+        env:
+          EXPECTED_SOURCE_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: python -c "import os, subprocess; actual = subprocess.check_output(['git', 'rev-parse', 'HEAD'], text=True).strip(); expected = os.environ['EXPECTED_SOURCE_SHA']; assert actual == expected, f'expected {expected}, got {actual}'"
+
+      # Build cache is never a substitute for exact-head tests or an
+      # independently validated platform/security gate outcome.
+      - name: Restore pinned Rust build cache
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6
+        with:
+          shared-key: profile-bridge-ci-v1
+
+      - name: Test certification matrix and update contracts
+        run: cargo test --locked -p certification-domain
+
+  # Source gate: cross-component-acceptance-gate.yml
+  cross-component-standalone-synthetic:
+    permissions:
+      contents: read
+    name: Repository-Local Standalone Flow
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+
+      - name: Verify exact source checkout
+        env:
+          EXPECTED_SOURCE_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: python -c "import os, subprocess; actual = subprocess.check_output(['git', 'rev-parse', 'HEAD'], text=True).strip(); expected = os.environ['EXPECTED_SOURCE_SHA']; assert actual == expected, f'expected {expected}, got {actual}'"
+
+      - name: Set up Node 24 LTS
+        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e
+        with:
+          node-version: '24.19.0'
+          package-manager-cache: false
+
+      - name: Enforce Node and npm versions
+        run: |
+          test "$(node --version)" = "v24.19.0"
+          npm install --global npm@11.17.0
+          test "$(npm --version)" = "11.17.0"
+
+      - name: Validate deterministic acceptance manifests and composition surfaces
+        run: |
+          python -m py_compile scripts/test-cross-component-acceptance.py scripts/check-phase2f-retained-operator.py scripts/check-phase2i-hardening.py scripts/check-phase2i-operational-bounds.py scripts/check-phase2i-supply-chain.py scripts/check-phase2i-support-bundle.py scripts/test-phase2i-d1-backup-restore.py
+          python scripts/test-cross-component-acceptance.py
+          python scripts/check-phase2f-retained-operator.py
+          python scripts/check-phase2f-retained-operator.py --self-test
+          python scripts/check-phase2i-hardening.py
+          python scripts/check-phase2i-hardening.py --self-test
+          python scripts/check-phase2i-operational-bounds.py
+          python scripts/check-phase2i-operational-bounds.py --self-test
+          python scripts/check-phase2i-supply-chain.py
+          python scripts/check-phase2i-supply-chain.py --self-test
+          python scripts/check-phase2i-support-bundle.py
+          python scripts/check-phase2i-support-bundle.py --self-test
+
+      - name: Prove realtime UI privacy and authority negative matrix
+        run: |
+          python scripts/check-phase2g-realtime-boundaries.py
+          python scripts/check-phase2g-realtime-boundaries.py --self-test
+          python scripts/check-phase2h-ui-boundaries.py
+          python scripts/check-phase2h-ui-boundaries.py --self-test
+
+      - name: Prove immutable generation registry and activation invariants
+        run: |
+          python scripts/test-profile-generation-registry.py
+          python scripts/test-profile-generation-registry-edge-cases.py
+          python scripts/test-profile-generation-integrity-guards.py
+
+      - name: Execute repository-local backup restore drill
+        run: python scripts/test-phase2i-d1-backup-restore.py
+
+      - name: Verify installed Rust dependency licenses
+        run: python scripts/check-phase2i-supply-chain.py --cargo-licenses
+
+      - name: Test and execute synthetic Profile Bridge operator flow
+        run: |
+          cargo metadata --locked --no-deps --format-version 1 > "$RUNNER_TEMP/profile-bridge-metadata.json"
+          python - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+
+          metadata = json.loads(Path(os.environ['RUNNER_TEMP'], 'profile-bridge-metadata.json').read_text())
+          package = next(package for package in metadata['packages'] if package['name'] == 'profile-bridge')
+          targets = {target['name']: target for target in package['targets']}
+          assert set(name for name, target in targets.items() if 'bin' in target['kind']) == {
+              'profile-bridge',
+              'profile-bridge-synthetic',
+          }
+          assert targets['profile-bridge'].get('required-features', []) == []
+          assert targets['profile-bridge-synthetic'].get('required-features', []) == ['synthetic-test-bin']
+          PY
+          cargo test --locked -p profile-bridge --all-targets --features synthetic-test-bin
+          root="$RUNNER_TEMP/cross-component-profile"
+          rm -rf "$root"
+          cargo run --locked -p profile-bridge --features synthetic-test-bin --bin profile-bridge-synthetic -- \
+            'profilebridge://claim/claim_0123456789abcdef0123456789abcdef' "$root" \
+            | tee "$RUNNER_TEMP/profile-bridge-synthetic.out"
+          grep -Fxq 'synthetic-operator-complete state=DIRTY_LOCAL_COMMITTED_GENERATION' "$RUNNER_TEMP/profile-bridge-synthetic.out"
+
+      - name: Clean install frontend from exact lockfile
+        working-directory: frontend
+        run: npm ci
+
+      - name: Verify installed npm dependency licenses
+        run: python scripts/check-phase2i-supply-chain.py --node-licenses
+
+      - name: Verify metadata-only acceptance output
+        run: |
+          python -m json.tool tests/cross-component/standalone-acceptance.json >/dev/null
+          python -m json.tool tests/cross-component/phase2i-release-candidate.json >/dev/null
+          python -m json.tool tests/operations/phase2i-operational-bounds.json >/dev/null
+          python -m json.tool tests/support/phase2i-support-bundle.json >/dev/null
+          if grep -R -n -E --include='*.json' '(password|access.?token|oauth|cookie|message.?body|credential.?value|raw.?secret)' tests/cross-component tests/operations; then
+            echo "Sensitive field found in Phase 2I repository-local acceptance evidence." >&2
+            exit 1
+          fi
+
+  # Source gate: d1-evolution-gate.yml
+  d1-evolution-accepted-pr-proof:
+    permissions:
+      actions: read
+      contents: read
+      pull-requests: read
+    name: Prove exact accepted FULL D1 PR evidence
+    if: github.event_name == 'push'
+    runs-on: ubuntu-latest
+    outputs:
+      reuse: ${{ steps.proof.outcome == 'success' && steps.proof.outputs.reuse == 'true' }}
+    steps:
+      - name: Checkout exact source
+        uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+
+      - name: Verify exact source checkout
+        env:
+          EXPECTED_SOURCE_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: python -c "import os, subprocess; actual = subprocess.check_output(['git', 'rev-parse', 'HEAD'], text=True).strip(); expected = os.environ['EXPECTED_SOURCE_SHA']; assert actual == expected, f'expected {expected}, got {actual}'"
+
+      - name: Prove pre-merge FULL D1 Linux and Windows and exact report ZIP
+        id: proof
+        continue-on-error: true
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: python scripts/accepted-main-pr-reuse.py --gate d1 --github-output "$GITHUB_OUTPUT"
+  d1-evolution-linux:
+    permissions:
+      actions: read
+      contents: read
+      pull-requests: read
+    name: Native opsctl and pinned Wrangler D1 proof
+    runs-on: ubuntu-latest
+    needs: d1-evolution-accepted-pr-proof
+    if: always() && (github.event_name == 'pull_request' || needs.d1-evolution-accepted-pr-proof.result != 'success' || needs.d1-evolution-accepted-pr-proof.outputs.reuse != 'true')
+    steps:
+      - name: Checkout exact source
+        uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+
+      - name: Verify exact source checkout
+        env:
+          EXPECTED_SOURCE_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: python -c "import os, subprocess; actual = subprocess.check_output(['git', 'rev-parse', 'HEAD'], text=True).strip(); expected = os.environ['EXPECTED_SOURCE_SHA']; assert actual == expected, f'expected {expected}, got {actual}'"
+
+      - name: Prove frontend-only PR inherits exact FULL D1 fault and recovery receipt
+        if: github.event_name == 'pull_request'
+        id: d1_light
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: python scripts/accepted-main-pr-reuse.py --pr-d1-proof --github-output "$GITHUB_OUTPUT"
+
+      - name: Set up pinned Node and npm
+        if: steps.d1_light.outputs.d1_light != 'true'
+        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e
+        with:
+          node-version: '24.19.0'
+          package-manager-cache: false
+
+      - name: Enforce pinned Wrangler version
+        if: steps.d1_light.outputs.d1_light != 'true'
+        run: |
+          test "$(node --version)" = "v24.19.0"
+          npm install --global npm@11.17.0
+          test "$(npm --version)" = "11.17.0"
+          test "$(npx --yes wrangler@4.94.0 --version)" = "4.94.0"
+
+      - name: Verify protected executor and release identity contracts
+        if: steps.d1_light.outputs.d1_light != 'true'
+        run: |
+          node scripts/check-d1-migration-executor.mjs
+          node scripts/check-d1-migration-executor.mjs --self-test
+          node scripts/check-d1-release-schema-identity.mjs
+          node scripts/check-d1-release-schema-identity.mjs --self-test
+
+      - name: Prove K2 608 MiB D1 successor-v2 migration and append-only recovery
+        if: steps.d1_light.outputs.d1_light != 'true'
+        run: python scripts/test-k2-generation-stream-limit-d1.py
+
+      - name: Prove K2 append-only historical WORKING evidence cannot authorize prune
+        if: steps.d1_light.outputs.d1_light != 'true'
+        run: |
+          python scripts/test-k2-working-proof-d1.py
+          python scripts/test-k2-retirement-intent-d1.py
+          python scripts/test-profile-current-cold-retirement-d1.py
+
+      - name: Execute all opsctl D1 commands as real CLI processes
+        if: steps.d1_light.outputs.d1_light != 'true'
+        run: |
+          cargo run --locked --quiet --manifest-path tools/opsctl/Cargo.toml -- --root . d1 repository \
+            | python -m json.tool >/dev/null
+          cargo run --locked --quiet --manifest-path tools/opsctl/Cargo.toml -- --root . d1 status \
+            --component resolver \
+            --ledger-json tests/d1-evolution/valid-exact-resolver-ledger.json | python -m json.tool >/dev/null
+          cargo run --locked --quiet --manifest-path tools/opsctl/Cargo.toml -- --root . d1 plan \
+            --component resolver \
+            --ledger-json tests/d1-evolution/valid-exact-resolver-ledger.json \
+            --release-manifest tests/d1-evolution/resolver-release-compatible.json \
+            --current-manifest tests/d1-evolution/resolver-release-compatible.json \
+            --known-good-manifest tests/d1-evolution/resolver-release-compatible.json \
+            | python -m json.tool >/dev/null
+          cargo run --locked --quiet --manifest-path tools/opsctl/Cargo.toml -- --root . d1 compatibility \
+            --component resolver \
+            --ledger-json tests/d1-evolution/valid-exact-resolver-ledger.json \
+            --release-manifest tests/d1-evolution/resolver-release-compatible.json | python -m json.tool >/dev/null
+          cargo run --locked --quiet --manifest-path tools/opsctl/Cargo.toml -- --root . d1 verify \
+            --component resolver \
+            --ledger-json tests/d1-evolution/valid-exact-resolver-ledger.json \
+            --release-manifest tests/d1-evolution/resolver-release-compatible.json | python -m json.tool >/dev/null
+
+      - name: Execute reusable D1 fault and recovery harness
+        if: steps.d1_light.outputs.d1_light != 'true'
+        env:
+          PYTHONDONTWRITEBYTECODE: '1'
+        run: |
+          set -euo pipefail
+          python -m py_compile scripts/d1-fault-recovery-harness.py
+          python scripts/d1-fault-recovery-harness.py \
+            --root . \
+            --wrangler-version 4.94.0 \
+            --report artifacts/d1-evolution/fault-recovery-report.json
+          python scripts/accepted-main-pr-reuse.py --verify-d1-report \
+            artifacts/d1-evolution/fault-recovery-report.json
+
+      - name: Upload D1 fault and recovery evidence
+        if: steps.d1_light.outputs.d1_light != 'true'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: d1-fault-recovery-${{ github.run_id }}-${{ github.run_attempt }}
+          path: artifacts/d1-evolution/fault-recovery-report.json
+          if-no-files-found: error
+          retention-days: 30
+  d1-evolution-windows-cli:
+    permissions:
+      actions: read
+      contents: read
+      pull-requests: read
+    name: Native opsctl D1 CLI portability on Windows
+    runs-on: windows-latest
+    needs: d1-evolution-accepted-pr-proof
+    if: always() && (github.event_name == 'pull_request' || needs.d1-evolution-accepted-pr-proof.result != 'success' || needs.d1-evolution-accepted-pr-proof.outputs.reuse != 'true')
+    steps:
+      - name: Checkout exact source
+        uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+
+      - name: Verify exact source checkout
+        env:
+          EXPECTED_SOURCE_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: python -c "import os, subprocess; actual = subprocess.check_output(['git', 'rev-parse', 'HEAD'], text=True).strip(); expected = os.environ['EXPECTED_SOURCE_SHA']; assert actual == expected, f'expected {expected}, got {actual}'"
+
+      - name: Execute all native opsctl D1 commands on Windows
+        shell: pwsh
+        run: |
+          $repository = cargo run --locked --quiet --manifest-path tools/opsctl/Cargo.toml -- --root . d1 repository | ConvertFrom-Json
+          if ($repository.kind -ne 'D1_REPOSITORY_PROJECTION') { throw 'd1 repository portability proof failed' }
+          $status = cargo run --locked --quiet --manifest-path tools/opsctl/Cargo.toml -- --root . d1 status --component resolver --ledger-json tests/d1-evolution/valid-exact-resolver-ledger.json | ConvertFrom-Json
+          if ($status.ledger_state -ne 'EXACT' -or $status.mutation_executed) { throw 'd1 status portability proof failed' }
+          $plan = cargo run --locked --quiet --manifest-path tools/opsctl/Cargo.toml -- --root . d1 plan --component resolver --ledger-json tests/d1-evolution/valid-exact-resolver-ledger.json --release-manifest tests/d1-evolution/resolver-release-compatible.json --current-manifest tests/d1-evolution/resolver-release-compatible.json --known-good-manifest tests/d1-evolution/resolver-release-compatible.json | ConvertFrom-Json
+          if ($plan.decision -ne 'SAFE' -or -not $plan.allowed) { throw 'd1 plan portability proof failed' }
+          $compatibility = cargo run --locked --quiet --manifest-path tools/opsctl/Cargo.toml -- --root . d1 compatibility --component resolver --ledger-json tests/d1-evolution/valid-exact-resolver-ledger.json --release-manifest tests/d1-evolution/resolver-release-compatible.json | ConvertFrom-Json
+          if ($compatibility.ledger_state -ne 'EXACT') { throw 'd1 compatibility portability proof failed' }
+          $verify = cargo run --locked --quiet --manifest-path tools/opsctl/Cargo.toml -- --root . d1 verify --component resolver --ledger-json tests/d1-evolution/valid-exact-resolver-ledger.json --release-manifest tests/d1-evolution/resolver-release-compatible.json | ConvertFrom-Json
+          if ($verify.decision -ne 'SAFE' -or -not $verify.allowed) { throw 'd1 verify portability proof failed' }
+
+  # Source gate: encrypted-generation-gate.yml
+  encrypted-generation-encrypted-generation-linux:
+    permissions:
+      contents: read
+    name: Encrypted Generation Linux And WASM
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+
+      - name: Verify exact source checkout
+        env:
+          EXPECTED_SOURCE_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: python -c "import os, subprocess; actual = subprocess.check_output(['git', 'rev-parse', 'HEAD'], text=True).strip(); expected = os.environ['EXPECTED_SOURCE_SHA']; assert actual == expected, f'expected {expected}, got {actual}'"
+
+      # Build cache is never a substitute for exact-head tests or an
+      # independently validated platform/security gate outcome.
+      - name: Restore pinned Rust build cache
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6
+        with:
+          shared-key: profile-bridge-ci-v1
+
+      - name: Compile Step 9 policy
+        run: python -m py_compile scripts/check-step9-encrypted-generation.py
+
+      - name: Enforce Step 9 encrypted generation boundary
+        run: python scripts/check-step9-encrypted-generation.py
+
+      - name: Prove key-output fixture is rejected
+        run: |
+          if python scripts/check-step9-encrypted-generation.py --root tests/encrypted-generation/fixtures/logs-key; then
+            echo "Key-output fixture unexpectedly passed." >&2
+            exit 1
+          fi
+
+      - name: Format
+        run: cargo fmt --all -- --check
+
+      - name: Clippy encrypted generation crate
+        run: cargo clippy --locked -p encrypted-generation-domain --all-targets -- -D warnings
+
+      - name: Test encrypted generation lifecycle
+        run: cargo test --locked -p encrypted-generation-domain
+
+      - name: Add Workers WASM target
+        run: rustup target add wasm32-unknown-unknown
+
+      - name: Check pure encrypted generation crate for Workers WASM
+        run: cargo check --locked -p encrypted-generation-domain --target wasm32-unknown-unknown
+  encrypted-generation-encrypted-generation-windows:
+    permissions:
+      contents: read
+    name: Encrypted Generation Windows
+    runs-on: windows-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+
+      - name: Verify exact source checkout
+        env:
+          EXPECTED_SOURCE_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: python -c "import os, subprocess; actual = subprocess.check_output(['git', 'rev-parse', 'HEAD'], text=True).strip(); expected = os.environ['EXPECTED_SOURCE_SHA']; assert actual == expected, f'expected {expected}, got {actual}'"
+
+      # Build cache is never a substitute for exact-head tests or an
+      # independently validated platform/security gate outcome.
+      - name: Restore pinned Rust build cache
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6
+        with:
+          shared-key: profile-bridge-ci-v1
+
+      - name: Test encrypted generation lifecycle
+        run: cargo test --locked -p encrypted-generation-domain
+
+  # Source gate: external-evidence-gate.yml
+  external-evidence-external-evidence:
+    permissions:
+      contents: read
+    name: External Evidence Metadata
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+
+      - name: Verify exact source checkout
+        env:
+          EXPECTED_SOURCE_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: python -c "import os, subprocess; actual = subprocess.check_output(['git', 'rev-parse', 'HEAD'], text=True).strip(); expected = os.environ['EXPECTED_SOURCE_SHA']; assert actual == expected, f'expected {expected}, got {actual}'"
+
+      - name: Prove typed external evidence semantic policy fails closed
+        run: cargo test --locked --manifest-path tools/opsctl/Cargo.toml -p opsctl-core external_evidence
+
+      - name: Validate repository evidence, scope, lineage and readiness through strict Rust adapter
+        run: cargo test --locked --manifest-path tools/opsctl/Cargo.toml --test external_evidence_policy
+
+  # Source gate: external-review-attestation-gate.yml
+  external-review-external-review-attestation:
+    permissions:
+      contents: read
+      issues: read
+      pull-requests: read
+    name: External Review Attestations
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+
+      - name: Verify exact source checkout
+        env:
+          EXPECTED_SOURCE_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: python -c "import os, subprocess; actual = subprocess.check_output(['git', 'rev-parse', 'HEAD'], text=True).strip(); expected = os.environ['EXPECTED_SOURCE_SHA']; assert actual == expected, f'expected {expected}, got {actual}'"
+
+      - name: Compile observer-only GitHub acquisition shell
+        run: |
+          python -m py_compile scripts/check-external-review-attestations.py
+          python -m py_compile tests/external-review-attestations/test-attestations.py
+
+      - name: Run observer-only GitHub API fixtures
+        run: python tests/external-review-attestations/test-attestations.py
+
+      - name: Run typed hosted-evidence policy tests
+        run: cargo test --manifest-path tools/opsctl/Cargo.toml --locked hosted_evidence
+
+      - name: Observe repository review objects from GitHub
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          REVIEW_OBSERVATION: ${{ runner.temp }}/external-review-attestation-observation.json
+        run: |
+          python scripts/check-external-review-attestations.py \
+            --output-observation-json "$REVIEW_OBSERVATION"
+
+      - name: Verify active terminal reviews with typed Rust policy
+        env:
+          REVIEW_OBSERVATION: ${{ runner.temp }}/external-review-attestation-observation.json
+        run: |
+          cargo run --quiet --manifest-path tools/opsctl/Cargo.toml --locked -- \
+            --root . \
+            hosted-evidence external-review-attestation verify \
+            --observation-json "$REVIEW_OBSERVATION"
+
+  # Source gate: frontend-gate.yml
+  frontend-frontend:
+    permissions:
+      contents: read
+    name: React Operator UI
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+
+      - name: Verify exact source checkout
+        env:
+          EXPECTED_SOURCE_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: python -c "import os, subprocess; actual = subprocess.check_output(['git', 'rev-parse', 'HEAD'], text=True).strip(); expected = os.environ['EXPECTED_SOURCE_SHA']; assert actual == expected, f'expected {expected}, got {actual}'"
+
+      - name: Enforce frontend sibling-feature boundaries
+        run: python scripts/check-frontend-feature-boundaries.py
+
+      - name: Prove sibling feature internals are rejected
+        run: python scripts/check-frontend-feature-boundaries.py --self-test
+
+      - name: Verify generated frontend OpenAPI runtime
+        run: python scripts/generate-frontend-openapi-runtime.py --check-render
+
+      - name: Verify PAS-2 frontend OpenAPI compiler input
+        run: python scripts/check-frontend-openapi.py
+
+      - name: Prove unsupported PAS-2 OpenAPI fails closed
+        run: python tests/contracts/test_frontend_openapi_negative.py
+
+      - name: Set up Node 24 LTS
+        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e
+        with:
+          node-version: '24.19.0'
+          package-manager-cache: false
+
+      - name: Enforce Node and npm versions
+        run: |
+          test "$(node --version)" = "v24.19.0"
+          npm install --global npm@11.17.0
+          test "$(npm --version)" = "11.17.0"
+
+      - name: Clean install from lockfile
+        working-directory: frontend
+        run: npm ci
+
+      - name: Reject credential persistence and token surfaces in application source
+        run: |
+          if grep -R -n -E --include='*.ts' --include='*.tsx' '(localStorage|sessionStorage|Cf-Access-Jwt-Assertion)' frontend/src; then
+            echo "Forbidden browser credential persistence/token surface found in application source." >&2
+            exit 1
+          fi
+
+      - name: Strict TypeScript
+        working-directory: frontend
+        run: npm run typecheck
+
+      - name: Unit tests
+        working-directory: frontend
+        run: npm test
+
+      - name: Production build
+        working-directory: frontend
+        run: npm run build
+
+      - name: Verify Static Assets output
+        run: |
+          test -f frontend/dist/index.html
+          find frontend/dist/assets -type f -print -quit | grep -q .
+
+  # Source gate: github-governance-gate.yml
+  github-governance-contract:
+    permissions:
+      actions: read
+      contents: read
+    name: GitHub Governance Contract
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout exact candidate source
+        uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Verify exact source checkout
+        env:
+          EXPECTED_SOURCE_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: python -c "import os, subprocess; actual = subprocess.check_output(['git', 'rev-parse', 'HEAD'], text=True).strip(); expected = os.environ['EXPECTED_SOURCE_SHA']; assert actual == expected, f'expected {expected}, got {actual}'"
+
+      - name: Set up Node 24 LTS
+        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e
+        with:
+          node-version: '24.19.0'
+          package-manager-cache: false
+
+      - name: Enforce Node version
+        run: test "$(node --version)" = "v24.19.0"
+
+      - name: Validate every GitHub Actions workflow with digest-pinned actionlint
+        run: |
+          set -euo pipefail
+          image='rhysd/actionlint@sha256:9d36088643581e728c969f35141f88139fec77280b2be23c1f66f8e40e1025e7'
+          docker pull "$image" >/dev/null
+          docker run --rm \
+            --volume "$GITHUB_WORKSPACE:/repo:ro" \
+            --workdir /repo \
+            "$image" -no-color
+
+      - name: Prove workflow secret authority fails closed
+        run: python scripts/check-workflow-secret-authority.py --self-test
+
+      - name: Validate canonical workflow secret consumers and environment boundaries
+        run: python scripts/check-workflow-secret-authority.py
+
+      - name: Prove AR-11 Core mailbox hosted disablement fails closed
+        run: node .github/scripts/ar11-core-mailbox-hosted-disablement.mjs --self-test
+
+      - name: Validate AR-11 Core mailbox hosted disablement contract
+        run: node .github/scripts/ar11-core-mailbox-hosted-disablement.mjs
+
+      - name: Derive lifecycle through the typed PF-1 owner
+        run: |
+          node .github/scripts/architecture-acceptance-observer.mjs evidence > acceptance-evidence.json
+          cargo run --locked --quiet --manifest-path tools/opsctl/Cargo.toml -- \
+            --root . status --acceptance-evidence-json acceptance-evidence.json \
+            > lifecycle-state.json
+          python -m json.tool lifecycle-state.json >/dev/null
+
+      - name: Validate architecture-slice premerge identity
+        if: github.event_name == 'pull_request'
+        env:
+          PR_TITLE: ${{ github.event.pull_request.title }}
+          PR_HEAD_REF: ${{ github.event.pull_request.head.ref }}
+          PR_BASE_REF: ${{ github.event.pull_request.base.ref }}
+          PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          node .github/scripts/architecture-acceptance-observer.mjs premerge \
+            --title "$PR_TITLE" \
+            --head-ref "$PR_HEAD_REF" \
+            --base-ref "$PR_BASE_REF" \
+            --base "$PR_BASE_SHA" \
+            --head "$PR_HEAD_SHA" \
+            > premerge-observation.json
+          python - <<'PY'
+          import json
+          premerge = json.load(open('premerge-observation.json', encoding='utf-8'))
+          state = json.load(open('lifecycle-state.json', encoding='utf-8'))
+          if premerge['architecture_slice'] and premerge['slice'] != state['current_slice']:
+              raise SystemExit(f"architecture slice {premerge['slice']} is not current {state['current_slice']}")
+          PY
+
+      - name: Prove typed lifecycle drift fails closed
+        run: cargo test --locked --manifest-path tools/opsctl/Cargo.toml architecture
+
+      - name: Prove deployment identity observation adapter fails closed
+        run: python scripts/deployment-identity-ar11.py --self-test
+
+      - name: Prove typed hosted evidence policy and adapter fail closed
+        run: cargo test --locked --manifest-path tools/opsctl/Cargo.toml hosted_evidence
+
+      - name: Validate current GitHub governance desired state
+        run: node .github/scripts/github-governance.mjs contract
+
+      - name: Prove GitHub governance weakening fails closed
+        run: node .github/scripts/github-governance.mjs self-test
+
+      - name: Validate canonical Actions registry projection
+        run: node .github/scripts/github-actions-registry.mjs contract
+
+      - name: Prove Actions registry drift fails closed
+        run: node .github/scripts/github-actions-registry.mjs self-test
+
+      - name: Validate accepted AR-8C operational credential lifecycle provenance
+        run: node .github/scripts/credential-lifecycle.mjs contract
+
+      - name: Prove accepted AR-8C operational credential lifecycle provenance drift fails closed
+        run: node .github/scripts/credential-lifecycle.mjs self-test
+
+      - name: Validate current subject-domain architecture authorities
+        run: node .github/scripts/architecture-authority-check.mjs
+
+      - name: Prove current architecture authority drift fails closed
+        run: node .github/scripts/architecture-authority-check.mjs --self-test
+
+      - name: Validate current Profile/Camoufox security authority
+        run: node .github/scripts/profile-security-authority-check.mjs
+
+      - name: Prove Profile/Camoufox security and proxy-handle leakage fail closed
+        run: node .github/scripts/profile-security-authority-check.mjs --self-test
+
+  # Source gate: local-profile-gate.yml
+  local-profile-accepted-pr-proof:
+    permissions:
+      contents: read
+      actions: read
+      pull-requests: read
+    name: Local Profile exact PR tree reuse proof
+    runs-on: ubuntu-latest
+    outputs:
+      reuse: ${{ steps.proof.outputs.reuse }}
+      native_unaffected: ${{ steps.native-prior.outputs.native_unaffected }}
+    steps:
+      - name: Checkout exact source
+        uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          fetch-depth: 0
+          filter: blob:none
+          persist-credentials: false
+      - name: Verify exact source checkout
+        env:
+          EXPECTED_SOURCE_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: python -c "import os, subprocess; actual = subprocess.check_output(['git', 'rev-parse', 'HEAD'], text=True).strip(); expected = os.environ['EXPECTED_SOURCE_SHA']; assert actual == expected, f'expected {expected}, got {actual}'"
+      - name: Test fail-closed replay admission
+        run: |
+          python -m py_compile scripts/accepted-main-pr-reuse.py
+          python scripts/accepted-main-pr-reuse.py --self-test
+      - name: Prove frontend-only PR inherits exact FULL Windows physical proof
+        if: github.event_name == 'pull_request'
+        id: native-prior
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: python scripts/accepted-main-pr-reuse.py --pr-native-proof --github-output "$GITHUB_OUTPUT"
+      - name: Bind accepted-main tree to completed PR checks or demand full proof
+        id: proof
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: python scripts/accepted-main-pr-reuse.py --gate local-profile --github-output "$GITHUB_OUTPUT"
+  local-profile-local-profile-linux:
+    permissions:
+      contents: read
+      actions: read
+      pull-requests: read
+    needs: local-profile-accepted-pr-proof
+    if: always() && (github.event_name == 'pull_request' || needs.local-profile-accepted-pr-proof.result != 'success' || needs.local-profile-accepted-pr-proof.outputs.reuse != 'true')
+    name: Local Profile Linux
+    runs-on: ubuntu-latest
+    steps:
+      - name: Require successful accepted PR proof routing
+        run: test "${{ needs.local-profile-accepted-pr-proof.result }}" = success
+
+      - name: Checkout
+        uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+
+      - name: Verify exact source checkout
+        env:
+          EXPECTED_SOURCE_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: python -c "import os, subprocess; actual = subprocess.check_output(['git', 'rev-parse', 'HEAD'], text=True).strip(); expected = os.environ['EXPECTED_SOURCE_SHA']; assert actual == expected, f'expected {expected}, got {actual}'"
+
+      # Cache is a compilation accelerator only, never an attestation.
+      # rust-cache's key includes the actual rustc, Cargo manifests/lockfiles
+      # and compile flags; Cargo still builds changed source on every SHA.
+      - name: Restore versioned Rust dependencies (not acceptance evidence)
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2 (immutable)
+        with:
+          shared-key: profile-bridge-ci-v1
+          cache-on-failure: 'true'
+
+      - name: Compile Step 8 policy
+        run: python -m py_compile scripts/check-step8-local-profile.py
+
+      - name: Enforce Step 8 local lifecycle boundary
+        run: python scripts/check-step8-local-profile.py
+
+      - name: Prove browser-lock deletion fixture is rejected
+        run: |
+          if python scripts/check-step8-local-profile.py --root tests/local-profile/fixtures/deletes-browser-lock; then
+            echo "Browser-owned lock deletion fixture unexpectedly passed." >&2
+            exit 1
+          fi
+
+      - name: Format
+        run: cargo fmt --all -- --check
+
+      - name: Clippy Profile Bridge
+        run: cargo clippy --locked -p profile-bridge --all-targets --features synthetic-test-bin -- -D warnings
+
+      - name: Test local profile lifecycle
+        run: cargo test --locked -p profile-bridge --features synthetic-test-bin local_profile
+  local-profile-local-profile-windows-core:
+    permissions:
+      contents: read
+      actions: read
+      pull-requests: read
+    needs: local-profile-accepted-pr-proof
+    if: always() && (github.event_name == 'pull_request' || needs.local-profile-accepted-pr-proof.result != 'success' || needs.local-profile-accepted-pr-proof.outputs.reuse != 'true')
+    name: Local Profile Windows Core
+    runs-on: windows-latest
+    outputs:
+      proof_mode: ${{ steps.native-prior.outcome == 'success' && 'INHERITED' || 'FULL' }}
+    steps:
+      - name: Require successful accepted PR proof routing
+        shell: pwsh
+        run: |
+          if ('${{ needs.local-profile-accepted-pr-proof.result }}' -ne 'success') { throw 'Accepted PR proof routing did not succeed' }
+
+      - name: Checkout
+        uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+
+      - name: Verify exact source checkout
+        env:
+          EXPECTED_SOURCE_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: python -c "import os, subprocess; actual = subprocess.check_output(['git', 'rev-parse', 'HEAD'], text=True).strip(); expected = os.environ['EXPECTED_SOURCE_SHA']; assert actual == expected, f'expected {expected}, got {actual}'"
+
+      - name: Set up pinned Python for native health-event integration
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
+        with:
+          python-version: '3.12.10'
+
+      - name: Certify unchanged exact prior FULL native physical proof
+        if: github.event_name == 'pull_request' && needs.local-profile-accepted-pr-proof.outputs.native_unaffected == 'true'
+        id: native-prior
+        continue-on-error: true
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: python scripts/accepted-main-pr-reuse.py --pr-native-certify
+
+      # The current FULL Windows path uses the existing exact compiler cache;
+      # prior FULL-proof reuse needs only the installed rustc version and the
+      # signed SHA-bound metadata. Avoid transferring 232 MiB on the fast path.
+      - name: Restore versioned Rust dependencies and opsctl
+        if: steps.native-prior.outcome != 'success'
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2 (immutable)
+        with:
+          shared-key: profile-bridge-ci-v1
+          workspaces: |
+            . -> target
+            tools/opsctl -> target
+          cache-on-failure: 'true'
+
+      - name: Test local profile lifecycle
+        if: steps.native-prior.outcome != 'success'
+        run: cargo test --locked -p profile-bridge --features synthetic-test-bin local_profile
+
+      - name: Prove OS-owned Restore scratch cleanup after Windows process death
+        if: steps.native-prior.outcome != 'success'
+        run: cargo test --locked -p profile-bridge --features synthetic-test-bin --lib generation_reopen::tests::windows_process_death_retires_both_os_owned_restore_files -- --exact
+
+      - name: Prove native Open diagnostic cause on Windows
+        if: steps.native-prior.outcome != 'success'
+        run: cargo test --locked -p profile-bridge --bin profile-bridge
+
+      - name: Prove READY v11-to-v12 lost-Commit recovery and dirty-byte refusal
+        if: steps.native-prior.outcome != 'success'
+        run: cargo test --locked -p profile-bridge --features synthetic-test-bin --lib lost_ready_commit_v11_to_v12
+
+      # The expensive real sparse WAL/Commit test runs once in the Local Windows
+      # owner instead of being duplicated in Quality Windows. An exact filter
+      # returning zero tests is a false green; prove the one-test list first.
+      - name: Prove Windows lost-Commit K1 exact sparse WAL successor
+        if: steps.native-prior.outcome != 'success'
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $PSNativeCommandUseErrorActionPreference = $true
+          $test = 'shipping_generation_successor_control::tests::fresh_lone_intent_first_seals_then_commit_and_next_claim_finishes_active_exact'
+          $cargoArgs = @('test', '--locked', '-p', 'profile-bridge', '--features', 'synthetic-test-bin', '--lib', $test, '--', '--exact')
+          $listed = & cargo @cargoArgs --list 2>&1
+          if ($LASTEXITCODE -ne 0 -or @($listed | Where-Object { "$_" -eq "${test}: test" }).Count -ne 1) {
+            throw "Windows K1 test list was not exactly one test: $($listed -join "`n")"
+          }
+          $result = & cargo @cargoArgs 2>&1
+          $result | ForEach-Object { Write-Host "$_" }
+          if ($LASTEXITCODE -ne 0 -or ($result -join "`n") -notmatch '(?m)^test result: ok\. 1 passed; 0 failed; 0 ignored;') {
+            throw 'Windows K1 exact sparse WAL successor did not pass exactly once'
+          }
+
+      - name: Prove Windows Playwright Ready health confirmation through native process stderr
+        if: steps.native-prior.outcome != 'success'
+        shell: pwsh
+        run: |
+          $env:PROFILE_BRIDGE_TEST_PYTHON = (Get-Command python).Source
+          cargo test --locked -p profile-bridge --features synthetic-test-bin --lib local_browser_open::tests -- --include-ignored
+          if ($LASTEXITCODE -ne 0) { throw 'native Playwright Ready health-confirmation tests failed' }
+
+      - name: Prove Windows release CMS verifier
+        if: steps.native-prior.outcome != 'success'
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $PSNativeCommandUseErrorActionPreference = $true
+          $test = 'production_verifier_accepts_only_exact_pinned_application_signature'
+          $cargoArgs = @('test', '--locked', '-p', 'profile-bridge', '--test', 'windows_delivery_signature_acceptance', '--', '--exact', $test)
+          $listed = & cargo @cargoArgs --list 2>&1
+          if ($LASTEXITCODE -ne 0 -or @($listed | Where-Object { "$_" -eq "${test}: test" }).Count -ne 1) {
+            throw "Windows CMS test list was not exactly one test: $($listed -join "`n")"
+          }
+          $result = & cargo @cargoArgs 2>&1
+          $result | ForEach-Object { Write-Host "$_" }
+          if ($LASTEXITCODE -ne 0 -or ($result -join "`n") -notmatch '(?m)^test result: ok\. 1 passed; 0 failed; 0 ignored;') {
+            throw 'Windows CMS exact verifier did not pass exactly once'
+          }
+
+      - name: Prove application delivery signing without OS certificate-store changes
+        if: steps.native-prior.outcome != 'success'
+        run: ./tests/windows-delivery-signing.ps1
+
+      - name: Build AR-6 opsctl on Windows
+        if: steps.native-prior.outcome != 'success'
+        run: cargo build --locked --manifest-path tools/opsctl/Cargo.toml
+
+      - name: Exercise AR-6 opsctl read-only commands on Windows
+        if: steps.native-prior.outcome != 'success'
+        shell: pwsh
+        run: |
+          $bin = 'tools/opsctl/target/debug/opsctl.exe'
+          if (-not (Test-Path $bin)) {
+            throw "opsctl.exe was not produced"
+          }
+          $doctor = ((& $bin --root . doctor) -join "`n") | ConvertFrom-Json
+          if ($LASTEXITCODE -ne 0 -or $doctor.status -ne 'ok' -or $doctor.mode -ne 'read-only' -or $doctor.mutation_executed -ne $false) {
+            throw "opsctl doctor lost the read-only contract"
+          }
+          '{"schema_version":1,"source_branch":"main","acceptance_observations":[]}' |
+            Set-Content -Encoding utf8 acceptance-evidence.json
+          $status = ((& $bin --root . status --acceptance-evidence-json acceptance-evidence.json) -join "`n") | ConvertFrom-Json
+          if ($LASTEXITCODE -ne 0 -or $status.accepted_checkpoint -ne 'AR-11' -or $status.current_slice -ne 'AR-12') {
+            throw "opsctl status lost the typed lifecycle contract"
+          }
+
+      - name: Write FULL Local Windows runner identity receipt
+        if: github.event_name == 'pull_request' && steps.native-prior.outcome != 'success'
+        shell: pwsh
+        env:
+          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: python scripts/accepted-main-pr-reuse.py --native-runner-receipt local-profile --receipt-output "$env:RUNNER_TEMP/local-native-runner.json"
+
+      - name: Upload FULL Local Windows runner identity receipt
+        if: github.event_name == 'pull_request' && steps.native-prior.outcome != 'success'
+        id: native-runner-upload
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: local-native-runner.json
+          path: ${{ runner.temp }}/local-native-runner.json
+          archive: false
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Verify uploaded FULL Local runner identity digest
+        if: github.event_name == 'pull_request' && steps.native-prior.outcome != 'success'
+        shell: pwsh
+        env:
+          UPLOADED_DIGEST: ${{ steps.native-runner-upload.outputs.artifact-digest }}
+        run: |
+          $expected = (Get-FileHash -Algorithm SHA256 "$env:RUNNER_TEMP/local-native-runner.json").Hash.ToLowerInvariant()
+          if (-not $env:UPLOADED_DIGEST -or $env:UPLOADED_DIGEST -ne $expected) {
+            throw 'FULL Local Windows runner receipt upload SHA mismatch'
+          }
+
+  # K2 compiles a separate release-profile Rust test and streams 256/512/543 MiB.
+  # Its independent Windows runner never shares temp fixtures or Cargo locks
+  # with Core; the original required status is gated on BOTH physical jobs.
+  local-profile-local-profile-windows-k2:
+    permissions:
+      contents: read
+      actions: read
+      pull-requests: read
+    needs: local-profile-accepted-pr-proof
+    if: always() && (github.event_name == 'pull_request' || needs.local-profile-accepted-pr-proof.result != 'success' || needs.local-profile-accepted-pr-proof.outputs.reuse != 'true')
+    name: Local Profile Windows K2
+    runs-on: windows-latest
+    outputs:
+      proof_mode: ${{ steps.native-prior.outcome == 'success' && 'INHERITED' || 'FULL' }}
+    steps:
+      - name: Require successful accepted PR proof routing
+        shell: pwsh
+        run: |
+          if ('${{ needs.local-profile-accepted-pr-proof.result }}' -ne 'success') { throw 'Accepted PR proof routing did not succeed' }
+
+      - name: Checkout
+        uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+
+      - name: Verify exact source checkout
+        env:
+          EXPECTED_SOURCE_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: python -c "import os, subprocess; actual = subprocess.check_output(['git', 'rev-parse', 'HEAD'], text=True).strip(); expected = os.environ['EXPECTED_SOURCE_SHA']; assert actual == expected, f'expected {expected}, got {actual}'"
+
+      - name: Set up pinned Python for K2 resource accounting
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
+        with:
+          python-version: '3.12.10'
+
+      - name: Certify unchanged exact prior FULL native physical proof
+        if: github.event_name == 'pull_request' && needs.local-profile-accepted-pr-proof.outputs.native_unaffected == 'true'
+        id: native-prior
+        continue-on-error: true
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: python scripts/accepted-main-pr-reuse.py --pr-native-certify
+
+      - name: Restore versioned Rust dependencies for K2
+        if: steps.native-prior.outcome != 'success'
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2 (immutable)
+        with:
+          shared-key: profile-bridge-ci-v1
+          workspaces: |
+            . -> target
+            tools/opsctl -> target
+          cache-on-failure: 'true'
+
+      - name: Prove K2 256/512 MiB file streaming on Windows with peak RAM and disk limits
+        if: steps.native-prior.outcome != 'success'
+        run: python scripts/test-k2-large-native-streaming.py
+
+      - name: Write FULL K2 Windows runner identity receipt
+        if: github.event_name == 'pull_request' && steps.native-prior.outcome != 'success'
+        shell: pwsh
+        env:
+          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: python scripts/accepted-main-pr-reuse.py --native-runner-receipt local-profile-k2 --receipt-output "$env:RUNNER_TEMP/local-k2-native-runner.json"
+
+      - name: Upload FULL K2 Windows runner identity receipt
+        if: github.event_name == 'pull_request' && steps.native-prior.outcome != 'success'
+        id: k2-native-runner-upload
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: local-k2-native-runner.json
+          path: ${{ runner.temp }}/local-k2-native-runner.json
+          archive: false
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Verify uploaded FULL K2 runner identity digest
+        if: github.event_name == 'pull_request' && steps.native-prior.outcome != 'success'
+        shell: pwsh
+        env:
+          UPLOADED_DIGEST: ${{ steps.k2-native-runner-upload.outputs.artifact-digest }}
+        run: |
+          $expected = (Get-FileHash -Algorithm SHA256 "$env:RUNNER_TEMP/local-k2-native-runner.json").Hash.ToLowerInvariant()
+          if (-not $env:UPLOADED_DIGEST -or $env:UPLOADED_DIGEST -ne $expected) {
+            throw 'FULL K2 Windows runner receipt upload SHA mismatch'
+          }
+
+  # Preserve the exact protected GitHub status name. A green Core alone must
+  # never make a PR mergeable while its independent physical K2 is still live.
+  local-profile-local-profile-windows:
+    permissions:
+      contents: read
+      actions: read
+      pull-requests: read
+    needs: [local-profile-accepted-pr-proof, local-profile-local-profile-windows-core, local-profile-local-profile-windows-k2]
+    if: always() && (github.event_name == 'pull_request' || needs.local-profile-accepted-pr-proof.result != 'success' || needs.local-profile-accepted-pr-proof.outputs.reuse != 'true')
+    name: Local Profile Windows
+    runs-on: ubuntu-latest
+    steps:
+      - name: Require both exact-head Windows proof jobs
+        env:
+          ADMISSION: ${{ needs.local-profile-accepted-pr-proof.result }}
+          CORE: ${{ needs.local-profile-local-profile-windows-core.result }}
+          K2: ${{ needs.local-profile-local-profile-windows-k2.result }}
+          CORE_MODE: ${{ needs.local-profile-local-profile-windows-core.outputs.proof_mode }}
+          K2_MODE: ${{ needs.local-profile-local-profile-windows-k2.outputs.proof_mode }}
+        run: |
+          test "$ADMISSION" = success
+          test "$CORE" = success
+          test "$K2" = success
+          test "$CORE_MODE" = "$K2_MODE"
+          test "$CORE_MODE" = FULL || test "$CORE_MODE" = INHERITED
+
+  # Source gate: profile-generation-gate.yml
+  profile-generation-profile-generation:
+    permissions:
+      contents: read
+    name: Registry Domain D1 Adapter Worker And Contract
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+
+      - name: Verify exact source checkout
+        env:
+          EXPECTED_SOURCE_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: python -c "import os, subprocess; actual = subprocess.check_output(['git', 'rev-parse', 'HEAD'], text=True).strip(); expected = os.environ['EXPECTED_SOURCE_SHA']; assert actual == expected, f'expected {expected}, got {actual}'"
+
+      # Build cache is never a substitute for exact-head tests or an
+      # independently validated platform/security gate outcome.
+      - name: Restore pinned Rust build cache
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6
+        with:
+          shared-key: profile-bridge-ci-v1
+
+      - name: Show pinned toolchain
+        run: rustup show active-toolchain
+
+      - name: Check formatting
+        run: cargo fmt --all -- --check
+
+      - name: Test generation domain
+        run: cargo test --locked -p profile-domain
+
+      - name: Test Cloudflare generation adapter
+        run: cargo test --locked -p cloudflare-adapters --lib
+
+      - name: Test Worker request evidence and routing helpers
+        run: cargo test --locked -p browser-profile-control-plane-worker --lib
+
+      - name: Check composed Worker for WASM
+        run: >-
+          cargo check --locked -p browser-profile-control-plane-worker
+          --target wasm32-unknown-unknown
+
+      - name: Compile registry and contract tests
+        run: >-
+          python -m py_compile
+          scripts/check-contract-compatibility.py
+          scripts/render-openapi.py
+          scripts/test-openapi-fragments.py
+          scripts/test-profile-generation-registry.py
+          scripts/test-profile-generation-registry-edge-cases.py
+          scripts/test-profile-generation-integrity-guards.py
+          scripts/test-k2-historical-predecessor-d1.py
+
+      - name: Prove governed registry and activation
+        run: |
+          python scripts/test-profile-generation-registry.py
+          python scripts/test-profile-generation-registry-edge-cases.py
+          python scripts/test-profile-generation-integrity-guards.py
+          python scripts/test-k2-historical-predecessor-d1.py
+
+      - name: Verify additive OpenAPI contract
+        run: |
+          python scripts/test-openapi-fragments.py
+          python scripts/check-contract-compatibility.py
+          python scripts/render-openapi.py --output /tmp/openapi-v1.json
+          python -m json.tool /tmp/openapi-v1.json >/dev/null
+          grep -q 'registerProfileGeneration' /tmp/openapi-v1.json
+          grep -q 'getProfileGeneration' /tmp/openapi-v1.json
+          grep -q 'verifyProfileGeneration' /tmp/openapi-v1.json
+          grep -q 'activateProfileGeneration' /tmp/openapi-v1.json
+          grep -q 'deactivateProfileGeneration' /tmp/openapi-v1.json
+          grep -q 'quarantineProfileGeneration' /tmp/openapi-v1.json
+
+      - name: Reject migration gaps and unsafe registry storage
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          from pathlib import Path
+          files = sorted(Path('migrations/d1').glob('[0-9][0-9][0-9][0-9]_*.sql'))
+          versions = [int(path.name.split('_', 1)[0]) for path in files]
+          expected = list(range(1, len(files) + 1))
+          if versions != expected:
+              raise SystemExit(f'non-contiguous D1 migrations: {versions}; expected {expected}')
+          PY
+          grep -q 'CREATE TABLE profile_generations' migrations/d1/0006_profile_generation_registry.sql
+          grep -q 'active_profile_generation_cannot_be_quarantined' migrations/d1/0006_profile_generation_registry.sql
+          grep -q 'profile_generation_time_regression' migrations/d1/0006_profile_generation_registry.sql
+          grep -q 'profile_generation_insert_not_governed' migrations/d1/0007_profile_generation_integrity_guards.sql
+          grep -q 'profile_generation_activation_not_governed' migrations/d1/0007_profile_generation_integrity_guards.sql
+          grep -q 'profile_generation_deactivate_commands' migrations/d1/0008_profile_generation_deactivation.sql
+          grep -q 'profile_generation_deactivation_not_governed' migrations/d1/0008_profile_generation_deactivation.sql
+          if grep -R --line-number -E '(plaintext|private_key|secret_key|profile_bytes)[[:space:]]+TEXT' \
+            migrations/d1/0006_profile_generation_registry.sql \
+            migrations/d1/0007_profile_generation_integrity_guards.sql \
+            migrations/d1/0008_profile_generation_deactivation.sql; then
+            echo 'Generation registry must remain metadata-only.' >&2
+            exit 1
+          fi
+
+  # Source gate: quality-gate.yml
+  quality-accepted-pr-proof:
+    permissions:
+      contents: read
+      actions: read
+      pull-requests: read
+    name: Quality exact PR tree reuse proof
+    runs-on: ubuntu-latest
+    outputs:
+      reuse: ${{ steps.proof.outputs.reuse }}
+      native_unaffected: ${{ steps.native-prior.outputs.native_unaffected }}
+    steps:
+      - name: Checkout exact source
+        uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          fetch-depth: 0
+          filter: blob:none
+          persist-credentials: false
+      - name: Verify exact source checkout
+        env:
+          EXPECTED_SOURCE_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: python -c "import os, subprocess; actual = subprocess.check_output(['git', 'rev-parse', 'HEAD'], text=True).strip(); expected = os.environ['EXPECTED_SOURCE_SHA']; assert actual == expected, f'expected {expected}, got {actual}'"
+      - name: Test fail-closed replay admission
+        run: |
+          python -m py_compile scripts/accepted-main-pr-reuse.py
+          python scripts/accepted-main-pr-reuse.py --self-test
+      - name: Prove frontend-only PR inherits exact FULL Windows physical proof
+        if: github.event_name == 'pull_request'
+        id: native-prior
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: python scripts/accepted-main-pr-reuse.py --pr-native-proof --github-output "$GITHUB_OUTPUT"
+      - name: Bind accepted-main tree to completed PR checks or demand full proof
+        id: proof
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: python scripts/accepted-main-pr-reuse.py --gate quality --github-output "$GITHUB_OUTPUT"
+  quality-rust-linux:
+    permissions:
+      contents: read
+      actions: read
+      pull-requests: read
+    needs: quality-accepted-pr-proof
+    if: always() && (github.event_name == 'pull_request' || needs.quality-accepted-pr-proof.result != 'success' || needs.quality-accepted-pr-proof.outputs.reuse != 'true')
+    name: Rust Linux and WASM
+    runs-on: ubuntu-latest
+    steps:
+      - name: Require successful accepted PR proof routing
+        run: test "${{ needs.quality-accepted-pr-proof.result }}" = success
+
+      - name: Checkout
+        uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Verify exact source checkout
+        env:
+          EXPECTED_SOURCE_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: python -c "import os, subprocess; actual = subprocess.check_output(['git', 'rev-parse', 'HEAD'], text=True).strip(); expected = os.environ['EXPECTED_SOURCE_SHA']; assert actual == expected, f'expected {expected}, got {actual}'"
+
+      - name: Probe exact prior FULL Rust Linux evidence
+        id: rust_linux_proof
+        if: github.event_name == 'pull_request'
+        continue-on-error: true
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          GITHUB_EVENT_NAME: ${{ github.event_name }}
+          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: python scripts/accepted-main-pr-reuse.py --pr-quality-rust-linux-proof
+
+      # The probe never substitutes for the acceptance step: independently
+      # recheck current main/PR/previous FULL before any Cargo step is skipped.
+      - name: Certify inherited exact FULL Rust Linux proof
+        if: steps.rust_linux_proof.outcome == 'success'
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          GITHUB_EVENT_NAME: ${{ github.event_name }}
+          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: python scripts/accepted-main-pr-reuse.py --pr-quality-rust-linux-proof
+
+      - name: Show pinned toolchain
+        if: steps.rust_linux_proof.outcome != 'success'
+        run: rustup show active-toolchain
+
+      # Keep OS/toolchain/manifests/flags in the action's hashed key.
+      # The independent opsctl Cargo workspace is used by this job as well.
+      # Restored artifacts never substitute any check or exact-head test.
+      - name: Restore versioned Rust dependencies and opsctl
+        if: steps.rust_linux_proof.outcome != 'success'
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2 (immutable)
+        with:
+          shared-key: profile-bridge-ci-v1
+          workspaces: |
+            . -> target
+            tools/opsctl -> target
+          cache-on-failure: 'true'
+
+      - name: Compile repository policy scripts
+        run: >-
+          python -m py_compile
+          scripts/check-current-documentation-contract.py
+          scripts/check-architecture.py
+          scripts/check-contract-compatibility.py
+          scripts/check-d1-boundary.py
+          scripts/check-device-generation-commit-boundary.py
+          scripts/check-r2-generation-objects.py
+          scripts/check-step4-governed-writes.py
+          scripts/check-step5-profile-coordinator.py
+          scripts/check-step6-windows-bridge.py
+          scripts/check-no-temporary-step4.py
+          scripts/check-frontend-feature-boundaries.py
+          scripts/check-phase2c-client-boundaries.py
+          scripts/test-phase2c-client-merge-assignment.py
+          scripts/check-phase2d-query-boundaries.py
+          scripts/check-phase2e-mailbox-boundaries.py
+          scripts/test-phase2d-query-projections.py
+          scripts/generate-frontend-contracts.py
+          scripts/check-opsctl-readonly.py
+          scripts/cloudflare-deploy-config.py
+          scripts/check-cloudflare-runtime-bindings.py
+          scripts/cloudflare-release.py
+          scripts/cloudflare-d1-bootstrap.py
+          scripts/check-pre2j-d3-resolver-bootstrap-authority.py
+          scripts/check-pre2j-d3-resolver-bootstrap-implementation.py
+          scripts/mailbox-secret-resolver-release.py
+          scripts/release-compat-evidence-ar11.py
+          scripts/release-core-overlay-ar11.py
+          scripts/deployment-snapshot-ar11.py
+          scripts/deployment-identity-ar11.py
+          scripts/test-d1-schema.py
+          scripts/test-step4-identity-acl.py
+          scripts/test-step4-command-guards.py
+          scripts/test-step5-coordinator-projection.py
+          scripts/test-step6-bridge-local.py
+          scripts/test-mailbox-vertical-slice.py
+          scripts/test-device-job-d1.py
+          scripts/test-device-generation-commit-d1.py
+          scripts/test-browser-mail-execution-d1.py
+
+      - name: Reject temporary Step 4, Step 5 and Step 6 artifacts
+        run: python scripts/check-no-temporary-step4.py
+
+      - name: Enforce architecture dependency boundaries
+        run: python scripts/check-architecture.py
+
+      - name: Enforce documentation and setup authority
+        run: |
+          python scripts/check-current-documentation-contract.py
+          python scripts/check-current-documentation-contract.py --self-test
+
+      - name: Prove forbidden dependency fixture is rejected
+        run: |
+          if python scripts/check-architecture.py --root tests/architecture/fixtures/forbidden-domain; then
+            echo "Forbidden architecture fixture unexpectedly passed." >&2
+            exit 1
+          fi
+
+      - name: Enforce typed D1 adapter boundary
+        run: python scripts/check-d1-boundary.py
+
+      - name: Enforce immutable R2 generation object boundary
+        run: python scripts/check-r2-generation-objects.py
+
+      - name: Prove missing R2 create-only condition is rejected
+        run: python scripts/check-r2-generation-objects.py --self-test
+
+      - name: Enforce coordinator-authoritative device generation commit boundary
+        run: python scripts/check-device-generation-commit-boundary.py
+
+      - name: Prove missing generation-commit authority reservation is rejected
+        run: python scripts/check-device-generation-commit-boundary.py --self-test
+
+      - name: Enforce governed Step 4 write surfaces
+        run: python scripts/check-step4-governed-writes.py
+
+      - name: Enforce Step 5 coordinator boundaries
+        run: python scripts/check-step5-profile-coordinator.py
+
+      - name: Prove assignment-derived coordinator authorization is rejected
+        run: |
+          if python scripts/check-step5-profile-coordinator.py --root tests/profile-coordinator/fixtures/assignment-authorizes; then
+            echo "Assignment-derived coordinator authorization unexpectedly passed." >&2
+            exit 1
+          fi
+
+      - name: Enforce Step 6 Windows Bridge boundaries
+        run: python scripts/check-step6-windows-bridge.py
+
+      - name: Prove browser runtime lock deletion fixture is rejected
+        run: |
+          if python scripts/check-step6-windows-bridge.py --root tests/windows-bridge/fixtures/deletes-browser-lock; then
+            echo "Browser runtime lock deletion fixture unexpectedly passed." >&2
+            exit 1
+          fi
+
+      - name: Prove raw D1 use-case fixture is rejected
+        run: |
+          if python scripts/check-d1-boundary.py --root tests/d1-boundary/fixtures/raw-use-case; then
+            echo "Raw D1 use-case fixture unexpectedly passed." >&2
+            exit 1
+          fi
+
+      - name: Lint and compare v1 contracts
+        run: python scripts/check-contract-compatibility.py
+
+      - name: Prove breaking contract fixture is rejected
+        run: |
+          if python scripts/check-contract-compatibility.py --current-root tests/contracts/fixtures/breaking; then
+            echo "Breaking contract fixture unexpectedly passed." >&2
+            exit 1
+          fi
+
+      - name: Protect accepted v1 contract baseline
+        run: bash scripts/check-contract-baseline-immutable.sh
+
+      - name: Enforce frontend sibling-feature boundaries
+        run: python scripts/check-frontend-feature-boundaries.py
+
+      - name: Prove sibling feature internals are rejected
+        run: python scripts/check-frontend-feature-boundaries.py --self-test
+
+      - name: Verify generated frontend contracts are current
+        run: python scripts/generate-frontend-contracts.py --check
+
+      - name: Enforce AR-6 read-only Rust opsctl boundary
+        run: |
+          python scripts/check-opsctl-readonly.py
+          python scripts/check-opsctl-readonly.py --self-test
+
+      - name: Test AR-6 opsctl Rust and doctor evidence
+        if: steps.rust_linux_proof.outcome != 'success'
+        run: |
+          cargo fmt --manifest-path tools/opsctl/Cargo.toml --all -- --check
+          cargo clippy --locked --manifest-path tools/opsctl/Cargo.toml --workspace --all-targets -- -D warnings
+          cargo test --locked --manifest-path tools/opsctl/Cargo.toml --workspace
+          cargo run --locked --quiet --manifest-path tools/opsctl/Cargo.toml -- --root . doctor | python -m json.tool >/dev/null
+          node .github/scripts/architecture-acceptance-observer.mjs evidence > acceptance-evidence.json
+          cargo run --locked --quiet --manifest-path tools/opsctl/Cargo.toml -- \
+            --root . status --acceptance-evidence-json acceptance-evidence.json \
+            | python -m json.tool >/dev/null
+
+      - name: Verify canonical Cloudflare deployment configuration
+        run: |
+          python scripts/cloudflare-deploy-config.py --check
+          python scripts/check-cloudflare-runtime-bindings.py
+
+      - name: Prove Cloudflare environment configuration fails closed
+        run: python scripts/cloudflare-deploy-config.py --self-test
+
+      - name: Verify immutable Cloudflare release provenance policy
+        run: python scripts/cloudflare-release.py check
+
+      - name: Prove immutable Cloudflare release provenance fails closed
+        run: python scripts/cloudflare-release.py self-test
+
+      - name: Verify deterministic empty-D1 bootstrap authority
+        run: |
+          python scripts/cloudflare-d1-bootstrap.py check
+          python scripts/cloudflare-d1-bootstrap.py build
+          python scripts/cloudflare-d1-bootstrap.py verify \
+            --file artifacts/cloudflare-d1-bootstrap/bootstrap.sql
+          test -z "$(git ls-files -- artifacts/cloudflare-d1-bootstrap/bootstrap.sql)"
+          git check-ignore -q artifacts/cloudflare-d1-bootstrap/bootstrap.sql
+          git check-ignore -q .wrangler/probe
+
+      - name: Prove empty-D1 bootstrap authority fails closed
+        run: python scripts/cloudflare-d1-bootstrap.py self-test
+
+      - name: Verify D3 resolver and first-deploy bootstrap authority
+        run: python scripts/check-pre2j-d3-resolver-bootstrap-authority.py
+
+      - name: Prove D3 resolver and bootstrap authority fails closed
+        run: python scripts/check-pre2j-d3-resolver-bootstrap-authority.py --self-test
+
+      - name: Verify D3 resolver implementation and no-rebuild ceremony
+        env:
+          IMPLEMENTATION_BASE: ${{ github.event.pull_request.base.sha || github.event.before }}
+        run: >-
+          python scripts/check-pre2j-d3-resolver-bootstrap-implementation.py
+          --base-ref "$IMPLEMENTATION_BASE"
+
+      - name: Prove D3 resolver implementation fails closed
+        run: |
+          python scripts/check-pre2j-d3-resolver-bootstrap-implementation.py --self-test
+          python scripts/mailbox-secret-resolver-release.py self-test
+          node .github/scripts/ar8-d-secret-transport-successor.mjs
+          node .github/scripts/ar8-d-secret-transport-successor.mjs --self-test
+          node .github/scripts/release-operational-ar11.mjs
+          node .github/scripts/release-operational-ar11.mjs --self-test
+          python scripts/release-compat-evidence-ar11.py --self-test
+          python scripts/download-release-set-ar11.py --self-test
+          python scripts/release-core-overlay-ar11.py --self-test
+          python scripts/deployment-snapshot-ar11.py --self-test
+
+      - name: Test D1 schema and transaction invariants
+        run: python scripts/test-d1-schema.py
+
+      - name: Test identity owner-transfer and ACL invariants
+        run: python scripts/test-step4-identity-acl.py
+
+      - name: Test governed command trigger atomicity
+        run: python scripts/test-step4-command-guards.py
+
+      - name: Test mailbox metadata, lifecycle, replay and atomicity invariants
+        run: python scripts/test-mailbox-vertical-slice.py
+
+      - name: Test Phase 2F device identity, job and claimable D1 invariants
+        run: python scripts/test-device-job-d1.py
+
+      - name: Test Phase 2F atomic device-generation catalog commit invariants
+        run: python scripts/test-device-generation-commit-d1.py
+
+      - name: Test Phase 2F browser mailbox execution D1 invariants
+        run: python scripts/test-browser-mail-execution-d1.py
+
+      - name: Test coordinator projection and reconciliation invariants
+        run: python scripts/test-step5-coordinator-projection.py
+
+      - name: Test local Bridge SQLite and outbox invariants
+        run: python scripts/test-step6-bridge-local.py
+
+      - name: Prove assignment-as-ACL fixture is rejected
+        run: |
+          if python scripts/test-step4-identity-acl.py --negative-fixture tests/identity-acl/fixtures/assignment-authorizes.sql; then
+            echo "Assignment-as-ACL fixture unexpectedly passed." >&2
+            exit 1
+          fi
+
+      - name: Enforce Phase 2C client merge and assignment boundaries
+        run: python scripts/check-phase2c-client-boundaries.py
+
+      - name: Prove Phase 2C grant-transfer, resurrection and raw-mutation fixtures are rejected
+        run: python scripts/check-phase2c-client-boundaries.py --self-test
+
+      - name: Prove Phase 2C client merge and assignment D1 invariants
+        run: python scripts/test-phase2c-client-merge-assignment.py
+
+      - name: Enforce Phase 2D query and privacy boundaries
+        run: python scripts/check-phase2d-query-boundaries.py
+
+      - name: Prove Phase 2D negative query fixtures are rejected
+        run: python scripts/check-phase2d-query-boundaries.py --self-test
+
+      - name: Prove Phase 2D grant-safe projections and query plans
+        run: python scripts/test-phase2d-query-projections.py
+
+      - name: Test Phase 2D query application and synthetic Bridge adapter
+        if: steps.rust_linux_proof.outcome != 'success'
+        run: |
+          cargo test --locked -p application-ports -p use-cases-query
+          cargo test --locked -p profile-bridge fake_mail_query
+
+      - name: Enforce Phase 2E cloud mailbox runtime and privacy boundaries
+        run: python scripts/check-phase2e-mailbox-boundaries.py
+
+      - name: Prove Phase 2E negative mailbox fixture is rejected
+        run: python scripts/check-phase2e-mailbox-boundaries.py --self-test
+
+      - name: Format
+        if: steps.rust_linux_proof.outcome != 'success'
+        run: cargo fmt --all -- --check
+
+      - name: Clippy native crates
+        if: steps.rust_linux_proof.outcome != 'success'
+        run: >-
+          cargo clippy --locked --workspace --all-targets
+          --exclude browser-profile-control-plane-worker
+          --exclude cloudflare-adapters -- -D warnings
+
+      - name: Test native crates
+        if: steps.rust_linux_proof.outcome != 'success'
+        run: >-
+          cargo test --locked --workspace --all-targets
+          --exclude browser-profile-control-plane-worker
+          --exclude cloudflare-adapters
+
+      - name: Prove C2 Gmail OAuth fragment is deterministically generated
+        if: steps.rust_linux_proof.outcome != 'success'
+        shell: bash
+        run: |
+          set -euo pipefail
+          generated="$(cargo run --locked --quiet -p control-plane-contract --bin export_mailbox_gmail_oauth)"
+          accepted="$(cat openapi/v1/fragments/mailbox-gmail-oauth.json)"
+          test "$generated" = "$accepted"
+
+      - name: Test Cloudflare adapter logic
+        if: steps.rust_linux_proof.outcome != 'success'
+        env:
+          RUSTFLAGS: -Dwarnings
+        run: cargo test --locked -p cloudflare-adapters --lib
+
+      - name: Test Worker native helpers
+        if: steps.rust_linux_proof.outcome != 'success'
+        run: cargo test --locked -p browser-profile-control-plane-worker --lib
+
+      - name: Test mailbox secret resolver runtime
+        if: steps.rust_linux_proof.outcome != 'success'
+        env:
+          RUSTFLAGS: -Dwarnings
+        run: cargo test --locked -p mailbox-secret-resolver-worker
+
+      - name: Check extracted identity application crate for Workers target
+        if: steps.rust_linux_proof.outcome != 'success'
+        run: >-
+          cargo check --locked --target wasm32-unknown-unknown
+          -p use-cases-identity
+
+      - name: Check pure crates for Workers target
+        if: steps.rust_linux_proof.outcome != 'success'
+        run: >-
+          cargo check --locked --target wasm32-unknown-unknown
+          -p profile-platform-primitives
+          -p contracts
+          -p control-plane-contract
+          -p identity-access-domain
+          -p client-domain
+          -p profile-domain
+          -p session-domain
+          -p mailbox-domain
+          -p notification-domain
+          -p bridge-domain
+          -p application-ports
+          -p use-cases
+          -p use-cases-notifications
+          -p use-cases-clients
+          -p use-cases-mailboxes
+          -p use-cases-query
+
+      - name: Scan tracked files for high-confidence secrets
+        run: bash scripts/check-tracked-secrets.sh
+  quality-d1-catalog:
+    permissions:
+      contents: read
+      actions: read
+      pull-requests: read
+    needs: quality-accepted-pr-proof
+    if: always() && (github.event_name == 'pull_request' || needs.quality-accepted-pr-proof.result != 'success' || needs.quality-accepted-pr-proof.outputs.reuse != 'true')
+    name: D1 Catalog Migrations
+    runs-on: ubuntu-latest
+    steps:
+      - name: Require successful accepted PR proof routing
+        run: test "${{ needs.quality-accepted-pr-proof.result }}" = success
+
+      - name: Checkout
+        uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+
+      - name: Verify exact source checkout
+        env:
+          EXPECTED_SOURCE_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: python -c "import os, subprocess; actual = subprocess.check_output(['git', 'rev-parse', 'HEAD'], text=True).strip(); expected = os.environ['EXPECTED_SOURCE_SHA']; assert actual == expected, f'expected {expected}, got {actual}'"
+
+      - name: Set up Node 24 LTS
+        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e
+        with:
+          node-version: '24.19.0'
+          package-manager-cache: false
+
+      - name: Enforce Node and npm versions
+        run: |
+          test "$(node --version)" = "v24.19.0"
+          npm install --global npm@11.17.0
+          test "$(npm --version)" = "11.17.0"
+
+      - name: Apply migrations to isolated local D1
+        run: >-
+          npx --yes wrangler@4.94.0 d1 migrations apply CATALOG_DB
+          --local
+          --config deploy/cloudflare/wrangler.d1-test.jsonc
+          --persist-to .wrangler/d1-test-state
+
+      - name: Prove migration replay is a no-op
+        run: >-
+          npx --yes wrangler@4.94.0 d1 migrations apply CATALOG_DB
+          --local
+          --config deploy/cloudflare/wrangler.d1-test.jsonc
+          --persist-to .wrangler/d1-test-state
+
+      - name: Verify migrated D1 catalog shape
+        run: >-
+          npx --yes wrangler@4.94.0 d1 execute CATALOG_DB
+          --local
+          --config deploy/cloudflare/wrangler.d1-test.jsonc
+          --persist-to .wrangler/d1-test-state
+          --command "SELECT COUNT(*) AS tenants FROM tenants; SELECT COUNT(*) AS clients FROM clients; SELECT COUNT(*) AS profiles FROM browser_profiles; SELECT COUNT(*) AS invitation_acceptances FROM invitation_acceptances; SELECT COUNT(*) AS governed_owner_transfers FROM owner_transfer_commands; SELECT COUNT(*) AS governed_profile_grants FROM profile_grant_commands; SELECT COUNT(*) AS coordinator_projection_commands FROM profile_coordinator_projection_commands; SELECT COUNT(*) AS coordinator_projections FROM profile_coordinator_projections; SELECT COUNT(*) AS mailbox_bindings FROM mailbox_bindings; SELECT COUNT(*) AS mailbox_jobs FROM mailbox_jobs; SELECT COUNT(*) AS browser_mailbox_execution_bindings FROM browser_mailbox_execution_bindings; SELECT name FROM d1_migrations ORDER BY id;"
+  quality-cloudflare-worker:
+    permissions:
+      contents: read
+      actions: read
+      pull-requests: read
+    needs: quality-accepted-pr-proof
+    if: always() && (github.event_name == 'pull_request' || needs.quality-accepted-pr-proof.result != 'success' || needs.quality-accepted-pr-proof.outputs.reuse != 'true')
+    name: Cloudflare Worker Release Build
+    runs-on: ubuntu-latest
+    env:
+      SOURCE_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+    steps:
+      - name: Require successful accepted PR proof routing
+        run: test "${{ needs.quality-accepted-pr-proof.result }}" = success
+
+      - name: Checkout exact release source
+        uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+
+      - name: Verify exact source checkout
+        env:
+          EXPECTED_SOURCE_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: python -c "import os, subprocess; actual = subprocess.check_output(['git', 'rev-parse', 'HEAD'], text=True).strip(); expected = os.environ['EXPECTED_SOURCE_SHA']; assert actual == expected, f'expected {expected}, got {actual}'"
+
+      - name: Resolve immutable release source authority
+        id: source
+        env:
+          SOURCE_EVENT: ${{ github.event_name }}
+          PR_HEAD_REF: ${{ github.head_ref }}
+        run: |
+          test "$(git rev-parse HEAD)" = "$SOURCE_SHA"
+          case "$SOURCE_EVENT:$GITHUB_REF" in
+            push:refs/heads/main)
+              test -z "$PR_HEAD_REF"
+              echo "source_ref=refs/heads/main" >> "$GITHUB_OUTPUT"
+              echo "authority=accepted-main" >> "$GITHUB_OUTPUT"
+              ;;
+            pull_request:refs/pull/*/merge)
+              test -n "$PR_HEAD_REF"
+              echo "source_ref=refs/heads/$PR_HEAD_REF" >> "$GITHUB_OUTPUT"
+              echo "authority=review-candidate" >> "$GITHUB_OUTPUT"
+              ;;
+            *)
+              echo "Unsupported release source event/ref: $SOURCE_EVENT $GITHUB_REF" >&2
+              exit 1
+              ;;
+          esac
+
+      - name: Show pinned toolchain
+        run: rustup show active-toolchain
+
+      - name: Check Worker for WASM
+        env:
+          RUSTFLAGS: -Dwarnings
+        run: >-
+          cargo check --locked -p browser-profile-control-plane-worker
+          --target wasm32-unknown-unknown
+
+      - name: Restore pinned worker-build bootstrap cache
+        id: worker-build-cache
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
+        with:
+          path: ${{ runner.temp }}/worker-build-install
+          key: worker-build-${{ runner.os }}-${{ runner.arch }}-rust-${{ hashFiles('rust-toolchain.toml') }}-0.8.5
+
+      - name: Install pinned worker-build
+        run: cargo install worker-build --version 0.8.5 --locked --root "$RUNNER_TEMP/worker-build-install"
+
+      - name: Build release Worker artifact
+        working-directory: apps/control-plane-worker
+        run: '"$RUNNER_TEMP/worker-build-install/bin/worker-build" --release'
+
+      - name: Verify Worker artifact
+        run: |
+          test -f apps/control-plane-worker/build/worker/shim.mjs
+          find apps/control-plane-worker/build -type f -name '*.wasm' -print -quit | grep -q .
+
+      - name: Set up Node 24 LTS
+        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e
+        with:
+          node-version: '24.19.0'
+          package-manager-cache: false
+
+      - name: Enforce Node and npm versions
+        run: |
+          test "$(node --version)" = "v24.19.0"
+          npm install --global npm@11.17.0
+          test "$(npm --version)" = "11.17.0"
+
+      - name: Install exact frontend dependency graph
+        working-directory: frontend
+        run: npm ci
+
+      - name: Build release Static Assets artifact
+        working-directory: frontend
+        run: npm run build
+
+      - name: Build immutable release package
+        id: release
+        env:
+          RELEASE_AUTHORITY: ${{ steps.source.outputs.authority }}
+          SOURCE_REF: ${{ steps.source.outputs.source_ref }}
+        run: |
+          python scripts/cloudflare-release.py build \
+            --source-sha "$SOURCE_SHA" \
+            --repository "$GITHUB_REPOSITORY" \
+            --source-ref "$SOURCE_REF" \
+            --source-event "$GITHUB_EVENT_NAME" \
+            --authority "$RELEASE_AUTHORITY" \
+            --github-output
+
+      - name: Verify immutable release archive against exact source
+        env:
+          RELEASE_AUTHORITY: ${{ steps.source.outputs.authority }}
+        run: |
+          python scripts/cloudflare-release.py verify-archive \
+            --archive "${{ steps.release.outputs.archive }}" \
+            --expected-source-sha "$SOURCE_SHA" \
+            --repository "$GITHUB_REPOSITORY" \
+            --authority "$RELEASE_AUTHORITY"
+
+      - name: Upload exact immutable release tar
+        id: upload
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          path: ${{ steps.release.outputs.archive }}
+          archive: false
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Verify uploaded artifact digest
+        env:
+          EXPECTED_DIGEST: ${{ steps.release.outputs.archive_sha256 }}
+          UPLOADED_DIGEST: ${{ steps.upload.outputs.artifact-digest }}
+        run: |
+          test -n "$UPLOADED_DIGEST"
+          test "$UPLOADED_DIGEST" = "$EXPECTED_DIGEST"
+          echo "Verified immutable release artifact ${UPLOADED_DIGEST} for ${SOURCE_SHA}."
+
+      # Build the other cloud release component while the pinned worker-build
+      # compiler is already present. Main only repackages these exact bytes.
+      - name: Build immutable Resolver Worker artifact
+        run: |
+          set -euo pipefail
+          (cd apps/mailbox-secret-resolver-worker && "$RUNNER_TEMP/worker-build-install/bin/worker-build" --release)
+          python scripts/mailbox-secret-resolver-release.py build \
+            --source-sha "$SOURCE_SHA" --repository "$GITHUB_REPOSITORY"
+
+      - name: Verify immutable Resolver archive against exact source
+        id: resolver
+        run: |
+          set -euo pipefail
+          mapfile -t archives < <(find artifacts/mailbox-secret-resolver-release -maxdepth 1 -type f -name '*.tar' -print)
+          test "${#archives[@]}" -eq 1
+          python scripts/mailbox-secret-resolver-release.py verify-archive \
+            --archive "${archives[0]}" --expected-source-sha "$SOURCE_SHA"
+          echo "archive=${archives[0]}" >> "$GITHUB_OUTPUT"
+          echo "archive_sha256=$(sha256sum "${archives[0]}" | cut -d' ' -f1)" >> "$GITHUB_OUTPUT"
+
+      - name: Upload exact immutable Resolver tar
+        id: resolver-upload
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          path: ${{ steps.resolver.outputs.archive }}
+          archive: false
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Verify uploaded Resolver artifact digest
+        env:
+          EXPECTED_DIGEST: ${{ steps.resolver.outputs.archive_sha256 }}
+          UPLOADED_DIGEST: ${{ steps.resolver-upload.outputs.artifact-digest }}
+        run: |
+          test -n "$UPLOADED_DIGEST"
+          test "$UPLOADED_DIGEST" = "$EXPECTED_DIGEST"
+  quality-rust-windows:
+    permissions:
+      contents: read
+      actions: read
+      pull-requests: read
+    needs: quality-accepted-pr-proof
+    if: always() && (github.event_name == 'pull_request' || needs.quality-accepted-pr-proof.result != 'success' || needs.quality-accepted-pr-proof.outputs.reuse != 'true')
+    name: Rust Windows And Profile Bridge Artifact
+    runs-on: windows-latest
+    steps:
+      - name: Require successful accepted PR proof routing
+        shell: pwsh
+        run: |
+          if ('${{ needs.quality-accepted-pr-proof.result }}' -ne 'success') { throw 'Accepted PR proof routing did not succeed' }
+
+      - name: Checkout
+        uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+
+      - name: Verify exact source checkout
+        env:
+          EXPECTED_SOURCE_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: python -c "import os, subprocess; actual = subprocess.check_output(['git', 'rev-parse', 'HEAD'], text=True).strip(); expected = os.environ['EXPECTED_SOURCE_SHA']; assert actual == expected, f'expected {expected}, got {actual}'"
+
+      - name: Show pinned toolchain
+        run: rustup show active-toolchain
+
+      - name: Reuse exact prior FULL-proof Profile Bridge executable
+        if: github.event_name == 'pull_request' && needs.quality-accepted-pr-proof.outputs.native_unaffected == 'true'
+        id: native-bridge
+        continue-on-error: true
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: python scripts/accepted-main-pr-reuse.py --pr-native-bridge target/release/profile-bridge.exe
+
+      # Full native tests need the warm toolchain cache; an already verified
+      # exact previous EXE does not. Keep this after the trusted attempt, but
+      # before the fallback cleanup/build so stale cache binaries cannot leak.
+      - name: Restore versioned Rust dependencies
+        if: steps.native-bridge.outcome != 'success'
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2 (immutable)
+        with:
+          shared-key: profile-bridge-ci-v1
+          workspaces: |
+            . -> target
+            tools/opsctl -> target
+          cache-on-failure: 'true'
+
+      - name: Remove untrusted inherited executable before FULL native fallback
+        if: steps.native-bridge.outcome != 'success'
+        shell: pwsh
+        run: |
+          $exe = 'target/release/profile-bridge.exe'
+          if (Test-Path -LiteralPath $exe) { Remove-Item -LiteralPath $exe -Force -ErrorAction Stop }
+
+      - name: Check and test native crates
+        if: steps.native-bridge.outcome != 'success'
+        run: >-
+          cargo test --locked --workspace --all-targets
+          --exclude browser-profile-control-plane-worker
+          --exclude cloudflare-adapters
+          -- --skip fresh_lone_intent_first_seals_then_commit_and_next_claim_finishes_active_exact
+          --skip production_verifier_accepts_only_exact_pinned_application_signature
+
+      - name: Build release Profile Bridge executable
+        if: steps.native-bridge.outcome != 'success'
+        run: cargo build --locked --release -p profile-bridge
+
+      - name: Compile actual per-user installer and prove native signature rejection
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $PSNativeCommandUseErrorActionPreference = $true
+          $compiler = Join-Path ${env:ProgramFiles(x86)} 'Inno Setup 6\ISCC.exe'
+          if (-not (Test-Path -LiteralPath $compiler -PathType Leaf)) {
+            throw 'Hosted Windows image is missing the Inno Setup build tool'
+          }
+          python scripts/windows-delivery-publication.py installer-smoke-test --bridge target/release/profile-bridge.exe --compiler "$compiler"
+
+      - name: Verify Windows Profile Bridge artifact
+        shell: pwsh
+        run: |
+          if (-not (Test-Path "target/release/profile-bridge.exe")) {
+            throw "profile-bridge.exe was not produced"
+          }
+          $artifact = Get-Item "target/release/profile-bridge.exe"
+          if ($artifact.Length -le 0) {
+            throw "profile-bridge.exe is empty"
+          }
+          Write-Host "Verified Profile Bridge artifact: $($artifact.FullName) ($($artifact.Length) bytes)"
+
+      # Source-only PR test transport; not a signed installer or approved Release Set.
+      # No production enrollment, trust mutation or deployment is possible here.
+      # Raw archive:false uses the source basename `profile-bridge.exe` as its
+      # artifact identity; the accepted-main proof binds it to one PR run/HEAD.
+      - name: Upload disposable exact-head Windows Bridge candidate
+        if: github.event_name == 'pull_request'
+        id: bridge-upload
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          path: target/release/profile-bridge.exe
+          archive: false
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Verify uploaded Bridge artifact digest
+        if: github.event_name == 'pull_request'
+        shell: pwsh
+        env:
+          UPLOADED_DIGEST: ${{ steps.bridge-upload.outputs.artifact-digest }}
+        run: |
+          $expected = (Get-FileHash -Algorithm SHA256 target/release/profile-bridge.exe).Hash.ToLowerInvariant()
+          if (-not $env:UPLOADED_DIGEST -or $env:UPLOADED_DIGEST -ne $expected) {
+            throw 'PR Bridge raw release executable upload digest mismatch'
+          }
+
+      - name: Write FULL Quality Windows runner identity receipt
+        if: github.event_name == 'pull_request' && steps.native-bridge.outcome != 'success'
+        shell: pwsh
+        env:
+          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: python scripts/accepted-main-pr-reuse.py --native-runner-receipt quality --receipt-output "$env:RUNNER_TEMP/quality-native-runner.json"
+
+      - name: Upload FULL Quality Windows runner identity receipt
+        if: github.event_name == 'pull_request' && steps.native-bridge.outcome != 'success'
+        id: native-runner-upload
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: quality-native-runner.json
+          path: ${{ runner.temp }}/quality-native-runner.json
+          archive: false
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Verify uploaded FULL Quality runner identity digest
+        if: github.event_name == 'pull_request' && steps.native-bridge.outcome != 'success'
+        shell: pwsh
+        env:
+          UPLOADED_DIGEST: ${{ steps.native-runner-upload.outputs.artifact-digest }}
+        run: |
+          $expected = (Get-FileHash -Algorithm SHA256 "$env:RUNNER_TEMP/quality-native-runner.json").Hash.ToLowerInvariant()
+          if (-not $env:UPLOADED_DIGEST -or $env:UPLOADED_DIGEST -ne $expected) {
+            throw 'FULL Quality Windows runner receipt upload SHA mismatch'
+          }
+
+  # Source gate: release-architecture-gate.yml
+  release-architecture-linux:
+    permissions:
+      contents: read
+    name: Release capability and promotion policy
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout exact source
+        uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Verify exact source checkout
+        env:
+          EXPECTED_SOURCE_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: python -c "import os, subprocess; actual = subprocess.check_output(['git', 'rev-parse', 'HEAD'], text=True).strip(); expected = os.environ['EXPECTED_SOURCE_SHA']; assert actual == expected, f'expected {expected}, got {actual}'"
+
+      - name: Validate frontend capability projection
+        run: node .github/scripts/frontend-capability-ar11.mjs
+
+      - name: Validate release publication transaction
+        run: |
+          node .github/scripts/release-architecture-ar11.mjs --self-test
+          python -m py_compile scripts/github-release-publication.py
+          python scripts/github-release-publication.py self-test
+          python -m py_compile scripts/download-release-set-ar11.py
+          python scripts/download-release-set-ar11.py --self-test
+
+      - name: Prove complete AR-11 behavioural certification traceability
+        run: |
+          python scripts/check-ar11-behavioural-certification.py
+          python scripts/check-ar11-behavioural-certification.py --self-test
+
+      - name: Prove lossless AR11 terminal projection at CLI/file boundary
+        run: python scripts/promotion-operational-outcome-ar11.py --self-test
+
+  # Source gate: repository-quality-audit-gate.yml
+  repository-quality-quality-audit:
+    permissions:
+      contents: read
+    name: Invariants And Fail-Closed Boundaries
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Verify exact source checkout
+        env:
+          EXPECTED_SOURCE_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: python -c "import os, subprocess; actual = subprocess.check_output(['git', 'rev-parse', 'HEAD'], text=True).strip(); expected = os.environ['EXPECTED_SOURCE_SHA']; assert actual == expected, f'expected {expected}, got {actual}'"
+
+      # Classification is evidence for a future guarded TARGETED scheduler,
+      # NOT authorization to bypass any currently required check context.
+      - name: Classify exact PR impact (advisory only; all gates still run)
+        env:
+          CI_EVENT: ${{ github.event_name }}
+          CI_BASE: ${{ github.event.pull_request.base.sha || github.event.before }}
+          CI_HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          python scripts/classify-ci-impact.py --self-test
+          python scripts/classify-ci-impact.py --event "$CI_EVENT" --base "$CI_BASE" --head "$CI_HEAD" --github-output "$GITHUB_OUTPUT"
+
+      - name: Compile audit policy scripts
+        run: |
+          python -m py_compile scripts/test-profile-generation-state-guards.py
+          python -m py_compile scripts/check-github-actions-runtime.py
+          python -m py_compile scripts/check-capability-module-layout.py
+          python -m py_compile scripts/check-worker-application-boundary.py
+          python -m py_compile scripts/check-profile-worker-application-boundary.py
+          python -m py_compile scripts/check-generation-worker-application-boundary.py
+          python -m py_compile scripts/check-mailbox-binding-worker-application-boundary.py
+          python -m py_compile scripts/check-mailbox-job-worker-application-boundary.py
+          python -m py_compile scripts/check-frontend-feature-boundaries.py
+          python -m py_compile scripts/check-historical-executable-debt.py
+          python -m py_compile scripts/check-opsctl-readonly.py
+          python -m py_compile scripts/check-phase1a-event-boundaries.py
+          python -m py_compile scripts/check-phase1b-notification-boundaries.py
+          python -m py_compile scripts/check-phase2a-client-boundaries.py
+          python -m py_compile scripts/test-client-creator-grant.py
+          python -m py_compile scripts/test-profile-creator-grant.py
+          python -m py_compile scripts/test-mailbox-client-associations.py
+          python -m py_compile scripts/test-mailbox-client-association-surface.py
+          python -m py_compile scripts/test-mailbox-onboarding-lifecycle.py
+          python -m py_compile scripts/test-gmail-oauth-onboarding.py
+          python -m py_compile scripts/check-phase2b-client-boundaries.py
+          python -m py_compile scripts/test-phase2b-client-contacts.py
+          python -m py_compile scripts/check-phase2c-client-boundaries.py
+          python -m py_compile scripts/test-phase2c-client-merge-assignment.py
+          python -m py_compile scripts/check-phase2d-query-boundaries.py
+          python -m py_compile scripts/test-phase2d-query-projections.py
+          python -m py_compile scripts/test-integration-event-foundation.py
+          python -m py_compile scripts/test-notification-delivery-foundation.py
+
+      - name: Enforce exact-source and immutable GitHub Actions policy
+        run: python scripts/check-github-actions-runtime.py
+
+      - name: Prove deprecated Node 20 checkout fixture is rejected
+        run: |
+          if python scripts/check-github-actions-runtime.py --root tests/github-actions-runtime/fixtures/node20-checkout; then
+            echo 'Deprecated Node 20 checkout fixture unexpectedly passed.' >&2
+            exit 1
+          fi
+
+      - name: Prove floating external action pins are rejected
+        run: |
+          if python scripts/check-github-actions-runtime.py --root tests/github-actions-runtime/fixtures/floating-action; then
+            echo 'Floating external action fixture unexpectedly passed.' >&2
+            exit 1
+          fi
+
+      - name: Prove implicit pull-request merge-ref checkout is rejected
+        run: |
+          if python scripts/check-github-actions-runtime.py --root tests/github-actions-runtime/fixtures/implicit-pr-checkout; then
+            echo 'Implicit PR checkout fixture unexpectedly passed.' >&2
+            exit 1
+          fi
+
+      - name: Prove pull_request_target is rejected
+        run: |
+          if python scripts/check-github-actions-runtime.py --root tests/github-actions-runtime/fixtures/pull-request-target; then
+            echo 'pull_request_target fixture unexpectedly passed.' >&2
+            exit 1
+          fi
+
+      - name: Enforce capability-owned application boundaries
+        run: python scripts/check-capability-module-layout.py
+
+      - name: Prove collapsed capability facades are rejected
+        run: python scripts/check-capability-module-layout.py --self-test
+
+      - name: Enforce Phase 1B notification ownership boundaries
+        run: python scripts/check-phase1b-notification-boundaries.py
+
+      - name: Prove provider leakage and duplicate notification ownership are rejected
+        run: python scripts/check-phase1b-notification-boundaries.py --self-test
+
+      - name: Enforce Phase 2A client ownership and contact-protection boundaries
+        run: python scripts/check-phase2a-client-boundaries.py
+
+      - name: Prove Phase 2A plaintext leakage, provider leakage and duplicate ownership are rejected
+        run: python scripts/check-phase2a-client-boundaries.py --self-test
+
+      - name: Prove A1 Client creator grant policy and atomic D1 transaction
+        run: python scripts/test-client-creator-grant.py
+
+      - name: Prove A2 Profile creator grant policy and atomic D1 transaction
+        run: python scripts/test-profile-creator-grant.py
+
+      - name: Prove Batch B mailbox Client relationship and Client Mail eligibility
+        run: python scripts/test-mailbox-client-associations.py
+
+      - name: Prove Batch B4 mailbox Client association contract transport and UX
+        run: python scripts/test-mailbox-client-association-surface.py
+
+      - name: Prove Pre-2J C1 mailbox onboarding lifecycle authority
+        run: python scripts/test-mailbox-onboarding-lifecycle.py
+
+      - name: Prove Pre-2J C2 Gmail OAuth onboarding boundaries
+        run: python scripts/test-gmail-oauth-onboarding.py
+
+      - name: Enforce Phase 2B protected client-contact D1 boundaries
+        run: python scripts/check-phase2b-client-boundaries.py
+
+      - name: Prove plaintext and unscoped Phase 2B D1 fixtures are rejected
+        run: python scripts/check-phase2b-client-boundaries.py --self-test
+
+      - name: Prove Phase 2B protected client-contact D1 invariants
+        run: python scripts/test-phase2b-client-contacts.py
+
+      - name: Enforce Phase 2C client merge and assignment boundaries
+        run: python scripts/check-phase2c-client-boundaries.py
+
+      - name: Prove Phase 2C grant-transfer, resurrection and raw-mutation fixtures are rejected
+        run: python scripts/check-phase2c-client-boundaries.py --self-test
+
+      - name: Prove Phase 2C client merge and assignment D1 invariants
+        run: python scripts/test-phase2c-client-merge-assignment.py
+
+      - name: Enforce Phase 2D query and privacy boundaries
+        run: python scripts/check-phase2d-query-boundaries.py
+
+      - name: Prove Phase 2D negative query fixtures are rejected
+        run: python scripts/check-phase2d-query-boundaries.py --self-test
+
+      - name: Prove Phase 2D grant-safe projections and query plans
+        run: python scripts/test-phase2d-query-projections.py
+
+      - name: Enforce thin client Worker application boundary
+        run: python scripts/check-worker-application-boundary.py
+
+      - name: Prove direct D1 client transport is rejected
+        run: python scripts/check-worker-application-boundary.py --self-test
+
+      - name: Enforce thin profile Worker application boundary
+        run: python scripts/check-profile-worker-application-boundary.py
+
+      - name: Prove direct D1 and legacy profile transports are rejected
+        run: python scripts/check-profile-worker-application-boundary.py --self-test
+
+      - name: Enforce thin generation Worker application boundary
+        run: python scripts/check-generation-worker-application-boundary.py
+
+      - name: Prove direct D1 generation transport is rejected
+        run: python scripts/check-generation-worker-application-boundary.py --self-test
+
+      - name: Enforce thin mailbox binding Worker application boundary
+        run: python scripts/check-mailbox-binding-worker-application-boundary.py
+
+      - name: Prove direct D1 and legacy mixed mailbox transports are rejected
+        run: python scripts/check-mailbox-binding-worker-application-boundary.py --self-test
+
+      - name: Enforce thin mailbox job Worker application boundary
+        run: python scripts/check-mailbox-job-worker-application-boundary.py
+
+      - name: Prove direct D1 and provider mailbox job transport is rejected
+        run: python scripts/check-mailbox-job-worker-application-boundary.py --self-test
+
+      - name: Enforce frontend sibling-feature boundaries
+        run: python scripts/check-frontend-feature-boundaries.py
+
+      - name: Prove sibling feature internals are rejected
+        run: python scripts/check-frontend-feature-boundaries.py --self-test
+
+      - name: Classify historical executable debt
+        run: |
+          python scripts/check-historical-executable-debt.py
+          python scripts/check-historical-executable-debt.py --self-test
+
+      - name: Audit read-only opsctl boundary
+        run: |
+          python scripts/check-opsctl-readonly.py
+          python scripts/check-opsctl-readonly.py --self-test
+
+      - name: Validate AR-11 release admission architecture
+        run: node .github/scripts/release-architecture-ar11.mjs
+
+      - name: Prove AR-11 release admission weakening fails closed
+        run: node .github/scripts/release-architecture-ar11.mjs --self-test
+
+      - name: Validate AR-11 release operational authority
+        run: node .github/scripts/release-operational-ar11.mjs
+
+      - name: Prove AR-11 operational weakening fails closed
+        run: node .github/scripts/release-operational-ar11.mjs --self-test
+
+      - name: Enforce Phase 1A event/outbox ownership and scope
+        run: python scripts/check-phase1a-event-boundaries.py
+
+      - name: Prove Phase 1A durable outbox and consumer idempotency
+        run: python scripts/test-integration-event-foundation.py
+
+      - name: Prove Phase 1B delivery and cursor D1 invariants
+        run: python scripts/test-notification-delivery-foundation.py
+
+      - name: Prove D1 live profile state guards
+        run: python scripts/test-profile-generation-state-guards.py
+
+      - name: Reject masked version overflow and direct ready transitions
+        shell: bash
+        run: |
+          set -euo pipefail
+          if grep -R --line-number --fixed-strings '.saturating_add(1)' \
+            apps/control-plane-worker crates; then
+            echo 'Version increments must not saturate.' >&2
+            exit 1
+          fi
+          if grep -R --line-number --fixed-strings 'AggregateVersion::from_value' \
+            apps crates; then
+            echo 'Invariant-bypassing aggregate version constructor returned.' >&2
+            exit 1
+          fi
+
+  # Source gate: resolver-d1-first-bootstrap.yml
+  resolver-d1-policy:
+    permissions:
+      contents: read
+    name: Resolver D1 first-bootstrap implementation
+    runs-on: ubuntu-latest
+    env:
+      SOURCE_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+      FIRST_BOOTSTRAP_BASE: ${{ github.event.pull_request.base.sha || github.event.before }}
+    steps:
+      - name: Checkout exact candidate source
+        uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Verify exact source checkout
+        env:
+          EXPECTED_SOURCE_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: python -c "import os, subprocess; actual = subprocess.check_output(['git', 'rev-parse', 'HEAD'], text=True).strip(); expected = os.environ['EXPECTED_SOURCE_SHA']; assert actual == expected, f'expected {expected}, got {actual}'"
+
+      - name: Compile first-bootstrap policy scripts
+        run: >-
+          python -m py_compile
+          scripts/mailbox-secret-resolver-d1-bootstrap.py
+          scripts/check-pre2j-d3-resolver-d1-first-bootstrap-implementation.py
+
+      - name: Verify resolver D1 first-bootstrap implementation
+        run: |
+          set -euo pipefail
+          python scripts/mailbox-secret-resolver-d1-bootstrap.py check
+          python scripts/check-pre2j-d3-resolver-d1-first-bootstrap-implementation.py \
+            --base-ref "$FIRST_BOOTSTRAP_BASE"
+
+      - name: Prove resolver D1 first-bootstrap fails closed
+        run: |
+          set -euo pipefail
+          python scripts/check-pre2j-d3-resolver-d1-first-bootstrap-implementation.py --self-test
+          python scripts/mailbox-secret-resolver-d1-bootstrap.py self-test
+          python scripts/mailbox-secret-resolver-d1-bootstrap.py build --development-working-tree
+          test -z "$(git ls-files -- artifacts/mailbox-secret-resolver-d1-first-bootstrap/bootstrap.sql)"
+          git check-ignore -q artifacts/mailbox-secret-resolver-d1-first-bootstrap/bootstrap.sql
+
+  # Source gate: runtime-bundle-gate.yml
+  runtime-bundle-runtime-bundle-linux:
+    permissions:
+      contents: read
+    name: Runtime Bundle Linux
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+
+      - name: Verify exact source checkout
+        env:
+          EXPECTED_SOURCE_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: python -c "import os, subprocess; actual = subprocess.check_output(['git', 'rev-parse', 'HEAD'], text=True).strip(); expected = os.environ['EXPECTED_SOURCE_SHA']; assert actual == expected, f'expected {expected}, got {actual}'"
+
+      - name: Compile Step 7 Python sources
+        run: >-
+          python -m py_compile
+          tools/runtime_bundle.py
+          runtime/camouhost/main.py
+          scripts/check-step7-runtime-bundle.py
+          scripts/test-step7-runtime-bundle.py
+          scripts/test-step7-fake-camouhost.py
+
+      - name: Enforce Step 7 runtime bundle boundaries
+        run: python scripts/check-step7-runtime-bundle.py
+
+      - name: Prove legacy corpus fixture is rejected
+        run: |
+          if python scripts/check-step7-runtime-bundle.py --root tests/runtime-bundle/fixtures/legacy-corpus-reference; then
+            echo "Legacy corpus reference fixture unexpectedly passed." >&2
+            exit 1
+          fi
+
+      - name: Test deterministic bundle build verify and extraction
+        run: python scripts/test-step7-runtime-bundle.py
+
+      - name: Test fake Camouhost subprocess lifecycle
+        run: python scripts/test-step7-fake-camouhost.py
+
+      - name: Check runtime bundle domain for WASM
+        run: >-
+          cargo check --locked --target wasm32-unknown-unknown
+          -p runtime-bundle-domain
+  runtime-bundle-runtime-bundle-windows:
+    permissions:
+      contents: read
+    name: Runtime Bundle Windows
+    runs-on: windows-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+
+      - name: Verify exact source checkout
+        env:
+          EXPECTED_SOURCE_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: python -c "import os, subprocess; actual = subprocess.check_output(['git', 'rev-parse', 'HEAD'], text=True).strip(); expected = os.environ['EXPECTED_SOURCE_SHA']; assert actual == expected, f'expected {expected}, got {actual}'"
+
+      - name: Prove Windows runtime package policy
+        run: |
+          python -m py_compile scripts/camouhost-runtime-package.py
+          python scripts/camouhost-runtime-package.py self-test
+
+      - name: Test runtime bundle domain
+        run: cargo test --locked -p runtime-bundle-domain
+
+      - name: Test fake Camouhost subprocess lifecycle
+        run: python scripts/test-step7-fake-camouhost.py
+
+  # Source gate: v2-staging-envelope-observation.yml
+  v2-staging-contract:
+    permissions:
+      contents: read
+      issues: read
+    name: V2 Staging Envelope Contract
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout exact candidate source
+        uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Verify exact source checkout
+        env:
+          EXPECTED_SOURCE_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: python -c "import os, subprocess; actual = subprocess.check_output(['git', 'rev-parse', 'HEAD'], text=True).strip(); expected = os.environ['EXPECTED_SOURCE_SHA']; assert actual == expected, f'expected {expected}, got {actual}'"
+
+      - name: Prove V2 staging observation adapters fail closed
+        run: |
+          set -euo pipefail
+          python scripts/v2-staging-envelope-observation.py --self-test
+          python scripts/deployment-identity-ar11.py --self-test
+          cargo build --locked --manifest-path tools/opsctl/Cargo.toml --examples

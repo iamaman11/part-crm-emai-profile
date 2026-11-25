@@ -68,7 +68,7 @@ def self_test() -> None:
         ("pull_request", ["apps/profile-bridge/src/main.rs"], False, "FULL"),
         ("pull_request", ["frontend/src/main.tsx", "crates/contracts/src/lib.rs"], False, "FULL"),
         ("pull_request", ["Cargo.lock"], False, "FULL"),
-        ("pull_request", [".github/workflows/quality-gate.yml"], False, "FULL"),
+        ("pull_request", [".github/workflows/ci.yml"], False, "FULL"),
         ("pull_request", ["scripts/classify-ci-impact.py"], False, "FULL"),
         ("pull_request", ["docs/ok.md", "../unsafe.rs"], False, "FULL"),
         ("pull_request", [], False, "FULL"),

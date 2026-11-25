@@ -174,7 +174,7 @@ secret-free workflow input и не создаёт новую tracked evidence au
 
 ## 6. Permanent CI
 
-`.github/workflows/external-review-attestation-gate.yml` получает только:
+Job `External Review Attestations` в `.github/workflows/ci.yml` получает только:
 
 - `contents: read`;
 - `issues: read`;
@@ -182,7 +182,7 @@ secret-free workflow input и не создаёт новую tracked evidence au
 
 Публичное required-check имя остаётся `External Review Attestations`.
 
-Workflow:
+Этот job:
 
 1. повторно запускает intake, scope и readiness validators;
 2. выполняет offline observer fixtures;
