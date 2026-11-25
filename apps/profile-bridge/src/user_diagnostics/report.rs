@@ -30,6 +30,14 @@ pub enum Stage {
     CloudMaterialization,
     BrowserPreflight,
     CamouhostLaunch,
+    CamouhostStartup,
+    CamouhostIdentity,
+    CamouhostOptionsReady,
+    CamouhostSdkEnter,
+    CamouhostBrowserEntered,
+    CamouhostNavigation,
+    CamouhostCleanup,
+    CamouhostDriverReleased,
     BrowserReady,
     BrowserVisible,
     BrowserClosed,
@@ -843,6 +851,35 @@ mod tests {
         assert!(report.contains("LocalDeleteCloudUnconfirmed"));
         assert!(!report.contains("BrowserUnavailable"));
         assert!(report.contains("LOCAL_OBSERVATIONS_ONLY"));
+        fs::remove_dir_all(root)?;
+        Ok(())
+    }
+
+    #[test]
+    fn installed_report_keeps_camouhost_launch_phase_and_safe_failure_category()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let root = test_root()?;
+        record_at(
+            &root,
+            Stage::CamouhostSdkEnter,
+            Outcome::Observed,
+            Cloud::Unknown,
+            Cause::None,
+            12,
+        );
+        record_at(
+            &root,
+            Stage::CamouhostLaunch,
+            Outcome::Failed,
+            Cloud::Unknown,
+            Cause::RuntimeTimeout,
+            1200,
+        );
+        let report = report_at(&root);
+        assert!(report.contains("CamouhostSdkEnter"));
+        assert!(report.contains("CamouhostLaunch"));
+        assert!(report.contains("RuntimeTimeout"));
+        assert!(!report.contains(&root.to_string_lossy().to_string()));
         fs::remove_dir_all(root)?;
         Ok(())
     }

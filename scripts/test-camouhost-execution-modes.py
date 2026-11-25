@@ -179,6 +179,21 @@ def main() -> int:
         runtime.report_runtime_stage("launch", "ready")
         runtime.report_runtime_stage("close", "browser_context_closed")
         runtime.report_runtime_failure("launch", RuntimeError("synthetic"))
+    diagnostic_output = io.StringIO()
+    with contextlib.redirect_stderr(diagnostic_output):
+        for step in ("identity_requested", "identity_ready", "options_ready", "sdk_enter", "browser_entered"):
+            runtime.report_runtime_stage("launch", step)
+        runtime.report_runtime_stage("launch", "not-a-stage")
+        runtime.report_runtime_failure("launch", RuntimeError("profile path and secret must not leak"))
+    safe_lines = diagnostic_output.getvalue().splitlines()
+    assert safe_lines == [
+        "camouhost_stage phase=launch step=identity_requested",
+        "camouhost_stage phase=launch step=identity_ready",
+        "camouhost_stage phase=launch step=options_ready",
+        "camouhost_stage phase=launch step=sdk_enter",
+        "camouhost_stage phase=launch step=browser_entered",
+        "camouhost_failure phase=launch category=unexpected",
+    ], safe_lines
     verify_embedded_python_path_configuration()
     verify_upstream_camoufox_config_is_final(runtime)
     verify_windows_browser_sdk_executable_path(runtime)
