@@ -420,14 +420,8 @@ fn ar11_workflow_terminalizes_after_owner_capture_and_before_final_assertion() -
     ));
     assert!(promote.contains(".promotion_plan_sha256"));
     assert!(promote.contains(".release_verify_sha256"));
-    assert!(promote.contains("Recheck live operator kill switch immediately before mutation"));
-    assert!(promote.contains("GH_TOKEN: ${{ secrets.AR11_STAGING_VARIABLES_READ_TOKEN }}"));
-    assert!(promote.contains("actions/variables/PROFILEBRIDGE_AUTO_STAGING_ENABLED"));
-    assert!(
-        promote.contains(".name == \"PROFILEBRIDGE_AUTO_STAGING_ENABLED\" and .value == \"true\"")
-    );
-    assert!(promote.contains("failed_boundary=\"OPERATOR_KILL_SWITCH\""));
-    assert!(promote.contains("kill_switch:$kill_switch"));
+    assert!(!promote.contains("AR11_STAGING_VARIABLES_READ_TOKEN"));
+    assert!(!promote.contains("actions/variables/PROFILEBRIDGE_AUTO_STAGING_ENABLED"));
     assert!(promote.contains("promotion verify"));
     assert!(!promote.contains("STAGING_CANDIDATE"));
     assert!(!promote.contains("issues/870"));
@@ -483,16 +477,7 @@ fn ar11_workflow_terminalizes_after_owner_capture_and_before_final_assertion() -
         .ok_or_else(|| {
             "post-deploy semantic owner must run on the same verified candidate".to_string()
         })?;
-    let live_kill_switch = promote
-        .find("Recheck live operator kill switch immediately before mutation")
-        .ok_or_else(|| {
-            "live operator stop must be re-read immediately before deploy".to_string()
-        })?;
-    assert!(
-        pre_deploy < live_kill_switch
-            && live_kill_switch < deploy_in_job
-            && deploy_in_job < post_verify
-    );
+    assert!(pre_deploy < deploy_in_job && deploy_in_job < post_verify);
     assert!(!workflow.contains("promotion-verify.json\" | jq -e '.verified == true"));
 
     let terminalize = workflow

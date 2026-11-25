@@ -266,7 +266,6 @@ function deployCredentialBoundaryErrors(promotion, promote) {
   const readyIndex = promote.indexOf(readyBind);
   const dryRunIndex = promote.indexOf(dryRun);
   const fenceIndex = promote.indexOf('Re-fence Worker identity and D1 head immediately before mutation');
-  const liveKillSwitchIndex = promote.indexOf('Recheck live operator kill switch immediately before mutation');
   const deployIndex = promote.indexOf('Deploy exact Release Set v3 bits after all fences');
   const deployStep = stepBlock(promote, 'Deploy exact Release Set v3 bits after all fences');
   const errors = [];
@@ -274,8 +273,8 @@ function deployCredentialBoundaryErrors(promotion, promote) {
     errors.push(`deploy-capable credential must be referenced exactly once and only by the one deploy step; workflow=${promotionCount} promote=${promoteCount}`);
   }
   if (!(readyIndex >= 0 && dryRunIndex > readyIndex && fenceIndex > dryRunIndex
-      && liveKillSwitchIndex > fenceIndex && deployIndex > liveKillSwitchIndex)) {
-    errors.push('deploy-capable credential must remain behind bound READY, exact-bits dry-run, immediate predeploy fence and live operator kill switch');
+      && deployIndex > fenceIndex)) {
+    errors.push('deploy-capable credential must remain behind bound READY, exact-bits dry-run and immediate predeploy fence');
   }
   const earlierSteps = promote.slice(0, deployIndex >= 0 ? deployIndex : promote.length);
   if (earlierSteps.includes(token) || promote.includes('echo "CLOUDFLARE_API_TOKEN=$DEPLOY_TOKEN" >> "$GITHUB_ENV"')) {
@@ -693,30 +692,18 @@ function promotionErrors(promotion) {
   }
   const readyBind = promote.indexOf('Bind previously verified READY evidence before provider credentials');
   const stagingTargetPin = promote.indexOf('Pin exact standing staging account and Worker before deploy credentials');
-  const liveKillSwitch = promote.indexOf('Recheck live operator kill switch immediately before mutation');
   const deployCredential = promote.indexOf('CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}');
   const refence = promote.indexOf('Re-fence Worker identity and D1 head immediately before mutation');
   const actualDeploy = promote.indexOf('Deploy exact Release Set v3 bits after all fences');
   if (!(readyBind >= 0 && stagingTargetPin > readyBind && refence > stagingTargetPin
-      && liveKillSwitch > refence && actualDeploy > liveKillSwitch && deployCredential > actualDeploy)) {
-    errors.push('mutation order must be READY binding -> staging target pin -> exact-current re-fence -> live operator kill switch -> scoped deploy credential');
+      && actualDeploy > refence && deployCredential > actualDeploy)) {
+    errors.push('mutation order must be READY binding -> staging target pin -> exact-current re-fence -> scoped deploy credential');
   }
-  const liveKillSwitchStep = stepBlock(promote, 'Recheck live operator kill switch immediately before mutation');
-  errors.push(...requireMarkers(liveKillSwitchStep, [
-    'id: kill_switch',
-    'GH_TOKEN: ${{ secrets.AR11_STAGING_VARIABLES_READ_TOKEN }}',
-    'test -n "$GH_TOKEN"',
-    'gh api "repos/$GITHUB_REPOSITORY/actions/variables/PROFILEBRIDGE_AUTO_STAGING_ENABLED"',
-    '.name == "PROFILEBRIDGE_AUTO_STAGING_ENABLED" and .value == "true"',
-  ], 'fresh operator kill switch'));
-  errors.push(...forbidMarkers(liveKillSwitchStep, [
-    'secrets.CLOUDFLARE_', 'wrangler deploy', 'continue-on-error: true', '|| true',
-  ], 'fresh operator kill switch'));
-  errors.push(...requireMarkers(stepBlock(promote, 'Capture staging mutation phase state'), [
-    'steps.kill_switch.outcome',
-    'failed_boundary="OPERATOR_KILL_SWITCH"',
-    'kill_switch:$kill_switch',
-  ], 'kill-switch mutation failure localization'));
+  errors.push(...forbidMarkers(promote, [
+    'AR11_STAGING_VARIABLES_READ_TOKEN',
+    'actions/variables/PROFILEBRIDGE_AUTO_STAGING_ENABLED',
+    'Recheck live operator kill switch immediately before mutation',
+  ], 'no extra runtime variable-read credential'));
 
   errors.push(...requireMarkers(promote, [
     'TARGET_PROFILE',
@@ -1587,28 +1574,6 @@ function selfTest(files) {
   const missingFenceProjection = files.promotion.replace('exact_current_fence:$exact_current_fence', 'exact_current_fence:null');
   if (!promotionErrors(missingFenceProjection).some((error) => error.includes('lossless exact-current fence projection'))) {
     throw new Error('lossy exact-current fence projection fixture unexpectedly passed');
-  }
-  const missingLiveOperatorToken = files.promotion.replace(
-    'GH_TOKEN: ${{ secrets.AR11_STAGING_VARIABLES_READ_TOKEN }}',
-    'GH_TOKEN: ${{ github.token }}',
-  );
-  if (!promotionErrors(missingLiveOperatorToken).some((error) => error.includes('fresh operator kill switch'))) {
-    throw new Error('live staging variable-read credential downgrade fixture passed');
-  }
-  const bypassedLiveOperatorSwitch = files.promotion.replace(
-    '.name == "PROFILEBRIDGE_AUTO_STAGING_ENABLED" and .value == "true"',
-    '.name == "PROFILEBRIDGE_AUTO_STAGING_ENABLED"',
-  );
-  if (!promotionErrors(bypassedLiveOperatorSwitch).some((error) => error.includes('fresh operator kill switch'))) {
-    throw new Error('live staging operator kill-switch value bypass fixture passed');
-  }
-  const missingKillSwitchFailure = files.promotion.replace('failed_boundary="OPERATOR_KILL_SWITCH"', 'failed_boundary="UNKNOWN"');
-  if (!promotionErrors(missingKillSwitchFailure).some((error) => error.includes('kill-switch mutation failure localization'))) {
-    throw new Error('operator kill-switch failure localization removal fixture passed');
-  }
-  const missingKillSwitchReceipt = files.promotion.replace('kill_switch:$kill_switch', 'kill_switch:null');
-  if (!promotionErrors(missingKillSwitchReceipt).some((error) => error.includes('kill-switch mutation failure localization'))) {
-    throw new Error('lossy operator kill-switch outcome receipt fixture passed');
   }
   const secondDeployAfterEvidence = files.promotion.replace(
     '      - name: Terminalize one lossless staging AR11 OperationalOutcome',

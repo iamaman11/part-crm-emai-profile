@@ -256,7 +256,6 @@ def validate_overlay(value: dict[str, Any]) -> None:
         "cloudflare.profile-launch-claim-key",
         "cloudflare.profile-generation-root-keyring",
         "cloudflare.release-observation-api",
-        "github.staging-promotion-variable-read-api",
         "cloudflare.staging-zero-trust-observation-api",
         "windows.staging-delivery-integrity",
     }
@@ -320,42 +319,6 @@ def validate_overlay(value: dict[str, Any]) -> None:
         raise ValueError("AR-11 release observation credential binding drifted")
     if observation.get("environment_scope") != {"kind": "environment", "environments": ["staging"]}:
         raise ValueError("AR-11 release observation credential must remain staging-only")
-
-    staging_variable_read = by_id["github.staging-promotion-variable-read-api"]
-    if (
-        staging_variable_read.get("class") != "OPERATIONAL_API_CREDENTIAL"
-        or staging_variable_read.get("provider_system") != "GITHUB"
-        or staging_variable_read.get("owner") != "release-set-promotion-standing-staging-authority"
-        or staging_variable_read.get("consumers") != [".github/workflows/release-set-promotion.yml"]
-        or staging_variable_read.get("environment_scope") != {"kind": "environment", "environments": ["staging"]}
-        or staging_variable_read.get("bindings") != [{
-            "surface": "github_environment_secret",
-            "name": "AR11_STAGING_VARIABLES_READ_TOKEN",
-            "environments": ["staging"],
-            "required_usage": True,
-        }]
-        or staging_variable_read.get("automation_class") != "READ_ONLY_GITHUB_STAGING_VARIABLE_POLICY_REFENCE"
-        or staging_variable_read.get("provider_capability") != "READ_ONLY_EXACT_REPOSITORY_VARIABLE_OBSERVATION"
-        or staging_variable_read.get("required_provider_permissions") != [
-            "Repository Metadata: Read", "Repository Variables: Read",
-        ]
-        or staging_variable_read.get("required_resource_scope") != "EXACT_REPOSITORY_iamaman11/part-crm-emai-profile_STAGING_ONLY"
-        or staging_variable_read.get("forbidden_provider_capabilities") != [
-            "Repository Variables: Write",
-            "Repository Secrets: Read or Write",
-            "Repository Contents: Write",
-            "Repository Actions: Write",
-            "Repository Administration: Write",
-            "Production resource scope",
-        ]
-        or staging_variable_read.get("allowed_mutator") != "NONE"
-        or staging_variable_read.get("mutation_allowed") is not False
-        or staging_variable_read.get("provider_mutation_forbidden") is not True
-        or staging_variable_read.get("production_authorized") is not False
-        or staging_variable_read.get("externally_issued") is not True
-        or staging_variable_read.get("future_cutover") != "AR-11_STANDING_STAGING"
-    ):
-        raise ValueError("AR-11 GitHub staging variable-read credential owner, exact repository, read-only permissions or production-denial drifted")
 
     zero_trust = by_id["cloudflare.staging-zero-trust-observation-api"]
     if (
@@ -692,62 +655,6 @@ def negative_self_test(state: State, root: Path = ROOT) -> None:
     else:
         raise AssertionError("release observation credential mutation-capability fixture unexpectedly passed")
 
-    missing_staging_variable_read = copy.deepcopy(state.overlay)
-    missing_staging_variable_read["credentials"] = [
-        item for item in missing_staging_variable_read["credentials"]
-        if item.get("id") != "github.staging-promotion-variable-read-api"
-    ]
-    try:
-        validate_overlay(missing_staging_variable_read)
-    except ValueError:
-        pass
-    else:
-        raise AssertionError("missing standing staging variable-read credential fixture unexpectedly passed")
-
-    for field, weakened in [
-        ("class", "DEPLOY_CREDENTIAL"),
-        ("provider_system", "OTHER_PROVIDER"),
-        ("owner", "unowned"),
-        ("consumers", [".github/workflows/other.yml"]),
-        ("environment_scope", {"kind": "environment", "environments": ["production"]}),
-        ("bindings", [{
-            "surface": "github_actions_secret", "name": "AR11_STAGING_VARIABLES_READ_TOKEN",
-            "environments": ["staging"], "required_usage": True,
-        }]),
-        ("bindings", [{
-            "surface": "github_environment_secret", "name": "AR11_STAGING_VARIABLES_READ_TOKEN",
-            "environments": ["production"], "required_usage": True,
-        }]),
-        ("bindings", [{
-            "surface": "github_environment_secret", "name": "AR11_STAGING_VARIABLES_READ_TOKEN",
-            "environments": ["staging"], "required_usage": False,
-        }]),
-        ("required_provider_permissions", ["Repository Metadata: Read", "Repository Variables: Write"]),
-        ("required_provider_permissions", ["Repository Variables: Read"]),
-        ("required_resource_scope", "ALL_REPOSITORIES"),
-        ("forbidden_provider_capabilities", ["Production resource scope"]),
-        ("automation_class", "MUTATING_OPERATOR_AUTOMATION"),
-        ("provider_capability", "REPOSITORY_VARIABLE_WRITE"),
-        ("allowed_mutator", "WORKFLOW_DISPATCH"),
-        ("mutation_allowed", True),
-        ("provider_mutation_forbidden", False),
-        ("production_authorized", True),
-        ("externally_issued", False),
-        ("future_cutover", "PRODUCTION"),
-    ]:
-        unsafe_overlay = copy.deepcopy(state.overlay)
-        credential = next(
-            item for item in unsafe_overlay["credentials"]
-            if item.get("id") == "github.staging-promotion-variable-read-api"
-        )
-        credential[field] = weakened
-        try:
-            validate_overlay(unsafe_overlay)
-        except ValueError:
-            pass
-        else:
-            raise AssertionError(f"standing staging variable-read {field} drift fixture unexpectedly passed")
-
     bad_zero_trust_overlay = copy.deepcopy(state.overlay)
     zero_trust_observation = next(
         item
@@ -902,7 +809,6 @@ def negative_self_test(state: State, root: Path = ROOT) -> None:
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--root", type=Path, default=ROOT)
-    parser.add_argument("--check", action="store_true", help="Validate the current credential authority (default)")
     parser.add_argument("--self-test", action="store_true")
     args = parser.parse_args()
     root = args.root.resolve()

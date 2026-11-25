@@ -1273,21 +1273,6 @@ jobs:
           trap - EXIT
           write_exact_fence
 
-      - name: Recheck live operator kill switch immediately before mutation
-        id: kill_switch
-        env:
-          # Deliberately separate from GITHUB_TOKEN: this narrowly scoped,
-          # read-only credential requires repository Variables:read. Never
-          # infer live switch state from an earlier job-time vars snapshot.
-          GH_TOKEN: ${{ secrets.AR11_STAGING_VARIABLES_READ_TOKEN }}
-        run: |
-          set -euo pipefail
-          test -n "$GH_TOKEN"
-          gh api "repos/$GITHUB_REPOSITORY/actions/variables/PROFILEBRIDGE_AUTO_STAGING_ENABLED" \
-            > "$RUNNER_TEMP/live-staging-kill-switch.json"
-          jq -e '.name == "PROFILEBRIDGE_AUTO_STAGING_ENABLED" and .value == "true"' \
-            "$RUNNER_TEMP/live-staging-kill-switch.json" >/dev/null
-
       - name: Mark provider mutation invocation boundary
         id: mutation_start
         run: |
@@ -1319,7 +1304,6 @@ jobs:
           elif [ "${{ steps.node_runtime.outcome }}" = "failure" ]; then failed_boundary="NODE_RUNTIME_SETUP"
           elif [ "${{ steps.dry_run.outcome }}" = "failure" ]; then failed_boundary="MUTATION_DRY_RUN"
           elif [ "${{ steps.exact_fence.outcome }}" = "failure" ]; then failed_boundary="EXACT_CURRENT_FENCE"
-          elif [ "${{ steps.kill_switch.outcome }}" = "failure" ]; then failed_boundary="OPERATOR_KILL_SWITCH"
           elif [ "${{ steps.mutation_start.outcome }}" = "failure" ]; then failed_boundary="MUTATION_INVOCATION_BOUNDARY"
           elif [ "${{ steps.deploy.outcome }}" = "failure" ]; then failed_boundary="PROVIDER_DEPLOY"
           fi
@@ -1337,8 +1321,8 @@ jobs:
             --arg authorized_checkout "${{ steps.authorized_checkout.outcome }}" --arg ready_bind "${{ steps.ready_bind.outcome }}" \
             --arg target_verify "${{ steps.target_verify.outcome }}" --arg node_runtime "${{ steps.node_runtime.outcome }}" \
             --arg dry_run "${{ steps.dry_run.outcome }}" \
-            --arg exact_fence "${{ steps.exact_fence.outcome }}" --arg kill_switch "${{ steps.kill_switch.outcome }}" --arg mutation_start "${{ steps.mutation_start.outcome }}" --arg deploy "${{ steps.deploy.outcome }}" \
-            '{schema_version:1,kind:"AR11_STAGING_PHASE_STATE",phase:"MUTATE",source_sha:$source_sha,release_set_id:(if $release_set_id=="" then null else $release_set_id end),promotion_id:(if $promotion_id=="" then null else $promotion_id end),target_capability_profile_id:(if $target_profile=="" then null else $target_profile end),authorization_kind:"STANDING_AR11_READY",intent_digest:(if $intent_digest=="" then null else $intent_digest end),provider_mutation_started:$mutation_started,provider_mutation_executed:$mutation_executed,production_mutation_executed:false,failed_boundary:(if $failed_boundary=="" then null else $failed_boundary end),exact_current_fence:$exact_current_fence,step_outcomes:{authorized_checkout:$authorized_checkout,ready_bind:$ready_bind,target_verify:$target_verify,node_runtime:$node_runtime,dry_run:$dry_run,exact_fence:$exact_fence,kill_switch:$kill_switch,mutation_start:$mutation_start,deploy:$deploy}}' \
+            --arg exact_fence "${{ steps.exact_fence.outcome }}" --arg mutation_start "${{ steps.mutation_start.outcome }}" --arg deploy "${{ steps.deploy.outcome }}" \
+            '{schema_version:1,kind:"AR11_STAGING_PHASE_STATE",phase:"MUTATE",source_sha:$source_sha,release_set_id:(if $release_set_id=="" then null else $release_set_id end),promotion_id:(if $promotion_id=="" then null else $promotion_id end),target_capability_profile_id:(if $target_profile=="" then null else $target_profile end),authorization_kind:"STANDING_AR11_READY",intent_digest:(if $intent_digest=="" then null else $intent_digest end),provider_mutation_started:$mutation_started,provider_mutation_executed:$mutation_executed,production_mutation_executed:false,failed_boundary:(if $failed_boundary=="" then null else $failed_boundary end),exact_current_fence:$exact_current_fence,step_outcomes:{authorized_checkout:$authorized_checkout,ready_bind:$ready_bind,target_verify:$target_verify,node_runtime:$node_runtime,dry_run:$dry_run,exact_fence:$exact_fence,mutation_start:$mutation_start,deploy:$deploy}}' \
             > "$RUNNER_TEMP/staging-mutation-state.json"
           phase_state_b64="$(base64 -w0 "$RUNNER_TEMP/staging-mutation-state.json")"
           echo "phase_state_b64=$phase_state_b64" >> "$GITHUB_OUTPUT"
