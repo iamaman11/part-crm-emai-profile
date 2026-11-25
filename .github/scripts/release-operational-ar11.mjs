@@ -418,12 +418,19 @@ function standingPredecessorProofErrors(source) {
     'exactly_one(jobs, TERMINAL).get("conclusion") == "failure"',
     'promote.get("status") == "completed" and promote.get("conclusion") == "failure"',
     'exactly_one(steps, RESOLVE).get("conclusion") == "success"',
-    'exactly_one(steps, BIND).get("conclusion") == "failure"',
+    'bind.get("conclusion") == "failure"',
     'exactly_one(steps, name).get("conclusion") == "skipped"',
     'for name in (BEFORE_CREDENTIALS, MUTATION_BOUNDARY, DEPLOY)',
-    'step["number"] < bind_number',
-    'step["name"] in SAFE_PRE_BIND',
-    'step["name"] in SAFE_POST_FAILURE',
+    'bind.get("conclusion") == "success" and pin.get("conclusion") == "failure"',
+    '[step["name"] for step in actual_prefix] == list(PIN_SUCCESS_PREFIX)',
+    'all(step.get("conclusion") == "success" for step in actual_prefix)',
+    'for name in PIN_SKIPPED',
+    'and exactly_one(steps, name)["number"] > pin_number',
+    'len({step["number"] for step in steps}) == len(steps)',
+    'step["number"] < failure_number',
+    'step["name"] in prefix',
+    'step.get("conclusion") == "skipped"',
+    '(step["name"] in SAFE_POST_FAILURE and step.get("conclusion") == "success")',
     'raise EvidenceRejected(message)',
   ], 'AR14 exact pre-effect predecessor proof');
 }
@@ -1445,6 +1452,20 @@ function selfTest(files) {
   );
   if (!standingPredecessorProofErrors(bypassedDeployFence).some((error) => error.includes('AR14 exact pre-effect'))) {
     throw new Error('provider deployment boundary bypass fixture passed');
+  }
+  const bypassedPinSkippedFence = files.standingProof.replace(
+    'for name in PIN_SKIPPED',
+    'for name in ()',
+  );
+  if (!standingPredecessorProofErrors(bypassedPinSkippedFence).some((error) => error.includes('AR14 exact pre-effect'))) {
+    throw new Error('staging pin mutation/deploy skipped-state bypass fixture passed');
+  }
+  const bypassedPinSuccessPrefix = files.standingProof.replace(
+    '[step["name"] for step in actual_prefix] == list(PIN_SUCCESS_PREFIX)',
+    'true',
+  );
+  if (!standingPredecessorProofErrors(bypassedPinSuccessPrefix).some((error) => error.includes('AR14 exact pre-effect'))) {
+    throw new Error('staging pin safe-prefix bypass fixture passed');
   }
   const standingSelfTest = spawnSync('python3', [STANDING_RUN_PROOF, '--self-test'], {
     cwd: ROOT, encoding: 'utf8',

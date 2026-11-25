@@ -419,9 +419,14 @@ fn ar11_workflow_terminalizes_after_owner_capture_and_before_final_assertion() -
         r#"require(previous.get("conclusion") == "failure", "unknown previous outcome")"#,
         r#"previous.get("run_attempt") == 1"#,
         r#"count == len(EXPECTED_JOBS)"#,
-        r#"exactly_one(steps, BIND).get("conclusion") == "failure""#,
+        r#"bind.get("conclusion") == "failure""#,
         "for name in (BEFORE_CREDENTIALS, MUTATION_BOUNDARY, DEPLOY)",
-        "step[\"name\"] in SAFE_POST_FAILURE",
+        r#"bind.get("conclusion") == "success" and pin.get("conclusion") == "failure""#,
+        r#"[step["name"] for step in actual_prefix] == list(PIN_SUCCESS_PREFIX)"#,
+        "for name in PIN_SKIPPED",
+        r#"len({step["number"] for step in steps}) == len(steps)"#,
+        r#"step.get("conclusion") == "skipped""#,
+        r#"(step["name"] in SAFE_POST_FAILURE and step.get("conclusion") == "success")"#,
     ] {
         assert!(
             predecessor_proof.contains(guard),

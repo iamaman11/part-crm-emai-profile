@@ -25,15 +25,29 @@ EXPECTED_JOBS = {ROUTE, PREFLIGHT, ROLLBACK, PROMOTE, TERMINAL}
 RESOLVE = "Resolve unique immutable Release Set for exact protected main"
 BIND = "Bind standing staging authority to exact same-run READY evidence"
 BEFORE_CREDENTIALS = "Pin exact standing staging account and Worker before deploy credentials"
+CHECKOUT = "Checkout exact authorized source"
+READY_DOWNLOAD = "Verify exact downloaded READY_TO_MUTATE evidence"
+RUST_CACHE = "Restore opsctl Rust compilation cache for read-only resolution"
+READY_BIND = "Bind previously verified READY evidence before provider credentials"
+TARGET_VERIFY = "Re-verify exact immutable Release Set before credentials"
+NODE_RUNTIME = "Set up pinned Node before deploy credential"
+DRY_RUN = "Render mutation overlay and prove exact bits dry-run without deploy credential"
+EXACT_CURRENT_FENCE = "Re-fence Worker identity and D1 head immediately before mutation"
 MUTATION_BOUNDARY = "Mark provider mutation invocation boundary"
 DEPLOY = "Deploy exact Release Set v3 bits after all fences"
 SAFE_POST_FAILURE = {
     "Capture staging resolve phase state",
     "Capture staging mutation phase state",
     "Capture staging post-verify phase state",
+    "Post Checkout exact authorized source",
     "Complete job",
 }
-SAFE_PRE_BIND = {"Set up job", RESOLVE}
+SAFE_PRE_BIND = {"Set up job", RESOLVE, CHECKOUT}
+PIN_SUCCESS_PREFIX = (
+    "Set up job", RESOLVE, CHECKOUT, BIND, READY_DOWNLOAD,
+    RUST_CACHE, READY_BIND, TARGET_VERIFY,
+)
+PIN_SKIPPED = (NODE_RUNTIME, DRY_RUN, EXACT_CURRENT_FENCE, MUTATION_BOUNDARY, DEPLOY)
 
 
 class EvidenceRejected(ValueError):
@@ -129,33 +143,69 @@ def verify_prior_run(
     names = [step.get("name") for step in steps]
     require(len(names) == len(set(names)), "duplicate prior job steps")
     require(
-        exactly_one(steps, RESOLVE).get("conclusion") == "success"
-        and exactly_one(steps, BIND).get("conclusion") == "failure",
-        "previous failure was not exactly candidate binding",
+        all(type(step.get("number")) is int and step["number"] > 0 for step in steps)
+        and len({step["number"] for step in steps}) == len(steps),
+        "prior job step numbers are missing or duplicated",
     )
+    require(exactly_one(steps, RESOLVE).get("conclusion") == "success", "prior resolution was not successful")
+    bind = exactly_one(steps, BIND)
+    pin = exactly_one(steps, BEFORE_CREDENTIALS)
+    if bind.get("conclusion") == "failure":
+        # Preceding #339 had no checkout; later exact-source checkouts are
+        # read-only and can precede this binder without gaining provider rights.
+        require(
+            all(
+                exactly_one(steps, name).get("conclusion") == "skipped"
+                for name in (BEFORE_CREDENTIALS, MUTATION_BOUNDARY, DEPLOY)
+            ),
+            "provider credential or mutation boundary may have been reached",
+        )
+        failure_step = bind
+        prefix = SAFE_PRE_BIND
+        boundary = "CANDIDATE_BINDING"
+    else:
+        require(
+            bind.get("conclusion") == "success" and pin.get("conclusion") == "failure",
+            "previous failure was not an admitted pre-effect boundary",
+        )
+        # #340 reached only the manifest/account allowlist comparison. It did
+        # not acquire a deploy token or start any provider mutation. Require
+        # every earlier success in the exact known order and all later effect
+        # entry points explicitly skipped, not merely missing from the log.
+        pin_number = pin["number"]
+        actual_prefix = sorted((step for step in steps if step["number"] < pin_number), key=lambda step: step["number"])
+        require(
+            [step["name"] for step in actual_prefix] == list(PIN_SUCCESS_PREFIX)
+            and all(step.get("conclusion") == "success" for step in actual_prefix),
+            "prior staging account pin lacks exact safe success prefix",
+        )
+        require(
+            all(
+                exactly_one(steps, name).get("conclusion") == "skipped"
+                and exactly_one(steps, name)["number"] > pin_number
+                for name in PIN_SKIPPED
+            ),
+            "staging pin failure reached a credential, mutation or deploy step",
+        )
+        failure_step = pin
+        prefix = set(PIN_SUCCESS_PREFIX)
+        boundary = "STAGING_TARGET_PIN"
+    failure_number = failure_step["number"]
     require(
         all(
-            exactly_one(steps, name).get("conclusion") == "skipped"
-            for name in (BEFORE_CREDENTIALS, MUTATION_BOUNDARY, DEPLOY)
-        ),
-        "provider credential or mutation boundary may have been reached",
-    )
-    bind_number = exactly_one(steps, BIND).get("number")
-    require(type(bind_number) is int and bind_number > 0, "candidate binding step order missing")
-    require(
-        all(
-            type(step.get("number")) is int
-            and (
-                (step["number"] < bind_number and (step.get("conclusion") != "success" or step["name"] in SAFE_PRE_BIND))
-                or step["number"] == bind_number
-                or step.get("conclusion") != "success"
-                or step["name"] in SAFE_POST_FAILURE
+            (
+                (step["number"] < failure_number and step.get("conclusion") == "success" and step["name"] in prefix)
+                or (step["number"] == failure_number and step["name"] == failure_step["name"] and step.get("conclusion") == "failure")
+                or (step["number"] > failure_number and (
+                    step.get("conclusion") == "skipped"
+                    or (step["name"] in SAFE_POST_FAILURE and step.get("conclusion") == "success")
+                ))
             )
             for step in steps
         ),
-        "unrecognized successful step after candidate binding failure",
+        "unrecognized successful step before or after pre-effect failure",
     )
-    return {"decision": "AR14_EXACT_PRE_EFFECT_RECOVERY", "predecessor_run_id": previous["id"]}
+    return {"decision": "AR14_EXACT_PRE_EFFECT_RECOVERY", "predecessor_run_id": previous["id"], "failed_boundary": boundary}
 
 
 def self_test() -> None:
@@ -190,6 +240,7 @@ def self_test() -> None:
         lambda h, j: j["jobs"][3]["steps"][5].update(conclusion="failure"),
         lambda h, j: j["jobs"].append({"name": "Other mutation", "run_id": 199}),
         lambda h, j: j["jobs"][3]["steps"].append({"name": "Unknown effect", "number": 8, "conclusion": "success"}),
+        lambda h, j: j["jobs"][3]["steps"].append({"name": "Unknown failed effect", "number": 9, "conclusion": "failure"}),
         lambda h, j: j["jobs"][3]["steps"][2].update(conclusion="skipped"),
         lambda h, j: j["jobs"][3]["steps"].insert(1, {"name": "Unexpected early effect", "number": 1, "conclusion": "success"}),
     ):
@@ -201,6 +252,63 @@ def self_test() -> None:
             pass
         else:
             raise AssertionError("unsafe recovery was accepted")
+
+    # Exact historical #340 topology: the staging account variable was empty,
+    # so account/manifest pin failed without a deploy token or provider effect.
+    pin_steps = [
+        {"name": name, "number": number, "conclusion": "success"}
+        for number, name in enumerate(PIN_SUCCESS_PREFIX, start=1)
+    ]
+    pin_steps.extend([
+        {"name": BEFORE_CREDENTIALS, "number": 9, "conclusion": "failure"},
+        {"name": "Capture staging resolve phase state", "number": 10, "conclusion": "success"},
+        {"name": NODE_RUNTIME, "number": 11, "conclusion": "skipped"},
+        {"name": DRY_RUN, "number": 12, "conclusion": "skipped"},
+        {"name": EXACT_CURRENT_FENCE, "number": 13, "conclusion": "skipped"},
+        {"name": MUTATION_BOUNDARY, "number": 14, "conclusion": "skipped"},
+        {"name": DEPLOY, "number": 15, "conclusion": "skipped"},
+        {"name": "Capture staging mutation phase state", "number": 16, "conclusion": "success"},
+        {"name": "Capture staging post-verify phase state", "number": 21, "conclusion": "success"},
+        {"name": "Post Checkout exact authorized source", "number": 42, "conclusion": "success"},
+        {"name": "Complete job", "number": 43, "conclusion": "success"},
+    ])
+    pinned_jobs = json.loads(json.dumps(jobs))
+    pinned_jobs["jobs"][3]["steps"] = pin_steps
+    assert verify_prior_run(history, pinned_jobs, 200) == {
+        "decision": "AR14_EXACT_PRE_EFFECT_RECOVERY",
+        "predecessor_run_id": 199,
+        "failed_boundary": "STAGING_TARGET_PIN",
+    }
+
+    def edit_step(job_set: dict[str, Any], name: str, **updates: Any) -> None:
+        step = exactly_one(job_set["jobs"][3]["steps"], name)
+        step.update(updates)
+
+    for edit in (
+        lambda j: edit_step(j, BEFORE_CREDENTIALS, conclusion="success"),
+        lambda j: edit_step(j, BIND, conclusion="failure"),
+        lambda j: edit_step(j, CHECKOUT, conclusion="skipped"),
+        lambda j: edit_step(j, READY_BIND, conclusion="skipped"),
+        lambda j: edit_step(j, TARGET_VERIFY, conclusion="failure"),
+        lambda j: edit_step(j, DRY_RUN, conclusion="success"),
+        lambda j: edit_step(j, EXACT_CURRENT_FENCE, conclusion="failure"),
+        lambda j: edit_step(j, MUTATION_BOUNDARY, conclusion="success"),
+        lambda j: edit_step(j, DEPLOY, conclusion="failure"),
+        lambda j: edit_step(j, NODE_RUNTIME, conclusion="success"),
+        lambda j: edit_step(j, BIND, number=3),
+        lambda j: edit_step(j, MUTATION_BOUNDARY, number=8),
+        lambda j: j["jobs"][3]["steps"].append({"name": "Unknown pre-pin operation", "number": 8, "conclusion": "success"}),
+        lambda j: j["jobs"][3]["steps"].append({"name": "Unknown post-pin operation", "number": 44, "conclusion": "success"}),
+        lambda j: j["jobs"][3]["steps"].append({"name": "Unknown failed operation", "number": 44, "conclusion": "failure"}),
+    ):
+        edited = json.loads(json.dumps(pinned_jobs))
+        edit(edited)
+        try:
+            verify_prior_run(history, edited, 200)
+        except EvidenceRejected:
+            pass
+        else:
+            raise AssertionError("unsafe staging pin recovery was accepted")
 
 
 def main() -> int:
