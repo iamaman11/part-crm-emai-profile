@@ -2090,7 +2090,8 @@ mod tests {
                 &mut self,
                 _: &GenerationDownloadCapability,
                 _: &std::path::Path,
-            ) -> Result<crate::generation_object_spool::VerifiedGenerationObjectFile, Self::Error> {
+            ) -> Result<crate::generation_object_spool::VerifiedGenerationObjectFile, Self::Error>
+            {
                 Err(self.0)
             }
         }
@@ -2148,7 +2149,8 @@ mod tests {
                 &mut self,
                 _: &GenerationDownloadCapability,
                 _: &std::path::Path,
-            ) -> Result<crate::generation_object_spool::VerifiedGenerationObjectFile, Self::Error> {
+            ) -> Result<crate::generation_object_spool::VerifiedGenerationObjectFile, Self::Error>
+            {
                 Err(GenerationObjectDownloadError::Transport)
             }
         }
@@ -2266,7 +2268,8 @@ mod tests {
                 &mut self,
                 capability: &GenerationDownloadCapability,
                 directory: &std::path::Path,
-            ) -> Result<crate::generation_object_spool::VerifiedGenerationObjectFile, Self::Error> {
+            ) -> Result<crate::generation_object_spool::VerifiedGenerationObjectFile, Self::Error>
+            {
                 let mut file = tempfile::tempfile_in(directory)
                     .map_err(|_| GenerationObjectDownloadError::Transport)?;
                 file.write_all(&[0_u8; 24])

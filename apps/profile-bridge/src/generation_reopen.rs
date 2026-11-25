@@ -1,6 +1,6 @@
 use crate::generation_object_spool::VerifiedGenerationObjectFile;
-use encrypted_generation_domain::MAX_STREAM_CONTAINER_BYTES;
 use encrypted_generation_domain::GenerationDek;
+use encrypted_generation_domain::MAX_STREAM_CONTAINER_BYTES;
 use profile_platform_primitives::{GenerationId, ProfileId, TenantId};
 use sha2::{Digest, Sha256};
 use std::fs;
