@@ -533,7 +533,9 @@ def verify_runtime_tree(output: Path, lock: dict[str, Any], candidate_provenance
         if path.is_symlink() or not path.is_file() or path.stat().st_size == 0: fail(f"materialized runtime file missing/not regular: {path}")
     components = lock["components"]
     probe = "import importlib.metadata,json,sys;print(json.dumps({'python':'.'.join(map(str,sys.version_info[:3])),'camoufox':importlib.metadata.version('camoufox'),'fpgen':importlib.metadata.version('fpgen'),'playwright':importlib.metadata.version('playwright')},sort_keys=True,separators=(',',':')))"
-    completed = subprocess.run([str(output/"python/python.exe"), "-I", "-c", probe], cwd=output, text=True, capture_output=True, check=False)
+    # Packaging must never generate bytecode next to integrity-pinned sources.
+    # A relocated runtime would otherwise rewrite those .pyc files on Open.
+    completed = subprocess.run([str(output/"python/python.exe"), "-I", "-B", "-c", probe], cwd=output, text=True, capture_output=True, check=False)
     expected = {"python":"3.12.10", "camoufox":components["camoufox_python"], "fpgen":components["fpgen"], "playwright":components["playwright"]}
     try: observed = json.loads(completed.stdout.strip())
     except json.JSONDecodeError as error: raise RuntimeBuildError("embedded Python verification output is invalid") from error
@@ -544,7 +546,7 @@ def verify_runtime_tree(output: Path, lock: dict[str, Any], candidate_provenance
     native_probe = subprocess.run(
         [
             str(output / "python/python.exe"),
-            "-I", "-c",
+            "-I", "-B", "-c",
             "import json,native_process,pathlib; print(json.dumps(str(pathlib.Path(native_process.__file__).resolve())))",
         ],
         cwd=output,
@@ -563,7 +565,7 @@ def verify_runtime_tree(output: Path, lock: dict[str, Any], candidate_provenance
     model_probe = subprocess.run(
         [
             str(output / "python/python.exe"),
-            "-I", "-c",
+            "-I", "-B", "-c",
             "from camoufox.fpgen_model import is_pinned; "
             "raise SystemExit(0 if is_pinned() else 1)",
         ],
@@ -578,6 +580,8 @@ def verify_runtime_tree(output: Path, lock: dict[str, Any], candidate_provenance
     inventory=[]; total=0
     for path in sorted(output.rglob("*")):
         if path.is_symlink(): fail("materialized runtime contains symlink")
+        if path.name == "__pycache__" or path.suffix == ".pyc":
+            fail("materialized runtime regrew mutable Python bytecode caches")
         if path.is_dir(): continue
         if not path.is_file(): fail("materialized runtime contains special entry")
         size=path.stat().st_size; total += size
