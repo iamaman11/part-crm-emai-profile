@@ -183,6 +183,74 @@ where
     confirmation.take().map(|confirm| confirm())
 }
 
+/// Only closed, path-free Camouhost observations cross the Python stderr boundary.
+/// Everything else may contain SDK diagnostics, configuration or profile data.
+/// This is a diagnostic projection, never launch/health/recovery authority.
+fn classify_camouhost_diagnostic(line: &str) -> Option<(Stage, Outcome, Cause)> {
+    let milestone = match line {
+        "camouhost_stage phase=startup step=begin" => {
+            Some((Stage::CamouhostStartup, Outcome::Started))
+        }
+        "camouhost_stage phase=startup step=ready" => {
+            Some((Stage::CamouhostStartup, Outcome::Observed))
+        }
+        "camouhost_stage phase=launch step=identity_requested" => {
+            Some((Stage::CamouhostIdentity, Outcome::Started))
+        }
+        "camouhost_stage phase=launch step=identity_ready" => {
+            Some((Stage::CamouhostIdentity, Outcome::Observed))
+        }
+        "camouhost_stage phase=launch step=options_ready" => {
+            Some((Stage::CamouhostOptionsReady, Outcome::Observed))
+        }
+        "camouhost_stage phase=launch step=before_browser_enter" => {
+            Some((Stage::CamouhostLaunch, Outcome::Observed))
+        }
+        "camouhost_stage phase=launch step=sdk_enter" => {
+            Some((Stage::CamouhostSdkEnter, Outcome::Observed))
+        }
+        "camouhost_stage phase=launch step=browser_entered" => {
+            Some((Stage::CamouhostBrowserEntered, Outcome::Observed))
+        }
+        "camouhost_stage phase=launch step=network_blocked" => {
+            Some((Stage::CamouhostBrowserEntered, Outcome::Observed))
+        }
+        // BrowserReady has its own one-shot health confirmation and observation.
+        "camouhost_stage phase=close step=browser_context_closed" => {
+            Some((Stage::BrowserClosed, Outcome::Observed))
+        }
+        "camouhost_stage phase=close step=playwright_driver_released" => {
+            Some((Stage::CamouhostDriverReleased, Outcome::Observed))
+        }
+        _ => None,
+    };
+    if let Some((stage, outcome)) = milestone {
+        return Some((stage, outcome, Cause::None));
+    }
+    let (phase, category) = line
+        .strip_prefix("camouhost_failure phase=")?
+        .split_once(" category=")?;
+    let stage = match phase {
+        "startup" => Stage::CamouhostStartup,
+        "launch" => Stage::CamouhostLaunch,
+        "browser_visible" => Stage::BrowserVisible,
+        "navigation" => Stage::CamouhostNavigation,
+        "close" => Stage::BrowserClosed,
+        "cleanup" => Stage::CamouhostCleanup,
+        _ => return None,
+    };
+    let cause = match category {
+        "dependency" => Cause::RuntimeDependency,
+        "contract" => Cause::RuntimeContract,
+        "timeout" => Cause::RuntimeTimeout,
+        "io" => Cause::RuntimeIo,
+        "browser_closed" => Cause::RuntimeClosed,
+        "unexpected" => Cause::RuntimeUnexpected,
+        _ => return None,
+    };
+    Some((stage, Outcome::Failed, cause))
+}
+
 fn run_python(
     runtime_root: &Path,
     folder: &Path,
@@ -663,12 +731,13 @@ fn run_python_with_input(
             if let Some(confirmed) = observe_runtime_ready_line(&line, &mut health_confirmation) {
                 let _ = health_result_tx.send(confirmed);
             }
-            // Runtime stderr can contain upstream/library detail. Forward only
-            // the fixed, redacted milestones and typed failure categories.
-            if cfg!(debug_assertions)
-                && (line.starts_with("camouhost_stage ") || line.starts_with("camouhost_failure "))
-            {
-                let _ = writeln!(std::io::stderr().lock(), "{line}");
+            // Release builds must retain the exact safe phase/category. Never
+            // persist or forward arbitrary Python/SDK stderr or profile bytes.
+            if let Some((stage, outcome, cause)) = classify_camouhost_diagnostic(&line) {
+                let duration = u64::try_from(native_started.elapsed().as_millis())
+                    .unwrap_or(u64::MAX)
+                    .min(86_400_000);
+                report::record_current(stage, outcome, Cloud::Unknown, cause, duration);
             }
         }
     });
@@ -1033,11 +1102,12 @@ fn open_under_profile_admission(
 mod tests {
     use super::{
         BeforeLaunch, CAMOUHOST_LAUNCH_READY_EVENT, ENTRYPOINT, LOCK, LocalOpenError,
-        ReadyConfirmation, local_generation, mark_local_unsynced, observe_runtime_ready_line,
-        open_or_create_workspace, recheck_workspace_after_writer_admission,
-        run_python_with_executable,
+        ReadyConfirmation, classify_camouhost_diagnostic, local_generation, mark_local_unsynced,
+        observe_runtime_ready_line, open_or_create_workspace,
+        recheck_workspace_after_writer_admission, run_python_with_executable,
     };
     use crate::generation_initialization::{InitialProfileOpen, InitialProfileStatus};
+    use crate::user_diagnostics::report::{Cause, Outcome, Stage};
     use profile_platform_primitives::{ActorId, ProfileId, TenantId};
 
     fn intent() -> InitialProfileOpen {
@@ -1047,6 +1117,68 @@ mod tests {
             profile_id: ProfileId::parse("profile_01JLOCAL").unwrap(),
             expected_version: 1,
             status: InitialProfileStatus::Draft,
+        }
+    }
+
+    #[test]
+    fn installed_camouhost_diagnostics_preserve_only_closed_phase_and_category() {
+        assert_eq!(
+            classify_camouhost_diagnostic("camouhost_stage phase=launch step=identity_requested"),
+            Some((Stage::CamouhostIdentity, Outcome::Started, Cause::None))
+        );
+        assert_eq!(
+            classify_camouhost_diagnostic("camouhost_stage phase=launch step=options_ready"),
+            Some((Stage::CamouhostOptionsReady, Outcome::Observed, Cause::None))
+        );
+        assert_eq!(
+            classify_camouhost_diagnostic("camouhost_stage phase=launch step=sdk_enter"),
+            Some((Stage::CamouhostSdkEnter, Outcome::Observed, Cause::None))
+        );
+        assert_eq!(
+            classify_camouhost_diagnostic("camouhost_stage phase=launch step=browser_entered"),
+            Some((
+                Stage::CamouhostBrowserEntered,
+                Outcome::Observed,
+                Cause::None
+            ))
+        );
+        for (category, cause) in [
+            ("dependency", Cause::RuntimeDependency),
+            ("contract", Cause::RuntimeContract),
+            ("timeout", Cause::RuntimeTimeout),
+            ("io", Cause::RuntimeIo),
+            ("browser_closed", Cause::RuntimeClosed),
+            ("unexpected", Cause::RuntimeUnexpected),
+        ] {
+            assert_eq!(
+                classify_camouhost_diagnostic(&format!(
+                    "camouhost_failure phase=launch category={category}"
+                )),
+                Some((Stage::CamouhostLaunch, Outcome::Failed, cause))
+            );
+        }
+        assert_eq!(
+            classify_camouhost_diagnostic("camouhost_failure phase=startup category=dependency"),
+            Some((
+                Stage::CamouhostStartup,
+                Outcome::Failed,
+                Cause::RuntimeDependency
+            ))
+        );
+        assert_eq!(
+            classify_camouhost_diagnostic("camouhost_failure phase=close category=browser_closed"),
+            Some((Stage::BrowserClosed, Outcome::Failed, Cause::RuntimeClosed))
+        );
+        for untrusted in [
+            "camouhost_failure phase=launch category=contract secret=password",
+            "camouhost_failure phase=launch category=contract\nprofile-path",
+            "camouhost_failure phase=launch category=secret",
+            "camouhost_failure phase=unrecognized category=timeout",
+            "camouhost_stage phase=launch step=sdk_enter path=C:\\secret",
+            "Traceback (most recent call last)",
+            "camouhost_identity {\"camoufox_config_json\":\"secret\"}",
+        ] {
+            assert_eq!(classify_camouhost_diagnostic(untrusted), None);
         }
     }
 

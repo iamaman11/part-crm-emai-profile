@@ -1009,6 +1009,8 @@ def report_runtime_stage(phase: str, step: str) -> None:
     allowed = {
         ("startup", "begin"),
         ("startup", "ready"),
+        ("launch", "identity_requested"),
+        ("launch", "identity_ready"),
         ("launch", "before_browser_enter"),
         ("launch", "options_ready"),
         ("launch", "sdk_enter"),
@@ -1623,6 +1625,7 @@ async def run_local_profile(root: Path, config: dict[str, Any] | None, first_run
                 raise RuntimeContractError("existing profile must retain its saved identity")
             # Same official Camoufox/BrowserForge draw as the previous helper,
             # now in this same Python process, before Playwright starts.
+            report_runtime_stage("launch", "identity_requested")
             with contextlib.redirect_stdout(sys.stderr):
                 generated = materialize_candidate_identity(root)
             print(
@@ -1637,6 +1640,7 @@ async def run_local_profile(root: Path, config: dict[str, Any] | None, first_run
             config = json.loads(generated["camoufox_config_json"])
             if not isinstance(config, dict):
                 raise RuntimeContractError("official fingerprint config invalid")
+            report_runtime_stage("launch", "identity_ready")
         # Installer/runtime gate verified the bundled SDK and fpgen model.
         # Warm local Open must not re-import and rehash the pinned model.
         # Only the first empty DRAFT calls materialize_candidate_identity(),
@@ -1645,12 +1649,15 @@ async def run_local_profile(root: Path, config: dict[str, Any] | None, first_run
         # Rust owns and holds exclusive local workspace admission. The
         # canonical configuration and first-run decision arrive in memory.
         options = camoufox_launch_options(lock, root, config, first_run=first_run)
+        report_runtime_stage("launch", "options_ready")
+        report_runtime_stage("launch", "before_browser_enter")
         session = await launch_native_camoufox(
             workspace=root,
             options=options,
             admission_granted=True,
             headless=False,
         )
+        report_runtime_stage("launch", "browser_entered")
         # The bootstrap page is ours, not the user's. For first Create only,
         # turn the sole tagged blank page into an ordinary blank. For a saved
         # profile, keep the tagged page until real session pages are observed.
@@ -1701,11 +1708,13 @@ def main() -> int:
         if os.environ.get(HEADLESS_MODE_ENV, "false") != "false":
             print("local browser requires headful mode", file=sys.stderr)
             return 2
+        report_runtime_stage("startup", "begin")
         try:
             config, first_run = read_local_open_request()
         except Exception as error:
             report_runtime_failure("startup", error)
             return 4
+        report_runtime_stage("startup", "ready")
         # User-native stdout is an inherited Windows OS launch-admission
         # handle. Keep fd 1 open, but send arbitrary SDK stdout to the OS
         # null sink; only fixed app milestones use the diagnostic stderr pipe.
