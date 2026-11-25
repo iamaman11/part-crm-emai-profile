@@ -140,6 +140,9 @@ CRITICAL: dict[str, dict[str, tuple[str, ...]]] = {
         "Local Profile Windows K2": (
             "Verify exact source checkout",
             "Prove K2 256/512 MiB file streaming on Windows with peak RAM and disk limits",
+            "Write FULL K2 Windows runner identity receipt",
+            "Upload FULL K2 Windows runner identity receipt",
+            "Verify uploaded FULL K2 runner identity digest",
         ),
         # This is the existing branch-protected status context. Its success
         # must be downstream of both independently executing Windows jobs.
@@ -204,6 +207,9 @@ NATIVE_REUSED_CRITICAL: dict[str, dict[str, tuple[str, ...]]] = {
 RUNNER_RECEIPT = {
     "quality": ("quality-native-runner.json", "Rust Windows And Profile Bridge Artifact"),
     "local-profile": ("local-native-runner.json", "Local Profile Windows Core"),
+    # Independent physical K2 runs on a different Windows runner than Core.
+    # Its own witnessed image/compiler cannot be inferred from Core's receipt.
+    "local-profile-k2": ("local-k2-native-runner.json", "Local Profile Windows K2"),
 }
 
 
@@ -875,12 +881,13 @@ def select_full_runner_receipt(
 ) -> dict[str, Any]:
     """Select a unique raw receipt bound to the *executed* FULL Windows job."""
     require(gate in RUNNER_RECEIPT, "unknown native runner receipt gate")
-    candidate = prove(prior_main, gate, api)
+    proof_gate = "local-profile" if gate == "local-profile-k2" else gate
+    candidate = prove(prior_main, proof_gate, api)
     root = f"repos/{REPOSITORY}"
     runs = api(f"{root}/actions/runs?head_sha={candidate}&event=pull_request&per_page=100")
     require(isinstance(runs.get("workflow_runs"), list), "native run inventory missing")
     actual = [run for run in runs["workflow_runs"]
-              if run.get("name") == WORKFLOW[gate]]
+              if run.get("name") == WORKFLOW[proof_gate]]
     require(bool(actual), "native FULL source run missing")
     source_run = max(actual, key=lambda run: run["id"])
     jobs = api(f"{root}/actions/runs/{source_run['id']}/jobs?per_page=100")
@@ -1336,6 +1343,7 @@ def prove_open_native_pr(api: Callable[[str], Any],
     # cannot claim safe reuse on a potentially updated hosted runner.
     select_full_runner_receipt(prior, "quality", api, as_of=as_of)
     select_full_runner_receipt(prior, "local-profile", api, as_of=as_of)
+    select_full_runner_receipt(prior, "local-profile-k2", api, as_of=as_of)
     require(artifacts.get("candidate_sha") != head
             and artifacts.get("artifacts", {}).get("bridge", {}).get("sha256"),
             "no independent inherited Bridge executable receipt")
@@ -1585,9 +1593,12 @@ def fixture(gate: str) -> tuple[dict[str, Any], Callable[[str], Any]]:
              }}
             for index, name in enumerate(names.values())
         ]
-    if gate in RUNNER_RECEIPT:
+    for index, receipt_gate in enumerate(
+        ("local-profile", "local-profile-k2") if gate == "local-profile"
+        else ((gate,) if gate in RUNNER_RECEIPT else ())
+    ):
         artifact_inventory.append({
-            "id": 999, "name": RUNNER_RECEIPT[gate][0],
+            "id": 999 + index, "name": RUNNER_RECEIPT[receipt_gate][0],
             "size_in_bytes": 256, "digest": "sha256:" + "a" * 64,
             "expired": False,
             "created_at": "2026-10-31T00:05:00Z",
@@ -1622,39 +1633,88 @@ def assert_local_windows_graph(source: str) -> None:
     regression must fail the already-required admission self-test before a
     misleading green Local Profile Windows aggregate can be accepted.
     """
-    headers = list(re.finditer(r"(?m)^  ([a-z][a-z0-9-]*):\s*$", source))
+    headers = list(re.finditer(r"(?m)^  ([a-z][a-z0-9-]*):[ \t]*$", source))
     blocks = {item.group(1): source[item.end():headers[index + 1].start()
-                                     if index + 1 < len(headers) else len(source)]
+                                     if index + 1 < len(headers) else len(source)].lstrip("\n")
               for index, item in enumerate(headers)}
     core = blocks.get("local-profile-windows-core", "")
     k2 = blocks.get("local-profile-windows-k2", "")
     aggregate = blocks.get("local-profile-windows", "")
     physical = "Prove K2 256/512 MiB file streaming on Windows with peak RAM and disk limits"
+    admission = ("always() && (github.event_name == 'pull_request' || "
+                 "needs.accepted-pr-proof.result != 'success' || "
+                 "needs.accepted-pr-proof.outputs.reuse != 'true')")
+
+    def step_body(job: str, name: str) -> str:
+        headers = list(re.finditer(r"(?m)^      - name: (.+)$", job))
+        matches = [index for index, item in enumerate(headers) if item.group(1) == name]
+        require(len(matches) == 1, f"required Windows step missing/duplicate: {name}")
+        index = matches[0]
+        return job[headers[index].end():headers[index + 1].start()
+                   if index + 1 < len(headers) else len(job)].strip("\n")
+
     for job, name in ((core, "Local Profile Windows Core"),
                       (k2, "Local Profile Windows K2")):
-        require(f"    name: {name}\n" in job and "    runs-on: windows-latest\n" in job
-                and "    needs: accepted-pr-proof\n" in job,
+        required_header = (
+            "    needs: accepted-pr-proof\n"
+            f"    if: {admission}\n"
+            f"    name: {name}\n"
+            "    runs-on: windows-latest\n"
+            "    outputs:\n"
+            "      proof_mode: ${{ steps.native-prior.outcome == 'success' && 'INHERITED' || 'FULL' }}\n"
+            "    steps:\n"
+        )
+        require(job.startswith(required_header)
+                and not re.search(r"(?m)^    continue-on-error:", job),
                 f"local Windows {name} is not its exact-source independent runner")
-        require("    if: always() && " in job
-                and "      - name: Verify exact source checkout\n" in job
-                and "      - name: Certify unchanged exact prior FULL native physical proof\n" in job,
-                f"local Windows {name} admission or safe FULL fallback missing")
+        checkout = step_body(job, "Checkout")
+        require(checkout == (
+            "        uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a\n"
+            "        with:\n"
+            "          ref: ${{ github.event.pull_request.head.sha || github.sha }}\n"
+            "          persist-credentials: false"
+        ), f"local Windows {name} checkout not bound to exact source")
+        source = step_body(job, "Verify exact source checkout")
+        require(source == (
+            "        env:\n"
+            "          EXPECTED_SOURCE_SHA: ${{ github.event.pull_request.head.sha || github.sha }}\n"
+            '        run: python -c "import os, subprocess; actual = '
+            "subprocess.check_output(['git', 'rev-parse', 'HEAD'], text=True).strip(); "
+            "expected = os.environ['EXPECTED_SOURCE_SHA']; "
+            'assert actual == expected, f\'expected {expected}, got {actual}\'"'
+        ), f"local Windows {name} source equality bypassed")
+        require("      - name: Certify unchanged exact prior FULL native physical proof\n" in job,
+                f"local Windows {name} independent prior-proof certification missing")
     require(f"      - name: {physical}\n" not in core
-            and f"      - name: {physical}\n" in k2
-            and "        run: python scripts/test-k2-large-native-streaming.py\n" in k2
-            and "        if: steps.native-prior.outcome != 'success'\n" in k2,
+            and step_body(k2, physical) == (
+                "        if: steps.native-prior.outcome != 'success'\n"
+                "        run: python scripts/test-k2-large-native-streaming.py"
+            ),
             "K2 must execute physically on its own Windows runner on FULL")
     require("      - name: Write FULL Local Windows runner identity receipt\n" in core
-            and "      - name: Write FULL Local Windows runner identity receipt\n" not in k2,
-            "local physical receipt must have exactly one Windows producer")
-    require("    name: Local Profile Windows\n" in aggregate
-            and "    needs: [accepted-pr-proof, local-profile-windows-core, local-profile-windows-k2]\n" in aggregate
-            and "    if: always() && " in aggregate
-            and "      - name: Require both exact-head Windows proof jobs\n" in aggregate
-            and '          test "$ADMISSION" = success\n' in aggregate
-            and '          test "$CORE" = success\n' in aggregate
-            and '          test "$K2" = success\n' in aggregate
-            and '          test "$CORE_MODE" = "$K2_MODE"\n' in aggregate,
+            and "      - name: Write FULL K2 Windows runner identity receipt\n" in k2,
+            "Core and K2 must each witness their own physical Windows runner")
+    required_aggregate = (
+        "    needs: [accepted-pr-proof, local-profile-windows-core, local-profile-windows-k2]\n"
+        f"    if: {admission}\n"
+        "    name: Local Profile Windows\n"
+        "    runs-on: ubuntu-latest\n"
+        "    steps:\n"
+        "      - name: Require both exact-head Windows proof jobs\n"
+        "        env:\n"
+        "          ADMISSION: ${{ needs.accepted-pr-proof.result }}\n"
+        "          CORE: ${{ needs.local-profile-windows-core.result }}\n"
+        "          K2: ${{ needs.local-profile-windows-k2.result }}\n"
+        "          CORE_MODE: ${{ needs.local-profile-windows-core.outputs.proof_mode }}\n"
+        "          K2_MODE: ${{ needs.local-profile-windows-k2.outputs.proof_mode }}\n"
+        "        run: |\n"
+        '          test "$ADMISSION" = success\n'
+        '          test "$CORE" = success\n'
+        '          test "$K2" = success\n'
+        '          test "$CORE_MODE" = "$K2_MODE"\n'
+        '          test "$CORE_MODE" = FULL || test "$CORE_MODE" = INHERITED'
+    )
+    require(aggregate.strip("\n") == required_aggregate,
             "protected Local Profile Windows context can bypass a physical job")
 
 
@@ -1668,10 +1728,40 @@ def self_test() -> None:
         ('test "$CORE_MODE" = "$K2_MODE"', 'true # ignore mixed modes'),
         ("    name: Local Profile Windows\n", "    name: Local Profile Windows Unprotected\n"),
         ("        run: python scripts/test-k2-large-native-streaming.py\n", "        run: echo K2 skipped\n"),
+        ("          K2: ${{ needs.local-profile-windows-k2.result }}",
+         "          K2: success"),
+        ("          CORE: ${{ needs.local-profile-windows-core.result }}",
+         "          CORE: success"),
+        ("          ADMISSION: ${{ needs.accepted-pr-proof.result }}",
+         "          ADMISSION: success"),
+        ("          K2_MODE: ${{ needs.local-profile-windows-k2.outputs.proof_mode }}",
+         "          K2_MODE: FULL"),
+        ("      proof_mode: ${{ steps.native-prior.outcome == 'success' && 'INHERITED' || 'FULL' }}",
+         "      proof_mode: FULL"),
+        ("        run: |\n          test \"$ADMISSION\" = success",
+         "        run: |\n          exit 0\n          test \"$ADMISSION\" = success"),
+        ("    needs: [accepted-pr-proof, local-profile-windows-core, local-profile-windows-k2]\n"
+         "    if: always() && ",
+         "    needs: [accepted-pr-proof, local-profile-windows-core, local-profile-windows-k2]\n"
+         "    if: always() && false # "),
+        ("      - name: Prove K2 256/512 MiB file streaming on Windows with peak RAM and disk limits\n"
+         "        if: steps.native-prior.outcome != 'success'\n",
+         "      - name: Prove K2 256/512 MiB file streaming on Windows with peak RAM and disk limits\n"
+         "        if: steps.native-prior.outcome != 'success'\n"
+         "        continue-on-error: true\n"),
+        ("          ref: ${{ github.event.pull_request.head.sha || github.sha }}",
+         "          ref: main"),
+        ("    runs-on: windows-latest\n    outputs:",
+         "    runs-on: windows-latest\n    continue-on-error: true\n    outputs:"),
     ):
         require(unsafe in graph, f"negative aggregate/K2 fixture not present: {unsafe}")
+        mutated = graph.replace(unsafe, repaired, 1)
+        if unsafe.startswith("          ref: "):
+            prefix, local = graph.split("  local-profile-windows-core:\n", 1)
+            mutated = (prefix + "  local-profile-windows-core:\n"
+                       + local.replace(unsafe, repaired, 1))
         try:
-            assert_local_windows_graph(graph.replace(unsafe, repaired, 1))
+            assert_local_windows_graph(mutated)
         except Unconfirmed:
             pass
         else:
@@ -2369,7 +2459,7 @@ def self_test() -> None:
 
     fixture_now = datetime(2026, 11, 24, tzinfo=timezone.utc)
     for gate in RUNNER_RECEIPT:
-        pages, read = fixture(gate)
+        pages, read = fixture("local-profile" if gate == "local-profile-k2" else gate)
         receipt = select_full_runner_receipt("a" * 40, gate, read, as_of=fixture_now)
         assert receipt["name"] == RUNNER_RECEIPT[gate][0]
         content = {
@@ -2419,7 +2509,9 @@ def self_test() -> None:
                 target["created_at"] = "2026-01-01T00:05:00Z"
             else:
                 jobs_path = next(key for key in case if key.endswith("/jobs?per_page=100"))
-                case[jobs_path]["jobs"][0]["run_attempt"] += 1
+                producer = next(job for job in case[jobs_path]["jobs"]
+                                if job["name"] == RUNNER_RECEIPT[gate][1])
+                producer["run_attempt"] += 1
             try:
                 select_full_runner_receipt("a" * 40, gate,
                                            lambda path: case[path], as_of=fixture_now)
@@ -3207,6 +3299,10 @@ def main() -> int:
             if not args.pr_native_proof:
                 gate = "quality" if args.pr_native_bridge is not None else "local-profile"
                 verify_full_runner_receipt(select_full_runner_receipt(prior, gate, api), token)
+            if gate == "local-profile":
+                verify_full_runner_receipt(
+                    select_full_runner_receipt(prior, "local-profile-k2", api), token,
+                )
             if args.pr_native_bridge is not None:
                 destination = args.pr_native_bridge.absolute()
                 require(not destination.exists() and not destination.is_symlink(),

@@ -295,6 +295,35 @@ jobs:
         if: steps.native-prior.outcome != 'success'
         run: python scripts/test-k2-large-native-streaming.py
 
+      - name: Write FULL K2 Windows runner identity receipt
+        if: github.event_name == 'pull_request' && steps.native-prior.outcome != 'success'
+        shell: pwsh
+        env:
+          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: python scripts/accepted-main-pr-reuse.py --native-runner-receipt local-profile-k2 --receipt-output "$env:RUNNER_TEMP/local-k2-native-runner.json"
+
+      - name: Upload FULL K2 Windows runner identity receipt
+        if: github.event_name == 'pull_request' && steps.native-prior.outcome != 'success'
+        id: k2-native-runner-upload
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: local-k2-native-runner.json
+          path: ${{ runner.temp }}/local-k2-native-runner.json
+          archive: false
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Verify uploaded FULL K2 runner identity digest
+        if: github.event_name == 'pull_request' && steps.native-prior.outcome != 'success'
+        shell: pwsh
+        env:
+          UPLOADED_DIGEST: ${{ steps.k2-native-runner-upload.outputs.artifact-digest }}
+        run: |
+          $expected = (Get-FileHash -Algorithm SHA256 "$env:RUNNER_TEMP/local-k2-native-runner.json").Hash.ToLowerInvariant()
+          if (-not $env:UPLOADED_DIGEST -or $env:UPLOADED_DIGEST -ne $expected) {
+            throw 'FULL K2 Windows runner receipt upload SHA mismatch'
+          }
+
   # Preserve the exact protected GitHub status name. A green Core alone must
   # never make a PR mergeable while its independent physical K2 is still live.
   local-profile-windows:
