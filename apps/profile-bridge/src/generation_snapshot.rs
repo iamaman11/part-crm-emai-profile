@@ -608,7 +608,6 @@ pub(crate) fn verify_workspace_matches_streamed_snapshot(
 /// by the authenticated BPGC0001 metadata. No generation path is made visible
 /// until all filenames, all content, strict EOF, SHA-256, and staged disk
 /// rereads agree. Never overwrite a current N or any previous LKG.
-#[allow(dead_code)] // K2 shipping download interface is still Vec-based.
 pub(crate) fn materialize_workspace_snapshot_streaming_with_pre_publish(
     root: &MaterializationRoot,
     tenant_id: &TenantId,
@@ -806,7 +805,7 @@ fn materialize_stream_into_staging(
     verify_streamed_workspace(&staging, &entries)?;
     before_publish(&staging)?;
 
-    // Identical no-replace atomic publish boundary to the in-memory reader.
+    // The one no-replace atomic publication boundary for streamed Restore.
     let workspace = publish_verified_staging(
         root,
         staging,
@@ -883,163 +882,6 @@ fn read_stream_piece(
     Ok(())
 }
 
-#[cfg(test)]
-pub(crate) fn materialize_workspace_snapshot(
-    root: &MaterializationRoot,
-    tenant_id: &TenantId,
-    profile_id: &ProfileId,
-    generation_id: &GenerationId,
-    snapshot: &[u8],
-) -> Result<GenerationWorkspace, GenerationSnapshotError> {
-    materialize_workspace_snapshot_with_pre_publish(
-        root,
-        tenant_id,
-        profile_id,
-        generation_id,
-        snapshot,
-        |_| Ok(()),
-    )
-}
-
-pub(crate) fn materialize_workspace_snapshot_with_pre_publish(
-    root: &MaterializationRoot,
-    tenant_id: &TenantId,
-    profile_id: &ProfileId,
-    generation_id: &GenerationId,
-    snapshot: &[u8],
-    before_publish: impl FnMut(&GenerationWorkspace) -> Result<(), GenerationSnapshotError>,
-) -> Result<GenerationWorkspace, GenerationSnapshotError> {
-    materialize_workspace_snapshot_to(
-        root,
-        tenant_id,
-        profile_id,
-        generation_id,
-        snapshot,
-        None,
-        before_publish,
-    )
-}
-
-/// In-memory BPGW compatibility uses the identical verified staging/publish path.
-#[allow(clippy::too_many_arguments)]
-pub(crate) fn materialize_profile_current_snapshot_with_pre_publish(
-    root: &MaterializationRoot,
-    tenant_id: &TenantId,
-    profile_id: &ProfileId,
-    generation_id: &GenerationId,
-    profile_version: u64,
-    snapshot: &[u8],
-    before_publish: impl FnMut(&GenerationWorkspace) -> Result<(), GenerationSnapshotError>,
-) -> Result<GenerationWorkspace, GenerationSnapshotError> {
-    materialize_workspace_snapshot_to(
-        root,
-        tenant_id,
-        profile_id,
-        generation_id,
-        snapshot,
-        Some(profile_version),
-        before_publish,
-    )
-}
-
-#[allow(clippy::too_many_arguments)]
-fn materialize_workspace_snapshot_to(
-    root: &MaterializationRoot,
-    tenant_id: &TenantId,
-    profile_id: &ProfileId,
-    generation_id: &GenerationId,
-    snapshot: &[u8],
-    profile_version: Option<u64>,
-    mut before_publish: impl FnMut(&GenerationWorkspace) -> Result<(), GenerationSnapshotError>,
-) -> Result<GenerationWorkspace, GenerationSnapshotError> {
-    if profile_version == Some(0) {
-        return Err(GenerationSnapshotError::InvalidFormat);
-    }
-    let entries = parse_workspace_snapshot(snapshot)?;
-    let existing = if profile_version.is_some() {
-        root.open_profile_current(tenant_id, profile_id)
-    } else {
-        root.open_generation(tenant_id, profile_id, generation_id)
-    };
-    match existing {
-        Ok(_) => return Err(GenerationSnapshotError::TargetAlreadyExists),
-        Err(LocalProfileError::Io(std::io::ErrorKind::NotFound)) => {}
-        Err(error) => return Err(GenerationSnapshotError::Local(error)),
-    }
-
-    let staging = create_staging_workspace(root, tenant_id, profile_id)?;
-    let staging_path = staging.path().to_path_buf();
-    let result = materialize_into_staging(
-        root,
-        staging,
-        &staging_path,
-        tenant_id,
-        profile_id,
-        generation_id,
-        &entries,
-        profile_version,
-        &mut before_publish,
-    );
-    if result.is_err() {
-        remove_owned_staging(&staging_path);
-    }
-    result
-}
-
-#[allow(clippy::too_many_arguments)]
-fn materialize_into_staging(
-    root: &MaterializationRoot,
-    mut staging: GenerationWorkspace,
-    staging_path: &Path,
-    tenant_id: &TenantId,
-    profile_id: &ProfileId,
-    generation_id: &GenerationId,
-    entries: &[SnapshotEntry<'_>],
-    profile_version: Option<u64>,
-    before_publish: &mut impl FnMut(&GenerationWorkspace) -> Result<(), GenerationSnapshotError>,
-) -> Result<GenerationWorkspace, GenerationSnapshotError> {
-    for entry in entries {
-        let target = staging_path.join(entry.relative_path);
-        let parent = target.parent().ok_or(GenerationSnapshotError::UnsafePath)?;
-        ensure_descendant_directories(staging_path, parent)?;
-        let mut file = OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .open(&target)
-            .map_err(LocalProfileError::from)?;
-        file.write_all(entry.content)
-            .map_err(LocalProfileError::from)?;
-        file.sync_all().map_err(LocalProfileError::from)?;
-        let metadata = file.metadata().map_err(LocalProfileError::from)?;
-        if !metadata.is_file()
-            || metadata.len()
-                != u64::try_from(entry.content.len())
-                    .map_err(|_| GenerationSnapshotError::SnapshotTooLarge)?
-        {
-            return Err(GenerationSnapshotError::SourceChanged);
-        }
-    }
-    match profile_version {
-        Some(version) => staging.rebind_staging_current(generation_id, version),
-        None => staging.rebind_staging_generation(generation_id),
-    }
-    .map_err(GenerationSnapshotError::Local)?;
-    verify_materialized_snapshot(&staging, entries)?;
-    before_publish(&staging)?;
-
-    let workspace = publish_verified_staging(
-        root,
-        staging,
-        staging_path,
-        tenant_id,
-        profile_id,
-        generation_id,
-        profile_version,
-    )?;
-    verify_materialized_snapshot(&workspace, entries)?;
-    Ok(workspace)
-}
-
 #[allow(clippy::too_many_arguments)]
 fn publish_verified_staging(
     root: &MaterializationRoot,
@@ -1094,47 +936,6 @@ fn create_staging_workspace(
     Err(GenerationSnapshotError::TargetAlreadyExists)
 }
 
-/// Exact full-byte comparison with server-authenticated workspace, including user_data.
-/// Immutable inventory alone cannot prove absence of unsaved browser state.
-pub(crate) fn verify_workspace_matches_snapshot(
-    workspace: &GenerationWorkspace,
-    snapshot: &[u8],
-) -> Result<(), GenerationSnapshotError> {
-    let entries = parse_workspace_snapshot(snapshot)?;
-    verify_materialized_snapshot(workspace, &entries)
-}
-
-fn verify_materialized_snapshot(
-    workspace: &GenerationWorkspace,
-    expected: &[SnapshotEntry<'_>],
-) -> Result<(), GenerationSnapshotError> {
-    let inventory = workspace
-        .inventory()
-        .map_err(GenerationSnapshotError::Local)?;
-    if inventory.entries().len() != expected.len() {
-        return Err(GenerationSnapshotError::SourceChanged);
-    }
-    for (actual, expected) in inventory.entries().iter().zip(expected) {
-        if actual.relative_path() != expected.relative_path
-            || actual.bytes()
-                != u64::try_from(expected.content.len())
-                    .map_err(|_| GenerationSnapshotError::SnapshotTooLarge)?
-        {
-            return Err(GenerationSnapshotError::SourceChanged);
-        }
-        let full_path = workspace.path().join(expected.relative_path);
-        let metadata = fs::symlink_metadata(&full_path).map_err(LocalProfileError::from)?;
-        if metadata.file_type().is_symlink() || !metadata.is_file() {
-            return Err(GenerationSnapshotError::SourceChanged);
-        }
-        let bytes = fs::read(&full_path).map_err(LocalProfileError::from)?;
-        if bytes.as_slice() != expected.content {
-            return Err(GenerationSnapshotError::SourceChanged);
-        }
-    }
-    Ok(())
-}
-
 fn ensure_descendant_directories(
     staging_root: &Path,
     parent: &Path,
@@ -1175,62 +976,6 @@ fn remove_owned_staging(path: &Path) {
             let _ = fs::remove_dir_all(path);
         }
     }
-}
-
-#[derive(Clone, Copy)]
-struct SnapshotEntry<'a> {
-    relative_path: &'a str,
-    content: &'a [u8],
-}
-
-fn parse_workspace_snapshot(
-    snapshot: &[u8],
-) -> Result<Vec<SnapshotEntry<'_>>, GenerationSnapshotError> {
-    if snapshot.len() > MAX_WORKSPACE_SNAPSHOT_BYTES
-        || snapshot.len() < WORKSPACE_SNAPSHOT_MAGIC.len() + 4
-        || &snapshot[..WORKSPACE_SNAPSHOT_MAGIC.len()] != WORKSPACE_SNAPSHOT_MAGIC
-    {
-        return Err(GenerationSnapshotError::InvalidFormat);
-    }
-    let mut cursor = WORKSPACE_SNAPSHOT_MAGIC.len();
-    let count = usize::try_from(read_u32(snapshot, &mut cursor)?)
-        .map_err(|_| GenerationSnapshotError::InvalidFormat)?;
-    if count > MAX_SNAPSHOT_FILES {
-        return Err(GenerationSnapshotError::InvalidFormat);
-    }
-
-    let mut entries = Vec::with_capacity(count);
-    let mut previous_path: Option<&str> = None;
-    let mut casefolded_paths = HashSet::with_capacity(count);
-    for _ in 0..count {
-        let path_len = usize::from(read_u16(snapshot, &mut cursor)?);
-        if path_len == 0 || path_len > MAX_RELATIVE_PATH_BYTES {
-            return Err(GenerationSnapshotError::UnsafePath);
-        }
-        let path_bytes = read_bytes(snapshot, &mut cursor, path_len)?;
-        let relative_path =
-            std::str::from_utf8(path_bytes).map_err(|_| GenerationSnapshotError::UnsafePath)?;
-        validate_windows_relative_path(relative_path)?;
-        if previous_path.is_some_and(|previous| previous >= relative_path) {
-            return Err(GenerationSnapshotError::InvalidFormat);
-        }
-        let casefolded = relative_path.to_lowercase();
-        if !casefolded_paths.insert(casefolded) {
-            return Err(GenerationSnapshotError::UnsafePath);
-        }
-        let content_len = usize::try_from(read_u64(snapshot, &mut cursor)?)
-            .map_err(|_| GenerationSnapshotError::SnapshotTooLarge)?;
-        let content = read_bytes(snapshot, &mut cursor, content_len)?;
-        entries.push(SnapshotEntry {
-            relative_path,
-            content,
-        });
-        previous_path = Some(relative_path);
-    }
-    if cursor != snapshot.len() {
-        return Err(GenerationSnapshotError::InvalidFormat);
-    }
-    Ok(entries)
 }
 
 fn validate_windows_relative_path(path: &str) -> Result<(), GenerationSnapshotError> {
@@ -1283,38 +1028,6 @@ fn windows_reserved_component(component: &str) -> bool {
         })
 }
 
-fn read_u16(snapshot: &[u8], cursor: &mut usize) -> Result<u16, GenerationSnapshotError> {
-    let bytes = read_bytes(snapshot, cursor, 2)?;
-    Ok(u16::from_be_bytes([bytes[0], bytes[1]]))
-}
-
-fn read_u32(snapshot: &[u8], cursor: &mut usize) -> Result<u32, GenerationSnapshotError> {
-    let bytes = read_bytes(snapshot, cursor, 4)?;
-    Ok(u32::from_be_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]))
-}
-
-fn read_u64(snapshot: &[u8], cursor: &mut usize) -> Result<u64, GenerationSnapshotError> {
-    let bytes = read_bytes(snapshot, cursor, 8)?;
-    Ok(u64::from_be_bytes([
-        bytes[0], bytes[1], bytes[2], bytes[3], bytes[4], bytes[5], bytes[6], bytes[7],
-    ]))
-}
-
-fn read_bytes<'a>(
-    snapshot: &'a [u8],
-    cursor: &mut usize,
-    len: usize,
-) -> Result<&'a [u8], GenerationSnapshotError> {
-    let end = cursor
-        .checked_add(len)
-        .ok_or(GenerationSnapshotError::InvalidFormat)?;
-    let bytes = snapshot
-        .get(*cursor..end)
-        .ok_or(GenerationSnapshotError::InvalidFormat)?;
-    *cursor = end;
-    Ok(bytes)
-}
-
 fn checked_extend(output: &mut Vec<u8>, bytes: &[u8]) -> Result<(), GenerationSnapshotError> {
     let new_len = output
         .len()
@@ -1332,9 +1045,7 @@ mod tests {
     use super::{
         GenerationSnapshotError, StreamedWorkspaceSnapshot, WORKSPACE_SNAPSHOT_MAGIC,
         WorkspaceSnapshotReader, encode_workspace_snapshot, encode_workspace_snapshot_streaming,
-        encoded_stream_snapshot_size, materialize_workspace_snapshot,
-        materialize_workspace_snapshot_streaming_with_pre_publish,
-        materialize_workspace_snapshot_with_pre_publish, parse_workspace_snapshot,
+        encoded_stream_snapshot_size, materialize_workspace_snapshot_streaming_with_pre_publish,
     };
     use crate::local_profile::MaterializationRoot;
     use profile_platform_primitives::{GenerationId, ProfileId, TenantId};
@@ -1385,6 +1096,44 @@ mod tests {
         output
     }
 
+    fn verified_stream_proof(snapshot: &[u8]) -> StreamedWorkspaceSnapshot {
+        StreamedWorkspaceSnapshot {
+            plaintext_bytes: snapshot.len() as u64,
+            plaintext_digest: sha2::Sha256::digest(snapshot).into(),
+        }
+    }
+
+    /// Exercise the real streamed BPGW parser with a descriptor proving the
+    /// *malformed* bytes themselves, not a mismatched digest that would mask a
+    /// parser regression. Each case has a unique, never-published target.
+    fn assert_streamed_rejection_without_publication(
+        fixture: &Fixture,
+        generation: &GenerationId,
+        snapshot: &[u8],
+        expected_error: GenerationSnapshotError,
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        let mut input = snapshot;
+        let result = materialize_workspace_snapshot_streaming_with_pre_publish(
+            &fixture.root,
+            &fixture.tenant_id,
+            &fixture.profile_id,
+            generation,
+            &mut input,
+            verified_stream_proof(snapshot),
+            |_| Ok(()),
+        );
+        assert_eq!(result.map(|_| ()), Err(expected_error));
+        assert!(matches!(
+            fixture
+                .root
+                .open_generation(&fixture.tenant_id, &fixture.profile_id, generation),
+            Err(crate::local_profile::LocalProfileError::Io(
+                std::io::ErrorKind::NotFound
+            ))
+        ));
+        Ok(())
+    }
+
     #[test]
     fn verified_restore_publishes_exactly_one_stable_current_without_overwrite()
     -> Result<(), Box<dyn std::error::Error>> {
@@ -1400,13 +1149,14 @@ mod tests {
             b"original verified browser files",
         )?;
         let snapshot = encode_workspace_snapshot(&source, &source.inventory()?)?;
-        let saved = super::materialize_profile_current_snapshot_with_pre_publish(
+        let saved = super::materialize_profile_current_snapshot_streaming_with_pre_publish(
             &fixture.root,
             &fixture.tenant_id,
             &fixture.profile_id,
             &cloud_id,
             9,
-            &snapshot,
+            &mut snapshot.as_slice(),
+            verified_stream_proof(&snapshot),
             |_| Ok(()),
         )?;
         assert!(saved.path().ends_with("current"));
@@ -1423,13 +1173,14 @@ mod tests {
             saved.path().join("browser-state.bin"),
             b"local unsynced edits",
         )?;
-        let attempt = super::materialize_profile_current_snapshot_with_pre_publish(
+        let attempt = super::materialize_profile_current_snapshot_streaming_with_pre_publish(
             &fixture.root,
             &fixture.tenant_id,
             &fixture.profile_id,
             &cloud_id,
             9,
-            &snapshot,
+            &mut snapshot.as_slice(),
+            verified_stream_proof(&snapshot),
             |_| Ok(()),
         );
         assert!(matches!(
@@ -2145,12 +1896,14 @@ mod tests {
         )?;
         let inventory = source.inventory()?;
         let snapshot = encode_workspace_snapshot(&source, &inventory)?;
-        let target = materialize_workspace_snapshot(
+        let target = materialize_workspace_snapshot_streaming_with_pre_publish(
             &fixture.root,
             &fixture.tenant_id,
             &fixture.profile_id,
             &target_id,
-            &snapshot,
+            &mut snapshot.as_slice(),
+            verified_stream_proof(&snapshot),
+            |_| Ok(()),
         )?;
         assert_eq!(target.inventory()?, inventory);
         assert_eq!(fs::read(target.path().join("prefs.js"))?, b"prefs");
@@ -2183,13 +1936,15 @@ mod tests {
     -> Result<(), Box<dyn std::error::Error>> {
         let fixture = Fixture::new()?;
         let target_id = GenerationId::parse("generation_snapshot_pre_publish_failure")?;
+        let snapshot = raw_snapshot(&[("prefs.js", b"new")]);
         assert_eq!(
-            materialize_workspace_snapshot_with_pre_publish(
+            materialize_workspace_snapshot_streaming_with_pre_publish(
                 &fixture.root,
                 &fixture.tenant_id,
                 &fixture.profile_id,
                 &target_id,
-                &raw_snapshot(&[("prefs.js", b"new")]),
+                &mut snapshot.as_slice(),
+                verified_stream_proof(&snapshot),
                 |_workspace| Err(GenerationSnapshotError::PrePublish),
             )
             .map(|_| ()),
@@ -2203,12 +1958,14 @@ mod tests {
         );
         // A failed pre-publish callback did not expose a canonical generation or
         // poison a later exact retry: only this owned staging directory is discarded.
-        let reopened = materialize_workspace_snapshot(
+        let reopened = materialize_workspace_snapshot_streaming_with_pre_publish(
             &fixture.root,
             &fixture.tenant_id,
             &fixture.profile_id,
             &target_id,
-            &raw_snapshot(&[("prefs.js", b"new")]),
+            &mut snapshot.as_slice(),
+            verified_stream_proof(&snapshot),
+            |_| Ok(()),
         )?;
         assert_eq!(fs::read(reopened.path().join("prefs.js"))?, b"new");
         fixture.cleanup();
@@ -2216,32 +1973,64 @@ mod tests {
     }
 
     #[test]
-    fn parser_rejects_truncation_trailing_bytes_unsorted_and_case_aliases() {
+    fn streaming_parser_rejects_truncation_trailing_bytes_unsorted_and_case_aliases()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let fixture = Fixture::new()?;
         let canonical = raw_snapshot(&[("a", b"1"), ("b", b"2")]);
-        assert!(parse_workspace_snapshot(&canonical).is_ok());
-        assert_eq!(
-            parse_workspace_snapshot(&canonical[..canonical.len() - 1]).map(|_| ()),
-            Err(GenerationSnapshotError::InvalidFormat)
-        );
+        let valid = GenerationId::parse("generation_stream_parser_valid")?;
+        let restored = materialize_workspace_snapshot_streaming_with_pre_publish(
+            &fixture.root,
+            &fixture.tenant_id,
+            &fixture.profile_id,
+            &valid,
+            &mut canonical.as_slice(),
+            verified_stream_proof(&canonical),
+            |_| Ok(()),
+        )?;
+        assert_eq!(fs::read(restored.path().join("a"))?, b"1");
+        assert_eq!(fs::read(restored.path().join("b"))?, b"2");
         let mut trailing = canonical.clone();
         trailing.push(0);
-        assert_eq!(
-            parse_workspace_snapshot(&trailing).map(|_| ()),
-            Err(GenerationSnapshotError::InvalidFormat)
-        );
-        assert_eq!(
-            parse_workspace_snapshot(&raw_snapshot(&[("b", b"1"), ("a", b"2")])).map(|_| ()),
-            Err(GenerationSnapshotError::InvalidFormat)
-        );
-        assert_eq!(
-            parse_workspace_snapshot(&raw_snapshot(&[("A", b"1"), ("a", b"2")])).map(|_| ()),
-            Err(GenerationSnapshotError::UnsafePath)
-        );
+        for (suffix, bytes, expected) in [
+            (
+                "truncated_payload",
+                canonical[..canonical.len() - 1].to_vec(),
+                GenerationSnapshotError::SnapshotTooLarge,
+            ),
+            (
+                "truncated_length_field",
+                canonical[..canonical.len() - 6].to_vec(),
+                GenerationSnapshotError::InvalidFormat,
+            ),
+            ("trailing", trailing, GenerationSnapshotError::InvalidFormat),
+            (
+                "unsorted",
+                raw_snapshot(&[("b", b"1"), ("a", b"2")]),
+                GenerationSnapshotError::UnsafePath,
+            ),
+            (
+                "case_alias",
+                raw_snapshot(&[("A", b"1"), ("a", b"2")]),
+                GenerationSnapshotError::UnsafePath,
+            ),
+        ] {
+            let generation = GenerationId::parse(format!("generation_stream_parser_{suffix}"))?;
+            assert_streamed_rejection_without_publication(
+                &fixture,
+                &generation,
+                &bytes,
+                expected,
+            )?;
+        }
+        fixture.cleanup();
+        Ok(())
     }
 
     #[test]
-    fn parser_rejects_windows_path_escape_and_device_aliases() {
-        for path in [
+    fn streaming_parser_rejects_windows_path_escape_and_device_aliases()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let fixture = Fixture::new()?;
+        let dangerous_paths = [
             "../escape",
             "/absolute",
             "C:/absolute",
@@ -2257,13 +2046,19 @@ mod tests {
             "user_data/.parentlock",
             ".profile-generation",
             ".profile-platform.lock",
-        ] {
-            assert_eq!(
-                parse_workspace_snapshot(&raw_snapshot(&[(path, b"x")])).map(|_| ()),
-                Err(GenerationSnapshotError::UnsafePath),
-                "path unexpectedly accepted: {path}"
-            );
+        ];
+        for (index, path) in dangerous_paths.into_iter().enumerate() {
+            let generation = GenerationId::parse(format!("generation_stream_path_{index}"))?;
+            let malformed = raw_snapshot(&[(path, b"x")]);
+            assert_streamed_rejection_without_publication(
+                &fixture,
+                &generation,
+                &malformed,
+                GenerationSnapshotError::UnsafePath,
+            )?;
         }
+        fixture.cleanup();
+        Ok(())
     }
 
     #[test]
@@ -2276,13 +2071,16 @@ mod tests {
                 .root
                 .create_generation(&fixture.tenant_id, &fixture.profile_id, &target_id)?;
         fs::write(existing.path().join("prefs.js"), b"old")?;
+        let snapshot = raw_snapshot(&[("prefs.js", b"new")]);
         assert_eq!(
-            materialize_workspace_snapshot(
+            materialize_workspace_snapshot_streaming_with_pre_publish(
                 &fixture.root,
                 &fixture.tenant_id,
                 &fixture.profile_id,
                 &target_id,
-                &raw_snapshot(&[("prefs.js", b"new")]),
+                &mut snapshot.as_slice(),
+                verified_stream_proof(&snapshot),
+                |_| Ok(()),
             )
             .map(|_| ()),
             Err(GenerationSnapshotError::TargetAlreadyExists)
