@@ -133,7 +133,7 @@ jobs:
         uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a
         with:
           ref: ${{ steps.resolve.outputs.main_sha }}
-          fetch-depth: 0
+          fetch-depth: 1
           persist-credentials: false
 
       - name: Restore opsctl Rust compilation cache for read-only resolution
@@ -313,7 +313,7 @@ jobs:
         with:
           ref: ${{ steps.observe.outputs.known_good_source }}
           path: known-good-source
-          fetch-depth: 0
+          fetch-depth: 1
           persist-credentials: false
 
       - name: Verify current immutable Release Set and build metadata snapshot
@@ -506,14 +506,15 @@ jobs:
           echo "promotion_id=$promotion_id" >&3
           echo "read_only_ready=true" >&3
 
-      - name: Prove bounded Worker and D1 quiescence
-        id: quiescence
+      - name: Re-observe live Worker identity and D1 ledger before READY
+        id: current_readback
         if: steps.policy.outputs.read_only_ready == 'true'
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_OBSERVE_API_TOKEN }}
         run: |
           set -euo pipefail
-          sleep 30
+          # Native readback after policy: fail closed if either independent live
+          # observation differs. No arbitrary timer can guarantee quiescence.
           account_id="$(jq -er '.control_plane.account_id // .account_id' "$DEPLOY_MANIFEST")"
           worker_name="$(jq -er '.control_plane.worker_name // .worker_name' "$DEPLOY_MANIFEST")"
           http_code="$(curl --silent --show-error --output "$RUNNER_TEMP/deployments-after-api.json" --write-out '%{http_code}' \
@@ -549,7 +550,7 @@ jobs:
 
       - name: Materialize secret-free READY_TO_MUTATE evidence
         id: ready
-        if: steps.policy.outputs.read_only_ready == 'true' && steps.quiescence.outcome == 'success'
+        if: steps.policy.outputs.read_only_ready == 'true' && steps.current_readback.outcome == 'success'
         run: |
           set -euo pipefail
           cp "$RUNNER_TEMP/release-policy-input/release-set.json" "$RUNNER_TEMP/release-set.json"
@@ -573,9 +574,9 @@ jobs:
             --arg release_verify_sha256 "$(sha256sum "$RUNNER_TEMP/release-verify.json" | cut -d' ' -f1)" \
             --arg preflight_sha256 "$(sha256sum "$RUNNER_TEMP/promotion-preflight.json" | cut -d' ' -f1)" \
             --arg plan_sha256 "$(sha256sum "$RUNNER_TEMP/promotion-plan.json" | cut -d' ' -f1)" \
-            '{schema_version:1,kind:"AR11_READY_TO_MUTATE",ready:true,environment:"staging",ready_run_id:$ready_run_id,ready_run_attempt:$ready_run_attempt,source_sha:$source_sha,release_set_id:$release_set_id,expected_current_release_set_id:$expected_current,expected_current_capability_profile_id:$expected_current_profile,target_capability_profile_id:$target_profile,admission_mode:$admission_mode,worker_exists:true,worker_identity_sha256:$worker_identity_sha256,d1_head:$d1_head,d1_ledger_sha256:$d1_ledger_sha256,secret_bindings_verified:true,quiescence:{seconds:30,worker_identity_stable:true,d1_ledger_stable:true},promotion_id:$promotion_id,recovery_strategy:$recovery_strategy,release_verify_sha256:$release_verify_sha256,promotion_preflight_sha256:$preflight_sha256,promotion_plan_sha256:$plan_sha256,credential_values_accessed:false,provider_mutation:false,production_mutation:false}' \
+            '{schema_version:1,kind:"AR11_READY_TO_MUTATE",ready:true,environment:"staging",ready_run_id:$ready_run_id,ready_run_attempt:$ready_run_attempt,source_sha:$source_sha,release_set_id:$release_set_id,expected_current_release_set_id:$expected_current,expected_current_capability_profile_id:$expected_current_profile,target_capability_profile_id:$target_profile,admission_mode:$admission_mode,worker_exists:true,worker_identity_sha256:$worker_identity_sha256,d1_head:$d1_head,d1_ledger_sha256:$d1_ledger_sha256,secret_bindings_verified:true,provider_observation:{method:"INDEPENDENT_LIVE_READBACK",worker_identity_stable:true,d1_ledger_stable:true},promotion_id:$promotion_id,recovery_strategy:$recovery_strategy,release_verify_sha256:$release_verify_sha256,promotion_preflight_sha256:$preflight_sha256,promotion_plan_sha256:$plan_sha256,credential_values_accessed:false,provider_mutation:false,production_mutation:false}' \
             > "$RUNNER_TEMP/ready-to-mutate.json"
-          jq -e --arg source "$SOURCE_SHA" --arg target "$RELEASE_SET_ID" --arg current "${{ steps.observe.outputs.current_id }}" --arg current_profile "${{ steps.observe.outputs.current_profile }}" --arg target_profile "${{ steps.policy.outputs.target_profile }}" --arg admission_mode "${{ steps.policy.outputs.admission_mode }}" --argjson run "$GITHUB_RUN_ID" --argjson attempt "$GITHUB_RUN_ATTEMPT" '.kind == "AR11_READY_TO_MUTATE" and .ready == true and .ready_run_id == $run and .ready_run_attempt == $attempt and .source_sha == $source and .release_set_id == $target and .expected_current_release_set_id == $current and .expected_current_capability_profile_id == $current_profile and .target_capability_profile_id == $target_profile and .admission_mode == $admission_mode and .worker_exists == true and .secret_bindings_verified == true and .quiescence.worker_identity_stable == true and .quiescence.d1_ledger_stable == true and .credential_values_accessed == false and .provider_mutation == false and .production_mutation == false' "$RUNNER_TEMP/ready-to-mutate.json" >/dev/null
+          jq -e --arg source "$SOURCE_SHA" --arg target "$RELEASE_SET_ID" --arg current "${{ steps.observe.outputs.current_id }}" --arg current_profile "${{ steps.observe.outputs.current_profile }}" --arg target_profile "${{ steps.policy.outputs.target_profile }}" --arg admission_mode "${{ steps.policy.outputs.admission_mode }}" --argjson run "$GITHUB_RUN_ID" --argjson attempt "$GITHUB_RUN_ATTEMPT" '.kind == "AR11_READY_TO_MUTATE" and .ready == true and .ready_run_id == $run and .ready_run_attempt == $attempt and .source_sha == $source and .release_set_id == $target and .expected_current_release_set_id == $current and .expected_current_capability_profile_id == $current_profile and .target_capability_profile_id == $target_profile and .admission_mode == $admission_mode and .worker_exists == true and .secret_bindings_verified == true and .provider_observation.method == "INDEPENDENT_LIVE_READBACK" and .provider_observation.worker_identity_stable == true and .provider_observation.d1_ledger_stable == true and .credential_values_accessed == false and .provider_mutation == false and .production_mutation == false' "$RUNNER_TEMP/ready-to-mutate.json" >/dev/null
           ready_sha="$(sha256sum "$RUNNER_TEMP/ready-to-mutate.json" | cut -d' ' -f1)"
           artifact_name="ar11-ready-to-mutate-$RELEASE_SET_ID-$SOURCE_SHA-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"
           echo "READY_TO_MUTATE evidence sha256=$ready_sha"
@@ -631,8 +632,8 @@ jobs:
             failed_boundary="DEPLOYMENT_SNAPSHOT"
           elif [ -n "${{ steps.policy.outputs.infra_boundary }}" ]; then
             failed_boundary="${{ steps.policy.outputs.infra_boundary }}"
-          elif [ "${{ steps.quiescence.outcome }}" = "failure" ]; then
-            failed_boundary="QUIESCENCE"
+          elif [ "${{ steps.current_readback.outcome }}" = "failure" ]; then
+            failed_boundary="PROVIDER_STATE_READBACK"
           elif [ "${{ steps.ready.outcome }}" = "failure" ]; then
             failed_boundary="READ_ONLY_READY_EVIDENCE"
           elif [ "${{ steps.ready_upload.outcome }}" = "failure" ]; then
@@ -954,7 +955,7 @@ jobs:
           test "$(sha256sum "$ready_root/promotion-plan.json" | cut -d' ' -f1)" = "$(jq -er '.promotion_plan_sha256' "$ready_root/ready-to-mutate.json")"
           test "$(sha256sum "$ready_root/release-verify.json" | cut -d' ' -f1)" = "$(jq -er '.release_verify_sha256' "$ready_root/ready-to-mutate.json")"
           test "$(sha256sum "$ready_root/ready-to-mutate.json" | cut -d' ' -f1)" = "$READY_EVIDENCE_SHA256"
-          jq -e --arg source "$MAIN_SHA" --arg target "$RELEASE_SET_ID" --arg current "$EXPECTED_CURRENT" --arg target_profile "$TARGET_PROFILE" --arg expected_profile "$EXPECTED_CURRENT_PROFILE" --argjson run "$GITHUB_RUN_ID" --argjson attempt "$GITHUB_RUN_ATTEMPT" '.schema_version == 1 and .kind == "AR11_READY_TO_MUTATE" and .ready == true and .ready_run_id == $run and .ready_run_attempt == $attempt and .source_sha == $source and .release_set_id == $target and .expected_current_release_set_id == $current and .target_capability_profile_id == $target_profile and .expected_current_capability_profile_id == $expected_profile and (.admission_mode == "DIRECT" or .admission_mode == "PREREQUISITE_RELEASE_BRIDGE") and .worker_exists == true and .secret_bindings_verified == true and .quiescence.worker_identity_stable == true and .quiescence.d1_ledger_stable == true and .credential_values_accessed == false and .provider_mutation == false and .production_mutation == false' "$ready_root/ready-to-mutate.json" >/dev/null
+          jq -e --arg source "$MAIN_SHA" --arg target "$RELEASE_SET_ID" --arg current "$EXPECTED_CURRENT" --arg target_profile "$TARGET_PROFILE" --arg expected_profile "$EXPECTED_CURRENT_PROFILE" --argjson run "$GITHUB_RUN_ID" --argjson attempt "$GITHUB_RUN_ATTEMPT" '.schema_version == 1 and .kind == "AR11_READY_TO_MUTATE" and .ready == true and .ready_run_id == $run and .ready_run_attempt == $attempt and .source_sha == $source and .release_set_id == $target and .expected_current_release_set_id == $current and .target_capability_profile_id == $target_profile and .expected_current_capability_profile_id == $expected_profile and (.admission_mode == "DIRECT" or .admission_mode == "PREREQUISITE_RELEASE_BRIDGE") and .worker_exists == true and .secret_bindings_verified == true and .provider_observation.method == "INDEPENDENT_LIVE_READBACK" and .provider_observation.worker_identity_stable == true and .provider_observation.d1_ledger_stable == true and .credential_values_accessed == false and .provider_mutation == false and .production_mutation == false' "$ready_root/ready-to-mutate.json" >/dev/null
           promotion_id="$(jq -er '.promotion_id' "$ready_root/ready-to-mutate.json")"
           {
             echo "promotion_id=$promotion_id"
@@ -976,7 +977,7 @@ jobs:
         uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a
         with:
           ref: ${{ steps.intent.outputs.main_sha }}
-          fetch-depth: 0
+          fetch-depth: 1
           persist-credentials: false
 
       - name: Restore opsctl Rust compilation cache for read-only resolution
@@ -1594,7 +1595,7 @@ jobs:
         uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a
         with:
           ref: ${{ steps.bind.outputs.main_sha }}
-          fetch-depth: 0
+          fetch-depth: 1
           persist-credentials: false
 
       - name: Download READY evidence and prove controlled UNKNOWN rollback blocks
