@@ -42,10 +42,11 @@ describe('Profile card client relationship (#870)', () => {
   });
 
   it('requires explicit confirmation before handing READY local eviction to the installed Bridge', async () => {
-    profileLookup.mockResolvedValue({
+    const initial = {
       profileId: 'profile_clean_ready', displayName: 'Ready profile', status: 'READY',
-      version: 2, metadataVersion: 1, linkedClientId: null, canOperate: true,
-    });
+      version: 6, metadataVersion: 1, linkedClientId: null, canOperate: true,
+    } as Awaited<ReturnType<typeof getProfile>>;
+    profileLookup.mockResolvedValueOnce(initial).mockResolvedValue({ ...initial, version: 7 });
     const cache = new QueryClient({ defaultOptions: { queries: { retry: false } } });
     render(
       <QueryClientProvider client={cache}>
@@ -60,9 +61,79 @@ describe('Profile card client relationship (#870)', () => {
     expect(readyLocalEviction).not.toHaveBeenCalled();
     fireEvent.click(trigger);
     expect(readyLocalEviction).not.toHaveBeenCalled();
-    fireEvent.click(screen.getByRole('button', { name: 'Confirm Remove clean local copy' }));
-    expect(readyLocalEviction).toHaveBeenCalledWith('tenant_test', 'actor_test', 'profile_clean_ready', 2);
+    const confirm = await screen.findByRole('button', { name: 'Confirm Remove clean local copy' });
+    expect(profileLookup).toHaveBeenCalledTimes(2);
+    expect(readyLocalEviction).not.toHaveBeenCalled();
+    fireEvent.click(confirm);
+    expect(readyLocalEviction).toHaveBeenCalledWith('tenant_test', 'actor_test', 'profile_clean_ready', 7);
     expect(localDelete).not.toHaveBeenCalled();
+  });
+
+  it('never arms local removal if the mandatory fresh read fails', async () => {
+    const initial = {
+      profileId: 'profile_clean_ready', displayName: 'Ready profile', status: 'READY',
+      version: 6, metadataVersion: 1, linkedClientId: null, canOperate: true,
+    } as Awaited<ReturnType<typeof getProfile>>;
+    profileLookup.mockResolvedValueOnce(initial).mockRejectedValueOnce(new Error('offline'));
+    const cache = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    render(
+      <QueryClientProvider client={cache}>
+        <TenantProvider loadTenantContexts={async () => ({ tenants: [{
+          tenantId: 'tenant_test', displayName: 'Test tenant', actorId: 'actor_test', role: 'TENANT_OWNER',
+        }] })}>
+          <ProfilesWorkspace selectedProfileId="profile_clean_ready" onProfileSelected={() => undefined} />
+        </TenantProvider>
+      </QueryClientProvider>,
+    );
+    fireEvent.click(await screen.findByRole('button', { name: 'Remove clean local copy' }));
+    expect(await screen.findByText(/Could not confirm the current cloud profile version/)).toBeTruthy();
+    expect(screen.queryByRole('button', { name: 'Confirm Remove clean local copy' })).toBeNull();
+    expect(readyLocalEviction).not.toHaveBeenCalled();
+  });
+
+  it('refuses local removal when a fresh read shows READY has regressed', async () => {
+    const initial = {
+      profileId: 'profile_clean_ready', displayName: 'Ready profile', status: 'READY',
+      version: 6, metadataVersion: 1, linkedClientId: null, canOperate: true,
+    } as Awaited<ReturnType<typeof getProfile>>;
+    profileLookup.mockResolvedValueOnce(initial).mockResolvedValueOnce({ ...initial, status: 'SUSPENDED', version: 7 });
+    const cache = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    render(
+      <QueryClientProvider client={cache}>
+        <TenantProvider loadTenantContexts={async () => ({ tenants: [{
+          tenantId: 'tenant_test', displayName: 'Test tenant', actorId: 'actor_test', role: 'TENANT_OWNER',
+        }] })}>
+          <ProfilesWorkspace selectedProfileId="profile_clean_ready" onProfileSelected={() => undefined} />
+        </TenantProvider>
+      </QueryClientProvider>,
+    );
+    fireEvent.click(await screen.findByRole('button', { name: 'Remove clean local copy' }));
+    // The READY action disappears as soon as the refreshed projection is SUSPENDED.
+    expect(await screen.findByText('This profile is SUSPENDED and cannot be opened.')).toBeTruthy();
+    expect(screen.queryByRole('button', { name: 'Confirm Remove clean local copy' })).toBeNull();
+    expect(readyLocalEviction).not.toHaveBeenCalled();
+  });
+
+  it('refuses an out-of-order authoritative readback instead of dispatching the stale version', async () => {
+    const initial = {
+      profileId: 'profile_clean_ready', displayName: 'Ready profile', status: 'READY',
+      version: 6, metadataVersion: 3, linkedClientId: null, canOperate: true,
+    } as Awaited<ReturnType<typeof getProfile>>;
+    profileLookup.mockResolvedValueOnce(initial).mockResolvedValueOnce({ ...initial, version: 5 });
+    const cache = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    render(
+      <QueryClientProvider client={cache}>
+        <TenantProvider loadTenantContexts={async () => ({ tenants: [{
+          tenantId: 'tenant_test', displayName: 'Test tenant', actorId: 'actor_test', role: 'TENANT_OWNER',
+        }] })}>
+          <ProfilesWorkspace selectedProfileId="profile_clean_ready" onProfileSelected={() => undefined} />
+        </TenantProvider>
+      </QueryClientProvider>,
+    );
+    fireEvent.click(await screen.findByRole('button', { name: 'Remove clean local copy' }));
+    expect(await screen.findByText(/latest profile version could not be confirmed/)).toBeTruthy();
+    expect(screen.queryByRole('button', { name: 'Confirm Remove clean local copy' })).toBeNull();
+    expect(readyLocalEviction).not.toHaveBeenCalled();
   });
 
   it('attaches and detaches through the existing typed, versioned commands with confirmed readback', async () => {

@@ -23,4 +23,15 @@ describe('ConfirmAction', () => {
     expect(onConfirm).toHaveBeenCalledTimes(1);
     expect(screen.getByRole('button', { name: 'Revoke access' })).toBeTruthy();
   });
+
+  it('keeps consent closed when the optional pre-confirmation read rejects the action', async () => {
+    const user = userEvent.setup();
+    const onArm = vi.fn(async () => false);
+    const onConfirm = vi.fn();
+    render(<ConfirmAction label="Remove local copy" consequence="Permanent local cleanup." onArm={onArm} onConfirm={onConfirm} />);
+    await user.click(screen.getByRole('button', { name: 'Remove local copy' }));
+    expect(onArm).toHaveBeenCalledTimes(1);
+    expect(screen.queryByRole('button', { name: 'Confirm Remove local copy' })).toBeNull();
+    expect(onConfirm).not.toHaveBeenCalled();
+  });
 });
