@@ -396,12 +396,38 @@ fn ar11_workflow_terminalizes_after_owner_capture_and_before_final_assertion() -
     assert!(
         promote.contains(".workflow_runs[0].id == $run and .workflow_runs[0].run_attempt == 1")
     );
-    assert!(promote.contains("len(runs) != min(total, 100)"));
-    assert!(promote.contains("len({run['id'] for run in runs}) != len(runs)"));
-    assert!(promote.contains("len({run['run_number'] for run in runs}) != len(runs)"));
-    assert!(promote.contains("run['run_number'] < number"));
-    assert!(promote.contains("predecessor.get('conclusion') != 'success'"));
-    assert!(promote.contains("predecessor.get('run_attempt') != 1"));
+    // The canonical cross-source replay fence is implemented by an offline
+    // fail-closed adapter, loaded only after the authorized main checkout.
+    // Verify both the workflow invocation and the adapter's source contract.
+    let predecessor_proof = fs::read_to_string(root.join("scripts/ar11-standing-run-proof.py"))
+        .map_err(|error| format!("standing predecessor proof must exist: {error}"))?;
+    assert!(promote.contains("python scripts/ar11-standing-run-proof.py"));
+    assert!(promote.contains("--history \"$RUNNER_TEMP/prior-standing-promotion-runs.json\""));
+    assert!(promote.contains("--jobs \"$RUNNER_TEMP/prior-staging-run-jobs.json\""));
+    assert!(promote.contains("--current-run-id \"$GITHUB_RUN_ID\""));
+    assert!(promote.contains("max_by(.run_number).id"));
+    assert!(promote.contains("actions/runs/$predecessor_run_id/jobs?per_page=100"));
+    assert!(promote.contains("test \"$(git rev-parse HEAD)\" = \"$main_sha\""));
+    assert!(promote.contains("ready_artifact_api_digest=\"sha256:$READY_ARTIFACT_DIGEST\""));
+    for guard in [
+        "len(runs) == min(total, 100)",
+        r#"len({run["id"] for run in runs}) == len(runs)"#,
+        r#"len({run["run_number"] for run in runs}) == len(runs)"#,
+        r#"earlier = [run for run in runs if run["run_number"] < current[0]["run_number"]]"#,
+        r#"previous = max(earlier, key=lambda run: run["run_number"])"#,
+        r#"if previous.get("conclusion") == "success":"#,
+        r#"require(previous.get("conclusion") == "failure", "unknown previous outcome")"#,
+        r#"previous.get("run_attempt") == 1"#,
+        r#"count == len(EXPECTED_JOBS)"#,
+        r#"exactly_one(steps, BIND).get("conclusion") == "failure""#,
+        "for name in (BEFORE_CREDENTIALS, MUTATION_BOUNDARY, DEPLOY)",
+        "step[\"name\"] in SAFE_POST_FAILURE",
+    ] {
+        assert!(
+            predecessor_proof.contains(guard),
+            "fail-closed predecessor proof lost mandatory canonical evidence guard: {guard}"
+        );
+    }
     assert!(!promote.contains(".display_title == $title"));
     assert!(promote.contains(".github/workflows/release-set-promotion.yml@main"));
     assert!(promote.contains("STAGING_PROMOTION_STANDING_INTENT"));
