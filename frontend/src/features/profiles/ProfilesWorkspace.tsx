@@ -29,6 +29,11 @@ function field(data: FormData, name: string): string {
 }
 
 type ProfileSelection = { tenantId: string; profileId: string };
+type ReadyLocalEvictionTicket = ProfileSelection & {
+  actorId: string;
+  version: number;
+  metadataVersion: number;
+};
 type GenerationActionTarget = ProfileSelection & { generationId: string };
 type GenerationActionCommand = (
   | { kind: 'verify'; expectedVersion: number; reference: string }
@@ -80,6 +85,8 @@ export function ProfilesWorkspace({
   const cache = useQueryClient();
   const [profileId, setProfileId] = useState(selectedProfileId ?? '');
   const [profile, setProfile] = useState<ProfileProjection | null>(null);
+  const currentProfile = useRef(profile);
+  currentProfile.current = profile;
   const activeTenant = contexts.find((context) => context.tenantId === tenantId);
   const owner = activeTenant?.role === 'TENANT_OWNER';
   const [generationId, setGenerationId] = useState('');
@@ -98,6 +105,8 @@ export function ProfilesWorkspace({
   const relationshipReadback = useRef<ProfileClientAssociationReadback | null>(null);
   const [openError, setOpenError] = useState<Error | null>(null);
   const [localDeleteError, setLocalDeleteError] = useState<Error | null>(null);
+  const readyLocalEvictionTicket = useRef<ReadyLocalEvictionTicket | null>(null);
+  const readyLocalEvictionArm = useRef(0);
   const requestLocalDeletion = (terminal: ProfileProjection) => {
     if (!owner || !activeTenant || terminal.status !== 'DELETED'
       || terminal.profileId !== profileId) return;
@@ -110,13 +119,60 @@ export function ProfilesWorkspace({
       setLocalDeleteError(new Error('Installed Profile Bridge did not accept local cleanup.'));
     }
   };
-  const requestReadyLocalEviction = (ready: ProfileProjection) => {
+  const armReadyLocalEviction = async (ready: ProfileProjection): Promise<boolean> => {
+    // Native Sync can advance READY while this page is unchanged. Read the
+    // existing authoritative projection before presenting destructive consent.
+    const arm = ++readyLocalEvictionArm.current;
+    readyLocalEvictionTicket.current = null;
     if (!owner || !activeTenant || ready.status !== 'READY'
-      || ready.profileId !== profileId || generationRefreshUnconfirmed || lookup.isPending) return;
+      || ready.profileId !== profileId || generationRefreshUnconfirmed || lookup.isPending) return false;
+    const target = { tenantId, profileId, actorId: activeTenant.actorId };
+    setLocalDeleteError(null);
+    try {
+      const latest = await getProfile(target.tenantId, target.profileId);
+      if (arm !== readyLocalEvictionArm.current
+        || selected.current.tenantId !== target.tenantId
+        || selected.current.profileId !== target.profileId) return false;
+      const visible = currentProfile.current;
+      if (latest.profileId !== target.profileId
+        || latest.version < ready.version || latest.metadataVersion < ready.metadataVersion
+        || (visible?.profileId === target.profileId
+          && (latest.version < visible.version || latest.metadataVersion < visible.metadataVersion))) {
+        setLocalDeleteError(new Error('The latest profile version could not be confirmed. Refresh status before retrying.'));
+        return false;
+      }
+      setProfile((previous) => acceptProfileReadback(previous, latest));
+      if (latest.status !== 'READY') {
+        setLocalDeleteError(new Error('This profile is no longer READY. Local removal was not requested.'));
+        return false;
+      }
+      readyLocalEvictionTicket.current = { ...target, version: latest.version, metadataVersion: latest.metadataVersion };
+      return true;
+    } catch {
+      if (arm === readyLocalEvictionArm.current
+        && selected.current.tenantId === target.tenantId
+        && selected.current.profileId === target.profileId) {
+        setLocalDeleteError(new Error('Could not confirm the current cloud profile version. Local removal was not requested.'));
+      }
+      return false;
+    }
+  };
+  const requestReadyLocalEviction = () => {
+    // Consume the one-shot readback before synchronous native protocol dispatch.
+    const ticket = readyLocalEvictionTicket.current;
+    readyLocalEvictionTicket.current = null;
+    if (!owner || !activeTenant || !ticket || profile?.status !== 'READY'
+      || ticket.tenantId !== tenantId || ticket.actorId !== activeTenant.actorId
+      || ticket.profileId !== profileId || profile.profileId !== profileId
+      || ticket.version !== profile.version || ticket.metadataVersion !== profile.metadataVersion
+      || generationRefreshUnconfirmed || lookup.isPending) {
+      setLocalDeleteError(new Error('The profile status changed. Check the latest status and confirm again.'));
+      return;
+    }
     try {
       setLocalDeleteError(null);
       dispatchReadyLocalCopyEviction(
-        tenantId, activeTenant.actorId, ready.profileId, ready.version,
+        ticket.tenantId, ticket.actorId, ticket.profileId, ticket.version,
       );
     } catch {
       setLocalDeleteError(new Error('Installed Profile Bridge did not accept the local copy request.'));
@@ -361,6 +417,8 @@ export function ProfilesWorkspace({
   });
 
   useEffect(() => {
+    readyLocalEvictionArm.current += 1;
+    readyLocalEvictionTicket.current = null;
     const nextProfileId = selectedProfileId ?? '';
     setProfileId(nextProfileId);
     setProfile(null);
@@ -518,10 +576,12 @@ export function ProfilesWorkspace({
           {owner && profile.status === 'READY' && (
             <div>
               <ConfirmAction
+                key={`${tenantId}:${profileId}`}
                 label="Remove clean local copy"
                 consequence={<>This removes the browser files stored on this computer, including its local recovery state. Only use after Sync has completed and the browser is closed. The encrypted cloud generation stays READY. Profile Bridge will refuse dirty, pending, busy or mismatched local copies. The browser cannot receive a completion receipt.</>}
                 disabled={lookup.isPending || generationRefreshUnconfirmed}
-                onConfirm={() => requestReadyLocalEviction(profile)}
+                onArm={() => armReadyLocalEviction(profile)}
+                onConfirm={requestReadyLocalEviction}
               />
               <p>After confirmed local removal, Open browser uses the existing cloud Restore path. This action does not touch tabs in an open browser.</p>
               <StatusMessage state={localDeleteError} />
