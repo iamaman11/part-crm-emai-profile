@@ -396,11 +396,24 @@ jobs:
           --exclude browser-profile-control-plane-worker
           --exclude cloudflare-adapters
 
+      - name: Prove C2 Gmail OAuth fragment is deterministically generated
+        if: steps.rust_linux_proof.outcome != 'success'
+        shell: bash
+        run: |
+          set -euo pipefail
+          generated="$(cargo run --locked --quiet -p control-plane-contract --bin export_mailbox_gmail_oauth)"
+          accepted="$(cat openapi/v1/fragments/mailbox-gmail-oauth.json)"
+          test "$generated" = "$accepted"
+
       - name: Test Cloudflare adapter logic
         if: steps.rust_linux_proof.outcome != 'success'
         env:
           RUSTFLAGS: -Dwarnings
         run: cargo test --locked -p cloudflare-adapters --lib
+
+      - name: Test Worker native helpers
+        if: steps.rust_linux_proof.outcome != 'success'
+        run: cargo test --locked -p browser-profile-control-plane-worker --lib
 
       - name: Test mailbox secret resolver runtime
         if: steps.rust_linux_proof.outcome != 'success'
@@ -426,9 +439,13 @@ jobs:
           -p profile-domain
           -p session-domain
           -p mailbox-domain
+          -p notification-domain
           -p bridge-domain
           -p application-ports
           -p use-cases
+          -p use-cases-notifications
+          -p use-cases-clients
+          -p use-cases-mailboxes
           -p use-cases-query
 
       - name: Scan tracked files for high-confidence secrets
