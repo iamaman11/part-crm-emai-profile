@@ -2015,12 +2015,7 @@ mod tests {
             ),
         ] {
             let generation = GenerationId::parse(format!("generation_stream_parser_{suffix}"))?;
-            assert_streamed_rejection_without_publication(
-                &fixture,
-                &generation,
-                &bytes,
-                expected,
-            )?;
+            assert_streamed_rejection_without_publication(&fixture, &generation, &bytes, expected)?;
         }
         fixture.cleanup();
         Ok(())
