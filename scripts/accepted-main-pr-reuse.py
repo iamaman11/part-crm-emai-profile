@@ -20,6 +20,7 @@ import subprocess
 import sys
 import tarfile
 import tempfile
+import time
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -205,6 +206,10 @@ class Unconfirmed(ValueError):
     pass
 
 
+class GitHubProofReadUnavailable(Unconfirmed):
+    """No reliable GitHub observation was available; not a proof rejection."""
+
+
 def require(ok: bool, reason: str) -> None:
     if not ok:
         raise Unconfirmed(reason)
@@ -288,8 +293,30 @@ def api_reader(token: str) -> Callable[[str], Any]:
                 "X-GitHub-Api-Version": "2022-11-28",
             },
         )
-        with urllib.request.urlopen(request, timeout=20) as response:
-            return json.load(response)
+        # Exact 35-job GitHub evidence sometimes times out mid-read. Retry
+        # transport failures only; an invalid or unauthorized proof must not
+        # be treated as transient, cached or downgraded to a green result.
+        for attempt in range(3):
+            try:
+                with urllib.request.urlopen(request, timeout=12) as response:
+                    return json.load(response)
+            except urllib.error.HTTPError as error:
+                if error.code not in {408, 429, 500, 502, 503, 504}:
+                    if error.code in {401, 403}:
+                        raise GitHubProofReadUnavailable(
+                            f"GitHub proof read unauthorized (HTTP {error.code}) at {path}"
+                        ) from error
+                    raise
+                last_error: Exception = error
+            except (urllib.error.URLError, TimeoutError) as error:
+                last_error = error
+            if attempt == 2:
+                raise GitHubProofReadUnavailable(
+                    f"GitHub proof read exhausted after 3 attempts at {path}: "
+                    f"{type(last_error).__name__}: {last_error}"
+                ) from last_error
+            time.sleep(0.25 * (attempt + 1))
+        raise AssertionError("unreachable GitHub proof read")
     return read
 
 
@@ -1337,6 +1364,17 @@ def prove_unchanged_prior_native(
     require(bool(SHA.fullmatch(source_sha) and SHA.fullmatch(base_sha)),
             "invalid native source/base")
     count = 0
+    first_rejection: str | None = None
+    # Quality and Local are two views of the same *completed* exact-head CI
+    # run. Re-read every immutable GitHub object at most once in this proof;
+    # neither view may silently observe a different 35-job response.
+    observations: dict[str, Any] = {}
+
+    def one_snapshot(path: str) -> Any:
+        if path not in observations:
+            observations[path] = api(path)
+        return observations[path]
+
     for prior in ancestors(base_sha):
         count += 1
         require(count <= 16 and (count != 1 or prior == base_sha),
@@ -1345,13 +1383,25 @@ def prove_unchanged_prior_native(
         if not native_unrelated(changed(prior, source_sha)):
             break
         try:
-            prove(prior, "quality", api)
-            prove(prior, "local-profile", api)
+            prove(prior, "quality", one_snapshot)
+            prove(prior, "local-profile", one_snapshot)
             return prior
+        except GitHubProofReadUnavailable:
+            # Trying older source identities cannot repair missing GitHub
+            # authority or transport; preserve the infrastructure outcome.
+            raise
         except (Unconfirmed, KeyError, ValueError, TypeError,
-                urllib.error.URLError, OSError):
+                urllib.error.URLError, OSError) as error:
+            if first_rejection is None:
+                first_rejection = (
+                    f"prior={prior} {type(error).__name__}: {str(error)[:300]}"
+                )
             continue
-    raise Unconfirmed("no unchanged FULL Quality and Local Windows physical proof")
+    raise Unconfirmed(
+        "no unchanged FULL Quality and Local Windows physical proof"
+        + (f"; first rejected source: {first_rejection}" if first_rejection
+           else "; no eligible unchanged ancestor")
+    )
 
 
 def prove_open_native_pr(api: Callable[[str], Any],
@@ -1850,6 +1900,98 @@ def assert_local_windows_graph(source: str) -> None:
 
 
 def self_test() -> None:
+    # A transient GitHub jobs endpoint timeout may not discard valid FULL
+    # evidence. Credential/authorization and malformed replies still fail once.
+    from unittest import mock
+
+    evidence_path = f"repos/{REPOSITORY}/actions/runs/42/jobs?per_page=100"
+    with (mock.patch.object(urllib.request, "urlopen", side_effect=[
+          urllib.error.URLError("temporary timeout"), io.BytesIO(b'{"total_count":35}')
+          ]) as transport, mock.patch.object(time, "sleep") as pause):
+        require(api_reader("test-token")(evidence_path) == {"total_count": 35}
+                and transport.call_count == 2 and pause.call_count == 1,
+                "transient exact GitHub proof response was not recovered")
+    with (mock.patch.object(urllib.request, "urlopen",
+          side_effect=urllib.error.URLError("persistent timeout")) as transport,
+          mock.patch.object(time, "sleep") as pause):
+        try:
+            api_reader("test-token")(evidence_path)
+        except GitHubProofReadUnavailable as error:
+            require("exhausted after 3 attempts" in str(error)
+                    and evidence_path in str(error)
+                    and transport.call_count == 3 and pause.call_count == 2,
+                    "exhausted GitHub evidence read lost its exact typed cause")
+        else:
+            raise AssertionError("repeated GitHub timeouts accepted evidence")
+    forbidden = urllib.error.HTTPError(
+        f"https://api.github.com/{evidence_path}", 403,
+        "Resource not accessible by integration", None, None,
+    )
+    with (mock.patch.object(urllib.request, "urlopen",
+          side_effect=forbidden) as transport,
+          mock.patch.object(time, "sleep") as pause):
+        try:
+            api_reader("test-token")(evidence_path)
+        except GitHubProofReadUnavailable as error:
+            require("unauthorized (HTTP 403)" in str(error)
+                    and transport.call_count == 1
+                    and pause.call_count == 0,
+                    "GitHub authorization failure was incorrectly retried")
+        else:
+            raise AssertionError("GitHub authorization failure accepted evidence")
+    with (mock.patch.object(urllib.request, "urlopen",
+          return_value=io.BytesIO(b'{invalid')) as transport,
+          mock.patch.object(time, "sleep") as pause):
+        try:
+            api_reader("test-token")(evidence_path)
+        except ValueError:
+            require(transport.call_count == 1 and pause.call_count == 0,
+                    "malformed GitHub proof body was incorrectly retried")
+        else:
+            raise AssertionError("malformed GitHub evidence was accepted")
+    try:
+        prove_unchanged_prior_native(
+            "a" * 40, "a" * 40, lambda _key: {},
+            lambda base: [base], lambda _old, _new: [],
+        )
+    except Unconfirmed as error:
+        require("first rejected source" in str(error)
+                and "main SHA drift" in str(error),
+                "failed ancestor proof lost its exact semantic reason")
+    else:
+        raise AssertionError("unproven FULL ancestor was accepted")
+    unavailable_reads = 0
+
+    def unavailable_api(_path: str) -> Any:
+        nonlocal unavailable_reads
+        unavailable_reads += 1
+        raise GitHubProofReadUnavailable("GitHub request deadline")
+
+    try:
+        prove_unchanged_prior_native(
+            "a" * 40, "a" * 40, unavailable_api,
+            lambda base: [base, "b" * 40], lambda _old, _new: [],
+        )
+    except GitHubProofReadUnavailable as error:
+        require(str(error) == "GitHub request deadline" and unavailable_reads == 1,
+                "read outage was converted to a missing semantic FULL proof")
+    else:
+        raise AssertionError("GitHub outage initiated ancestor fallback")
+    shared_pages, _ = fixture("quality")
+    shared_reads: dict[str, int] = {}
+
+    def shared_api(path: str) -> Any:
+        shared_reads[path] = shared_reads.get(path, 0) + 1
+        return shared_pages[path]
+
+    require(prove_unchanged_prior_native(
+        "a" * 40, "a" * 40, shared_api,
+        lambda base: [base], lambda _old, _new: [],
+    ) == "a" * 40, "valid unchanged FULL Quality/Local source not found")
+    require(shared_reads.get(next(key for key in shared_pages
+                                  if key.endswith("/jobs?per_page=100"))) == 1,
+            "Quality and Local re-fetched the same immutable 35-job proof")
+
     assert native_runner_receipt_scopes(True, False) == ()
     assert native_runner_receipt_scopes(False, True) == ("quality",)
     assert native_runner_receipt_scopes(False, False) == (
