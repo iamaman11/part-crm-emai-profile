@@ -196,8 +196,10 @@ def verify_prior_run(
             (
                 (step["number"] < failure_number and step.get("conclusion") == "success" and step["name"] in prefix)
                 or (step["number"] == failure_number and step["name"] == failure_step["name"] and step.get("conclusion") == "failure")
-                or step.get("conclusion") != "success"
-                or step["name"] in SAFE_POST_FAILURE
+                or (step["number"] > failure_number and (
+                    step.get("conclusion") == "skipped"
+                    or (step["name"] in SAFE_POST_FAILURE and step.get("conclusion") == "success")
+                ))
             )
             for step in steps
         ),
@@ -238,6 +240,7 @@ def self_test() -> None:
         lambda h, j: j["jobs"][3]["steps"][5].update(conclusion="failure"),
         lambda h, j: j["jobs"].append({"name": "Other mutation", "run_id": 199}),
         lambda h, j: j["jobs"][3]["steps"].append({"name": "Unknown effect", "number": 8, "conclusion": "success"}),
+        lambda h, j: j["jobs"][3]["steps"].append({"name": "Unknown failed effect", "number": 9, "conclusion": "failure"}),
         lambda h, j: j["jobs"][3]["steps"][2].update(conclusion="skipped"),
         lambda h, j: j["jobs"][3]["steps"].insert(1, {"name": "Unexpected early effect", "number": 1, "conclusion": "success"}),
     ):
@@ -296,6 +299,7 @@ def self_test() -> None:
         lambda j: edit_step(j, MUTATION_BOUNDARY, number=8),
         lambda j: j["jobs"][3]["steps"].append({"name": "Unknown pre-pin operation", "number": 8, "conclusion": "success"}),
         lambda j: j["jobs"][3]["steps"].append({"name": "Unknown post-pin operation", "number": 44, "conclusion": "success"}),
+        lambda j: j["jobs"][3]["steps"].append({"name": "Unknown failed operation", "number": 44, "conclusion": "failure"}),
     ):
         edited = json.loads(json.dumps(pinned_jobs))
         edit(edited)
