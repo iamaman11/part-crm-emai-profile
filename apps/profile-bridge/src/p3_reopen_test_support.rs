@@ -1,8 +1,7 @@
 use crate::browser_execution::{load_materialization_binding, persist_materialization_binding};
 use crate::generation_object_spool::VerifiedGenerationObjectFile;
 use crate::generation_reopen::{
-    SignedGenerationObjectGetPort, SignedGenerationObjectGetResponse,
-    SignedGenerationObjectStreamGetPort, VerifiedGenerationObjectDownloader,
+    SignedGenerationObjectStreamGetPort, VerifiedGenerationObjectStreamDownloader,
 };
 use crate::local_profile::{GenerationWorkspace, LocalGenerationState, MaterializationRoot};
 use crate::operator_flow::{
@@ -817,49 +816,9 @@ struct BackendGet {
     state: Rc<RefCell<BackendState>>,
 }
 
-impl SignedGenerationObjectGetPort for BackendGet {
-    type Error = BridgePortError;
-
-    fn get_exact(
-        &mut self,
-        signed_url: &str,
-        max_bytes: usize,
-    ) -> Result<SignedGenerationObjectGetResponse, Self::Error> {
-        let mut state = self.state.borrow_mut();
-        let (object, selected, historical) = if signed_url == HISTORICAL_SIGNED_DOWNLOAD_URL {
-            let (previous, bytes) = state.retained_object
-                .as_ref()
-                .ok_or(BridgePortError::InvalidResponse)?;
-            if previous.generation_id() == state.active_generation.as_str() {
-                return Err(BridgePortError::InvalidResponse);
-            }
-            (bytes.clone(), previous.generation_id().to_owned(), true)
-        } else if signed_url == SIGNED_DOWNLOAD_URL {
-            (
-                state.object.clone().ok_or(BridgePortError::InvalidResponse)?,
-                state.active_generation.as_str().to_owned(),
-                false,
-            )
-        } else {
-            return Err(BridgePortError::InvalidResponse);
-        };
-        if object.len() != max_bytes {
-            return Err(BridgePortError::InvalidResponse);
-        }
-        if historical {
-            state.events.push(format!("historical-get:{selected}"));
-        } else {
-            state.events.push(format!("get:{selected}"));
-        }
-        Ok(SignedGenerationObjectGetResponse::new(200, object))
-    }
-}
-
-// The production shipping cold-R2 owner streams authenticated ciphertext to
-// an unpublished spool. The old Vec-only fixture cannot reopen native Firefox
-// profiles that exceed its 64 MiB legacy cap, even when the encrypted object
-// is valid. Exercise the same bounded stream path here, with no extra memory
-// copy and no relaxation of the production signed capability check.
+// Exercise the same bounded ciphertext stream as the shipping cold-R2 owner,
+// including historical retained generations. Neither route buffers a cloned
+// response or relaxes the exact signed capability/descriptor binding.
 impl SignedGenerationObjectStreamGetPort for BackendGet {
     type Error = BridgePortError;
 
@@ -869,18 +828,36 @@ impl SignedGenerationObjectStreamGetPort for BackendGet {
         max_bytes: u64,
         destination: &mut dyn std::io::Write,
     ) -> Result<u16, Self::Error> {
-        if signed_url != SIGNED_DOWNLOAD_URL {
-            return Err(BridgePortError::InvalidResponse);
-        }
         let state = self.state.borrow();
-        let object = state.object.as_ref().ok_or(BridgePortError::InvalidResponse)?;
+        let (object, selected, historical): (&[u8], String, bool) =
+            if signed_url == HISTORICAL_SIGNED_DOWNLOAD_URL {
+                let (previous, bytes) = state
+                    .retained_object
+                    .as_ref()
+                    .ok_or(BridgePortError::InvalidResponse)?;
+                if previous.generation_id() == state.active_generation.as_str() {
+                    return Err(BridgePortError::InvalidResponse);
+                }
+                (bytes.as_slice(), previous.generation_id().to_owned(), true)
+            } else if signed_url == SIGNED_DOWNLOAD_URL {
+                (
+                    state.object.as_deref().ok_or(BridgePortError::InvalidResponse)?,
+                    state.active_generation.as_str().to_owned(),
+                    false,
+                )
+            } else {
+                return Err(BridgePortError::InvalidResponse);
+            };
         if u64::try_from(object.len()).ok() != Some(max_bytes) {
             return Err(BridgePortError::InvalidResponse);
         }
         destination.write_all(object).map_err(|_| BridgePortError::InvalidResponse)?;
-        let selected = state.active_generation.as_str().to_owned();
         drop(state);
-        self.state.borrow_mut().events.push(format!("get:{selected}"));
+        self.state.borrow_mut().events.push(if historical {
+            format!("historical-get:{selected}")
+        } else {
+            format!("get:{selected}")
+        });
         Ok(200)
     }
 }
@@ -1063,7 +1040,7 @@ fn committed_then_crashed_writer_recovers_wal_and_cold_reopens_sole_successor()
             FakeCamouhost::default(),
         ))
     };
-    let mut downloader = VerifiedGenerationObjectDownloader::new(BackendGet {
+    let mut downloader = VerifiedGenerationObjectStreamDownloader::new(BackendGet {
         state: Rc::clone(&state),
     });
     let mut uploader = BackendPut { state: Rc::clone(&state) };
@@ -1250,7 +1227,7 @@ fn one_hundred_sequential_streamed_saves_keep_current_local_profile_reopenable()
         FakeProcessControl::default(),
         FakeCamouhost::default(),
     );
-    let mut downloader = VerifiedGenerationObjectDownloader::new(BackendGet {
+    let mut downloader = VerifiedGenerationObjectStreamDownloader::new(BackendGet {
         state: Rc::clone(&state),
     });
     let mut put = BackendPut { state: Rc::clone(&state) };
@@ -1372,7 +1349,7 @@ fn run_canonical_saved_successor_reopen(
         FakeProcessControl::default(),
         FakeCamouhost::default(),
     );
-    let mut downloader = VerifiedGenerationObjectDownloader::new(BackendGet {
+    let mut downloader = VerifiedGenerationObjectStreamDownloader::new(BackendGet {
         state: Rc::clone(&state),
     });
 

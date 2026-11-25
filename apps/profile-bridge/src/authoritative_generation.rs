@@ -10,17 +10,14 @@ use crate::generation_reopen::{
 use crate::generation_snapshot::{
     GenerationSnapshotError, StreamedWorkspaceSnapshot,
     materialize_profile_current_snapshot_streaming_with_pre_publish,
-    materialize_profile_current_snapshot_with_pre_publish,
     materialize_workspace_snapshot_streaming_with_pre_publish,
-    materialize_workspace_snapshot_with_pre_publish, verify_workspace_matches_snapshot,
     verify_workspace_matches_streamed_snapshot,
 };
 use crate::local_profile::{
     BridgeWorkspaceLock, GenerationWorkspace, LocalProfileError, MaterializationRoot,
 };
 use encrypted_generation_domain::{
-    canonical_generation_object_key, inspect_generation_metadata_prelude, open_generation_expected,
-    open_generation_streaming,
+    canonical_generation_object_key, inspect_generation_metadata_prelude, open_generation_streaming,
 };
 use profile_platform_primitives::{DeviceId, GenerationId, ProfileId, TenantId};
 use std::fs;
@@ -608,7 +605,7 @@ where
             }
         })?;
     // The exact selected workspace was observed missing before any remote read. No local
-    // mutation takes place until materialize_workspace_snapshot_with_pre_publish below.
+    // mutation takes place until streamed snapshot pre-publish below.
     // Existing incomplete/dirty materialization never receives a clean no-use witness.
     let prewrite_refusal = |reason: AuthoritativeGenerationPreWriteError| {
         if incomplete_local.is_none() {
@@ -646,163 +643,30 @@ where
             AuthoritativeGenerationPreWriteError::DescriptorMismatch,
         ));
     }
-    let source_container_sha256 = encode_sha256(capability.container_digest());
-
     // The exact Restore uses an OS-owned, unnamed file for immutable ciphertext.
     // It is never CURRENT or a recovery checkpoint. The file handle stays with
     // this invocation and the OS releases it even if the process terminates.
-    // Stream also when only the host-local binding is missing.
-    let stream = downloader
+    // Stream also when only the host-local binding is missing: there is no
+    // generation-sized in-memory fallback or second materialization owner.
+    let ciphertext = downloader
         .download_generation_object_to_temporary_file(&capability, root.path())
         .map_err(|error| {
             prewrite_refusal(AuthoritativeGenerationPreWriteError::Download(error.into()))
         })?;
-    if let Some(ciphertext) = stream {
-        return materialize_streamed_authoritative_generation(
-            root,
-            tenant_id,
-            profile_id,
-            generation_id,
-            device_id,
-            workspace_epoch,
-            control,
-            &capability,
-            ciphertext,
-            incomplete_local,
-            profile_version,
-            expected_previous_base,
-        );
-    }
-
-    let container = downloader
-        .download_generation_object(&capability)
-        .map_err(|error| {
-            prewrite_refusal(AuthoritativeGenerationPreWriteError::Download(error.into()))
-        })?;
-    let inspected = inspect_generation_metadata_prelude(&container)
-        .map_err(|_| prewrite_refusal(AuthoritativeGenerationPreWriteError::MetadataMismatch))?;
-    let metadata = inspected.metadata();
-    if metadata.tenant_id() != tenant_id
-        || metadata.profile_id() != profile_id
-        || metadata.generation_id() != generation_id
-        || metadata.object_key() != expected_object_key
-        || inspected.metadata_digest().bytes() != capability.metadata_digest()
-        || expected_previous_base.is_some_and(|old| metadata.base_generation_id() != Some(old))
-    {
-        return Err(prewrite_refusal(
-            AuthoritativeGenerationPreWriteError::MetadataMismatch,
-        ));
-    }
-    let metadata_prelude = container
-        .get(..inspected.prelude_bytes())
-        .ok_or_else(|| prewrite_refusal(AuthoritativeGenerationPreWriteError::MetadataMismatch))?;
-    let opening_key = control
-        .opening_material(tenant_id, profile_id, metadata_prelude)
-        .map_err(|error| {
-            prewrite_refusal(AuthoritativeGenerationPreWriteError::OpeningControl(
-                error.into(),
-            ))
-        })?;
-    if opening_key.key_id() != metadata.key_id() {
-        return Err(prewrite_refusal(
-            AuthoritativeGenerationPreWriteError::OpeningMaterialMismatch,
-        ));
-    }
-
-    let opened = open_generation_expected(
-        &container,
-        &opening_key,
+    materialize_streamed_authoritative_generation(
+        root,
         tenant_id,
         profile_id,
         generation_id,
+        device_id,
+        workspace_epoch,
+        control,
+        &capability,
+        ciphertext,
+        incomplete_local,
+        profile_version,
+        expected_previous_base,
     )
-    .map_err(|_| prewrite_refusal(AuthoritativeGenerationPreWriteError::Decryption))?;
-    if let Some(workspace) = incomplete_local {
-        // The caller supplies the current same-device admission epoch. Take this
-        // device's local lock and compare ALL workspace bytes, including mutable
-        // user_data, with cloud truth.
-        let lock = BridgeWorkspaceLock::acquire_or_recover_interrupted(
-            &workspace,
-            device_id,
-            workspace_epoch,
-        )
-        .map_err(|_| AuthoritativeGenerationMaterializationError::IncompleteLocalEvidence)?;
-        let restored = (|| {
-            if !matches!(browser_writer_locks_absent(&workspace), Ok(true)) {
-                return Err(AuthoritativeGenerationMaterializationError::IncompleteLocalEvidence);
-            }
-            verify_workspace_matches_snapshot(&workspace, opened.plaintext()).map_err(|_| {
-                AuthoritativeGenerationMaterializationError::IncompleteLocalEvidence
-            })?;
-            if let Some(version) = profile_version {
-                confirm_closed_current_matches_cloud(
-                    root,
-                    &workspace,
-                    generation_id,
-                    version,
-                    expected_previous_base,
-                )
-                .map_err(|_| AuthoritativeGenerationMaterializationError::InvalidLocalEvidence)?;
-            } else {
-                restore_materialization_binding_after_authoritative_open(
-                    &workspace,
-                    tenant_id,
-                    profile_id,
-                    generation_id,
-                    &source_container_sha256,
-                )
-                .map_err(|_| AuthoritativeGenerationMaterializationError::InvalidLocalEvidence)?;
-            }
-            Ok(())
-        })();
-        let released = lock
-            .release()
-            .map_err(|_| AuthoritativeGenerationMaterializationError::InvalidLocalEvidence);
-        restored?;
-        released?;
-        return Ok(());
-    }
-    let bind = |workspace: &GenerationWorkspace| {
-        if profile_version.is_some() {
-            return require_native_camoufox_config(workspace);
-        }
-        restore_materialization_binding_after_authoritative_open(
-            workspace,
-            tenant_id,
-            profile_id,
-            generation_id,
-            &source_container_sha256,
-        )
-        .map(|_| ())
-        .map_err(|_| GenerationSnapshotError::PrePublish)
-    };
-    let published = match profile_version {
-        Some(version) => materialize_profile_current_snapshot_with_pre_publish(
-            root,
-            tenant_id,
-            profile_id,
-            generation_id,
-            version,
-            opened.plaintext(),
-            bind,
-        ),
-        None => materialize_workspace_snapshot_with_pre_publish(
-            root,
-            tenant_id,
-            profile_id,
-            generation_id,
-            opened.plaintext(),
-            bind,
-        ),
-    };
-    published.map_err(|error| match error {
-        GenerationSnapshotError::Local(_) => AuthoritativeGenerationMaterializationError::Local,
-        GenerationSnapshotError::PrePublish => {
-            AuthoritativeGenerationMaterializationError::BrowserIdentity
-        }
-        _ => AuthoritativeGenerationMaterializationError::Snapshot,
-    })?;
-    Ok(())
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -828,7 +692,7 @@ where
     use AuthoritativeGenerationPreWriteError as PreWrite;
     // Do not return an "absent local generation" clean-release witness when
     // Firefox files already exist but the host-only materialization sidecar
-    // is missing. The ordinary Vec fallback already enforces this boundary.
+    // is missing. The streaming owner must enforce this boundary too.
     let prewrite = |reason: PreWrite| {
         if incomplete_local.is_none() {
             Error::ReadBeforeLocalUse(reason)
@@ -1261,29 +1125,6 @@ mod tests {
         }
     }
 
-    struct FakeDownloader {
-        container: Vec<u8>,
-        calls: u64,
-    }
-
-    impl GenerationObjectDownloadPort for FakeDownloader {
-        type Error = GenerationObjectDownloadError;
-
-        fn download_generation_object(
-            &mut self,
-            capability: &GenerationDownloadCapability,
-        ) -> Result<Vec<u8>, Self::Error> {
-            let digest: [u8; 32] = Sha256::digest(&self.container).into();
-            if digest != capability.container_digest()
-                || u64::try_from(self.container.len()).ok() != Some(capability.container_bytes())
-            {
-                return Err(GenerationObjectDownloadError::DigestMismatch);
-            }
-            self.calls += 1;
-            Ok(self.container.clone())
-        }
-    }
-
     /// Exercise the real owner through the OS-owned stream, never a Vec.
     /// The source is a previously sealed BPGC container.
     struct FakeStreamDownloader {
@@ -1294,18 +1135,11 @@ mod tests {
     impl GenerationObjectDownloadPort for FakeStreamDownloader {
         type Error = GenerationObjectDownloadError;
 
-        fn download_generation_object(
-            &mut self,
-            _capability: &GenerationDownloadCapability,
-        ) -> Result<Vec<u8>, Self::Error> {
-            Err(GenerationObjectDownloadError::InvalidCapability)
-        }
-
         fn download_generation_object_to_temporary_file(
             &mut self,
             capability: &GenerationDownloadCapability,
             directory: &std::path::Path,
-        ) -> Result<Option<crate::generation_object_spool::VerifiedGenerationObjectFile>, Self::Error>
+        ) -> Result<crate::generation_object_spool::VerifiedGenerationObjectFile, Self::Error>
         {
             if u64::try_from(self.container.len()).ok() != Some(capability.container_bytes())
                 || <[u8; 32]>::from(Sha256::digest(&self.container))
@@ -1329,7 +1163,7 @@ mod tests {
                     capability.container_digest(),
                 )
                 .map_err(|_| GenerationObjectDownloadError::DigestMismatch)?;
-            Ok(Some(verified))
+            Ok(verified)
         }
     }
 
@@ -1341,18 +1175,11 @@ mod tests {
     impl GenerationObjectDownloadPort for ParallelStreamDownloader {
         type Error = GenerationObjectDownloadError;
 
-        fn download_generation_object(
-            &mut self,
-            capability: &GenerationDownloadCapability,
-        ) -> Result<Vec<u8>, Self::Error> {
-            self.inner.download_generation_object(capability)
-        }
-
         fn download_generation_object_to_temporary_file(
             &mut self,
             capability: &GenerationDownloadCapability,
             directory: &std::path::Path,
-        ) -> Result<Option<crate::generation_object_spool::VerifiedGenerationObjectFile>, Self::Error>
+        ) -> Result<crate::generation_object_spool::VerifiedGenerationObjectFile, Self::Error>
         {
             let verified = self
                 .inner
@@ -2259,10 +2086,11 @@ mod tests {
         struct DisconnectedObjectGet(GenerationObjectDownloadError);
         impl GenerationObjectDownloadPort for DisconnectedObjectGet {
             type Error = GenerationObjectDownloadError;
-            fn download_generation_object(
+            fn download_generation_object_to_temporary_file(
                 &mut self,
                 _: &GenerationDownloadCapability,
-            ) -> Result<Vec<u8>, Self::Error> {
+                _: &std::path::Path,
+            ) -> Result<crate::generation_object_spool::VerifiedGenerationObjectFile, Self::Error> {
                 Err(self.0)
             }
         }
@@ -2316,10 +2144,11 @@ mod tests {
         struct DisconnectedObjectGet;
         impl GenerationObjectDownloadPort for DisconnectedObjectGet {
             type Error = GenerationObjectDownloadError;
-            fn download_generation_object(
+            fn download_generation_object_to_temporary_file(
                 &mut self,
                 _: &GenerationDownloadCapability,
-            ) -> Result<Vec<u8>, Self::Error> {
+                _: &std::path::Path,
+            ) -> Result<crate::generation_object_spool::VerifiedGenerationObjectFile, Self::Error> {
                 Err(GenerationObjectDownloadError::Transport)
             }
         }
@@ -2387,7 +2216,7 @@ mod tests {
                 }
                 _ => unreachable!("closed test fixture name"),
             }
-            let mut downloader = FakeDownloader {
+            let mut downloader = FakeStreamDownloader {
                 container: fixture.container.clone(),
                 calls: 0,
             };
@@ -2427,20 +2256,35 @@ mod tests {
     #[test]
     fn malformed_object_bytes_before_workspace_do_not_publish_or_request_key()
     -> Result<(), Box<dyn std::error::Error>> {
-        // The verifier is an independent narrow owner. A malformed object in a
-        // unit-injected raw port is never mistaken for locally dirty data or accepted.
+        // The bytes match the signed descriptor's size and digest, but are not
+        // an encrypted-generation metadata prelude. Verification of the OS-owned
+        // tempfile alone must never authorize opening material or publication.
         struct MalformedObjectGet;
         impl GenerationObjectDownloadPort for MalformedObjectGet {
             type Error = GenerationObjectDownloadError;
-            fn download_generation_object(
+            fn download_generation_object_to_temporary_file(
                 &mut self,
-                _: &GenerationDownloadCapability,
-            ) -> Result<Vec<u8>, Self::Error> {
-                Ok(vec![0; 24])
+                capability: &GenerationDownloadCapability,
+                directory: &std::path::Path,
+            ) -> Result<crate::generation_object_spool::VerifiedGenerationObjectFile, Self::Error> {
+                let mut file = tempfile::tempfile_in(directory)
+                    .map_err(|_| GenerationObjectDownloadError::Transport)?;
+                file.write_all(&[0_u8; 24])
+                    .map_err(|_| GenerationObjectDownloadError::Transport)?;
+                file.sync_all()
+                    .map_err(|_| GenerationObjectDownloadError::Transport)?;
+                crate::generation_object_spool::VerifiedGenerationObjectFile::from_temporary_file(
+                    file,
+                    capability.container_bytes(),
+                    capability.container_digest(),
+                )
+                .map_err(|_| GenerationObjectDownloadError::DigestMismatch)
             }
         }
         let fixture = Fixture::new()?;
         let mut control = fixture.control();
+        control.container_bytes = 24;
+        control.container_digest = Sha256::digest([0_u8; 24]).into();
         let refusal = ensure_authoritative_generation(
             &fixture.root,
             &fixture.tenant_id,
@@ -2488,7 +2332,7 @@ mod tests {
             let fixture = Fixture::new()?;
             let mut control = fixture.control();
             control.capability_error = Some(reason);
-            let mut downloader = FakeDownloader {
+            let mut downloader = FakeStreamDownloader {
                 container: fixture.container.clone(),
                 calls: 0,
             };
@@ -2531,7 +2375,7 @@ mod tests {
         )?;
         let mut control = fixture.control();
         control.capability_error = Some(GenerationReopenControlError::HttpStatus);
-        let mut downloader = FakeDownloader {
+        let mut downloader = FakeStreamDownloader {
             container: fixture.container.clone(),
             calls: 0,
         };
@@ -2561,7 +2405,7 @@ mod tests {
         let fixture = Fixture::new()?;
         let mut control = fixture.control();
         control.opening_error = Some(GenerationReopenControlError::InvalidResponse);
-        let mut downloader = FakeDownloader {
+        let mut downloader = FakeStreamDownloader {
             container: fixture.container.clone(),
             calls: 0,
         };
@@ -2613,7 +2457,7 @@ mod tests {
             b"retain-me",
         )?;
         let mut control = fixture.control();
-        let mut downloader = FakeDownloader {
+        let mut downloader = FakeStreamDownloader {
             container: fixture.container.clone(),
             calls: 0,
         };
@@ -2664,7 +2508,7 @@ mod tests {
             b"authoritative-state",
         )?;
         let mut control = fixture.control();
-        let mut downloader = FakeDownloader {
+        let mut downloader = FakeStreamDownloader {
             container: fixture.container.clone(),
             calls: 0,
         };
@@ -2719,7 +2563,7 @@ mod tests {
             ));
         fs::write(&sidecar, b"invalid-evidence")?;
         let mut control = fixture.control();
-        let mut downloader = FakeDownloader {
+        let mut downloader = FakeStreamDownloader {
             container: fixture.container.clone(),
             calls: 0,
         };
@@ -2747,7 +2591,7 @@ mod tests {
     -> Result<(), Box<dyn std::error::Error>> {
         let fixture = Fixture::new()?;
         let mut control = fixture.control();
-        let mut downloader = FakeDownloader {
+        let mut downloader = FakeStreamDownloader {
             container: fixture.container.clone(),
             calls: 0,
         };
@@ -2820,7 +2664,7 @@ mod tests {
     -> Result<(), Box<dyn std::error::Error>> {
         let fixture = Fixture::without_browser_identity()?;
         let mut control = fixture.control();
-        let mut downloader = FakeDownloader {
+        let mut downloader = FakeStreamDownloader {
             container: fixture.container.clone(),
             calls: 0,
         };
@@ -2859,7 +2703,7 @@ mod tests {
         let fixture = Fixture::new()?;
         let mut control = fixture.control();
         control.metadata_digest = [0xaa; 32];
-        let mut downloader = FakeDownloader {
+        let mut downloader = FakeStreamDownloader {
             container: fixture.container.clone(),
             calls: 0,
         };
@@ -2901,7 +2745,7 @@ mod tests {
         let fixture = Fixture::new()?;
         let mut control = fixture.control();
         control.generation_id = GenerationId::parse("generation_stale_authority")?;
-        let mut downloader = FakeDownloader {
+        let mut downloader = FakeStreamDownloader {
             container: fixture.container.clone(),
             calls: 0,
         };
