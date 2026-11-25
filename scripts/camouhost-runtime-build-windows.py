@@ -7,6 +7,7 @@ runtime-lock and materialized with bounded download/extraction and no fork.
 from __future__ import annotations
 
 import argparse
+from email.parser import BytesParser
 import hashlib
 import io
 import json
@@ -133,6 +134,148 @@ def load_lock(path: Path) -> dict[str, Any]:
         fail("Windows Python distribution URL is invalid")
     validate_python_packages(python, components)
     return value
+
+
+def public_json(url: str) -> dict[str, Any]:
+    """Read only official public release metadata, never an executable or a secret."""
+    if not (url.startswith("https://api.github.com/repos/daijro/camoufox/")
+            or url.startswith("https://pypi.org/pypi/")):
+        fail("untrusted runtime lock metadata origin")
+    request = urllib.request.Request(url, headers={"User-Agent": "profile-bridge-runtime-lock/1", "Accept": "application/json"})
+    with urllib.request.urlopen(request, timeout=30) as response:
+        raw = response.read(2 * 1024 * 1024 + 1)
+    if len(raw) > 2 * 1024 * 1024:
+        fail("public release metadata exceeds bound")
+    try:
+        value = json.loads(raw)
+    except (UnicodeDecodeError, json.JSONDecodeError) as error:
+        raise RuntimeBuildError("public release metadata is invalid") from error
+    if not isinstance(value, dict):
+        fail("public release metadata is not an object")
+    return value
+
+
+def official_release_pin(browser_tag: str, sdk_version: str) -> tuple[str, str, str]:
+    """Require one upstream commit for both the official browser and Python SDK."""
+    version = browser_tag.removeprefix("v")
+    if re.fullmatch(r"[1-9][0-9]*\.[0-9]+(?:\.[0-9]+)?-beta\.[1-9][0-9]*", version) is None or browser_tag != "v" + version:
+        fail("official Camoufox browser tag is invalid")
+    if re.fullmatch(r"0\.[0-9]+\.[0-9]+(?:b[1-9][0-9]*)?", sdk_version) is None:
+        fail("official Camoufox Python version is invalid")
+    prefix = "https://api.github.com/repos/daijro/camoufox/"
+    release = public_json(prefix + "releases/tags/" + browser_tag)
+    if release.get("tag_name") != browser_tag:
+        fail("upstream release tag mismatch")
+    browser_commit = public_json(prefix + "commits/" + browser_tag).get("sha")
+    sdk_commit = public_json(prefix + "commits/v" + sdk_version).get("sha")
+    if not isinstance(browser_commit, str) or re.fullmatch(r"[0-9a-f]{40}", browser_commit) is None or browser_commit != sdk_commit:
+        fail("Camoufox browser and Python SDK do not resolve to the same upstream commit")
+    expected_url = f"https://github.com/daijro/camoufox/releases/download/{browser_tag}/camoufox-{version}-win.x86_64.zip"
+    assets = release.get("assets")
+    if not isinstance(assets, list):
+        fail("official browser release assets are missing")
+    matches = [row for row in assets if isinstance(row, dict) and row.get("browser_download_url") == expected_url]
+    if len(matches) != 1:
+        fail("official Windows x86_64 browser asset is not unique")
+    digest = matches[0].get("digest")
+    if not isinstance(digest, str) or not digest.startswith("sha256:") or SHA256_RE.fullmatch(digest[7:]) is None:
+        fail("official browser release lacks a valid SHA-256")
+    return browser_commit, expected_url, digest[7:]
+
+
+def wheel_identity(path: Path) -> tuple[str, str]:
+    """Use the wheel's own metadata; wheel filenames are not semantic authority."""
+    with zipfile.ZipFile(path) as wheel:
+        manifests = [n for n in wheel.namelist() if n.count("/") == 1 and n.endswith(".dist-info/METADATA")]
+        if len(manifests) != 1:
+            fail("resolved wheel has ambiguous package metadata")
+        metadata = BytesParser().parsebytes(wheel.read(manifests[0]))
+    name, version = metadata.get("Name"), metadata.get("Version")
+    if not isinstance(name, str) or not isinstance(version, str):
+        fail("resolved wheel is missing package identity")
+    name = re.sub(r"[-_.]+", "-", name.lower())
+    if PACKAGE_NAME_RE.fullmatch(name) is None or not version or any(ch.isspace() for ch in version):
+        fail("resolved wheel package identity is malformed")
+    return name, version
+
+
+def update_official_runtime_lock(path: Path, browser_tag: str, sdk_version: str) -> None:
+    """One controlled refresh of the existing lock, retaining the native build/installer.
+
+    Pip only *resolves/downloads* Windows CPython 3.12 wheels in a disposable
+    directory. The resulting release lock still admits only exact public PyPI
+    URLs, SHA-256 and a complete independently reproducible wheel graph.
+    """
+    lock = load_lock(path)
+    upstream_commit, browser_url, browser_digest = official_release_pin(browser_tag, sdk_version)
+    existing = {row["filename"]: row for row in lock["windows_distribution"]["python"]["packages"]}
+    old_components = lock["components"]
+    with tempfile.TemporaryDirectory(prefix="camouhost-pin-refresh-") as folder:
+        temp = Path(folder)
+        constraints = temp / "constraints.txt"
+        constraints.write_text("".join(
+            f"{row['name']}=={row['version']}\n"
+            for row in sorted(existing.values(), key=lambda row: row["name"])
+            if row["name"] != "camoufox"
+        ), encoding="utf-8")
+        destination = temp / "wheels"
+        destination.mkdir()
+        command = [
+            sys.executable, "-m", "pip", "download", "--disable-pip-version-check",
+            "--only-binary=:all:", "--platform", "win_amd64", "--python-version", "3.12",
+            "--implementation", "cp", "--abi", "cp312", "--dest", str(destination),
+            "--constraint", str(constraints), f"camoufox=={sdk_version}",
+            f"fpgen=={old_components['fpgen']}", f"playwright=={old_components['playwright']}",
+        ]
+        resolved = subprocess.run(command, capture_output=True, text=True, check=False, timeout=240)
+        if resolved.returncode != 0:
+            fail("official Windows wheel graph could not be resolved: " + " | ".join(resolved.stderr.splitlines()[-4:]))
+        rows: list[dict[str, str]] = []
+        for wheel in sorted(destination.glob("*.whl")):
+            name, version = wheel_identity(wheel)
+            digest = sha256_file(wheel)
+            previous = existing.get(wheel.name)
+            if previous is not None and previous["sha256"] == digest:
+                row = previous
+            else:
+                release = public_json(f"https://pypi.org/pypi/{name}/{version}/json")
+                candidates = release.get("urls")
+                if not isinstance(candidates, list):
+                    fail("PyPI wheel inventory is missing")
+                matches = [entry for entry in candidates if isinstance(entry, dict) and entry.get("filename") == wheel.name]
+                if len(matches) != 1 or matches[0].get("digests", {}).get("sha256") != digest:
+                    fail("resolved Windows wheel does not match public PyPI SHA-256")
+                row = {"filename": wheel.name, "name": name, "sha256": digest, "url": matches[0]["url"], "version": version}
+            rows.append(row)
+        if not rows:
+            fail("official Windows wheel resolver returned no wheels")
+        # Pip's --platform chooses Windows wheels but evaluates some PEP 508
+        # environment markers on the build host. Retain pinned Windows-only
+        # packages from the prior verified lock (e.g. ansicon/colorama), while
+        # replacing the SDK and all resolved packages by name exactly once.
+        resolved_names = {row["name"] for row in rows}
+        rows.extend(row for row in existing.values()
+                    if row["name"] not in resolved_names and row["name"] != "camoufox")
+    lock["browser"] = {"release_commit": upstream_commit, "repository": "daijro/camoufox", "version": browser_tag[1:]}
+    lock["python_source"] = {"commit": upstream_commit, "repository": "daijro/camoufox"}
+    lock["components"]["camoufox_python"] = sdk_version
+    lock["windows_distribution"]["browser"] = {"artifact_sha256": browser_digest, "artifact_url": browser_url, "executable_path": "browser/camoufox.exe"}
+    lock["windows_distribution"]["python"]["packages"] = sorted(rows, key=lambda row: (row["name"], row["version"], row["filename"]))
+    validate_python_packages(lock["windows_distribution"]["python"], lock["components"])
+    # Write only once all externally resolved identities and the complete lock
+    # are validated. There is no download/install or runtime mutation here.
+    output = canonical(lock)
+    with tempfile.NamedTemporaryFile(prefix=".runtime-lock-", dir=path.parent, delete=False) as staged:
+        staging_path = Path(staged.name)
+        staged.write(output)
+        staged.flush()
+        os.fsync(staged.fileno())
+    try:
+        os.replace(staging_path, path)
+    finally:
+        staging_path.unlink(missing_ok=True)
+    load_lock(path)
+    print(f"Pinned Camoufox {browser_tag} + Python SDK {sdk_version}; {len(rows)} exact Windows wheels.")
 
 
 def retryable_download_error(error: BaseException) -> bool:
@@ -505,6 +648,31 @@ def materialize(
 
 
 def self_test() -> None:
+    for invalid_tag in ("159.0-beta.43", "v159.0", "v159.0-beta.0", "v159.0-beta.43-extra"):
+        try:
+            official_release_pin(invalid_tag, "0.5.10b2")
+        except RuntimeBuildError:
+            pass
+        else:
+            fail(f"invalid official browser release tag accepted: {invalid_tag}")
+    valid_url = "https://github.com/daijro/camoufox/releases/download/v159.0-beta.43/camoufox-159.0-beta.43-win.x86_64.zip"
+    valid_release = {"tag_name": "v159.0-beta.43", "assets": [{"browser_download_url": valid_url, "digest": "sha256:" + "a" * 64}]}
+    with patch(__name__ + ".public_json", side_effect=[valid_release, {"sha": "b" * 40}, {"sha": "b" * 40}]):
+        if official_release_pin("v159.0-beta.43", "0.5.10b2") != ("b" * 40, valid_url, "a" * 64):
+            fail("paired official release pin is not exact")
+    with patch(__name__ + ".public_json", side_effect=[valid_release, {"sha": "b" * 40}, {"sha": "c" * 40}]):
+        try:
+            official_release_pin("v159.0-beta.43", "0.5.10b2")
+        except RuntimeBuildError:
+            pass
+        else:
+            fail("mismatched browser/SDK release commits were accepted")
+    with tempfile.TemporaryDirectory(prefix="camouhost-wheel-meta-") as directory:
+        wheel = Path(directory) / "sample.whl"
+        with zipfile.ZipFile(wheel, "w") as archive:
+            archive.writestr("sample-1.2.0.dist-info/METADATA", "Metadata-Version: 2.1\nName: Sample_Pkg\nVersion: 1.2.0\n")
+        if wheel_identity(wheel) != ("sample-pkg", "1.2.0"):
+            fail("resolved wheel metadata identity mismatch")
     with tempfile.TemporaryDirectory(prefix="camouhost-runtime-selftest-") as directory:
         root=Path(directory); archive=root/"safe.zip"
         with zipfile.ZipFile(archive,"w",compression=zipfile.ZIP_STORED) as z: z.writestr("alpha/file.txt",b"payload")
@@ -578,6 +746,10 @@ def parser() -> argparse.ArgumentParser:
     build.add_argument("--output", type=Path, required=True)
     build.add_argument("--build-python", type=Path, required=True)
     build.add_argument("--distribution-cache", type=Path, default=None)
+    refresh = commands.add_parser("refresh-lock", help="pin a paired official Camoufox browser/SDK via GitHub and PyPI")
+    refresh.add_argument("--runtime-lock", type=Path, default=DEFAULT_LOCK)
+    refresh.add_argument("--browser-tag", required=True)
+    refresh.add_argument("--sdk-version", required=True)
     commands.add_parser("self-test")
     return result
 
@@ -587,6 +759,8 @@ def main() -> int:
     try:
         if args.command == "self-test":
             self_test()
+        elif args.command == "refresh-lock":
+            update_official_runtime_lock(args.runtime_lock, args.browser_tag, args.sdk_version)
         else:
             materialize(
                 runtime_lock=args.runtime_lock,

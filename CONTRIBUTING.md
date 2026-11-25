@@ -129,6 +129,28 @@ bash scripts/check-tracked-secrets.sh
 
 For D1 migration replay and Worker release packaging use the pinned commands from the owning permanent workflows. Windows, runtime-bundle, local-profile, encrypted-generation, certification, Profile Bridge and real-Camoufox acceptance stay with their dedicated permanent workflows rather than unsupported local approximations.
 
+## Updating the official Camoufox runtime
+
+There is one shipping browser/SDK inventory, `runtime/camouhost/runtime-lock.json`.
+To adopt a future upstream release, use the existing Windows runtime builder's
+`refresh-lock` command with the browser tag and its **paired** Python SDK tag:
+
+```text
+python scripts/camouhost-runtime-build-windows.py refresh-lock --browser-tag v159.0-beta.43 --sdk-version 0.5.10b2
+python scripts/camouhost-runtime-build-windows.py self-test
+python scripts/test-camouhost-execution-modes.py
+```
+
+The refresh resolves Windows Python 3.12 wheels using pip, keeps established
+Windows-marker wheels, checks GitHub/PyPI SHA-256 and requires the browser and
+SDK tags to resolve to the same upstream commit. It changes only the canonical
+lock; it **does not** download a browser into an installed application, alter
+profiles, deploy or authorize a release. Review the lock diff, then use the
+ordinary protected PR checks, signed Release Set and native Windows installer.
+Test Create/Open/Close/Sync and cold Restore on disposable profiles for that
+exact installed version. Incompatible older test profiles are not migrated or
+silently deleted; no parallel browser updater or compatibility launcher exists.
+
 ## Critical-path development rules
 
 Optimize for the shortest safe path to accepted capability:

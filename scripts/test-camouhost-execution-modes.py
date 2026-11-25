@@ -53,7 +53,7 @@ def verify_upstream_camoufox_config_is_final(runtime) -> None:
     with (
         patch.dict(sys.modules, {"camoufox": fake_package, "camoufox.utils": fake_utils}),
         patch.object(runtime, "camoufox_browser_selector", return_value={"executable_path": "/camoufox.exe"}),
-        patch.object(runtime, "locked_firefox_major", return_value=158),
+        patch.object(runtime, "locked_firefox_major", return_value=159),
         patch.object(runtime, "accessibility_preferences", return_value={}),
         patch.object(runtime, "resolve_headless_mode", return_value=False),
         patch.object(runtime, "resolve_proxy", return_value=None),
@@ -104,7 +104,7 @@ def verify_windows_browser_sdk_executable_path(runtime) -> None:
             "windows_distribution": {
                 "browser": {"executable_path": "browser/camoufox.exe"}
             },
-            "browser": {"version": "158.0.0-beta.1"},
+            "browser": {"version": "159.0-beta.43"},
         }
 
         with patch.object(runtime, "__file__", str(entrypoint)):
@@ -142,6 +142,20 @@ def verify_embedded_python_path_configuration():
 
 def main() -> int:
     runtime = load_runtime()
+    # Release tags changed from three to two numeric components in Firefox 159.
+    for version, expected_major in (
+        ("158.0.1-beta.41", 158),
+        ("159.0-beta.43", 159),
+        ("160.1.3-beta.1", 160),
+    ):
+        assert runtime.locked_firefox_major({"browser": {"version": version}}) == expected_major
+    for version in ("159", "159.0", "159.0.0", "159.0-beta.0", "159.0-beta.43-extra", "official/beta.43"):
+        try:
+            runtime.locked_firefox_major({"browser": {"version": version}})
+        except runtime.RuntimeContractError:
+            pass
+        else:
+            raise AssertionError(f"unsupported Camoufox version accepted: {version}")
     # A lost Rust diagnostic reader must never interrupt Camoufox's own SDK
     # close lifecycle while the inherited native child guard remains active.
     class ClosedDiagnosticPipe:
@@ -315,15 +329,17 @@ def main() -> int:
     # reached from the user-native Rust Open path.
     run({runtime.EXECUTION_MODE_ENV: runtime.ISOLATED_COLD_PROBE_MODE},
         18, ["automation"])
-    for env in (
-        {runtime.EXECUTION_MODE_ENV: runtime.ISOLATED_COLD_PROBE_MODE,
-         runtime.AGENT_DIRECTORY_ENV: "/tmp/never-execute"},
-        {runtime.EXECUTION_MODE_ENV: runtime.ISOLATED_COLD_PROBE_MODE,
-         runtime.HEADLESS_MODE_ENV: "true"},
-        {runtime.EXECUTION_MODE_ENV: runtime.ISOLATED_COLD_PROBE_MODE,
-         runtime.HEADLESS_MODE_ENV: "virtual"},
-    ):
-        assert run(env, 2, []), "cold probe must not accept scripts or unverified display mode"
+    assert run({runtime.EXECUTION_MODE_ENV: runtime.ISOLATED_COLD_PROBE_MODE,
+                runtime.AGENT_DIRECTORY_ENV: "/tmp/never-execute"}, 2, []), "cold probe must reject scripts"
+    # Windows C09 is headful-only; Linux CI intentionally permits isolated
+    # headless/virtual probes and must not be tested against Windows policy.
+    for mode in ("true", "virtual"):
+        env = {runtime.EXECUTION_MODE_ENV: runtime.ISOLATED_COLD_PROBE_MODE,
+               runtime.HEADLESS_MODE_ENV: mode}
+        if os.name == "nt":
+            run(env, 2, [])
+        else:
+            run(env, 18, ["automation"])
 
     for headless, expected in (("false", False), ("true", True),
                                ("virtual", "virtual")):

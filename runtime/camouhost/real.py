@@ -717,7 +717,9 @@ def locked_firefox_major(lock: dict[str, Any]) -> int:
     version = browser.get("version") if isinstance(browser, dict) else None
     if not isinstance(version, str):
         raise RuntimeContractError("browser lock is invalid")
-    match = re.fullmatch(r"([1-9][0-9]*)\.[0-9]+\.[0-9]+-beta\.[0-9]+", version)
+    # Official Camoufox tags use both Firefox 158.0.1 and 159.0 release forms.
+    # Accept those two version shapes, not arbitrary strings or an unpinned channel.
+    match = re.fullmatch(r"([1-9][0-9]*)\.[0-9]+(?:\.[0-9]+)?-beta\.[1-9][0-9]*", version)
     if match is None:
         raise RuntimeContractError("browser lock version is unsupported")
     return int(match.group(1))
