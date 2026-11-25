@@ -541,12 +541,19 @@ WEBGL2_OPTIONAL_KEYS = (
     "webGl2:parameters",
     "webGl2:shaderPrecisionFormats",
 )
+LEGACY_WEBGL_CONTEXT_KEYS = (
+    "webGl:contextAttributes",
+    "webGl2:contextAttributes",
+)
 
 
 def generation_webgl2_enabled(config: dict[str, Any]) -> bool:
-    # Removed upstream in 156.0.1-beta.37: no longer an SDK fingerprint surface.
-    if "webGl:contextAttributes" in config or "webGl2:contextAttributes" in config:
-        raise RuntimeContractError("materialized removed WebGL context attribute settings")
+    # Earlier pinned Camoufox generated these fields in persisted identities.
+    # The newer SDK no longer supports spoofing them, but a saved profile must
+    # remain readable without rewriting its signed identity or browser bytes.
+    for key in LEGACY_WEBGL_CONTEXT_KEYS:
+        if key in config and not isinstance(config[key], dict):
+            raise RuntimeContractError("materialized legacy WebGL context attributes are invalid")
     for key in WEBGL_REQUIRED_KEYS:
         if not isinstance(config.get(key), dict):
             raise RuntimeContractError(f"materialized {key} observation surface is invalid")
@@ -806,10 +813,16 @@ def camoufox_launch_options(
     }
     if isolated:
         firefox_prefs["network.disable-localhost-when-offline"] = True
+    # SDK 159 removed context-attribute injection. Project only these retired
+    # fields out of the launch-time copy; the canonical persisted identity,
+    # digest and all other official SDK settings stay byte-for-byte intact.
+    sdk_config = copy.deepcopy(config)
+    for key in LEGACY_WEBGL_CONTEXT_KEYS:
+        sdk_config.pop(key, None)
     try:
         options = launch_options(
             **camoufox_browser_selector(lock),
-            config=copy.deepcopy(config),
+            config=sdk_config,
             enable_cache=True,
             ff_version=locked_firefox_major(lock),
             firefox_user_prefs=firefox_prefs,

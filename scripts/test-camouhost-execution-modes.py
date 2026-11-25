@@ -74,6 +74,16 @@ def verify_upstream_camoufox_config_is_final(runtime) -> None:
         assert "env" not in sdk_calls[0]
         assert identity == {"canvas:seed": 12345, "webGl:vendor": "test-gpu"}
 
+        # A pre-159 profile retains the exact signed canonical configuration,
+        # while the newer SDK sees only the currently supported settings.
+        legacy = {**identity, "webGl:contextAttributes": {"alpha": True},
+                  "webGl2:contextAttributes": {"depth": False}}
+        original = json.dumps(legacy, sort_keys=True)
+        runtime.camoufox_launch_options({}, Path("/disposable"), legacy)
+        assert sdk_calls[-1]["config"] == identity
+        assert json.dumps(legacy, sort_keys=True) == original
+        assert sdk_calls[-1]["config"] is not legacy
+
         new = runtime.camoufox_launch_options({}, Path("/disposable"), identity, first_run=True)
         assert new["args"] == ["-new-tab", runtime.MANAGED_BOOTSTRAP_TAB_URL]
         assert new["ignore_default_args"] == ["about:blank"]
@@ -218,6 +228,12 @@ def main() -> int:
     request = json.dumps({"config_json": config_json, "first_run": True})
     with patch.object(sys, "stdin", io.StringIO(request)):
         assert runtime.read_local_open_request() == (config, True)
+    old = {**config, "webGl:contextAttributes": {"alpha": True}}
+    old_json = runtime.canonical_json(old).decode("utf-8")
+    with patch.object(sys, "stdin", io.StringIO(
+        json.dumps({"config_json": old_json, "first_run": False}) + "\n"
+    )):
+        assert runtime.read_local_open_request() == (old, False)
     # A blank DRAFT alone may ask the official SDK for a new identity;
     # existing profiles must provide their persisted config.
     with patch.object(sys, "stdin", io.StringIO(

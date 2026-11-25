@@ -59,10 +59,19 @@ for value in (None, [], False):
     invalid["webGl2:parameters"] = value
     refused(invalid)
 
-for removed in ("webGl:contextAttributes", "webGl2:contextAttributes"):
-    invalid = make_config(True)
-    invalid[removed] = {}
-    refused(invalid)
+for legacy_key in module.LEGACY_WEBGL_CONTEXT_KEYS:
+    legacy = make_config(True)
+    legacy[legacy_key] = {"alpha": True}
+    assert module.generation_webgl2_enabled(legacy)
+    assert "context_attributes" not in module.browser_visible_probe_request(legacy)["webgl"]
+    for bad_value in (None, [], False):
+        invalid = make_config(True)
+        invalid[legacy_key] = bad_value
+        refused(invalid)
+
+legacy_disabled = make_config(False)
+legacy_disabled["webGl2:contextAttributes"] = {}
+refused(legacy_disabled)
 
 for missing in module.WEBGL_REQUIRED_KEYS:
     invalid = make_config(True)
@@ -76,7 +85,7 @@ stray = make_config(False)
 stray["webGl2:supportedExtensions"] = ["spoof"]
 refused(stray)
 
-print("Camouhost WebGL observation contract: enabled / disabled / partial / removed PASS")
+print("Camouhost WebGL observation contract: enabled / disabled / partial / legacy PASS")
 
 
 # The diagnostic projection must not touch browser page content or change
