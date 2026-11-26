@@ -3,9 +3,11 @@ import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { TenantProvider } from '../../app/TenantContext';
 import { dispatchBrowserProfileOpen, listProfiles } from './api';
+import { invokeProfileBridgeDiagnostics } from '../../shared/bridgeDiagnostics';
 import { ProfileDirectory } from './ProfileDirectory';
 
 vi.mock('./api', () => ({ listProfiles: vi.fn(), dispatchBrowserProfileOpen: vi.fn() }));
+vi.mock('../../shared/bridgeDiagnostics', () => ({ invokeProfileBridgeDiagnostics: vi.fn() }));
 
 const mockedListProfiles = vi.mocked(listProfiles);
 const mockedOpen = vi.mocked(dispatchBrowserProfileOpen);
@@ -232,6 +234,10 @@ describe('ProfileDirectory tenant bootstrap boundary', () => {
     expect(mockedOpen).toHaveBeenNthCalledWith(1, 'tenant_01JAUTH', 'actor_01JAUTH', 'profile_draft_click', 4, 'DRAFT');
     fireEvent.click(screen.getByRole('button', { name: 'Open browser for Ready browser' }));
     expect(mockedOpen).toHaveBeenNthCalledWith(2, 'tenant_01JAUTH', 'actor_01JAUTH', 'profile_ready_click', 7, 'READY');
+    expect(screen.getAllByText(/This page cannot confirm BrowserReady or cloud Saved/)).toHaveLength(2);
+    fireEvent.click(screen.getAllByRole('button', { name: 'Copy diagnostics' })[0]!);
+    expect(invokeProfileBridgeDiagnostics).toHaveBeenCalledTimes(1);
+    expect(mockedOpen).toHaveBeenCalledTimes(2); // diagnostics never replays Open
     expect(mockedListProfiles).toHaveBeenCalledTimes(1);
     expect(onSelect).not.toHaveBeenCalled();
     fireEvent.click(screen.getAllByRole('button', { name: 'View details' })[0]!);
@@ -280,6 +286,7 @@ describe('ProfileDirectory tenant bootstrap boundary', () => {
 
     fireEvent.click(await screen.findByRole('button', { name: 'Open browser for Failed handoff' }));
     expect(mockedOpen).toHaveBeenCalledTimes(1);
+    expect(screen.queryByText(/This page cannot confirm BrowserReady or cloud Saved/)).toBeNull();
     expect((await screen.findByRole('alert')).textContent).toContain('Could not hand off Failed handoff');
     expect(screen.queryByText(/sensitive native details/)).toBeNull();
   });

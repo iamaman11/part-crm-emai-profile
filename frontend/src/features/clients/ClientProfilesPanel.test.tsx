@@ -10,6 +10,7 @@ import {
 } from '../profiles';
 import { ClientProfilesPanel } from './ClientProfilesPanel';
 import { listClientProfiles } from './api';
+import { invokeProfileBridgeDiagnostics } from '../../shared/bridgeDiagnostics';
 
 vi.mock('../profiles', async (importOriginal) => ({
   ...(await importOriginal<typeof import('../profiles')>()),
@@ -22,6 +23,7 @@ vi.mock('../profiles', async (importOriginal) => ({
 vi.mock('./api', () => ({
   listClientProfiles: vi.fn(),
 }));
+vi.mock('../../shared/bridgeDiagnostics', () => ({ invokeProfileBridgeDiagnostics: vi.fn() }));
 
 const mockedAssignProfile = vi.mocked(assignProfile);
 const mockedDetachProfile = vi.mocked(detachProfile);
@@ -117,6 +119,10 @@ describe('ClientProfilesPanel relationship and native Open navigation', () => {
     );
     fireEvent.click(screen.getByRole('button', { name: `Open browser for ${profileId}` }));
     expect(mockedOpen).toHaveBeenCalledExactlyOnceWith(tenantId, actorId, profileId, 4, 'READY');
+    expect(screen.getByText(/This page cannot confirm BrowserReady or cloud Saved/)).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: 'Copy diagnostics' }));
+    expect(invokeProfileBridgeDiagnostics).toHaveBeenCalledTimes(1);
+    expect(mockedOpen).toHaveBeenCalledTimes(1);
     expect(mockedGetProfile).not.toHaveBeenCalled();
   });
 
@@ -153,6 +159,7 @@ describe('ClientProfilesPanel relationship and native Open navigation', () => {
     expect(viewer.disabled).toBe(true);
     expect(screen.getByText('Cannot open a SUSPENDED profile.')).toBeTruthy();
     expect(screen.getByText('Operator permission is required.')).toBeTruthy();
+    expect(screen.getAllByRole('button', { name: 'Copy diagnostics' })).toHaveLength(2);
     expect(mockedOpen).not.toHaveBeenCalled();
   });
 

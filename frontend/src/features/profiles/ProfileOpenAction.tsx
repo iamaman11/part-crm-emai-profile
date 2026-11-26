@@ -1,4 +1,5 @@
-import { useId } from 'react';
+import { useId, useState } from 'react';
+import { invokeProfileBridgeDiagnostics } from '../../shared/bridgeDiagnostics';
 import type { dispatchBrowserProfileOpen, ProfileListPageDto } from './api';
 
 type ListedProfile = ProfileListPageDto['profiles'][number];
@@ -20,6 +21,7 @@ export function ProfileOpenAction({
   onError: (error: Error | null) => void;
 }) {
   const reasonId = useId();
+  const [openRequested, setOpenRequested] = useState(false);
   const unavailable = !actorId ? 'Organization access is unavailable.'
     : !profile.canOperate ? 'Operator permission is required.'
       : profile.status !== 'DRAFT' && profile.status !== 'READY'
@@ -30,8 +32,11 @@ export function ProfileOpenAction({
     // click and must use this exact row's tenant, actor and profile version.
     if (!actorId || !profile.canOperate || (profile.status !== 'DRAFT' && profile.status !== 'READY')) return;
     onError(null);
+    setOpenRequested(false);
     try {
       dispatchOpen(tenantId, actorId, profile.profileId, profile.version, profile.status);
+      // Protocol handoff is not a witness of BrowserReady, Close or cloud Saved.
+      setOpenRequested(true);
     } catch {
       onError(new Error(`Could not hand off ${profile.displayName} to the installed Profile Bridge. Check the installation and try again.`));
     }
@@ -49,6 +54,19 @@ export function ProfileOpenAction({
       >
         Open browser
       </button>
+      <button
+        type="button"
+        className="profile-open-diagnostics"
+        onClick={invokeProfileBridgeDiagnostics}
+        title="Copy the installed Bridge's redacted local observations; nothing is uploaded"
+      >
+        Copy diagnostics
+      </button>
+      {openRequested && (
+        <small className="profile-open-reason" role="status">
+          Windows Open requested. This page cannot confirm BrowserReady or cloud Saved; check the Bridge diagnostics if no window appears.
+        </small>
+      )}
       {unavailable && <small className="profile-open-reason" id={reasonId}>{unavailable}</small>}
     </div>
   );
