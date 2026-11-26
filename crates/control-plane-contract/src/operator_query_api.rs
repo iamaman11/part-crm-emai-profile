@@ -339,9 +339,11 @@ mod tests {
     -> Result<(), Box<dyn std::error::Error>> {
         let schema = openapi_fragment();
         let item = &schema["components"]["schemas"]["ProfileListItemDto"];
-        assert!(item["required"].as_array().is_some_and(|required| {
-            required.iter().any(|field| field == "canOperate")
-        }));
+        assert!(
+            item["required"]
+                .as_array()
+                .is_some_and(|required| { required.iter().any(|field| field == "canOperate") })
+        );
         assert_eq!(item["properties"]["canOperate"]["type"], "boolean");
         let viewer = ProfileListItemDto {
             profile_id: "profile_visible_only".to_owned(),
