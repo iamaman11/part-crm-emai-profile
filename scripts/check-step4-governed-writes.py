@@ -377,7 +377,7 @@ def validate_inverse_relationship_acl(database: sqlite3.Connection, errors: list
     def visible_profiles(actor_id: str) -> list[tuple[object, ...]]:
         return database.execute(
             profiles_sql,
-            (client_id, tenant_id, "", actor_id, 26),
+            (actor_id, client_id, tenant_id, "", actor_id, 26),
         ).fetchall()
 
     if len(visible_profiles("actor_owner_p1_fixture")) != 1:
@@ -386,6 +386,12 @@ def validate_inverse_relationship_acl(database: sqlite3.Connection, errors: list
         errors.append("member with independent Client and Profile grants cannot see attached Profile")
     if len(visible_profiles("actor_member_profile_only_p1")) != 1:
         errors.append("independent Profile grant should remain valid even when nested Client visibility fails closed")
+    if visible_profiles("actor_owner_p1_fixture")[0][-1] != 1:
+        errors.append("TenantOwner profile list lost its direct Open authorization")
+    if visible_profiles("actor_member_profile_p1")[0][-1] != 0:
+        errors.append("PROFILE_VIEWER obtained direct Open authorization from a Client relationship")
+    if visible_profiles("actor_member_profile_only_p1")[0][-1] != 0:
+        errors.append("PROFILE_VIEWER obtained direct Open authorization from profile visibility")
     if visible_profiles("actor_member_client_only_p1"):
         errors.append("Client relationship leaked attached Profile without an independent Profile grant")
     if visible_profiles("actor_member_no_client_p1"):
