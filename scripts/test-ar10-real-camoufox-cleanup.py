@@ -890,7 +890,7 @@ def prove_failure_observation_contract() -> None:
         assert stdout.getvalue() == ""
         assert stderr.getvalue().splitlines() == [
             "camouhost_stage phase=launch step=identity_requested",
-            f"camouhost_failure phase=launch category={category}",
+            f"camouhost_failure phase=identity category={category}",
         ]
         assert "secret" not in stdout.getvalue() + stderr.getvalue()
     timeout = type("TimeoutError", (Exception,), {})("secret-url-key-profile-content")

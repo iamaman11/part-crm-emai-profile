@@ -993,7 +993,7 @@ def runtime_failure_category(error: BaseException) -> str:
 
 def report_runtime_failure(phase: str, error: BaseException) -> None:
     """Report only closed diagnostic categories; exception text may contain profile data."""
-    if phase not in {"startup", "launch", "browser_visible", "navigation", "close", "cleanup"}:
+    if phase not in {"startup", "identity", "launch", "browser_visible", "navigation", "close", "cleanup"}:
         phase = "unknown"
     category = runtime_failure_category(error)
     try:
@@ -1619,12 +1619,14 @@ async def run_local_profile(root: Path, config: dict[str, Any] | None, first_run
 
     session = None
     context_closed = False
+    failure_phase = "launch"
     try:
         if config is None:
             if not first_run:
                 raise RuntimeContractError("existing profile must retain its saved identity")
             # Same official Camoufox/BrowserForge draw as the previous helper,
             # now in this same Python process, before Playwright starts.
+            failure_phase = "identity"
             report_runtime_stage("launch", "identity_requested")
             with contextlib.redirect_stdout(sys.stderr):
                 generated = materialize_candidate_identity(root)
@@ -1641,6 +1643,7 @@ async def run_local_profile(root: Path, config: dict[str, Any] | None, first_run
             if not isinstance(config, dict):
                 raise RuntimeContractError("official fingerprint config invalid")
             report_runtime_stage("launch", "identity_ready")
+            failure_phase = "launch"
         # Installer/runtime gate verified the bundled SDK and fpgen model.
         # Warm local Open must not re-import and rehash the pinned model.
         # Only the first empty DRAFT calls materialize_candidate_identity(),
@@ -1683,7 +1686,7 @@ async def run_local_profile(root: Path, config: dict[str, Any] | None, first_run
         report_runtime_stage("close", "playwright_driver_released")
         return 0
     except BaseException as error:
-        report_runtime_failure("close" if context_closed else "launch", error)
+        report_runtime_failure("close" if context_closed else failure_phase, error)
         # Never close or detach a launched user browser because of an
         # application-side error. Keep the SDK connection alive until the
         # browser itself closes, then release only the driver connection.

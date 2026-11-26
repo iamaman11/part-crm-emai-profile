@@ -253,6 +253,10 @@ fn diagnostic_cause(result: &Result<(), BridgeCliError>) -> Cause {
         Err(BridgeCliError::LaunchFailed(ShippingCompositionError::LocalOpen(
             profile_bridge::local_browser_open::LocalOpenError::BrowserLaunchFailed,
         ))) => Cause::BrowserRuntimeLaunchFailed,
+        #[cfg(windows)]
+        Err(BridgeCliError::LaunchFailed(ShippingCompositionError::LocalOpen(
+            profile_bridge::local_browser_open::LocalOpenError::IdentityPreparation,
+        ))) => Cause::BrowserIdentityPreparationFailed,
         Err(BridgeCliError::LaunchFailed(ShippingCompositionError::LocalDelete(
             profile_bridge::local_profile_delete::TerminalDeleteError::AuthorizationUnconfirmed,
         ))) => Cause::LocalDeleteCloudUnconfirmed,
@@ -562,6 +566,12 @@ mod tests {
                 ShippingCompositionError::LocalOpen(LocalOpenError::BrowserLaunchFailed),
             ))),
             Cause::BrowserRuntimeLaunchFailed,
+        );
+        assert_eq!(
+            diagnostic_cause(&Err(BridgeCliError::LaunchFailed(
+                ShippingCompositionError::LocalOpen(LocalOpenError::IdentityPreparation),
+            ))),
+            Cause::BrowserIdentityPreparationFailed,
         );
         for sibling in [
             LocalOpenError::OperationInProgress,

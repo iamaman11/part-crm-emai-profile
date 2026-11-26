@@ -6,6 +6,7 @@ The real browser/lease/Save invariants require separate physical acceptance.
 """
 from __future__ import annotations
 
+import asyncio
 import contextlib
 import importlib.util
 import io
@@ -28,6 +29,33 @@ def load_runtime():
     return module
 
 
+def verify_first_identity_failure_has_a_safe_distinct_phase(runtime) -> None:
+    """A failed first DRAFT draw never becomes a browser-launch failure or leaks Python text."""
+    from types import ModuleType
+
+    fake_native = ModuleType("native_process")
+
+    async def unexpected_launch(**_kwargs):
+        raise AssertionError("browser must never launch after identity generation fails")
+
+    fake_native.launch_native_camoufox = unexpected_launch
+    diagnostics = io.StringIO()
+    with (
+        tempfile.TemporaryDirectory() as directory,
+        patch.dict(sys.modules, {"native_process": fake_native}),
+        patch.object(
+            runtime,
+            "materialize_candidate_identity",
+            side_effect=RuntimeError("sensitive test path and secret"),
+        ),
+        contextlib.redirect_stderr(diagnostics),
+    ):
+        result = asyncio.run(runtime.run_local_profile(Path(directory), None, True))
+    assert result == 5
+    assert diagnostics.getvalue().splitlines() == [
+        "camouhost_stage phase=launch step=identity_requested",
+        "camouhost_failure phase=identity category=unexpected",
+    ]
 
 def verify_upstream_camoufox_config_is_final(runtime) -> None:
     """The official SDK result is authoritative: no second fingerprint serializer."""
@@ -152,6 +180,7 @@ def verify_embedded_python_path_configuration():
 
 def main() -> int:
     runtime = load_runtime()
+    verify_first_identity_failure_has_a_safe_distinct_phase(runtime)
     # Release tags changed from three to two numeric components in Firefox 159.
     for version, expected_major in (
         ("158.0.1-beta.41", 158),
@@ -185,6 +214,7 @@ def main() -> int:
             runtime.report_runtime_stage("launch", step)
         runtime.report_runtime_stage("launch", "not-a-stage")
         runtime.report_runtime_failure("launch", RuntimeError("profile path and secret must not leak"))
+        runtime.report_runtime_failure("identity", RuntimeError("profile path and secret must not leak"))
     safe_lines = diagnostic_output.getvalue().splitlines()
     assert safe_lines == [
         "camouhost_stage phase=launch step=identity_requested",
@@ -193,6 +223,7 @@ def main() -> int:
         "camouhost_stage phase=launch step=sdk_enter",
         "camouhost_stage phase=launch step=browser_entered",
         "camouhost_failure phase=launch category=unexpected",
+        "camouhost_failure phase=identity category=unexpected",
     ], safe_lines
     verify_embedded_python_path_configuration()
     verify_upstream_camoufox_config_is_final(runtime)

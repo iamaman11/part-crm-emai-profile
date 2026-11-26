@@ -90,6 +90,7 @@ pub enum Cause {
     BrowserRecoveryRequired,
     BrowserRouteUnstable,
     BrowserRuntimeLaunchFailed,
+    BrowserIdentityPreparationFailed,
     CoordinatorLeaseConflict,
     CoordinatorUncertain,
     CloudRestoreUnavailable,
@@ -692,11 +693,20 @@ fn latest_operation_summary(records: &[Observation]) -> String {
         }
         None => ("IN_PROGRESS_OR_UNPROVEN", "CHECK_LATEST_EVENT"),
     };
-    // Prefer a specific failed transport/runtime phase over a later generic
-    // UNCONFIRMED wrapper. All values come from closed enums, never stderr.
+    // A later Open/Save command wrapper must not hide the concrete failed
+    // Camouhost/transport phase. All values come from closed enums, never stderr.
     let failure = same_operation()
         .rev()
-        .find(|record| record.outcome == Outcome::Failed && record.cause != Cause::None)
+        .find(|record| {
+            record.outcome == Outcome::Failed
+                && record.cause != Cause::None
+                && !matches!(record.stage, Stage::OpenRequested | Stage::CloudSaveAttempt)
+        })
+        .or_else(|| {
+            same_operation()
+                .rev()
+                .find(|record| record.outcome == Outcome::Failed && record.cause != Cause::None)
+        })
         .or_else(|| {
             same_operation().rev().find(|record| {
                 record.outcome == Outcome::Unconfirmed && record.cause != Cause::None
@@ -914,6 +924,49 @@ mod tests {
             latest_operation_summary(&newer_open)
                 .contains("LATEST_OPERATION_STATUS=IN_PROGRESS_OR_UNPROVEN")
         );
+    }
+
+    #[test]
+    fn latest_open_failure_keeps_the_first_run_identity_phase_over_generic_wrapper() {
+        let invocation = "op_00000001_0000000000000001";
+        let records = [
+            observed(
+                invocation,
+                Stage::CamouhostIdentity,
+                Outcome::Started,
+                Cloud::Unknown,
+                Cause::None,
+            ),
+            observed(
+                invocation,
+                Stage::CamouhostIdentity,
+                Outcome::Failed,
+                Cloud::Unknown,
+                Cause::RuntimeUnexpected,
+            ),
+            observed(
+                invocation,
+                Stage::OpenRequested,
+                Outcome::Failed,
+                Cloud::Unknown,
+                Cause::BrowserIdentityPreparationFailed,
+            ),
+        ];
+        let summary = latest_operation_summary(&records);
+        assert!(summary.contains("LATEST_OPERATION_STATUS=OPEN_FAILED"));
+        assert!(summary.contains("LATEST_FAILURE_STAGE=CamouhostIdentity;CAUSE=RuntimeUnexpected"));
+        assert!(!summary.contains("EXACT_CLOUD_SAVE_OBSERVED"));
+    }
+
+    #[test]
+    fn identity_failure_has_a_closed_safe_wire_cause() -> Result<(), serde_json::Error> {
+        let serialized = serde_json::to_string(&Cause::BrowserIdentityPreparationFailed)?;
+        assert_eq!(serialized, "\"BROWSER_IDENTITY_PREPARATION_FAILED\"");
+        assert_eq!(
+            serde_json::from_str::<Cause>(&serialized)?,
+            Cause::BrowserIdentityPreparationFailed
+        );
+        Ok(())
     }
 
     #[test]
