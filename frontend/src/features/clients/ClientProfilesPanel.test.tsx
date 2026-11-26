@@ -4,8 +4,10 @@ import userEvent from '@testing-library/user-event';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   assignProfile,
+  createProfile,
   detachProfile,
   getProfile,
+  listProfiles,
   dispatchBrowserProfileOpen,
 } from '../profiles';
 import { ClientProfilesPanel } from './ClientProfilesPanel';
@@ -15,8 +17,10 @@ import { invokeProfileBridgeDiagnostics } from '../../shared/bridgeDiagnostics';
 vi.mock('../profiles', async (importOriginal) => ({
   ...(await importOriginal<typeof import('../profiles')>()),
   assignProfile: vi.fn(),
+  createProfile: vi.fn(),
   detachProfile: vi.fn(),
   getProfile: vi.fn(),
+  listProfiles: vi.fn(),
   dispatchBrowserProfileOpen: vi.fn(),
 }));
 
@@ -26,8 +30,10 @@ vi.mock('./api', () => ({
 vi.mock('../../shared/bridgeDiagnostics', () => ({ invokeProfileBridgeDiagnostics: vi.fn() }));
 
 const mockedAssignProfile = vi.mocked(assignProfile);
+const mockedCreateProfile = vi.mocked(createProfile);
 const mockedDetachProfile = vi.mocked(detachProfile);
 const mockedGetProfile = vi.mocked(getProfile);
+const mockedListProfiles = vi.mocked(listProfiles);
 const mockedListClientProfiles = vi.mocked(listClientProfiles);
 const mockedOpen = vi.mocked(dispatchBrowserProfileOpen);
 
@@ -66,6 +72,12 @@ describe('ClientProfilesPanel relationship and native Open navigation', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mockedListClientProfiles.mockResolvedValue({ profiles: [], nextCursor: null });
+    mockedListProfiles.mockResolvedValue({ profiles: [], nextCursor: null });
+    mockedCreateProfile.mockResolvedValue({
+      resultCode: 'created',
+      resourceId: 'profile_01JCLIENTPROFILES_CREATED',
+      aggregateVersion: 1,
+    });
     mockedAssignProfile.mockResolvedValue({
       resultCode: 'assigned',
       resourceId: 'assignment_01JCLIENTPROFILES',
@@ -96,6 +108,7 @@ describe('ClientProfilesPanel relationship and native Open navigation', () => {
     renderPanel();
 
     expect(await screen.findByText('profile_01JCLIENTPROFILES_A')).toBeTruthy();
+    expect(screen.getByText('1 client profile loaded · more available below.')).toBeTruthy();
     await user.click(screen.getByRole('button', { name: 'Load more profiles' }));
     expect(await screen.findByText('profile_01JCLIENTPROFILES_B')).toBeTruthy();
 
@@ -103,6 +116,122 @@ describe('ClientProfilesPanel relationship and native Open navigation', () => {
     expect(mockedListClientProfiles.mock.calls[0]?.[0]).toBe(tenantId);
     expect(mockedListClientProfiles.mock.calls[0]?.[1]).toBe(clientId);
     expect(mockedListClientProfiles.mock.calls[1]?.[3]).toBe('profiles:profile_01JCLIENTPROFILES_A');
+  });
+
+  it('lets the client operator choose a visible existing profile by name instead of typing its ID', async () => {
+    mockedListProfiles.mockResolvedValue({
+      profiles: [
+        { ...profileItem('profile_01JCLIENTPROFILES_PICK', 5), displayName: 'Sales mailbox', linkedClientId: null },
+        { ...profileItem('profile_01JCLIENTPROFILES_HIDDEN', 6), displayName: 'Already linked', linkedClientId: clientId },
+      ],
+      nextCursor: null,
+    });
+    mockedGetProfile.mockResolvedValue({ ...profileItem('profile_01JCLIENTPROFILES_PICK', 5), linkedClientId: null });
+    const user = userEvent.setup();
+    renderPanel();
+
+    const picker = await screen.findByRole('combobox', { name: 'Available profiles' });
+    await waitFor(() => expect(picker.textContent).toContain('Sales mailbox'));
+    expect(picker.textContent).not.toContain('Already linked');
+    await user.selectOptions(picker, 'profile_01JCLIENTPROFILES_PICK');
+    await user.type(screen.getByLabelText('Reason for association'), 'used by this client');
+    await user.click(screen.getByRole('button', { name: 'Attach / reassign' }));
+
+    await waitFor(() => expect(mockedAssignProfile).toHaveBeenCalledWith(
+      tenantId,
+      'profile_01JCLIENTPROFILES_PICK',
+      { clientId, reason: 'used by this client', expectedMetadataVersion: 5 },
+      expect.any(String),
+    ));
+  });
+
+  it('paginates the accessible profile picker instead of limiting selection to the first page', async () => {
+    mockedListProfiles.mockImplementation(async (_tenant, _signal, cursor) => cursor === 'next-available'
+      ? { profiles: [{ ...profileItem('profile_01JCLIENTPROFILES_NEXT', 2), linkedClientId: null, displayName: 'Second page mailbox' }], nextCursor: null }
+      : { profiles: [{ ...profileItem('profile_01JCLIENTPROFILES_FIRST', 1), linkedClientId: null }], nextCursor: 'next-available' });
+    const user = userEvent.setup();
+    renderPanel();
+
+    const picker = await screen.findByRole('combobox', { name: 'Available profiles' });
+    await waitFor(() => expect(picker.textContent).toContain('profile_01JCLIENTPROFILES_FIRST'));
+    await user.click(screen.getByRole('button', { name: 'Load more available profiles' }));
+    await waitFor(() => expect(picker.textContent).toContain('Second page mailbox'));
+    expect(mockedListProfiles.mock.calls[1]?.[2]).toBe('next-available');
+  });
+
+  it('creates a browser profile from the client card and only reports success after a linked readback', async () => {
+    let readCount = 0;
+    mockedGetProfile.mockImplementation(async (_tenant, id) => ({
+      ...profileItem(id, 1),
+      displayName: 'Client sales profile',
+      linkedClientId: ++readCount === 1 ? null : clientId,
+    }));
+    const user = userEvent.setup();
+    const { onMutated } = renderPanel();
+
+    await user.type(screen.getByLabelText('New profile name'), 'Client sales profile');
+    await user.click(screen.getByRole('button', { name: 'Create and attach profile' }));
+
+    expect((await screen.findByRole('status')).textContent).toContain('Profile created and linked');
+    expect(mockedCreateProfile).toHaveBeenCalledTimes(1);
+    const created = mockedCreateProfile.mock.calls[0]!;
+    expect(created[0]).toBe(tenantId);
+    expect(created[1]).toMatch(/^profile_[0-9a-f]{32}$/);
+    expect(created[2]).toBe('Client sales profile');
+    expect(mockedAssignProfile).toHaveBeenCalledExactlyOnceWith(
+      tenantId,
+      created[1],
+      { clientId, reason: 'Created from the client card', expectedMetadataVersion: 1 },
+      expect.any(String),
+    );
+    expect(mockedAssignProfile.mock.calls[0]![3]).not.toBe(created[3]);
+    expect(mockedGetProfile).toHaveBeenCalledTimes(2);
+    await waitFor(() => expect(onMutated).toHaveBeenCalledTimes(1));
+  });
+
+  it('retains the generated ID and creation idempotency key if the association ACK is lost', async () => {
+    let readCount = 0;
+    mockedGetProfile.mockImplementation(async (_tenant, id) => ({
+      ...profileItem(id, 1),
+      linkedClientId: ++readCount === 1 ? null : clientId,
+    }));
+    mockedAssignProfile.mockRejectedValueOnce(new Error('private transport details'));
+    const user = userEvent.setup();
+    renderPanel();
+
+    await user.type(screen.getByLabelText('New profile name'), 'Recoverable profile');
+    await user.click(screen.getByRole('button', { name: 'Create and attach profile' }));
+
+    const warning = await screen.findByRole('alert');
+    expect(warning.textContent).toContain('Creating another profile is paused to avoid duplicates');
+    expect(warning.textContent).not.toContain('private transport details');
+    expect((screen.getByRole('button', { name: 'Create and attach profile' }) as HTMLButtonElement).disabled).toBe(true);
+    const originalId = mockedCreateProfile.mock.calls[0]![1];
+    expect(warning.textContent).toContain(originalId);
+    await user.click(screen.getByRole('button', { name: 'Retry creation / attachment' }));
+
+    expect((await screen.findByRole('status')).textContent).toContain('Profile created and linked');
+    expect(mockedCreateProfile).toHaveBeenCalledTimes(2);
+    expect(mockedCreateProfile.mock.calls[1]![1]).toBe(originalId);
+    expect(mockedCreateProfile.mock.calls[1]![3]).toBe(mockedCreateProfile.mock.calls[0]![3]);
+    expect(mockedAssignProfile).toHaveBeenCalledTimes(1);
+    expect(mockedGetProfile).toHaveBeenCalledTimes(3);
+  });
+
+  it('does not claim a linked profile when the authoritative association readback is missing', async () => {
+    mockedGetProfile.mockImplementation(async (_tenant, id) => ({ ...profileItem(id, 1), linkedClientId: null }));
+    const user = userEvent.setup();
+    renderPanel();
+
+    await user.type(screen.getByLabelText('New profile name'), 'Unconfirmed association');
+    await user.click(screen.getByRole('button', { name: 'Create and attach profile' }));
+
+    const warning = await screen.findByRole('alert');
+    expect(warning.textContent).toContain('Profile creation or attachment is not confirmed');
+    expect(screen.queryByText(/Profile created and linked/)).toBeNull();
+    expect(mockedCreateProfile).toHaveBeenCalledTimes(1);
+    expect(mockedAssignProfile).toHaveBeenCalledTimes(1);
+    expect(mockedGetProfile).toHaveBeenCalledTimes(2);
   });
 
   it('offers direct native Open alongside profile details without a Worker launch', async () => {
@@ -199,9 +328,10 @@ describe('ClientProfilesPanel relationship and native Open navigation', () => {
     const user = userEvent.setup();
     const { onMutated } = renderPanel();
 
-    await screen.findByText('No independently visible profiles are attached to this client.');
+    await screen.findByText(/No profiles attached to this client are visible to your account/);
+    await user.click(screen.getByText('Advanced: enter a profile ID'));
     await user.type(screen.getByLabelText('Profile ID'), 'profile_01JCLIENTPROFILES_ATTACH');
-    await user.type(screen.getByLabelText('Reason'), 'move to selected client');
+    await user.type(screen.getByLabelText('Reason for association'), 'move to selected client');
     await user.click(screen.getByRole('button', { name: 'Attach / reassign' }));
 
     await waitFor(() => expect(mockedAssignProfile).toHaveBeenCalledTimes(1));

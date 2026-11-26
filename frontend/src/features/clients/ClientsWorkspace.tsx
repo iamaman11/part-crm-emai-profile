@@ -131,6 +131,7 @@ export function ClientsWorkspace({
       {selectedClient && (
         <>
           <ClientProfilesPanel
+            key={`${tenantId}:${selectedClient.clientId}`}
             tenantId={tenantId}
             actorId={actorId}
             clientId={selectedClient.clientId}
