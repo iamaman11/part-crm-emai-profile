@@ -8,6 +8,7 @@ import {
 import { ConfirmAction } from '../../shared/ui/ConfirmAction';
 import { StatusMessage } from '../../shared/ui/StatusMessage';
 import { useLogicalCommandMutation } from '../../shared/ui/useLogicalCommandMutation';
+import { ProfileOpenAction } from '../profiles/ProfileOpenAction';
 import { listClientProfiles } from './api';
 
 function field(data: FormData, name: string): string {
@@ -16,15 +17,18 @@ function field(data: FormData, name: string): string {
 
 export function ClientProfilesPanel({
   tenantId,
+  actorId,
   clientId,
   onMutated,
 }: {
   tenantId: string;
+  actorId: string | null;
   clientId: string;
   onMutated: () => Promise<void>;
 }) {
   const queryClient = useQueryClient();
   const [detachReason, setDetachReason] = useState('');
+  const [openError, setOpenError] = useState<{ tenantId: string; clientId: string; error: Error } | null>(null);
   const queryKey = ['client-registry', tenantId, clientId, 'profiles'] as const;
 
   const profiles = useInfiniteQuery({
@@ -99,6 +103,7 @@ export function ClientProfilesPanel({
           ?? (detach.data ? `${detach.data.resultCode}: ${detach.data.resourceId}` : null)
         }
       />
+      <StatusMessage state={openError?.tenantId === tenantId && openError.clientId === clientId ? openError.error : null} />
 
       {!profiles.isPending && visibleProfiles.length === 0 && !profiles.error ? (
         <p>No independently visible profiles are attached to this client.</p>
@@ -118,12 +123,19 @@ export function ClientProfilesPanel({
             {visibleProfiles.map((profile) => (
               <article className="registry-row" key={profile.profileId}>
                 <div>
-                  <strong>{profile.profileId}</strong>
+                  <strong>{profile.displayName}</strong>
+                  {profile.displayName !== profile.profileId && <span className="profile-row-id"><code>{profile.profileId}</code></span>}
                   <div className="muted">
                     {profile.status} · browser v{profile.version} · metadata v{profile.metadataVersion}
                   </div>
                 </div>
                 <div className="row-actions">
+                  <ProfileOpenAction
+                    tenantId={tenantId}
+                    actorId={actorId}
+                    profile={profile}
+                    onError={(error) => setOpenError(error ? { tenantId, clientId, error } : null)}
+                  />
                   <a
                     href={`/profiles/${encodeURIComponent(profile.profileId)}?tenant=${encodeURIComponent(tenantId)}`}
                     aria-label={`View profile ${profile.profileId}`}

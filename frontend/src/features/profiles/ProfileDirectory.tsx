@@ -1,7 +1,8 @@
 import { useInfiniteQuery } from '@tanstack/react-query';
 import { useState } from 'react';
 import { useTenant } from '../../app/TenantContext';
-import { dispatchBrowserProfileOpen, listProfiles, type ProfileListPageDto } from './api';
+import { listProfiles } from './api';
+import { ProfileOpenAction } from './ProfileOpenAction';
 import { StatusMessage } from '../../shared/ui/StatusMessage';
 
 export function ProfileDirectory({
@@ -25,18 +26,6 @@ export function ProfileDirectory({
   const profiles = query.data?.pages.flatMap((page) => page.profiles) ?? [];
   const deletedCount = profiles.filter((profile) => profile.status === 'DELETED').length;
   const visibleProfiles = showDeleted ? profiles : profiles.filter((profile) => profile.status !== 'DELETED');
-
-  const openFromDirectory = (profile: ProfileListPageDto['profiles'][number]) => {
-    // Local protocol dispatch must stay inside the user click. The list already
-    // contains the authoritative Operate bit; never preflight with a cloud Open.
-    if (!activeTenant || !profile.canOperate || (profile.status !== 'DRAFT' && profile.status !== 'READY')) return;
-    setOpenError(null);
-    try {
-      dispatchBrowserProfileOpen(tenantId, activeTenant.actorId, profile.profileId, profile.version, profile.status);
-    } catch {
-      setOpenError({ tenantId, error: new Error(`Could not hand off ${profile.displayName} to the installed Profile Bridge. Check the installation and try again.`) });
-    }
-  };
 
   if (!tenantId) {
     return <section className="panel full-span" aria-labelledby="profile-directory-title"><h2 id="profile-directory-title">Visible profiles</h2><p>Select an authorized organization before loading profiles.</p></section>;
@@ -74,21 +63,16 @@ export function ProfileDirectory({
             <tbody>
               {visibleProfiles.map((profile) => (
                 <tr key={profile.profileId} aria-current={profile.profileId === selectedProfileId ? 'true' : undefined}>
-                  <td><strong>{profile.displayName}</strong> <code>{profile.profileId}</code></td>
+                  <td><strong>{profile.displayName}</strong><span className="profile-row-id"><code>{profile.profileId}</code></span></td>
                   <td>{profile.status}</td>
                   <td>{profile.linkedClientId ?? 'Unassigned'}</td>
                   <td><div className="profile-row-actions">
-                    <button
-                      type="button"
-                      aria-label={`Open browser for ${profile.displayName}`}
-                      disabled={!activeTenant || !profile.canOperate || (profile.status !== 'DRAFT' && profile.status !== 'READY')}
-                      title={!profile.canOperate ? 'Operator permission is required to open this profile.'
-                        : profile.status !== 'DRAFT' && profile.status !== 'READY' ? `This profile is ${profile.status} and cannot be opened.`
-                          : !activeTenant ? 'Select an authorized organization.' : 'Open with installed Profile Bridge'}
-                      onClick={() => openFromDirectory(profile)}
-                    >
-                      Open browser
-                    </button>
+                    <ProfileOpenAction
+                      tenantId={tenantId}
+                      actorId={activeTenant?.actorId ?? null}
+                      profile={profile}
+                      onError={(error) => setOpenError(error ? { tenantId, error } : null)}
+                    />
                     <button className="profile-row-details" type="button" onClick={() => onSelect(profile.profileId)}>
                       {profile.profileId === selectedProfileId ? 'Selected' : 'View details'}
                     </button>

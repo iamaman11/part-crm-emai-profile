@@ -258,8 +258,10 @@ describe('ProfileDirectory tenant bootstrap boundary', () => {
     const suspended = screen.getByRole('button', { name: 'Open browser for Suspended browser' }) as HTMLButtonElement;
     expect(viewer.disabled).toBe(true);
     expect(viewer.title).toContain('Operator permission');
+    expect(screen.getByText('Operator permission is required.')).toBeTruthy();
     expect(suspended.disabled).toBe(true);
     expect(suspended.title).toContain('SUSPENDED');
+    expect(screen.getByText('Cannot open a SUSPENDED profile.')).toBeTruthy();
     expect(screen.queryByRole('button', { name: 'Open browser for Deleted browser' })).toBeNull();
     fireEvent.click(screen.getByRole('button', { name: 'Show deleted profiles (1)' }));
     expect((screen.getByRole('button', { name: 'Open browser for Deleted browser' }) as HTMLButtonElement).disabled).toBe(true);
