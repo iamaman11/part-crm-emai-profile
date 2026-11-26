@@ -1,7 +1,7 @@
 import { useInfiniteQuery } from '@tanstack/react-query';
 import { useState } from 'react';
 import { useTenant } from '../../app/TenantContext';
-import { listProfiles } from './api';
+import { dispatchBrowserProfileOpen, listProfiles } from './api';
 import { ProfileOpenAction } from './ProfileOpenAction';
 import { StatusMessage } from '../../shared/ui/StatusMessage';
 
@@ -71,6 +71,7 @@ export function ProfileDirectory({
                       tenantId={tenantId}
                       actorId={activeTenant?.actorId ?? null}
                       profile={profile}
+                      dispatchOpen={dispatchBrowserProfileOpen}
                       onError={(error) => setOpenError(error ? { tenantId, error } : null)}
                     />
                     <button className="profile-row-details" type="button" onClick={() => onSelect(profile.profileId)}>

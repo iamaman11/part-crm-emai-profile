@@ -4,11 +4,12 @@ import {
   assignProfile,
   detachProfile,
   getProfile,
+  dispatchBrowserProfileOpen,
+  ProfileOpenAction,
 } from '../profiles';
 import { ConfirmAction } from '../../shared/ui/ConfirmAction';
 import { StatusMessage } from '../../shared/ui/StatusMessage';
 import { useLogicalCommandMutation } from '../../shared/ui/useLogicalCommandMutation';
-import { ProfileOpenAction } from '../profiles/ProfileOpenAction';
 import { listClientProfiles } from './api';
 
 function field(data: FormData, name: string): string {
@@ -134,6 +135,7 @@ export function ClientProfilesPanel({
                     tenantId={tenantId}
                     actorId={actorId}
                     profile={profile}
+                    dispatchOpen={dispatchBrowserProfileOpen}
                     onError={(error) => setOpenError(error ? { tenantId, clientId, error } : null)}
                   />
                   <a

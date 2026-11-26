@@ -1,5 +1,5 @@
 import { useId } from 'react';
-import { dispatchBrowserProfileOpen, type ProfileListPageDto } from './api';
+import type { dispatchBrowserProfileOpen, ProfileListPageDto } from './api';
 
 type ListedProfile = ProfileListPageDto['profiles'][number];
 
@@ -10,11 +10,13 @@ export function ProfileOpenAction({
   tenantId,
   actorId,
   profile,
+  dispatchOpen,
   onError,
 }: {
   tenantId: string;
   actorId: string | null;
   profile: ListedProfile;
+  dispatchOpen: typeof dispatchBrowserProfileOpen;
   onError: (error: Error | null) => void;
 }) {
   const reasonId = useId();
@@ -29,7 +31,7 @@ export function ProfileOpenAction({
     if (!actorId || !profile.canOperate || (profile.status !== 'DRAFT' && profile.status !== 'READY')) return;
     onError(null);
     try {
-      dispatchBrowserProfileOpen(tenantId, actorId, profile.profileId, profile.version, profile.status);
+      dispatchOpen(tenantId, actorId, profile.profileId, profile.version, profile.status);
     } catch {
       onError(new Error(`Could not hand off ${profile.displayName} to the installed Profile Bridge. Check the installation and try again.`));
     }

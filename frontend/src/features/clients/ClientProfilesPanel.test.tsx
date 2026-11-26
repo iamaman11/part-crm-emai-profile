@@ -6,17 +6,18 @@ import {
   assignProfile,
   detachProfile,
   getProfile,
+  dispatchBrowserProfileOpen,
 } from '../profiles';
-import { dispatchBrowserProfileOpen } from '../profiles/api';
 import { ClientProfilesPanel } from './ClientProfilesPanel';
 import { listClientProfiles } from './api';
 
-vi.mock('../profiles', () => ({
+vi.mock('../profiles', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../profiles')>()),
   assignProfile: vi.fn(),
   detachProfile: vi.fn(),
   getProfile: vi.fn(),
+  dispatchBrowserProfileOpen: vi.fn(),
 }));
-vi.mock('../profiles/api', () => ({ dispatchBrowserProfileOpen: vi.fn() }));
 
 vi.mock('./api', () => ({
   listClientProfiles: vi.fn(),
