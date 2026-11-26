@@ -1,7 +1,8 @@
 import { useInfiniteQuery } from '@tanstack/react-query';
 import { useState } from 'react';
 import { useTenant } from '../../app/TenantContext';
-import { listProfiles } from './api';
+import { dispatchBrowserProfileOpen, listProfiles } from './api';
+import { ProfileOpenAction } from './ProfileOpenAction';
 import { StatusMessage } from '../../shared/ui/StatusMessage';
 
 export function ProfileDirectory({
@@ -11,7 +12,8 @@ export function ProfileDirectory({
   selectedProfileId?: string | null;
   onSelect: (profileId: string) => void;
 }) {
-  const { tenantId } = useTenant();
+  const { tenantId, contexts } = useTenant();
+  const activeTenant = contexts.find((context) => context.tenantId === tenantId);
   const query = useInfiniteQuery({
     queryKey: ['operator-query', tenantId, 'profiles'],
     queryFn: ({ signal, pageParam }) => listProfiles(tenantId, signal, pageParam),
@@ -20,6 +22,7 @@ export function ProfileDirectory({
     enabled: tenantId.length > 0,
   });
   const [showDeleted, setShowDeleted] = useState(false);
+  const [openError, setOpenError] = useState<{ tenantId: string; error: Error } | null>(null);
   const profiles = query.data?.pages.flatMap((page) => page.profiles) ?? [];
   const deletedCount = profiles.filter((profile) => profile.status === 'DELETED').length;
   const visibleProfiles = showDeleted ? profiles : profiles.filter((profile) => profile.status !== 'DELETED');
@@ -38,6 +41,7 @@ export function ProfileDirectory({
         </button>
       )}
       <StatusMessage state={query.error ?? (query.isPending ? 'Loading visible profiles…' : null)} />
+      <StatusMessage state={openError?.tenantId === tenantId ? openError.error : null} />
       {!query.isPending && query.data && visibleProfiles.length === 0 && (
         <p>{profiles.length === 0
           ? 'No profiles are visible to the active actor in this tenant.'
@@ -59,14 +63,21 @@ export function ProfileDirectory({
             <tbody>
               {visibleProfiles.map((profile) => (
                 <tr key={profile.profileId} aria-current={profile.profileId === selectedProfileId ? 'true' : undefined}>
-                  <td><strong>{profile.displayName}</strong> <code>{profile.profileId}</code></td>
+                  <td><strong>{profile.displayName}</strong><span className="profile-row-id"><code>{profile.profileId}</code></span></td>
                   <td>{profile.status}</td>
                   <td>{profile.linkedClientId ?? 'Unassigned'}</td>
-                  <td>
-                    <button type="button" onClick={() => onSelect(profile.profileId)}>
+                  <td><div className="profile-row-actions">
+                    <ProfileOpenAction
+                      tenantId={tenantId}
+                      actorId={activeTenant?.actorId ?? null}
+                      profile={profile}
+                      dispatchOpen={dispatchBrowserProfileOpen}
+                      onError={(error) => setOpenError(error ? { tenantId, error } : null)}
+                    />
+                    <button className="profile-row-details" type="button" onClick={() => onSelect(profile.profileId)}>
                       {profile.profileId === selectedProfileId ? 'Selected' : 'View details'}
                     </button>
-                  </td>
+                  </div></td>
                 </tr>
               ))}
             </tbody>

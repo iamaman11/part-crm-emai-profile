@@ -97,6 +97,7 @@ pub async fn dispatch(route: RouteClass, request: &Request, env: &Env) -> Result
                             active_generation_id: profile
                                 .active_generation_id()
                                 .map(|value| value.as_str().to_owned()),
+                            can_operate: profile.can_operate(),
                         })
                         .collect(),
                     next_cursor: page.next_cursor().map(|value| value.as_str().to_owned()),

@@ -145,7 +145,23 @@ impl ProfileReadModelPort for D1QueryRepository {
             r#"
             SELECT profile.profile_id, profile.display_name, profile.status, profile.version, profile.metadata_version,
                    assignment.client_id AS linked_client_id,
-                   profile.active_generation_id
+                   profile.active_generation_id,
+                   EXISTS (
+                       SELECT 1 FROM memberships AS operator_member
+                       WHERE operator_member.tenant_id = profile.tenant_id
+                         AND operator_member.actor_id = ?
+                         AND operator_member.status = 'ACTIVE'
+                         AND (
+                             operator_member.role = 'TENANT_OWNER'
+                             OR (operator_member.role = 'MEMBER' AND EXISTS (
+                                 SELECT 1 FROM profile_grants AS operator_grant
+                                 WHERE operator_grant.tenant_id = profile.tenant_id
+                                   AND operator_grant.profile_id = profile.profile_id
+                                   AND operator_grant.actor_id = operator_member.actor_id
+                                   AND operator_grant.role = 'PROFILE_OPERATOR'
+                             ))
+                         )
+                   ) AS can_operate
             FROM browser_profiles AS profile
             LEFT JOIN profile_client_assignments AS assignment
               ON assignment.tenant_id = profile.tenant_id
@@ -176,6 +192,7 @@ impl ProfileReadModelPort for D1QueryRepository {
             ORDER BY profile.profile_id
             LIMIT ?
             "#,
+            actor.actor_id().as_str(),
             actor.tenant_scope().tenant_id().as_str(),
             after.as_str(),
             actor.actor_id().as_str(),
@@ -205,7 +222,23 @@ impl ClientProfileReadModelPort for D1QueryRepository {
             r#"
             SELECT profile.profile_id, profile.display_name, profile.status, profile.version, profile.metadata_version,
                    assignment.client_id AS linked_client_id,
-                   profile.active_generation_id
+                   profile.active_generation_id,
+                   EXISTS (
+                       SELECT 1 FROM memberships AS operator_member
+                       WHERE operator_member.tenant_id = profile.tenant_id
+                         AND operator_member.actor_id = ?
+                         AND operator_member.status = 'ACTIVE'
+                         AND (
+                             operator_member.role = 'TENANT_OWNER'
+                             OR (operator_member.role = 'MEMBER' AND EXISTS (
+                                 SELECT 1 FROM profile_grants AS operator_grant
+                                 WHERE operator_grant.tenant_id = profile.tenant_id
+                                   AND operator_grant.profile_id = profile.profile_id
+                                   AND operator_grant.actor_id = operator_member.actor_id
+                                   AND operator_grant.role = 'PROFILE_OPERATOR'
+                             ))
+                         )
+                   ) AS can_operate
             FROM browser_profiles AS profile
             JOIN profile_client_assignments AS assignment
               ON assignment.tenant_id = profile.tenant_id
@@ -237,6 +270,7 @@ impl ClientProfileReadModelPort for D1QueryRepository {
             ORDER BY profile.profile_id
             LIMIT ?
             "#,
+            actor.actor_id().as_str(),
             client_id.as_str(),
             actor.tenant_scope().tenant_id().as_str(),
             after.as_str(),
@@ -353,6 +387,7 @@ struct ProfileRow {
     metadata_version: i64,
     linked_client_id: Option<String>,
     active_generation_id: Option<String>,
+    can_operate: i64,
 }
 
 #[derive(Deserialize)]
@@ -525,6 +560,11 @@ fn map_client_row(row: ClientRow) -> Result<ClientReadProjection, QueryPortError
 }
 
 fn map_profile_row(row: ProfileRow) -> Result<ProfileReadProjection, QueryPortError> {
+    let can_operate = match row.can_operate {
+        0 => false,
+        1 => true,
+        _ => return Err(integrity_error()),
+    };
     Ok(ProfileReadProjection::new(
         ProfileId::parse(row.profile_id).map_err(|_| integrity_error())?,
         profile_status(&row.status)?,
@@ -539,7 +579,8 @@ fn map_profile_row(row: ProfileRow) -> Result<ProfileReadProjection, QueryPortEr
             .transpose()
             .map_err(|_| integrity_error())?,
         row.display_name,
-    ))
+    )
+    .with_can_operate(can_operate))
 }
 
 fn map_member_row(row: MemberRow) -> Result<MemberReadProjection, QueryPortError> {
@@ -639,7 +680,7 @@ fn dependency_error(_error: worker::Error) -> QueryPortError {
 
 #[cfg(test)]
 mod tests {
-    use super::{client_cursor, mailbox_cursor};
+    use super::{ProfileRow, client_cursor, mailbox_cursor, map_profile_row};
     use application_ports::query::{
         QueryCursor, QueryPageRequest, QueryPageSize, QueryPortErrorClass,
     };
@@ -654,6 +695,25 @@ mod tests {
         let error = client_cursor(&page).expect_err("mailbox cursor must not enter client query");
         assert_eq!(error.class(), QueryPortErrorClass::InvalidCursor);
         assert_eq!(mailbox_cursor(&page)?, "binding_01JQUERY");
+        Ok(())
+    }
+
+    #[test]
+    fn profile_query_operate_flag_accepts_only_explicit_boolean_values()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let row = |can_operate| ProfileRow {
+            profile_id: "profile_01JQUERYOPERATE".to_owned(),
+            display_name: "Test profile".to_owned(),
+            status: "READY".to_owned(),
+            version: 3,
+            metadata_version: 2,
+            linked_client_id: None,
+            active_generation_id: None,
+            can_operate,
+        };
+        assert!(!map_profile_row(row(0))?.can_operate());
+        assert!(map_profile_row(row(1))?.can_operate());
+        assert!(map_profile_row(row(2)).is_err());
         Ok(())
     }
 }

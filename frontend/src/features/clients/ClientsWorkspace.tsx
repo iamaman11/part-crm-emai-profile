@@ -23,7 +23,8 @@ export function ClientsWorkspace({
   selectedClientId?: string | null;
   onClientSelected: (clientId: string) => void;
 }) {
-  const { tenantId } = useTenant();
+  const { tenantId, contexts } = useTenant();
+  const actorId = contexts.find((context) => context.tenantId === tenantId)?.actorId ?? null;
   const { enabled } = useCapabilities();
   const queryClient = useQueryClient();
   const requireTenant = tenantId.length > 0;
@@ -131,6 +132,7 @@ export function ClientsWorkspace({
         <>
           <ClientProfilesPanel
             tenantId={tenantId}
+            actorId={actorId}
             clientId={selectedClient.clientId}
             onMutated={refreshSelected}
           />

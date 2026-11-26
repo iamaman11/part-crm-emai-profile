@@ -28,6 +28,7 @@ pub struct ProfileListItemDto {
     pub metadata_version: u64,
     pub linked_client_id: Option<String>,
     pub active_generation_id: Option<String>,
+    pub can_operate: bool,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -95,7 +96,7 @@ pub fn openapi_fragment() -> Value {
                 "ProfileListItemDto": {
                     "type": "object",
                     "additionalProperties": false,
-                    "required": ["profileId", "displayName", "status", "version", "metadataVersion", "linkedClientId", "activeGenerationId"],
+                    "required": ["profileId", "displayName", "status", "version", "metadataVersion", "linkedClientId", "activeGenerationId", "canOperate"],
                     "properties": {
                         "profileId": {"type": "string", "minLength": 8, "maxLength": 96},
                         "displayName": {"type": "string", "minLength": 1, "maxLength": 80},
@@ -103,7 +104,8 @@ pub fn openapi_fragment() -> Value {
                         "version": {"type": "integer", "minimum": 1},
                         "metadataVersion": {"type": "integer", "minimum": 1},
                         "linkedClientId": nullable_opaque_id_schema(),
-                        "activeGenerationId": nullable_opaque_id_schema()
+                        "activeGenerationId": nullable_opaque_id_schema(),
+                        "canOperate": {"type": "boolean"}
                     }
                 },
                 "ProfileListPageDto": {
@@ -262,7 +264,10 @@ fn problem_response() -> Value {
 
 #[cfg(test)]
 mod tests {
-    use super::{MailboxListPageDto, MemberListPageDto, ProfileListPageDto, openapi_fragment};
+    use super::{
+        MailboxListPageDto, MemberListPageDto, ProfileListItemDto, ProfileListPageDto,
+        openapi_fragment,
+    };
 
     #[test]
     fn operator_query_contract_has_bounded_list_paths() {
@@ -326,6 +331,34 @@ mod tests {
         assert!(profiles.get("nextCursor").is_some());
         assert!(members.get("nextCursor").is_some());
         assert!(mailboxes.get("nextCursor").is_some());
+        Ok(())
+    }
+
+    #[test]
+    fn profile_list_exposes_explicit_operator_permission_not_merely_visibility()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let schema = openapi_fragment();
+        let item = &schema["components"]["schemas"]["ProfileListItemDto"];
+        assert!(
+            item["required"]
+                .as_array()
+                .is_some_and(|required| { required.iter().any(|field| field == "canOperate") })
+        );
+        assert_eq!(item["properties"]["canOperate"]["type"], "boolean");
+        let viewer = ProfileListItemDto {
+            profile_id: "profile_visible_only".to_owned(),
+            display_name: "Visible only".to_owned(),
+            status: "READY".to_owned(),
+            version: 3,
+            metadata_version: 2,
+            linked_client_id: None,
+            active_generation_id: None,
+            can_operate: false,
+        };
+        let wire = serde_json::to_value(&viewer)?;
+        assert_eq!(wire["canOperate"], false);
+        let decoded: ProfileListItemDto = serde_json::from_value(wire)?;
+        assert!(!decoded.can_operate);
         Ok(())
     }
 }
