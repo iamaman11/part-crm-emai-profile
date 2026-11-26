@@ -2,21 +2,22 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { TenantProvider } from '../../app/TenantContext';
-import { listProfiles } from './api';
+import { dispatchBrowserProfileOpen, listProfiles } from './api';
 import { ProfileDirectory } from './ProfileDirectory';
 
-vi.mock('./api', () => ({ listProfiles: vi.fn() }));
+vi.mock('./api', () => ({ listProfiles: vi.fn(), dispatchBrowserProfileOpen: vi.fn() }));
 
 const mockedListProfiles = vi.mocked(listProfiles);
+const mockedOpen = vi.mocked(dispatchBrowserProfileOpen);
 
 type TenantContextsLoader = NonNullable<Parameters<typeof TenantProvider>[0]['loadTenantContexts']>;
 
-function renderDirectory(loadTenantContexts: TenantContextsLoader) {
+function renderDirectory(loadTenantContexts: TenantContextsLoader, onSelect = vi.fn()) {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   return render(
     <QueryClientProvider client={client}>
       <TenantProvider loadTenantContexts={loadTenantContexts}>
-        <ProfileDirectory onSelect={() => undefined} />
+        <ProfileDirectory onSelect={onSelect} />
       </TenantProvider>
     </QueryClientProvider>,
   );
@@ -45,6 +46,7 @@ describe('ProfileDirectory tenant bootstrap boundary', () => {
           version: 2, metadataVersion: 2,
           linkedClientId: null,
           activeGenerationId: 'generation_active_test',
+          canOperate: true,
         },
         {
           profileId: 'profile_deleted_test',
@@ -53,6 +55,7 @@ describe('ProfileDirectory tenant bootstrap boundary', () => {
           version: 3, metadataVersion: 3,
           linkedClientId: null,
           activeGenerationId: null,
+          canOperate: false,
         },
       ],
       nextCursor: null,
@@ -86,6 +89,7 @@ describe('ProfileDirectory tenant bootstrap boundary', () => {
         version: 3, metadataVersion: 3,
         linkedClientId: null,
         activeGenerationId: null,
+        canOperate: false,
       }],
       nextCursor: null,
     });
@@ -117,6 +121,7 @@ describe('ProfileDirectory tenant bootstrap boundary', () => {
             version: 4, metadataVersion: 4,
             linkedClientId: null,
             activeGenerationId: 'generation_page_two',
+            canOperate: true,
           }],
           nextCursor: null,
         };
@@ -129,6 +134,7 @@ describe('ProfileDirectory tenant bootstrap boundary', () => {
           version: 3, metadataVersion: 3,
           linkedClientId: null,
           activeGenerationId: null,
+          canOperate: false,
         }],
         nextCursor: 'next_test_page',
       };
@@ -167,6 +173,7 @@ describe('ProfileDirectory tenant bootstrap boundary', () => {
           version: 2, metadataVersion: 2,
           linkedClientId: null,
           activeGenerationId: 'generation_page_one',
+          canOperate: true,
         }],
         nextCursor: 'next_test_page',
       };
@@ -204,5 +211,74 @@ describe('ProfileDirectory tenant bootstrap boundary', () => {
 
     await waitFor(() => expect(mockedListProfiles).toHaveBeenCalledTimes(1));
     expect(mockedListProfiles.mock.calls[0]?.[0]).toBe('tenant_01JAUTH');
+  });
+
+  it('opens DRAFT and READY profiles directly from their list rows with the existing native URI owner', async () => {
+    mockedListProfiles.mockResolvedValue({
+      profiles: [
+        { profileId: 'profile_draft_click', displayName: 'Draft browser', status: 'DRAFT', version: 4,
+          metadataVersion: 2, linkedClientId: null, activeGenerationId: null, canOperate: true },
+        { profileId: 'profile_ready_click', displayName: 'Ready browser', status: 'READY', version: 7,
+          metadataVersion: 3, linkedClientId: null, activeGenerationId: 'generation_ready', canOperate: true },
+      ],
+      nextCursor: null,
+    });
+    const onSelect = vi.fn();
+    renderDirectory(async () => ({ tenants: [{
+      tenantId: 'tenant_01JAUTH', displayName: 'Organization', actorId: 'actor_01JAUTH', role: 'MEMBER',
+    }] }), onSelect);
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Open browser for Draft browser' }));
+    expect(mockedOpen).toHaveBeenNthCalledWith(1, 'tenant_01JAUTH', 'actor_01JAUTH', 'profile_draft_click', 4, 'DRAFT');
+    fireEvent.click(screen.getByRole('button', { name: 'Open browser for Ready browser' }));
+    expect(mockedOpen).toHaveBeenNthCalledWith(2, 'tenant_01JAUTH', 'actor_01JAUTH', 'profile_ready_click', 7, 'READY');
+    expect(mockedListProfiles).toHaveBeenCalledTimes(1);
+    expect(onSelect).not.toHaveBeenCalled();
+    fireEvent.click(screen.getAllByRole('button', { name: 'View details' })[0]!);
+    expect(onSelect).toHaveBeenCalledWith('profile_draft_click');
+  });
+
+  it('disables direct Open for viewer grants and non-launchable or deleted lifecycle states', async () => {
+    mockedListProfiles.mockResolvedValue({
+      profiles: [
+        { profileId: 'profile_viewer_only', displayName: 'Viewer only', status: 'READY', version: 3,
+          metadataVersion: 3, linkedClientId: null, activeGenerationId: null, canOperate: false },
+        { profileId: 'profile_suspended', displayName: 'Suspended browser', status: 'SUSPENDED', version: 8,
+          metadataVersion: 3, linkedClientId: null, activeGenerationId: null, canOperate: true },
+        { profileId: 'profile_deleted', displayName: 'Deleted browser', status: 'DELETED', version: 9,
+          metadataVersion: 5, linkedClientId: null, activeGenerationId: null, canOperate: true },
+      ],
+      nextCursor: null,
+    });
+    renderDirectory(async () => ({ tenants: [{
+      tenantId: 'tenant_01JAUTH', displayName: 'Organization', actorId: 'actor_01JAUTH', role: 'MEMBER',
+    }] }));
+
+    const viewer = await screen.findByRole('button', { name: 'Open browser for Viewer only' }) as HTMLButtonElement;
+    const suspended = screen.getByRole('button', { name: 'Open browser for Suspended browser' }) as HTMLButtonElement;
+    expect(viewer.disabled).toBe(true);
+    expect(viewer.title).toContain('Operator permission');
+    expect(suspended.disabled).toBe(true);
+    expect(suspended.title).toContain('SUSPENDED');
+    expect(screen.queryByRole('button', { name: 'Open browser for Deleted browser' })).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: 'Show deleted profiles (1)' }));
+    expect((screen.getByRole('button', { name: 'Open browser for Deleted browser' }) as HTMLButtonElement).disabled).toBe(true);
+    expect(mockedOpen).not.toHaveBeenCalled();
+  });
+
+  it('shows a safe handoff failure without claiming an Open or retrying the native command', async () => {
+    mockedListProfiles.mockResolvedValue({ profiles: [{
+      profileId: 'profile_handoff_fail', displayName: 'Failed handoff', status: 'READY', version: 10,
+      metadataVersion: 3, linkedClientId: null, activeGenerationId: null, canOperate: true,
+    }], nextCursor: null });
+    mockedOpen.mockImplementationOnce(() => { throw new Error('sensitive native details'); });
+    renderDirectory(async () => ({ tenants: [{
+      tenantId: 'tenant_01JAUTH', displayName: 'Organization', actorId: 'actor_01JAUTH', role: 'TENANT_OWNER',
+    }] }));
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Open browser for Failed handoff' }));
+    expect(mockedOpen).toHaveBeenCalledTimes(1);
+    expect((await screen.findByRole('alert')).textContent).toContain('Could not hand off Failed handoff');
+    expect(screen.queryByText(/sensitive native details/)).toBeNull();
   });
 });

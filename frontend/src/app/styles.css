@@ -44,6 +44,10 @@ p { line-height: 1.55; color: #4b5664; }
 .action-grid .wide { grid-column: span 2; }
 .action-row { display: flex; flex-wrap: wrap; gap: .65rem; align-items: end; margin-top: .8rem; }
 .action-row label { min-width: 15rem; }
+.table-scroll { width: 100%; overflow-x: auto; }
+.profile-row-actions { display: flex; gap: .5rem; align-items: center; flex-wrap: wrap; }
+.profile-row-actions button { white-space: nowrap; }
+.profile-row-actions .profile-row-details { background: transparent; color: inherit; border-color: #aab4c0; }
 .confirm-action { display: flex; flex-wrap: wrap; gap: .5rem; align-items: center; padding: .65rem; border: 1px solid #e5c2c7; border-radius: .75rem; background: #fff6f7; }
 .consequence { flex: 1 1 20rem; color: #63202a; line-height: 1.4; }
 

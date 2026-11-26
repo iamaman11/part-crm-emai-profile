@@ -14,6 +14,7 @@ pub struct ProfileReadProjection {
     metadata_version: AggregateVersion,
     linked_client_id: Option<ClientId>,
     active_generation_id: Option<GenerationId>,
+    can_operate: bool,
 }
 
 impl ProfileReadProjection {
@@ -35,6 +36,7 @@ impl ProfileReadProjection {
             metadata_version,
             linked_client_id,
             active_generation_id,
+            can_operate: false,
         }
     }
 
@@ -70,6 +72,18 @@ impl ProfileReadProjection {
     #[must_use]
     pub const fn active_generation_id(&self) -> Option<&GenerationId> {
         self.active_generation_id.as_ref()
+    }
+
+    /// Authorization already resolved by the query owner; never inferred by the UI.
+    #[must_use]
+    pub const fn with_can_operate(mut self, can_operate: bool) -> Self {
+        self.can_operate = can_operate;
+        self
+    }
+
+    #[must_use]
+    pub const fn can_operate(&self) -> bool {
+        self.can_operate
     }
 }
 

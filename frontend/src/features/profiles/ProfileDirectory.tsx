@@ -1,7 +1,7 @@
 import { useInfiniteQuery } from '@tanstack/react-query';
 import { useState } from 'react';
 import { useTenant } from '../../app/TenantContext';
-import { listProfiles } from './api';
+import { dispatchBrowserProfileOpen, listProfiles, type ProfileListPageDto } from './api';
 import { StatusMessage } from '../../shared/ui/StatusMessage';
 
 export function ProfileDirectory({
@@ -11,7 +11,8 @@ export function ProfileDirectory({
   selectedProfileId?: string | null;
   onSelect: (profileId: string) => void;
 }) {
-  const { tenantId } = useTenant();
+  const { tenantId, contexts } = useTenant();
+  const activeTenant = contexts.find((context) => context.tenantId === tenantId);
   const query = useInfiniteQuery({
     queryKey: ['operator-query', tenantId, 'profiles'],
     queryFn: ({ signal, pageParam }) => listProfiles(tenantId, signal, pageParam),
@@ -20,9 +21,22 @@ export function ProfileDirectory({
     enabled: tenantId.length > 0,
   });
   const [showDeleted, setShowDeleted] = useState(false);
+  const [openError, setOpenError] = useState<{ tenantId: string; error: Error } | null>(null);
   const profiles = query.data?.pages.flatMap((page) => page.profiles) ?? [];
   const deletedCount = profiles.filter((profile) => profile.status === 'DELETED').length;
   const visibleProfiles = showDeleted ? profiles : profiles.filter((profile) => profile.status !== 'DELETED');
+
+  const openFromDirectory = (profile: ProfileListPageDto['profiles'][number]) => {
+    // Local protocol dispatch must stay inside the user click. The list already
+    // contains the authoritative Operate bit; never preflight with a cloud Open.
+    if (!activeTenant || !profile.canOperate || (profile.status !== 'DRAFT' && profile.status !== 'READY')) return;
+    setOpenError(null);
+    try {
+      dispatchBrowserProfileOpen(tenantId, activeTenant.actorId, profile.profileId, profile.version, profile.status);
+    } catch {
+      setOpenError({ tenantId, error: new Error(`Could not hand off ${profile.displayName} to the installed Profile Bridge. Check the installation and try again.`) });
+    }
+  };
 
   if (!tenantId) {
     return <section className="panel full-span" aria-labelledby="profile-directory-title"><h2 id="profile-directory-title">Visible profiles</h2><p>Select an authorized organization before loading profiles.</p></section>;
@@ -38,6 +52,7 @@ export function ProfileDirectory({
         </button>
       )}
       <StatusMessage state={query.error ?? (query.isPending ? 'Loading visible profiles…' : null)} />
+      <StatusMessage state={openError?.tenantId === tenantId ? openError.error : null} />
       {!query.isPending && query.data && visibleProfiles.length === 0 && (
         <p>{profiles.length === 0
           ? 'No profiles are visible to the active actor in this tenant.'
@@ -62,11 +77,22 @@ export function ProfileDirectory({
                   <td><strong>{profile.displayName}</strong> <code>{profile.profileId}</code></td>
                   <td>{profile.status}</td>
                   <td>{profile.linkedClientId ?? 'Unassigned'}</td>
-                  <td>
-                    <button type="button" onClick={() => onSelect(profile.profileId)}>
+                  <td><div className="profile-row-actions">
+                    <button
+                      type="button"
+                      aria-label={`Open browser for ${profile.displayName}`}
+                      disabled={!activeTenant || !profile.canOperate || (profile.status !== 'DRAFT' && profile.status !== 'READY')}
+                      title={!profile.canOperate ? 'Operator permission is required to open this profile.'
+                        : profile.status !== 'DRAFT' && profile.status !== 'READY' ? `This profile is ${profile.status} and cannot be opened.`
+                          : !activeTenant ? 'Select an authorized organization.' : 'Open with installed Profile Bridge'}
+                      onClick={() => openFromDirectory(profile)}
+                    >
+                      Open browser
+                    </button>
+                    <button className="profile-row-details" type="button" onClick={() => onSelect(profile.profileId)}>
                       {profile.profileId === selectedProfileId ? 'Selected' : 'View details'}
                     </button>
-                  </td>
+                  </div></td>
                 </tr>
               ))}
             </tbody>

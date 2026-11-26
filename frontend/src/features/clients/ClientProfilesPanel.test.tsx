@@ -37,6 +37,7 @@ function profileItem(profileId: string, version: number) {
     metadataVersion: version,
     linkedClientId: clientId,
     activeGenerationId: null,
+    canOperate: true,
   };
 }
 
