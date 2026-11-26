@@ -92,6 +92,7 @@ pub enum Cause {
     BrowserRuntimeLaunchFailed,
     CoordinatorLeaseConflict,
     CoordinatorUncertain,
+    CloudRestoreUnavailable,
     CloudSaveFailed,
     OtherSafeFailure,
     RuntimeDependency,
@@ -640,6 +641,77 @@ fn local_confirmation(record: &Observation) -> &'static str {
     }
 }
 
+/// A clipboard-friendly explanation of the most recent observed invocation.
+/// This is deliberately derived from the existing bounded event records, not
+/// from a second lifecycle state, cloud readback or retry authorization.
+fn latest_operation_summary(records: &[Observation]) -> String {
+    let Some(latest) = records.last() else {
+        return "LATEST_OPERATION_STATUS=NO_LOCAL_OBSERVATIONS;AUTHORITY=OBSERVATION_ONLY;NEXT_STEP=CHECK_INSTALLATION\n".to_owned();
+    };
+    let same_operation = || {
+        records
+            .iter()
+            .filter(|record| record.operation_id == latest.operation_id)
+    };
+    // Last decisive witness wins. A Close, R2 upload or an earlier successful
+    // invocation never establishes a cloud Save for this invocation.
+    let save_witness = same_operation().rev().find(|record| {
+        matches!(
+            (record.stage, record.outcome, record.cloud),
+            (
+                Stage::CloudSaveConfirmed,
+                Outcome::Succeeded,
+                Cloud::CommittedExact
+            ) | (Stage::CloudSaveAttempt, Outcome::Unconfirmed, _)
+                | (Stage::LocalUnsynced, _, _)
+        )
+    });
+    let (status, next_step) = match save_witness {
+        Some(record)
+            if record.stage == Stage::CloudSaveConfirmed
+                && record.outcome == Outcome::Succeeded
+                && record.cloud == Cloud::CommittedExact =>
+        {
+            ("EXACT_CLOUD_SAVE_OBSERVED", "NORMAL_NEXT_OPEN")
+        }
+        Some(_) => (
+            "CLOUD_NOT_CONFIRMED_LOCAL_DATA_RETAINED_OR_UNPROVEN",
+            "PRESERVE_LOCAL_CHECK_NETWORK_THEN_OWNED_SYNC",
+        ),
+        None if same_operation().any(|record| {
+            record.stage == Stage::OpenRequested && record.outcome == Outcome::Failed
+        }) =>
+        {
+            ("OPEN_FAILED", "CHECK_FAILURE_STAGE_AND_COPY_REPORT")
+        }
+        None if same_operation().any(|record| {
+            record.stage == Stage::BrowserReady && record.outcome == Outcome::Observed
+        }) =>
+        {
+            ("BROWSER_READY_OBSERVED", "CLOSE_NORMALLY_FOR_SYNC")
+        }
+        None => ("IN_PROGRESS_OR_UNPROVEN", "CHECK_LATEST_EVENT"),
+    };
+    // Prefer a specific failed transport/runtime phase over a later generic
+    // UNCONFIRMED wrapper. All values come from closed enums, never stderr.
+    let failure = same_operation()
+        .rev()
+        .find(|record| record.outcome == Outcome::Failed && record.cause != Cause::None)
+        .or_else(|| {
+            same_operation().rev().find(|record| {
+                record.outcome == Outcome::Unconfirmed && record.cause != Cause::None
+            })
+        });
+    let (failure_stage, failure_cause) = failure.map_or_else(
+        || ("NONE".to_owned(), "NONE".to_owned()),
+        |record| (format!("{:?}", record.stage), format!("{:?}", record.cause)),
+    );
+    format!(
+        "LATEST_OPERATION_STATUS={status};AUTHORITY=OBSERVATION_ONLY;NEXT_STEP={next_step}\nLATEST_OBSERVED_STAGE={:?};OUTCOME={:?};CAUSE={:?}\nLATEST_FAILURE_STAGE={failure_stage};CAUSE={failure_cause}\n",
+        latest.stage, latest.outcome, latest.cause,
+    )
+}
+
 /// Read-only, strictly reconstructed from admitted typed observations. No profile data is read.
 #[must_use]
 pub fn report_current() -> String {
@@ -666,6 +738,7 @@ pub fn report_at(root: &Path) -> String {
         release_sequence,
         runtime,
     );
+    report.push_str(&latest_operation_summary(&records));
     for record in records {
         let line = format!(
             "TIME_MS={};OP={};STAGE={:?};OUTCOME={:?};CLOUD={:?};CAUSE={:?};DURATION_MS={};LOCAL={};NEXT_SAFE_STEP={}\n",
@@ -726,6 +799,132 @@ mod tests {
         ));
         fs::create_dir_all(root.join("state"))?;
         Ok(root)
+    }
+
+    fn observed(
+        operation_id: &str,
+        stage: Stage,
+        outcome: Outcome,
+        cloud: Cloud,
+        cause: Cause,
+    ) -> Observation {
+        Observation {
+            schema_version: 1,
+            time_unix_ms: 1,
+            operation_id: operation_id.to_owned(),
+            stage,
+            outcome,
+            cloud,
+            cause,
+            duration_ms: 1,
+            open_pages: None,
+            verified_runtime: None,
+            verified_sequence: None,
+            transport: None,
+        }
+    }
+
+    #[test]
+    fn latest_operation_summary_uses_only_its_own_exact_cloud_witness() {
+        let old = "op_00000001_0000000000000001";
+        let fresh = "op_00000002_0000000000000002";
+        let records = [
+            observed(
+                old,
+                Stage::CloudSaveConfirmed,
+                Outcome::Succeeded,
+                Cloud::CommittedExact,
+                Cause::None,
+            ),
+            observed(
+                fresh,
+                Stage::LocalUnsynced,
+                Outcome::Observed,
+                Cloud::Unknown,
+                Cause::None,
+            ),
+            observed(
+                fresh,
+                Stage::Transport,
+                Outcome::Failed,
+                Cloud::Unknown,
+                Cause::NetworkConnect,
+            ),
+            observed(
+                fresh,
+                Stage::CloudSaveAttempt,
+                Outcome::Unconfirmed,
+                Cloud::NotConfirmed,
+                Cause::CloudSaveFailed,
+            ),
+            observed(
+                fresh,
+                Stage::OpenRequested,
+                Outcome::Observed,
+                Cloud::Unknown,
+                Cause::None,
+            ),
+        ];
+        let summary = latest_operation_summary(&records);
+        assert!(summary.contains(
+            "LATEST_OPERATION_STATUS=CLOUD_NOT_CONFIRMED_LOCAL_DATA_RETAINED_OR_UNPROVEN"
+        ));
+        assert!(summary.contains("LATEST_FAILURE_STAGE=Transport;CAUSE=NetworkConnect"));
+        assert!(summary.contains("PRESERVE_LOCAL_CHECK_NETWORK_THEN_OWNED_SYNC"));
+        assert!(!summary.contains("EXACT_CLOUD_SAVE_OBSERVED"));
+
+        let confirmed = [
+            observed(
+                fresh,
+                Stage::LocalUnsynced,
+                Outcome::Observed,
+                Cloud::Unknown,
+                Cause::None,
+            ),
+            observed(
+                fresh,
+                Stage::CloudSaveConfirmed,
+                Outcome::Succeeded,
+                Cloud::CommittedExact,
+                Cause::None,
+            ),
+            observed(
+                fresh,
+                Stage::OpenRequested,
+                Outcome::Observed,
+                Cloud::Unknown,
+                Cause::None,
+            ),
+        ];
+        let summary = latest_operation_summary(&confirmed);
+        assert!(summary.contains("LATEST_OPERATION_STATUS=EXACT_CLOUD_SAVE_OBSERVED"));
+        assert!(summary.contains("AUTHORITY=OBSERVATION_ONLY"));
+
+        let newer_open = [
+            confirmed[1].clone(),
+            observed(
+                old,
+                Stage::OpenRequested,
+                Outcome::Started,
+                Cloud::Unknown,
+                Cause::None,
+            ),
+        ];
+        assert!(
+            latest_operation_summary(&newer_open)
+                .contains("LATEST_OPERATION_STATUS=IN_PROGRESS_OR_UNPROVEN")
+        );
+    }
+
+    #[test]
+    fn cloud_restore_failure_has_a_closed_safe_wire_cause() -> Result<(), serde_json::Error> {
+        let serialized = serde_json::to_string(&Cause::CloudRestoreUnavailable)?;
+        assert_eq!(serialized, "\"CLOUD_RESTORE_UNAVAILABLE\"");
+        assert_eq!(
+            serde_json::from_str::<Cause>(&serialized)?,
+            Cause::CloudRestoreUnavailable
+        );
+        Ok(())
     }
 
     #[test]
@@ -1007,6 +1206,9 @@ mod tests {
         );
         let report = report_at(&root);
         assert!(report.contains("LOCAL=LOCAL_UNSYNCED_RETAINED"));
+        assert!(report.contains(
+            "LATEST_OPERATION_STATUS=CLOUD_NOT_CONFIRMED_LOCAL_DATA_RETAINED_OR_UNPROVEN"
+        ));
         assert!(report.contains("PRESERVE_LOCAL_WAIT_FOR_OWNED_RECOVERY"));
         assert!(!report.contains("CLOUD=CommittedExact"));
         assert!(!report.contains("AUTHORIZATION_GRANTED"));
@@ -1113,7 +1315,15 @@ mod tests {
         }
         let text = report_at(&root);
         assert!(text.len() <= MAX_REPORT_BYTES);
-        assert!(text.lines().count() <= MAX_EVENTS + 5);
+        // The fixed three-line latest-operation summary adds bounded context,
+        // without increasing the existing 48-event or 20 KiB limits.
+        assert_eq!(
+            text.lines()
+                .filter(|line| line.starts_with("LATEST_"))
+                .count(),
+            3
+        );
+        assert!(text.lines().count() <= MAX_EVENTS + 5 + 3);
         fs::remove_dir_all(root)?;
         Ok(())
     }

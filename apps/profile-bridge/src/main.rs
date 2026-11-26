@@ -256,6 +256,18 @@ fn diagnostic_cause(result: &Result<(), BridgeCliError>) -> Cause {
         Err(BridgeCliError::LaunchFailed(ShippingCompositionError::LocalDelete(
             profile_bridge::local_profile_delete::TerminalDeleteError::AuthorizationUnconfirmed,
         ))) => Cause::LocalDeleteCloudUnconfirmed,
+        Err(BridgeCliError::LaunchFailed(ShippingCompositionError::RestoreUnavailable)) => {
+            Cause::CloudRestoreUnavailable
+        }
+        Err(BridgeCliError::LaunchFailed(ShippingCompositionError::SyncUnconfirmed)) => {
+            Cause::CloudSaveFailed
+        }
+        Err(BridgeCliError::LaunchFailed(ShippingCompositionError::SyncLeaseConflict)) => {
+            Cause::CoordinatorLeaseConflict
+        }
+        Err(BridgeCliError::LaunchFailed(ShippingCompositionError::SyncVersionConflict)) => {
+            Cause::LocalStateUncertain
+        }
         Err(BridgeCliError::LaunchFailed(_)) => Cause::BrowserUnavailable,
         Err(_) => Cause::OtherSafeFailure,
     }
@@ -496,6 +508,34 @@ mod tests {
                 ))),
                 Cause::LocalDeleteCloudUnconfirmed,
                 "{other:?} does not imply an unconfirmed cloud readback",
+            );
+        }
+    }
+
+    #[test]
+    fn sync_restore_refusals_keep_their_safe_phase_in_cli_diagnostics() {
+        for (error, expected) in [
+            (
+                ShippingCompositionError::RestoreUnavailable,
+                Cause::CloudRestoreUnavailable,
+            ),
+            (
+                ShippingCompositionError::SyncUnconfirmed,
+                Cause::CloudSaveFailed,
+            ),
+            (
+                ShippingCompositionError::SyncLeaseConflict,
+                Cause::CoordinatorLeaseConflict,
+            ),
+            (
+                ShippingCompositionError::SyncVersionConflict,
+                Cause::LocalStateUncertain,
+            ),
+        ] {
+            assert_eq!(
+                diagnostic_cause(&Err(BridgeCliError::LaunchFailed(error))),
+                expected,
+                "{error:?} must not collapse into BrowserUnavailable",
             );
         }
     }
