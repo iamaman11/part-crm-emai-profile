@@ -232,6 +232,7 @@ fn classify_camouhost_diagnostic(line: &str) -> Option<(Stage, Outcome, Cause)> 
         .split_once(" category=")?;
     let stage = match phase {
         "startup" => Stage::CamouhostStartup,
+        "identity" => Stage::CamouhostIdentity,
         "launch" => Stage::CamouhostLaunch,
         "browser_visible" => Stage::BrowserVisible,
         "navigation" => Stage::CamouhostNavigation,
@@ -1166,6 +1167,14 @@ mod tests {
             ))
         );
         assert_eq!(
+            classify_camouhost_diagnostic("camouhost_failure phase=identity category=unexpected"),
+            Some((
+                Stage::CamouhostIdentity,
+                Outcome::Failed,
+                Cause::RuntimeUnexpected
+            ))
+        );
+        assert_eq!(
             classify_camouhost_diagnostic("camouhost_failure phase=close category=browser_closed"),
             Some((Stage::BrowserClosed, Outcome::Failed, Cause::RuntimeClosed))
         );
@@ -1173,6 +1182,7 @@ mod tests {
             "camouhost_failure phase=launch category=contract secret=password",
             "camouhost_failure phase=launch category=contract\nprofile-path",
             "camouhost_failure phase=launch category=secret",
+            "camouhost_failure phase=identity category=unexpected profile=C:\\secret",
             "camouhost_failure phase=unrecognized category=timeout",
             "camouhost_stage phase=launch step=sdk_enter path=C:\\secret",
             "Traceback (most recent call last)",
