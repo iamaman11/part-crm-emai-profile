@@ -273,6 +273,9 @@ fn diagnostic_cause(result: &Result<(), BridgeCliError>) -> Cause {
         Err(BridgeCliError::LaunchFailed(ShippingCompositionError::SyncLeaseConflict)) => {
             Cause::CoordinatorLeaseConflict
         }
+        Err(BridgeCliError::LaunchFailed(ShippingCompositionError::SyncServerRejected)) => {
+            Cause::CloudSaveRejected
+        }
         Err(BridgeCliError::LaunchFailed(ShippingCompositionError::SyncVersionConflict)) => {
             Cause::LocalStateUncertain
         }
@@ -534,6 +537,10 @@ mod tests {
             (
                 ShippingCompositionError::SyncLeaseConflict,
                 Cause::CoordinatorLeaseConflict,
+            ),
+            (
+                ShippingCompositionError::SyncServerRejected,
+                Cause::CloudSaveRejected,
             ),
             (
                 ShippingCompositionError::SyncVersionConflict,

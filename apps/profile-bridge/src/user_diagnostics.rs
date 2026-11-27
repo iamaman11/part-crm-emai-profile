@@ -347,6 +347,9 @@ impl UserDiagnostic {
                     crate::generation_initialization::InitialProfileError::LeaseConflict => {
                         "BRIDGE_SYNC_COORDINATOR_CONFLICT"
                     }
+                    crate::generation_initialization::InitialProfileError::ServerRejected => {
+                        "BRIDGE_SYNC_SERVER_REJECTED"
+                    }
                     crate::generation_initialization::InitialProfileError::Snapshot => {
                         "BRIDGE_FIRST_OPEN_SNAPSHOT_FAILED"
                     }
@@ -429,6 +432,7 @@ impl UserDiagnostic {
                 }
                 ShippingCompositionError::SyncUnconfirmed => "BRIDGE_CLOUD_SYNC_UNCONFIRMED",
                 ShippingCompositionError::SyncLeaseConflict => "BRIDGE_SYNC_COORDINATOR_CONFLICT",
+                ShippingCompositionError::SyncServerRejected => "BRIDGE_SYNC_SERVER_REJECTED",
                 ShippingCompositionError::SyncVersionConflict => "BRIDGE_SYNC_VERSION_CONFLICT",
                 ShippingCompositionError::LocalDelete(error) => match error {
                     crate::local_profile_delete::TerminalDeleteError::AuthorizationUnconfirmed => {
@@ -919,6 +923,12 @@ impl UserDiagnostic {
             },
             Self::Launch(Launch::SyncUnconfirmed) => {
                 "The browser closed locally and its files are intact, but cloud synchronization is not confirmed. Local pending-sync evidence was retained for a later exact retry."
+            }
+            Self::Launch(Launch::SyncServerRejected)
+            | Self::Launch(Launch::Initialization(
+                crate::generation_initialization::InitialProfileError::ServerRejected,
+            )) => {
+                "The server rejected this Sync request. The original browser files and pending changes are preserved. Check the current profile state in the application before using the existing verified recovery; do not delete local files or repeatedly retry."
             }
             Self::Launch(Launch::SyncVersionConflict) => {
                 "Cloud CURRENT is newer or differs from the exact local Save candidate. The original local profile and unsynced data were preserved. Do not force Restore or rewrite the version marker; explicit verified recovery is required."
@@ -1806,6 +1816,15 @@ mod tests {
         ));
         assert_eq!(initial.code(), diagnostic.code());
         assert_eq!(initial.message(), diagnostic.message());
+    }
+
+    #[test]
+    fn rejected_sync_requires_verification_without_discarding_local_data() {
+        let diagnostic = UserDiagnostic::Launch(ShippingCompositionError::SyncServerRejected);
+        assert_eq!(diagnostic.code(), "BRIDGE_SYNC_SERVER_REJECTED");
+        assert!(diagnostic.message().contains("original browser files"));
+        assert!(diagnostic.message().contains("do not delete"));
+        assert!(!diagnostic.message().contains("Saved"));
     }
 
     #[test]

@@ -25,6 +25,7 @@ pub enum ShippingCompositionError {
     RestoreUnavailable,
     SyncUnconfirmed,
     SyncLeaseConflict,
+    SyncServerRejected,
     /// Server CURRENT is a different committed candidate; dirty bytes are preserved.
     SyncVersionConflict,
     LocalDelete(crate::local_profile_delete::TerminalDeleteError),
@@ -63,6 +64,7 @@ impl core::fmt::Display for ShippingCompositionError {
             }
             Self::SyncUnconfirmed => "Native Close succeeded; cloud Sync not confirmed",
             Self::SyncLeaseConflict => "Coordinator lease conflict: original local unsynced data preserved; explicit recovery required",
+            Self::SyncServerRejected => "Cloud Sync request was rejected by the server; local unsynced data preserved for verified recovery",
             Self::SyncVersionConflict => "Cloud CURRENT differs from the saved local candidate; preserve original local data for explicit recovery",
             Self::LocalDelete(error) => return core::fmt::Display::fmt(error, formatter),
             #[cfg(windows)]
@@ -887,7 +889,30 @@ mod windows {
     enum ClosedReadySyncError {
         Unconfirmed,
         LeaseConflict,
+        ServerRejected,
         VersionConflict,
+    }
+
+    fn classify_prepare_refusal(
+        error: crate::generation_initialization::InitialProfileError,
+    ) -> ClosedReadySyncError {
+        match error {
+            crate::generation_initialization::InitialProfileError::LeaseConflict => {
+                ClosedReadySyncError::LeaseConflict
+            }
+            crate::generation_initialization::InitialProfileError::ServerRejected => {
+                ClosedReadySyncError::ServerRejected
+            }
+            _ => ClosedReadySyncError::Unconfirmed,
+        }
+    }
+
+    fn classify_control_plane_refusal(error: ShippingControlPlaneError) -> ClosedReadySyncError {
+        match error {
+            ShippingControlPlaneError::LaunchLeaseConflict => ClosedReadySyncError::LeaseConflict,
+            ShippingControlPlaneError::HttpStatus => ClosedReadySyncError::ServerRejected,
+            _ => ClosedReadySyncError::Unconfirmed,
+        }
     }
 
     impl From<()> for ClosedReadySyncError {
@@ -1040,16 +1065,11 @@ mod windows {
             binding.device_id(),
             &mut transport,
         )
-        .map_err(|error| match error {
-            crate::generation_initialization::InitialProfileError::LeaseConflict => {
-                ClosedReadySyncError::LeaseConflict
-            }
-            _ => ClosedReadySyncError::Unconfirmed,
-        })?;
+        .map_err(classify_prepare_refusal)?;
         let mut enrollment = ControlPlaneEnrollment::new(transport.clone());
         let enrolled = enrollment
             .redeem_claim(&claim, binding.device_id(), now().map_err(|_| ())?)
-            .map_err(|_| ClosedReadySyncError::Unconfirmed)?;
+            .map_err(classify_control_plane_refusal)?;
         if enrolled.actor().actor_id() != actor.actor_id()
             || enrolled.actor().tenant_scope().tenant_id() != actor.tenant_scope().tenant_id()
             || enrolled.profile_id() != &intent.profile_id
@@ -1066,12 +1086,7 @@ mod windows {
                 binding.device_id(),
                 enrolled.launch_intent_id(),
             )
-            .map_err(|error| match error {
-                ShippingControlPlaneError::LaunchLeaseConflict => {
-                    ClosedReadySyncError::LeaseConflict
-                }
-                _ => ClosedReadySyncError::Unconfirmed,
-            })?;
+            .map_err(classify_control_plane_refusal)?;
         let outcome = (|| -> Result<(), ClosedReadySyncError> {
             if request_prepared_pending_retry_decision(
                 &intent.tenant_id,
@@ -1498,16 +1513,11 @@ mod windows {
         );
         // Sync-only fresh Coordinator witness. Native Open uses no lease.
         let claim = reauthorize_current_ready_generation(intent, &actor, device, &mut transport)
-            .map_err(|error| match error {
-                crate::generation_initialization::InitialProfileError::LeaseConflict => {
-                    ClosedReadySyncError::LeaseConflict
-                }
-                _ => ClosedReadySyncError::Unconfirmed,
-            })?;
+            .map_err(classify_prepare_refusal)?;
         let mut enrollment = ControlPlaneEnrollment::new(transport.clone());
         let enrolled = enrollment
             .redeem_claim(&claim, device, now().map_err(|_| ())?)
-            .map_err(|_| ())?;
+            .map_err(classify_control_plane_refusal)?;
         if enrolled.actor().actor_id() != actor.actor_id()
             || enrolled.actor().tenant_scope().tenant_id() != actor.tenant_scope().tenant_id()
             || enrolled.profile_id() != &intent.profile_id
@@ -1524,12 +1534,7 @@ mod windows {
                 device,
                 enrolled.launch_intent_id(),
             )
-            .map_err(|error| match error {
-                ShippingControlPlaneError::LaunchLeaseConflict => {
-                    ClosedReadySyncError::LeaseConflict
-                }
-                _ => ClosedReadySyncError::Unconfirmed,
-            })?;
+            .map_err(classify_control_plane_refusal)?;
         let heartbeat = RetainedSaveHeartbeat::start(coordinator.clone(), lease.clone());
         let outcome = (|| {
             let mut sealer = coordinator.clone();
@@ -1675,6 +1680,9 @@ mod windows {
                     ClosedReadySyncError::LeaseConflict => {
                         ShippingCompositionError::SyncLeaseConflict
                     }
+                    ClosedReadySyncError::ServerRejected => {
+                        ShippingCompositionError::SyncServerRejected
+                    }
                     ClosedReadySyncError::Unconfirmed => ShippingCompositionError::SyncUnconfirmed,
                     ClosedReadySyncError::VersionConflict => {
                         ShippingCompositionError::SyncVersionConflict
@@ -1723,8 +1731,17 @@ mod windows {
                             ClosedReadySyncError::LeaseConflict => {
                                 ShippingCompositionError::SyncLeaseConflict
                             }
+                            ClosedReadySyncError::ServerRejected => {
+                                ShippingCompositionError::SyncServerRejected
+                            }
                             ClosedReadySyncError::Unconfirmed => {
-                                ShippingCompositionError::Initialization(error)
+                                if error
+                                    == crate::generation_initialization::InitialProfileError::ServerRejected
+                                {
+                                    ShippingCompositionError::SyncServerRejected
+                                } else {
+                                    ShippingCompositionError::Initialization(error)
+                                }
                             }
                             ClosedReadySyncError::VersionConflict => {
                                 ShippingCompositionError::SyncVersionConflict
@@ -2017,6 +2034,20 @@ mod windows {
                     Outcome::Unconfirmed,
                     Cloud::NotConfirmed,
                     Cause::CloudSaveFailed,
+                    0,
+                );
+                return outcome;
+            }
+            if matches!(outcome, Err(ShippingCompositionError::SyncServerRejected)) {
+                // A verified server refusal is not a transient network gap.
+                // The existing exact CURRENT/pending proof was already tried;
+                // never retry a rejected mutation or infer a saved receipt.
+                eprintln!("BRIDGE_SYNC_SERVER_REJECTED;NEXT_SAFE_STEP=PRESERVE_LOCAL_BYTES");
+                report::record_current(
+                    Stage::RecoveryRequired,
+                    Outcome::Unconfirmed,
+                    Cloud::NotConfirmed,
+                    Cause::CloudSaveRejected,
                     0,
                 );
                 return outcome;
@@ -3387,7 +3418,11 @@ mod windows {
 
     #[cfg(test)]
     mod closed_sync_retry_tests {
-        use super::{MAX_CLOSED_SYNC_ATTEMPTS, next_sync_retry_delay};
+        use super::{
+            ClosedReadySyncError, MAX_CLOSED_SYNC_ATTEMPTS, ShippingControlPlaneError,
+            classify_control_plane_refusal, classify_prepare_refusal, next_sync_retry_delay,
+        };
+        use crate::generation_initialization::InitialProfileError;
 
         #[test]
         fn closed_sync_stops_after_three_attempts_without_long_lived_retry_process() {
@@ -3395,6 +3430,34 @@ mod windows {
             // Only two pauses are possible before the owner exits.
             assert_eq!(next_sync_retry_delay(2), 4);
             assert_eq!(next_sync_retry_delay(4), 4);
+        }
+
+        #[test]
+        fn recognized_server_refusal_is_terminal_but_uncertain_transport_remains_retryable() {
+            assert_eq!(
+                classify_prepare_refusal(InitialProfileError::ServerRejected),
+                ClosedReadySyncError::ServerRejected
+            );
+            assert_eq!(
+                classify_prepare_refusal(InitialProfileError::LeaseConflict),
+                ClosedReadySyncError::LeaseConflict
+            );
+            assert_eq!(
+                classify_prepare_refusal(InitialProfileError::Authorization),
+                ClosedReadySyncError::Unconfirmed
+            );
+            assert_eq!(
+                classify_control_plane_refusal(ShippingControlPlaneError::HttpStatus),
+                ClosedReadySyncError::ServerRejected
+            );
+            assert_eq!(
+                classify_control_plane_refusal(ShippingControlPlaneError::HttpServerUncertain),
+                ClosedReadySyncError::Unconfirmed
+            );
+            assert_eq!(
+                classify_control_plane_refusal(ShippingControlPlaneError::Transport),
+                ClosedReadySyncError::Unconfirmed
+            );
         }
     }
 }
