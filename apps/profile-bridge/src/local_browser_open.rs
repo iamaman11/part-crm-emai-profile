@@ -20,6 +20,9 @@ const PYTHON: &str = "python/python.exe";
 const ENTRYPOINT: &str = "camouhost/real.py";
 const LOCK: &str = "camouhost/runtime-lock.json";
 const CONFIG: &str = "camoufox-config.json";
+const RENDER_POLICY: &str = "camoufox-render-policy.json";
+const NATIVE_RENDER_POLICY: &[u8] = b"{\"canvas_noise\":false,\"schema_version\":1}\n";
+const MASKED_RENDER_POLICY: &[u8] = b"{\"canvas_noise\":true,\"schema_version\":1}\n";
 const USER_DATA: &str = "user_data";
 const MAX_CONFIG_BYTES: u64 = 1024 * 1024;
 const LOCAL_UNSYNCED: &str = ".local-unsynced";
@@ -192,6 +195,15 @@ where
 /// Everything else may contain SDK diagnostics, configuration or profile data.
 /// This is a diagnostic projection, never launch/health/recovery authority.
 fn classify_camouhost_diagnostic(line: &str) -> Option<(Stage, Outcome, Cause)> {
+    if line == "camouhost_stage phase=launch step=identity_gpu_probe_timeout" {
+        // A first-DRAFT SDK probe timed out, but the same official fpgen draw
+        // is still being prepared with the SDK's persisted canvas mask.
+        return Some((
+            Stage::CamouhostIdentity,
+            Outcome::Observed,
+            Cause::RuntimeTimeout,
+        ));
+    }
     let milestone = match line {
         "camouhost_stage phase=startup step=begin" => {
             Some((Stage::CamouhostStartup, Outcome::Started))
@@ -361,6 +373,10 @@ fn read_profile_config(folder: &Path) -> Result<String, LocalOpenError> {
 fn persist_sdk_identity(folder: &Path, raw: &[u8]) -> Result<(), LocalOpenError> {
     let report: serde_json::Value =
         serde_json::from_slice(raw).map_err(|_| LocalOpenError::IdentityPreparation)?;
+    let canvas_noise = report
+        .get("canvas_noise")
+        .and_then(serde_json::Value::as_bool)
+        .ok_or(LocalOpenError::IdentityPreparation)?;
     let config_json = report
         .get("camoufox_config_json")
         .and_then(serde_json::Value::as_str)
@@ -394,6 +410,41 @@ fn persist_sdk_identity(folder: &Path, raw: &[u8]) -> Result<(), LocalOpenError>
     match fs::symlink_metadata(&destination) {
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
         _ => return Err(LocalOpenError::IdentityPreparation),
+    }
+    let rendering_policy = folder.join(RENDER_POLICY);
+    // Pin SDK native defaults or the SDK canvas mask for every new identity;
+    // absence of this file means a historical profile's old launch prefs.
+    // Commit this file first: an interrupted write cannot launch Firefox with
+    // an SDK identity but a different rendering policy.
+    let policy_bytes = if canvas_noise {
+        MASKED_RENDER_POLICY
+    } else {
+        NATIVE_RENDER_POLICY
+    };
+    let already_persisted = match fs::symlink_metadata(&rendering_policy) {
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => false,
+        Ok(metadata) if metadata.is_file() && !metadata.file_type().is_symlink() => {
+            // A crash after the first atomic file, before CONFIG, is a safe
+            // retry only when the exact policy bytes still match. Never
+            // replace or silently switch a policy that was already written.
+            fs::read(&rendering_policy).map_err(|_| LocalOpenError::IdentityPreparation)?
+                == policy_bytes
+        }
+        _ => return Err(LocalOpenError::IdentityPreparation),
+    };
+    if !already_persisted {
+        let mut temporary = tempfile::NamedTempFile::new_in(folder)
+            .map_err(|_| LocalOpenError::IdentityPreparation)?;
+        temporary
+            .write_all(policy_bytes)
+            .map_err(|_| LocalOpenError::IdentityPreparation)?;
+        temporary
+            .as_file()
+            .sync_all()
+            .map_err(|_| LocalOpenError::IdentityPreparation)?;
+        temporary
+            .persist_noclobber(&rendering_policy)
+            .map_err(|_| LocalOpenError::IdentityPreparation)?;
     }
     let mut temporary =
         tempfile::NamedTempFile::new_in(folder).map_err(|_| LocalOpenError::IdentityPreparation)?;
@@ -1132,6 +1183,7 @@ mod tests {
     use crate::generation_initialization::{InitialProfileOpen, InitialProfileStatus};
     use crate::user_diagnostics::report::{Cause, Outcome, Stage};
     use profile_platform_primitives::{ActorId, ProfileId, TenantId};
+    use sha2::{Digest, Sha256};
 
     fn intent() -> InitialProfileOpen {
         InitialProfileOpen {
@@ -1144,7 +1196,110 @@ mod tests {
     }
 
     #[test]
+    fn first_sdk_identity_persists_the_official_rendering_choice_without_rewriting_config() {
+        let base = tempfile::tempdir().unwrap();
+        let config = b"{\"navigator.userAgent\":\"test\"}\n";
+        let digest = Sha256::digest(config)
+            .iter()
+            .map(|byte| format!("{byte:02x}"))
+            .collect::<String>();
+        for (canvas_noise, name) in [(false, "native"), (true, "masked")] {
+            let folder = base.path().join(name);
+            std::fs::create_dir(&folder).unwrap();
+            let report = serde_json::to_vec(&serde_json::json!({
+                "canvas_noise": canvas_noise,
+                "camoufox_config_json": std::str::from_utf8(config).unwrap(),
+                "fingerprint_config_sha256": digest,
+            }))
+            .unwrap();
+            super::persist_sdk_identity(&folder, &report).unwrap();
+            assert_eq!(std::fs::read(folder.join(super::CONFIG)).unwrap(), config);
+            let policy = folder.join(super::RENDER_POLICY);
+            let expected_policy = if canvas_noise {
+                super::MASKED_RENDER_POLICY
+            } else {
+                super::NATIVE_RENDER_POLICY
+            };
+            assert_eq!(std::fs::read(&policy).unwrap(), expected_policy);
+            assert_eq!(
+                super::persist_sdk_identity(&folder, &report),
+                Err(LocalOpenError::IdentityPreparation),
+                "existing identities cannot be replaced on retry"
+            );
+        }
+    }
+
+    #[test]
+    fn malformed_rendering_choice_fails_before_creating_any_identity_files() {
+        let base = tempfile::tempdir().unwrap();
+        let report = serde_json::to_vec(&serde_json::json!({
+            "canvas_noise": "not-a-boolean",
+            "camoufox_config_json": "{}\n",
+            "fingerprint_config_sha256": "bad",
+        }))
+        .unwrap();
+        assert_eq!(
+            super::persist_sdk_identity(base.path(), &report),
+            Err(LocalOpenError::IdentityPreparation)
+        );
+        assert!(!base.path().join(super::CONFIG).exists());
+        assert!(!base.path().join(super::RENDER_POLICY).exists());
+    }
+
+    #[test]
+    fn interrupted_policy_first_write_can_resume_only_with_exact_matching_bytes() {
+        let base = tempfile::tempdir().unwrap();
+        let config = b"{}\n";
+        let digest = Sha256::digest(config)
+            .iter()
+            .map(|byte| format!("{byte:02x}"))
+            .collect::<String>();
+        let report = serde_json::to_vec(&serde_json::json!({
+            "canvas_noise": false,
+            "camoufox_config_json": std::str::from_utf8(config).unwrap(),
+            "fingerprint_config_sha256": digest,
+        }))
+        .unwrap();
+        let matching = base.path().join("matching");
+        std::fs::create_dir(&matching).unwrap();
+        std::fs::write(
+            matching.join(super::RENDER_POLICY),
+            super::NATIVE_RENDER_POLICY,
+        )
+        .unwrap();
+        super::persist_sdk_identity(&matching, &report).unwrap();
+        assert_eq!(std::fs::read(matching.join(super::CONFIG)).unwrap(), config);
+
+        let conflicting = base.path().join("conflicting");
+        std::fs::create_dir(&conflicting).unwrap();
+        std::fs::write(
+            conflicting.join(super::RENDER_POLICY),
+            super::MASKED_RENDER_POLICY,
+        )
+        .unwrap();
+        assert_eq!(
+            super::persist_sdk_identity(&conflicting, &report),
+            Err(LocalOpenError::IdentityPreparation)
+        );
+        assert!(!conflicting.join(super::CONFIG).exists());
+        assert_eq!(
+            std::fs::read(conflicting.join(super::RENDER_POLICY)).unwrap(),
+            super::MASKED_RENDER_POLICY
+        );
+    }
+
+    #[test]
     fn installed_camouhost_diagnostics_preserve_only_closed_phase_and_category() {
+        assert_eq!(
+            classify_camouhost_diagnostic(
+                "camouhost_stage phase=launch step=identity_gpu_probe_timeout"
+            ),
+            Some((
+                Stage::CamouhostIdentity,
+                Outcome::Observed,
+                Cause::RuntimeTimeout
+            ))
+        );
         assert_eq!(
             classify_camouhost_diagnostic("camouhost_stage phase=launch step=identity_requested"),
             Some((Stage::CamouhostIdentity, Outcome::Started, Cause::None))
