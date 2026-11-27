@@ -95,6 +95,7 @@ pub enum Cause {
     CoordinatorUncertain,
     CloudRestoreUnavailable,
     CloudSaveFailed,
+    CloudSaveRejected,
     OtherSafeFailure,
     RuntimeDependency,
     RuntimeContract,

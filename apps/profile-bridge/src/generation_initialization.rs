@@ -92,6 +92,7 @@ impl InitialProfileOpen {
 pub enum InitialProfileError {
     Authorization,
     LeaseConflict,
+    ServerRejected,
     RuntimeBundle,
     Runtime,
     Snapshot,
@@ -107,6 +108,9 @@ impl core::fmt::Display for InitialProfileError {
             Self::Authorization => "profile Sync authorization was not confirmed",
             Self::LeaseConflict => {
                 "confirmed Coordinator lease conflict; local unsynced browser data preserved"
+            }
+            Self::ServerRejected => {
+                "server rejected the profile transition; preserve local data for verified recovery"
             }
             Self::RuntimeBundle | Self::Runtime => "installed runtime is unavailable",
             Self::Snapshot => "closed local snapshot could not be verified",
@@ -138,13 +142,21 @@ fn post<T: MachineHttpPort>(
     let response = transport
         .request(MachineHttpMethod::PostJson, path, &id, Some(&body))
         .map_err(|_| InitialProfileError::Authorization)?;
-    // Only the existing bounded, correlated 409 parser can prove a durable
-    // coordinator conflict. Unknown 409 and transport errors remain unconfirmed.
-    if response.status() == 409
-        && crate::shipping_control_plane::safe_machine_problem_code(&response, &id)
-            == Some("lease_conflict")
-    {
-        return Err(InitialProfileError::LeaseConflict);
+    // This existing bounded parser accepts only exact, request-correlated
+    // server problem codes. Do not turn an unknown 409 into a claimed conflict.
+    if response.status() == 409 {
+        let problem = crate::shipping_control_plane::safe_machine_problem_code(&response, &id);
+        eprintln!(
+            "BRIDGE_INITIALIZATION_MACHINE_REFUSAL;status=409;problem={}",
+            problem.unwrap_or("unverified")
+        );
+        match problem {
+            Some("lease_conflict") => return Err(InitialProfileError::LeaseConflict),
+            Some("version_conflict" | "invalid_state" | "replay_rejected") => {
+                return Err(InitialProfileError::ServerRejected);
+            }
+            _ => {} // No authenticated terminal verdict: preserve uncertain recovery.
+        }
     }
     Ok(response)
 }
@@ -1590,12 +1602,14 @@ mod tests {
     }
 
     #[test]
-    fn ready_reauthorization_distinguishes_verified_lease_conflict_from_unknown_409()
+    fn ready_reauthorization_keeps_verified_terminal_conflicts_typed()
     -> Result<(), Box<dyn std::error::Error>> {
         use profile_platform_primitives::TenantScope;
 
         struct Refusal {
             correlated: bool,
+            code: &'static str,
+            status: u16,
         }
         impl MachineHttpPort for Refusal {
             type Error = ();
@@ -1610,10 +1624,13 @@ mod tests {
                 assert!(path.ends_with("/generation-initialization"));
                 assert!(body.is_some());
                 let payload = control_plane_contract::public_api::ProblemPayload {
-                    problem_type: "urn:part-crm:problem:lease-conflict".to_owned(),
-                    title: "Lease Conflict".to_owned(),
-                    status: 409,
-                    code: "lease_conflict".to_owned(),
+                    problem_type: control_plane_contract::public_api::problem_type_for_code(
+                        self.code,
+                    )
+                    .to_owned(),
+                    title: "Request Refused".to_owned(),
+                    status: self.status,
+                    code: self.code.to_owned(),
                     correlation_id: if self.correlated {
                         correlation_id.as_str().to_owned()
                     } else {
@@ -1621,7 +1638,7 @@ mod tests {
                     },
                 };
                 Ok(MachineHttpResponse::new(
-                    409,
+                    self.status,
                     serde_json::to_vec(&payload).map_err(|_| ())?,
                 ))
             }
@@ -1641,19 +1658,66 @@ mod tests {
                 &intent,
                 &actor,
                 &device,
-                &mut Refusal { correlated: true }
+                &mut Refusal {
+                    correlated: true,
+                    code: "lease_conflict",
+                    status: 409,
+                }
             ),
             Err(InitialProfileError::LeaseConflict)
         );
-        assert_eq!(
-            reauthorize_current_ready_generation(
-                &intent,
-                &actor,
-                &device,
-                &mut Refusal { correlated: false }
-            ),
-            Err(InitialProfileError::Authorization)
-        );
+        for code in ["version_conflict", "invalid_state", "replay_rejected"] {
+            assert_eq!(
+                reauthorize_current_ready_generation(
+                    &intent,
+                    &actor,
+                    &device,
+                    &mut Refusal {
+                        correlated: true,
+                        code,
+                        status: 409,
+                    }
+                ),
+                Err(InitialProfileError::ServerRejected),
+                "a verified {code} must stop instead of repeating an identical Prepare"
+            );
+        }
+        for (correlated, code) in [
+            (false, "lease_conflict"),
+            (false, "version_conflict"),
+            (true, "conflict"),
+        ] {
+            assert_eq!(
+                reauthorize_current_ready_generation(
+                    &intent,
+                    &actor,
+                    &device,
+                    &mut Refusal {
+                        correlated,
+                        code,
+                        status: 409,
+                    }
+                ),
+                Err(InitialProfileError::Authorization),
+                "unverified or ambiguous 409 cannot fabricate a terminal verdict"
+            );
+        }
+        for status in [408, 429, 500, 503] {
+            assert_eq!(
+                reauthorize_current_ready_generation(
+                    &intent,
+                    &actor,
+                    &device,
+                    &mut Refusal {
+                        correlated: true,
+                        code: "dependency_unavailable",
+                        status,
+                    }
+                ),
+                Err(InitialProfileError::Authorization),
+                "uncertain HTTP {status} must retain the ordinary recovery path"
+            );
+        }
         Ok(())
     }
 
