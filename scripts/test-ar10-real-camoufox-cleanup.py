@@ -893,6 +893,32 @@ def prove_failure_observation_contract() -> None:
             f"camouhost_failure phase=identity category={category}",
         ]
         assert "secret" not in stdout.getvalue() + stderr.getvalue()
+
+    # The official native SDK launch wrapper retains a typed cause, although
+    # its public message is intentionally generic. Classify the cause without
+    # emitting either the SDK exception text or sensitive browser data.
+    native_launch_error = type("NativeLaunchError", (RuntimeError,), {})
+    for upstream, expected in (
+        (type("TargetClosedError", (Exception,), {})("secret-profile-path"), "browser_closed"),
+        (type("TimeoutError", (Exception,), {})("secret-url"), "timeout"),
+        (OSError("secret-process-path"), "io"),
+        (RuntimeError("TargetClosedError mentioned in secret text"), "unexpected"),
+    ):
+        wrapped = native_launch_error("official Camoufox Playwright launch failed")
+        wrapped.__cause__ = upstream
+        stderr = io.StringIO()
+        with contextlib.redirect_stderr(stderr):
+            runtime.report_runtime_failure("launch", wrapped)
+        assert stderr.getvalue() == f"camouhost_failure phase=launch category={expected}\n"
+        assert "secret" not in stderr.getvalue()
+
+    wrapped = native_launch_error("no SDK cause")
+    assert runtime.runtime_failure_category(wrapped) == "unexpected"
+    # Arbitrarily nested or cyclic exception chains cannot fabricate a Close.
+    opaque = RuntimeError("opaque")
+    wrapped.__cause__ = opaque
+    opaque.__cause__ = wrapped
+    assert runtime.runtime_failure_category(wrapped) == "unexpected"
     timeout = type("TimeoutError", (Exception,), {})("secret-url-key-profile-content")
     frames = [f"hello|{IPC_VERSION}", f"launch|{SESSION}", f"observe_browser_visible|{SESSION}",
               f"admit_navigation|{SESSION}|unused", f"close|{SESSION}"]

@@ -977,17 +977,27 @@ def valid_frame(raw: str) -> bool:
 
 
 def runtime_failure_category(error: BaseException) -> str:
-    if isinstance(error, importlib.metadata.PackageNotFoundError):
-        return "dependency"
-    if isinstance(error, RuntimeContractError):
-        return "contract"
-    elif isinstance(error, TimeoutError) or type(error).__name__ == "TimeoutError":
-        # Playwright's TimeoutError is not the builtin TimeoutError.
-        return "timeout"
-    elif isinstance(error, OSError):
-        return "io"
-    elif type(error).__name__ == "TargetClosedError":
-        return "browser_closed"
+    # NativeLaunchError deliberately hides untrusted SDK exception text, but
+    # keeps the original exception as __cause__. Preserve its closed category
+    # across that one trusted adapter boundary; do not mistake a message that
+    # merely mentions TargetClosedError for a browser-close observation.
+    wrapped_launch = type(error).__name__ == "NativeLaunchError"
+    candidate = error
+    for _ in range(6):
+        if isinstance(candidate, importlib.metadata.PackageNotFoundError):
+            return "dependency"
+        if isinstance(candidate, RuntimeContractError):
+            return "contract"
+        if isinstance(candidate, TimeoutError) or type(candidate).__name__ == "TimeoutError":
+            # Playwright's TimeoutError is not the builtin TimeoutError.
+            return "timeout"
+        if isinstance(candidate, OSError):
+            return "io"
+        if type(candidate).__name__ == "TargetClosedError":
+            return "browser_closed"
+        if not wrapped_launch or candidate.__cause__ is None or candidate.__cause__ is candidate:
+            break
+        candidate = candidate.__cause__
     return "unexpected"
 
 
