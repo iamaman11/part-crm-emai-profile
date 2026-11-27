@@ -2438,6 +2438,7 @@ mod windows {
                 LocalOpenError::RuntimeUnavailable,
                 LocalOpenError::IdentityPreparation,
                 LocalOpenError::BrowserLaunchFailed,
+                LocalOpenError::BrowserExitedBeforeReady,
                 LocalOpenError::LaunchConfirmation,
                 LocalOpenError::BrowserNotClosedCleanly,
                 LocalOpenError::ProfileBusy,
