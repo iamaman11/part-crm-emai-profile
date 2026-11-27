@@ -450,6 +450,16 @@ def prove(main_sha: str, gate: str, api: Callable[[str], Any],
             label = step.get("name")
             require(label not in actual, f"duplicate PR step: {name}/{label}")
             actual[label] = (step.get("status"), step.get("conclusion"))
+        # An unchanged-native PR may certify prior FULL Linux while the
+        # Windows reuse probe independently falls back to a real FULL build.
+        # The current exact-head executable then has its own physical proof;
+        # it need not (and may not) have the prior executable's byte digest.
+        windows_full = (native_reused and gate == "quality"
+                        and name == RUNNER_RECEIPT["quality"][1]
+                        and all(actual.get(step) == ("completed", "success")
+                                for step in CRITICAL["quality"][name]))
+        if windows_full:
+            steps = ("Verify exact source checkout",) + CRITICAL["quality"][name]
         require(all(actual.get(step) == ("completed", "success") for step in steps),
                 f"required PR test skipped/missing: {name}")
         if native_reused and gate == "quality" and name == "Rust Linux and WASM":
@@ -463,14 +473,16 @@ def prove(main_sha: str, gate: str, api: Callable[[str], Any],
                 require(actual.get(RUST_LINUX_LIGHT_CERT) in
                         (None, ("completed", "skipped")),
                         "Quality Rust Linux falsely certified inheritance during FULL")
-        if native_reused and (
+        if native_reused and not windows_full and (
             name == RUNNER_RECEIPT[gate][1]
             or (gate == "local-profile" and name == "Local Profile Windows K2")
         ):
             # A continue-on-error step can report conclusion=success despite
             # outcome=failure. The physical fallback must then run. Require
             # every FULL-only step truly skipped before accepting inheritance;
-            # a mixed or green-only path is never a valid reused proof.
+            # a partial FULL/LIGHT path within this Windows job, or a green-
+            # only reuse probe, is never valid inherited proof. Independently
+            # completed Windows FULL was accepted above on its own steps.
             for full_step in CRITICAL[gate][name]:
                 if full_step in steps:
                     continue  # Installer/upload are still physically executed.
@@ -565,11 +577,18 @@ def prove_release_artifacts(main_sha: str, api: Callable[[str], Any]) -> dict[st
         }
     require(len({receipt["id"] for receipt in selected.values()}) == len(selected),
             "artifact IDs overlap")
-    if native_prior is not None:
+    bridge_job = producers[RELEASE_PRODUCERS["bridge"]]
+    bridge_steps = {step.get("name"): (step.get("status"), step.get("conclusion"))
+                    for step in bridge_job.get("steps", [])}
+    bridge_full = all(bridge_steps.get(step) == ("completed", "success")
+                      for step in CRITICAL["quality"][RELEASE_PRODUCERS["bridge"]])
+    if native_prior is not None and not bridge_full:
         # A current PR may upload an inherited Bridge only after its original
         # FULL physical-proved producer and all transitive native inputs were
         # revalidated. The current raw artifact must contain EXACTLY those
         # previous bytes; a green installer/new upload is not proof alone.
+        # A genuinely FULL current Windows build is independently proved in
+        # the same PR even when only Linux inherited its prior FULL proof.
         prior_receipt = prove_release_artifacts(native_prior, api)
         for field in ("sha256", "size"):
             require(selected["bridge"][field] == prior_receipt["artifacts"]["bridge"][field],
@@ -3025,6 +3044,48 @@ def self_test() -> None:
         step["conclusion"] = "skipped" if step["name"] == RUST_LINUX_LIGHT_CERT else "success"
     require(prove_accepted_native_reuse(new_main, "quality", lambda key: full_linux_pages[key])
             == (new_head, prior_main), "genuine Linux FULL on reused-native PR rejected")
+    # The inverse mix is also safe: inherited Linux Cargo is independently
+    # certified against prior FULL, while Windows actually compiles, tests,
+    # uploads and witnesses a fresh exact-head Bridge executable. The fresh
+    # executable's bytes are not required to equal its ancestor's digest.
+    full_windows_pages = json.loads(json.dumps(new_pages))
+    full_windows_jobs = full_windows_pages[linux_jobs_url]["jobs"]
+    full_windows = next(job for job in full_windows_jobs
+                        if job["name"] == RELEASE_PRODUCERS["bridge"])
+    for label in CRITICAL["quality"][RELEASE_PRODUCERS["bridge"]]:
+        step = next((step for step in full_windows["steps"]
+                     if step["name"] == label), None)
+        if step is None:
+            full_windows["steps"].append({
+                "name": label, "status": "completed", "conclusion": "success",
+            })
+        else:
+            step["status"], step["conclusion"] = "completed", "success"
+    full_windows_artifacts = full_windows_pages[
+        f"repos/{REPOSITORY}/actions/runs/{quality_run['id']}/artifacts?per_page=100"
+    ]["artifacts"]
+    fresh_bridge = next(a for a in full_windows_artifacts if a["name"] == "profile-bridge.exe")
+    fresh_bridge["digest"] = "sha256:" + "9" * 64
+    require(prove_accepted_native_reuse(new_main, "quality", lambda key: full_windows_pages[key])
+            == (new_head, prior_main), "genuine Windows FULL on inherited-Linux PR rejected")
+    mixed_receipt = prove_release_artifacts(new_main, lambda key: full_windows_pages[key])
+    require(mixed_receipt["native_prior_main_sha"] == prior_main
+            and mixed_receipt["artifacts"]["bridge"]["sha256"] == "9" * 64,
+            "current FULL Windows executable incorrectly replaced by inherited bytes")
+    # A partial Windows compile/receipt must not masquerade as either fully
+    # built or fully inherited, even if the job's top-level result was green.
+    partial_windows = json.loads(json.dumps(full_windows_pages))
+    partial_jobs = partial_windows[linux_jobs_url]["jobs"]
+    partial_bridge = next(job for job in partial_jobs
+                          if job["name"] == RELEASE_PRODUCERS["bridge"])
+    next(step for step in partial_bridge["steps"]
+         if step["name"] == "Build release Profile Bridge executable")["conclusion"] = "skipped"
+    try:
+        prove_accepted_native_reuse(new_main, "quality", lambda key: partial_windows[key])
+    except Unconfirmed:
+        pass
+    else:
+        raise AssertionError("partial Windows FULL/inherited mixed proof accepted")
     require(prove_accepted_native_reuse(new_main, "local-profile", lambda key: new_pages[key])
             == (new_head, prior_main), "exact new PR inherited Local proof rejected")
     verified_inherited = prove_release_artifacts(new_main, lambda key: new_pages[key])
