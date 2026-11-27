@@ -151,6 +151,14 @@ export function ClientProfilesPanel({
         each one directly. Client visibility alone does not grant access to a browser profile.
       </p>
       <p>First time on this Windows computer? <a href={`/devices?tenant=${encodeURIComponent(tenantId)}`}>Install and connect Profile Bridge</a> once, then launch any profile you can operate.</p>
+      <p className="muted">After closing Camoufox, refresh this list to see the latest cloud status. A browser launch alone does not confirm Saved.</p>
+      <button
+        type="button"
+        disabled={profiles.isFetching || available.isFetching}
+        onClick={() => { void Promise.all([profiles.refetch(), available.refetch()]); }}
+      >
+        {profiles.isFetching || available.isFetching ? 'Refreshing profiles…' : 'Refresh profiles'}
+      </button>
       <StatusMessage
         state={
           profiles.error
