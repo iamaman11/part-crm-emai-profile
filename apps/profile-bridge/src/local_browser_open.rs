@@ -48,6 +48,7 @@ pub enum LocalOpenError {
     OperationInProgress,
     IdentityPreparation,
     BrowserLaunchFailed,
+    BrowserExitedBeforeReady,
     BrowserNotClosedCleanly,
     LaunchConfirmation,
 }
@@ -62,6 +63,9 @@ impl fmt::Display for LocalOpenError {
             Self::OperationInProgress => "Another native Open, Close or Sync operation still owns this profile",
             Self::IdentityPreparation => "Local Camoufox identity could not be prepared",
             Self::BrowserLaunchFailed => "Local Camoufox did not start; the existing profile was kept",
+            Self::BrowserExitedBeforeReady => {
+                "Native Camoufox exited before BrowserReady; local unsynced files were preserved for a normal reopen"
+            }
             Self::BrowserNotClosedCleanly => {
                 "Browser close was not verified; local files were kept"
             }
@@ -80,6 +84,7 @@ enum NativeBrowserCompletion {
     NativeWriterReleased,
     RecoveryRequired,
     LaunchFailed,
+    PreReadyWriterExited,
     LaunchUnconfirmed,
     CloseUnconfirmed,
 }
@@ -455,11 +460,12 @@ fn classify_native_browser_completion(
     }
     if action == "--local-open" {
         return match native_writer_absent {
-            // The native Firefox writer did run, even if its SDK Ready event
-            // never arrived. Its exit is unclean/unknown, not a failed spawn.
-            // This never licenses Sync without a current-run final witness.
+            // The native Firefox writer ran and is now absent, but the SDK
+            // never confirmed BrowserReady. Keep this distinct from both a
+            // failed spawn and a post-Ready unconfirmed final Close: neither
+            // is permission for cloud Sync without a current-run witness.
             Some(true) if native_writer_seen_before_ready => {
-                NativeBrowserCompletion::RecoveryRequired
+                NativeBrowserCompletion::PreReadyWriterExited
             }
             Some(true) => NativeBrowserCompletion::LaunchFailed,
             _ => NativeBrowserCompletion::LaunchUnconfirmed,
@@ -1060,6 +1066,22 @@ fn open_under_profile_admission(
             // Keep the durable writer admission: Firefox may still own bytes.
             return Err(LocalOpenError::LaunchConfirmation);
         }
+        NativeBrowserCompletion::PreReadyWriterExited => {
+            // A pre-Ready native writer really existed. The adapter has ended
+            // and the first native-lock observation found no writer; require
+            // a second independent check before releasing Bridge admission.
+            // Keep dirty evidence and never start Sync on this path.
+            if !matches!(
+                crate::browser_execution::browser_writer_locks_absent(&workspace),
+                Ok(true)
+            ) {
+                return Err(LocalOpenError::LaunchConfirmation);
+            }
+            writer
+                .release()
+                .map_err(|_| LocalOpenError::InvalidLocalWorkspace)?;
+            return Err(LocalOpenError::BrowserExitedBeforeReady);
+        }
         NativeBrowserCompletion::CloseUnconfirmed | NativeBrowserCompletion::RecoveryRequired => {
             // A crashed Firefox has genuinely released its kernel file handle.
             // Retain every original browser byte and .local-unsynced marker,
@@ -1218,8 +1240,12 @@ mod tests {
                 true,
                 Some(true)
             ),
-            Completion::RecoveryRequired,
-            "a witnessed pre-Ready native writer is not a pure launch failure"
+            Completion::PreReadyWriterExited,
+            "a witnessed pre-Ready native writer has its own recoverable outcome"
+        );
+        assert!(
+            !Completion::PreReadyWriterExited.confirms_closed_profile(),
+            "pre-Ready writer exit must never become a clean close/Sync receipt"
         );
         assert_eq!(
             classify_native_browser_completion(
@@ -1809,7 +1835,7 @@ mod tests {
     #[cfg(windows)]
     #[test]
     #[ignore = "requires PROFILE_BRIDGE_TEST_PYTHON"]
-    fn native_writer_exiting_before_sdk_ready_is_recovery_not_launch_failure()
+    fn native_writer_exiting_before_sdk_ready_has_distinct_unsynced_outcome()
     -> Result<(), Box<dyn std::error::Error>> {
         use std::fs;
         use std::path::PathBuf;
@@ -1839,7 +1865,7 @@ sys.exit(0)
         fs::create_dir(&folder)?;
         assert_eq!(
             run_python_with_executable(&python, &runtime_root, &folder, "--local-open", None)?,
-            super::NativeBrowserCompletion::RecoveryRequired,
+            super::NativeBrowserCompletion::PreReadyWriterExited,
         );
         assert!(crate::browser_execution::browser_writer_locks_absent_at(
             &folder

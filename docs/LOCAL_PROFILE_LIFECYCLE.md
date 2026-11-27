@@ -358,7 +358,12 @@ Observed progression:
       -> SYNCING (same Rust owner; exact encrypted successor)
       -> CURRENT_CONFIRMED (D1 receipt and durable clean marker)
 
-Uncertain startup or Close yields RECOVERY_REQUIRED, preserves local dirty files, and does not trigger automatic cloud Sync. The startup deadline bounds foreground observation without terminating a user browser.
+An observed native writer that exits **before BrowserReady** has a distinct recoverable diagnostic
+once a second independent OS-lock check proves it is gone. The original dirty files remain, no
+automatic cloud Sync runs, and an ordinary subsequent Open/Close may recover them. If the writer
+is still live/unknown, startup stays unconfirmed and retains native admission. A post-Ready
+close without the final-close witness remains RECOVERY_REQUIRED. The startup deadline bounds
+foreground observation without terminating a user browser.
 
 The spawned Python owns a Win32 FILE_SHARE_NONE handle for the OS-only .profile-platform.launch-admission file outside browser snapshots. This kernel guard survives an OS-killed Rust parent while the child remains alive. A new Open, closed Sync, Restore, installer activation or local Delete cannot proceed solely because Firefox parent.lock is temporarily absent. The guard disappears when its last native handle closes; no PID-based state manager or new cloud authority is introduced.
 
