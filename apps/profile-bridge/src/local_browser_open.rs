@@ -427,8 +427,7 @@ fn persist_sdk_identity(folder: &Path, raw: &[u8]) -> Result<(), LocalOpenError>
             // A crash after the first atomic file, before CONFIG, is a safe
             // retry only when the exact policy bytes still match. Never
             // replace or silently switch a policy that was already written.
-            fs::read(&rendering_policy)
-                .map_err(|_| LocalOpenError::IdentityPreparation)?
+            fs::read(&rendering_policy).map_err(|_| LocalOpenError::IdentityPreparation)?
                 == policy_bytes
         }
         _ => return Err(LocalOpenError::IdentityPreparation),
@@ -1263,14 +1262,21 @@ mod tests {
         .unwrap();
         let matching = base.path().join("matching");
         std::fs::create_dir(&matching).unwrap();
-        std::fs::write(matching.join(super::RENDER_POLICY), super::NATIVE_RENDER_POLICY).unwrap();
+        std::fs::write(
+            matching.join(super::RENDER_POLICY),
+            super::NATIVE_RENDER_POLICY,
+        )
+        .unwrap();
         super::persist_sdk_identity(&matching, &report).unwrap();
         assert_eq!(std::fs::read(matching.join(super::CONFIG)).unwrap(), config);
 
         let conflicting = base.path().join("conflicting");
         std::fs::create_dir(&conflicting).unwrap();
-        std::fs::write(conflicting.join(super::RENDER_POLICY), super::MASKED_RENDER_POLICY)
-            .unwrap();
+        std::fs::write(
+            conflicting.join(super::RENDER_POLICY),
+            super::MASKED_RENDER_POLICY,
+        )
+        .unwrap();
         assert_eq!(
             super::persist_sdk_identity(&conflicting, &report),
             Err(LocalOpenError::IdentityPreparation)
