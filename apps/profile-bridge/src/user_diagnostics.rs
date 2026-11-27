@@ -1164,7 +1164,11 @@ mod tests {
         assert_ne!(pre_ready.code(), unconfirmed_close.code());
         assert!(pre_ready.message().contains("before BrowserReady"));
         assert!(pre_ready.message().contains("no cloud Save was confirmed"));
-        assert!(pre_ready.message().contains("unsynced changes were preserved"));
+        assert!(
+            pre_ready
+                .message()
+                .contains("unsynced changes were preserved")
+        );
     }
 
     #[test]
