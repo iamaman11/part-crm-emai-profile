@@ -34,6 +34,7 @@ BROWSER_CLOSE_QUIESCENCE_SECONDS = 10.0
 BROWSER_CLOSE_POLL_SECONDS = 0.05
 SESSION_PATTERN = re.compile(r"[A-Za-z0-9_-]{8,96}\Z")
 CONFIG_NAME = "camoufox-config.json"
+RENDER_POLICY_NAME = "camoufox-render-policy.json"
 USER_DATA_NAME = "user_data"
 BRIDGE_LOCK_NAME = ".profile-platform.lock"
 RUNTIME_LOCK_NAME = "runtime-lock.json"
@@ -336,6 +337,26 @@ def load_canonical_json(
     if not isinstance(value, dict) or canonical_json(value) != raw:
         raise RuntimeContractError("runtime JSON is not canonical")
     return value, raw
+
+
+def saved_canvas_noise_policy(root: Path) -> bool | None:
+    """Read a new identity's SDK policy, or None for an unchanged legacy Open.
+
+    Profiles created before this policy file keep their old launch preferences.
+    A malformed or redirected policy must never silently change the fingerprint.
+    """
+    path = root / RENDER_POLICY_NAME
+    if not path.exists() and not path.is_symlink():
+        return None
+    policy, _ = load_canonical_json(path, 256)
+    if (
+        set(policy) != {"canvas_noise", "schema_version"}
+        or type(policy["canvas_noise"]) is not bool
+        or type(policy["schema_version"]) is not int
+        or policy["schema_version"] != 1
+    ):
+        raise RuntimeContractError("saved Camoufox rendering policy is invalid")
+    return policy["canvas_noise"]
 
 
 def runtime_lock_path() -> Path:
@@ -806,11 +827,20 @@ def camoufox_launch_options(
     from camoufox.utils import launch_options
 
     user_data_dir = root / USER_DATA_NAME
+    rendering_policy = saved_canvas_noise_policy(root)
     firefox_prefs: dict[str, Any] = {
         "browser.startup.page": 3,
-        "privacy.baselineFingerprintingProtection": False,
         **accessibility_preferences(os.name),
     }
+    if rendering_policy is None:
+        # Saved profiles from previous releases retain their exact historical
+        # launch behavior; never change a live browser identity implicitly.
+        firefox_prefs["privacy.baselineFingerprintingProtection"] = False
+    elif rendering_policy:
+        # The SDK's canvas placeholder uses baseline-protection overrides.
+        # Merely passing canvas_noise=True while forcing this pref off would
+        # silently disable the very masking the official SDK requested.
+        firefox_prefs["privacy.baselineFingerprintingProtection"] = True
     if isolated:
         firefox_prefs["network.disable-localhost-when-offline"] = True
     # SDK 159 removed context-attribute injection. Project only these retired
@@ -819,6 +849,9 @@ def camoufox_launch_options(
     sdk_config = copy.deepcopy(config)
     for key in LEGACY_WEBGL_CONTEXT_KEYS:
         sdk_config.pop(key, None)
+    # New native profiles use the SDK's default Firefox protection prefs.
+    # Only a masked first-DRAFT identity opts into the official canvas mask.
+    rendering_options = {"canvas_noise": True} if rendering_policy else {}
     try:
         options = launch_options(
             **camoufox_browser_selector(lock),
@@ -831,6 +864,7 @@ def camoufox_launch_options(
             os="windows",
             proxy=resolve_proxy(),
             user_data_dir=str(user_data_dir),
+            **rendering_options,
         )
     except (OSError, ValueError, TypeError) as error:
         raise RuntimeContractError("official Camoufox launch options rejected") from error
@@ -937,17 +971,31 @@ def materialize_candidate_identity(root: Path) -> dict[str, Any]:
         screen=get_screen_cons(headless_mode or "DISPLAY" in os.environ),
         os="windows",
     )
+    sdk_options = {
+        **browser_selector,
+        "enable_cache": True,
+        "ff_version": locked_firefox_major(lock),
+        "headless": headless_mode,
+        "i_know_what_im_doing": True,
+        "os": "windows",
+        "user_data_dir": str(user_data_dir),
+    }
+    canvas_noise = False
     with contextlib.redirect_stdout(sys.stderr):
-        options = launch_options(
-            **browser_selector,
-            enable_cache=True,
-            ff_version=locked_firefox_major(lock),
-            fingerprint=fingerprint,
-            headless=headless_mode,
-            i_know_what_im_doing=True,
-            os="windows",
-            user_data_dir=str(user_data_dir),
-        )
+        try:
+            options = launch_options(**sdk_options, fingerprint=copy.deepcopy(fingerprint))
+        except TimeoutError:
+            # The pinned SDK's host-GPU WebGL probe is bounded at 30 seconds.
+            # No browser context/identity was admitted or persisted yet. Keep
+            # the SAME fpgen draw and let the official SDK select its supported
+            # masked-canvas rendering policy without another host-GPU probe.
+            report_runtime_stage("launch", "identity_gpu_probe_timeout")
+            canvas_noise = True
+            options = launch_options(
+                **sdk_options,
+                fingerprint=copy.deepcopy(fingerprint),
+                canvas_noise=True,
+            )
     config = extract_camoufox_config(options)
     generation_webgl2_enabled(config)
     config_bytes = canonical_json(config)
@@ -959,6 +1007,7 @@ def materialize_candidate_identity(root: Path) -> dict[str, Any]:
         b"profile-stability-v2-fpgen-config\0" + config_bytes
     )
     return {
+        "canvas_noise": canvas_noise,
         "camoufox_config_json": config_bytes.decode("utf-8"),
         "fingerprint_config_sha256": config_sha256,
         "fingerprint_policy_version": str(lock["fingerprint_policy_version"]),
@@ -1020,6 +1069,7 @@ def report_runtime_stage(phase: str, step: str) -> None:
         ("startup", "begin"),
         ("startup", "ready"),
         ("launch", "identity_requested"),
+        ("launch", "identity_gpu_probe_timeout"),
         ("launch", "identity_ready"),
         ("launch", "before_browser_enter"),
         ("launch", "options_ready"),

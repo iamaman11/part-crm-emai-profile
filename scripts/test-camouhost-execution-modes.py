@@ -72,6 +72,8 @@ def verify_upstream_camoufox_config_is_final(runtime) -> None:
             "headless": False,
             "user_data_dir": kwargs["user_data_dir"],
             "firefox_user_prefs": {"official-webgl-setting": True},
+            # Opaque future SDK feature options are not an app-owned whitelist.
+            "sdk_native_features": {"webgl2": True, "ubo": True, "humanize": True},
         }
 
     fake_utils.launch_options = official_launch_options
@@ -92,11 +94,18 @@ def verify_upstream_camoufox_config_is_final(runtime) -> None:
             "SAFE": "untouched",
         }
         assert base["firefox_user_prefs"] == {"official-webgl-setting": True}
+        assert base["sdk_native_features"] == {
+            "webgl2": True, "ubo": True, "humanize": True,
+        }
         assert base["args"] == ["-new-tab", runtime.MANAGED_BOOTSTRAP_TAB_URL]
         assert base["ignore_default_args"] == ["about:blank"]
         assert sdk_calls[0]["config"] == identity
         assert sdk_calls[0]["config"] is not identity
         assert sdk_calls[0]["user_data_dir"] == str(Path("/disposable/user_data"))
+        assert (
+            sdk_calls[0]["firefox_user_prefs"]["privacy.baselineFingerprintingProtection"]
+            is False
+        )
         # Do not pass an environment at all: the upstream SDK/native process
         # inherits the OS environment and owns CAMOU_CONFIG_* construction.
         assert "env" not in sdk_calls[0]
@@ -123,6 +132,149 @@ def verify_upstream_camoufox_config_is_final(runtime) -> None:
         assert isolated["args"] == ["-new-tab", runtime.MANAGED_BOOTSTRAP_TAB_URL]
         assert isolated["ignore_default_args"] == ["about:blank"]
         assert isolated["env"]["CAMOU_CONFIG_1"] == "sdk-composed-identity"
+
+
+def verify_official_gpu_timeout_policy_is_persistent_and_fail_closed(runtime) -> None:
+    """SDK 159 recovery must keep one draw and one rendering choice on Restore."""
+    from types import ModuleType
+
+    fake_package = ModuleType("camoufox")
+    fake_utils = ModuleType("camoufox.utils")
+    fake_fingerprints = ModuleType("camoufox.fingerprints")
+    fingerprint_draws = []
+    sdk_calls = []
+    exact_config = {"navigator.userAgent": "fixture", "webGl2Enabled": True}
+
+    def generate_fingerprint(**kwargs):
+        fingerprint_draws.append(kwargs)
+        return {"fixture": "one official fpgen identity"}
+
+    def official_options(**kwargs):
+        sdk_calls.append(kwargs)
+        if len(sdk_calls) == 1:
+            raise TimeoutError("SDK host GPU probe timed out; path deliberately not logged")
+        return {"env": {"CAMOU_CONFIG_1": json.dumps(exact_config)},
+                "firefox_user_prefs": {"sdk-owned": "untouched"}}
+
+    fake_fingerprints.generate_fingerprint = generate_fingerprint
+    fake_utils.get_screen_cons = lambda _headless: None
+    fake_utils.launch_options = official_options
+    fake_package.utils = fake_utils
+    fake_package.fingerprints = fake_fingerprints
+    lock = {"fingerprint_policy_version": "official-v159-fixture"}
+
+    with (
+        tempfile.TemporaryDirectory() as directory,
+        patch.dict(sys.modules, {
+            "camoufox": fake_package,
+            "camoufox.utils": fake_utils,
+            "camoufox.fingerprints": fake_fingerprints,
+        }),
+        patch.object(runtime, "load_runtime_lock", return_value=(lock, "0" * 64)),
+        patch.object(runtime, "verify_python_components"),
+        patch.object(
+            runtime, "camoufox_browser_selector",
+            return_value={"executable_path": "/fixture/camoufox.exe"},
+        ),
+        patch.object(runtime, "locked_firefox_major", return_value=159),
+        patch.object(runtime, "resolve_headless_mode", return_value=False),
+        patch.object(runtime, "resolve_proxy", return_value=None),
+        patch.object(runtime, "generation_webgl2_enabled"),
+    ):
+        original = Path(directory) / "source"
+        original.mkdir()
+        diagnostics = io.StringIO()
+        with contextlib.redirect_stderr(diagnostics):
+            report = runtime.materialize_candidate_identity(original)
+        assert diagnostics.getvalue().splitlines() == [
+            "camouhost_stage phase=launch step=identity_gpu_probe_timeout"
+        ]
+        assert report["canvas_noise"] is True
+        assert len(fingerprint_draws) == 1
+        assert len(sdk_calls) == 2
+        assert "canvas_noise" not in sdk_calls[0]
+        assert sdk_calls[1]["canvas_noise"] is True
+        assert sdk_calls[1]["fingerprint"] == sdk_calls[0]["fingerprint"]
+        assert sdk_calls[1]["executable_path"] == "/fixture/camoufox.exe"
+        assert json.loads(report["camoufox_config_json"]) == exact_config
+        assert not (original / runtime.CONFIG_NAME).exists()
+        assert not (original / runtime.RENDER_POLICY_NAME).exists()
+
+        # Mirror the sole Rust writer's exact persisted bytes. Only this
+        # immutable choice, not a second generated fingerprint, is restored.
+        policy = runtime.canonical_json({"canvas_noise": True, "schema_version": 1})
+        original.joinpath(runtime.RENDER_POLICY_NAME).write_bytes(policy)
+        original.joinpath(runtime.CONFIG_NAME).write_text(
+            report["camoufox_config_json"], encoding="utf-8"
+        )
+        runtime.camoufox_launch_options(lock, original, exact_config, first_run=True)
+        assert sdk_calls[-1]["canvas_noise"] is True
+        assert (
+            sdk_calls[-1]["firefox_user_prefs"]["privacy.baselineFingerprintingProtection"]
+            is True
+        )
+
+        restored = Path(directory) / "cold-restore"
+        restored.mkdir()
+        restored.joinpath(runtime.RENDER_POLICY_NAME).write_bytes(policy)
+        restored.joinpath(runtime.CONFIG_NAME).write_text(
+            report["camoufox_config_json"], encoding="utf-8"
+        )
+        runtime.camoufox_launch_options(lock, restored, exact_config)
+        assert sdk_calls[-1]["canvas_noise"] is True
+        assert sdk_calls[-1]["config"] == exact_config
+        assert len(fingerprint_draws) == 1
+
+        native = Path(directory) / "new-native-default"
+        native.mkdir()
+        native.joinpath(runtime.RENDER_POLICY_NAME).write_bytes(
+            b'{"canvas_noise":false,"schema_version":1}\n'
+        )
+        runtime.camoufox_launch_options(lock, native, exact_config)
+        assert "canvas_noise" not in sdk_calls[-1]
+        assert "privacy.baselineFingerprintingProtection" not in sdk_calls[-1]["firefox_user_prefs"]
+
+        restored.joinpath(runtime.RENDER_POLICY_NAME).write_bytes(
+            b'{"canvas_noise":"false","schema_version":1}\n'
+        )
+        try:
+            runtime.camoufox_launch_options(lock, restored, exact_config)
+        except runtime.RuntimeContractError:
+            pass
+        else:
+            raise AssertionError("malformed rendering policy must fail closed")
+
+        restored.joinpath(runtime.RENDER_POLICY_NAME).write_bytes(policy + b"junk")
+        try:
+            runtime.camoufox_launch_options(lock, restored, exact_config)
+        except runtime.RuntimeContractError:
+            pass
+        else:
+            raise AssertionError("noncanonical rendering policy must fail closed")
+
+        if os.name != "nt":
+            restored.joinpath(runtime.RENDER_POLICY_NAME).unlink()
+            restored.joinpath(runtime.RENDER_POLICY_NAME).symlink_to(original / runtime.CONFIG_NAME)
+            try:
+                runtime.camoufox_launch_options(lock, restored, exact_config)
+            except runtime.RuntimeContractError:
+                pass
+            else:
+                raise AssertionError("redirected rendering policy must fail closed")
+
+        # An unrelated SDK failure never turns into masked-canvas recovery.
+        sdk_calls.clear()
+        fake_utils.launch_options = lambda **_kwargs: (_ for _ in ()).throw(OSError("fixture"))
+        unrelated = Path(directory) / "unrelated-error"
+        unrelated.mkdir()
+        try:
+            runtime.materialize_candidate_identity(unrelated)
+        except OSError:
+            pass
+        else:
+            raise AssertionError("unrelated SDK failure must propagate")
+        assert not (unrelated / runtime.CONFIG_NAME).exists()
+        assert not (unrelated / runtime.RENDER_POLICY_NAME).exists()
 
 
 def verify_windows_browser_sdk_executable_path(runtime) -> None:
@@ -210,7 +362,10 @@ def main() -> int:
         runtime.report_runtime_failure("launch", RuntimeError("synthetic"))
     diagnostic_output = io.StringIO()
     with contextlib.redirect_stderr(diagnostic_output):
-        for step in ("identity_requested", "identity_ready", "options_ready", "sdk_enter", "browser_entered"):
+        for step in (
+            "identity_requested", "identity_gpu_probe_timeout", "identity_ready",
+            "options_ready", "sdk_enter", "browser_entered",
+        ):
             runtime.report_runtime_stage("launch", step)
         runtime.report_runtime_stage("launch", "not-a-stage")
         runtime.report_runtime_failure("launch", RuntimeError("profile path and secret must not leak"))
@@ -218,6 +373,7 @@ def main() -> int:
     safe_lines = diagnostic_output.getvalue().splitlines()
     assert safe_lines == [
         "camouhost_stage phase=launch step=identity_requested",
+        "camouhost_stage phase=launch step=identity_gpu_probe_timeout",
         "camouhost_stage phase=launch step=identity_ready",
         "camouhost_stage phase=launch step=options_ready",
         "camouhost_stage phase=launch step=sdk_enter",
@@ -227,6 +383,7 @@ def main() -> int:
     ], safe_lines
     verify_embedded_python_path_configuration()
     verify_upstream_camoufox_config_is_final(runtime)
+    verify_official_gpu_timeout_policy_is_persistent_and_fail_closed(runtime)
     verify_windows_browser_sdk_executable_path(runtime)
 
     # The Rust delivery owner must preserve the OS process path for the

@@ -27,6 +27,7 @@ import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from types import ModuleType, SimpleNamespace
+from typing import Any
 from unittest.mock import Mock, patch
 
 IPC_VERSION = "3"
@@ -182,7 +183,7 @@ def materialize(
     runtime_lock: Path,
     headless: str,
     root: Path,
-) -> dict[str, str]:
+) -> dict[str, Any]:
     root.mkdir()
     # This test drives the official SDK directly, so it reproduces the local
     # filesystem preparation that Rust/ProfileBridge performs before Open.
@@ -228,15 +229,17 @@ print(json.dumps(report, separators=(",", ":"), sort_keys=True), flush=True)
     except json.JSONDecodeError as error:
         raise AssertionError("materialization report is not JSON") from error
     required = {
+        "canvas_noise",
         "camoufox_config_json",
         "fingerprint_config_sha256",
         "fingerprint_policy_version",
         "fingerprint_materialization_sha256",
         "runtime_lock_sha256",
     }
-    if set(report) != required or any(
-        not isinstance(value, str) or not value for value in report.values()
-    ):
+    if (set(report) != required or type(report["canvas_noise"]) is not bool or any(
+        not isinstance(report[key], str) or not report[key]
+        for key in required - {"canvas_noise"}
+    )):
         raise AssertionError(f"unexpected materialization report keys: {sorted(report)}")
     import hashlib
 
@@ -255,6 +258,12 @@ print(json.dumps(report, separators=(",", ":"), sort_keys=True), flush=True)
         raise AssertionError("official SDK config digest does not match returned config")
     # The production Rust owner persists this exact canonical payload. The
     # test harness mirrors that write; Camouhost itself never writes the file.
+    # Every new identity pins SDK-native or masked preferences for future Open.
+    # The production Rust writer is the real owner of these bytes.
+    (root / "camoufox-render-policy.json").write_bytes(
+        (b'{"canvas_noise":true,"schema_version":1}\n' if report["canvas_noise"]
+         else b'{"canvas_noise":false,"schema_version":1}\n')
+    )
     (root / "camoufox-config.json").write_bytes(canonical)
     expected = hashlib.sha256(b"profile-stability-v2-fpgen-config\0" + canonical).hexdigest()
     if report["fingerprint_materialization_sha256"] != expected:
@@ -266,7 +275,7 @@ def process_env(
     runtime_lock: Path,
     headless: str,
     root: Path,
-    report: dict[str, str],
+    report: dict[str, Any],
 ) -> dict[str, str]:
     env = runtime_env(runtime_lock, headless)
     env.update(
