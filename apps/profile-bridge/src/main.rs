@@ -255,6 +255,10 @@ fn diagnostic_cause(result: &Result<(), BridgeCliError>) -> Cause {
         ))) => Cause::BrowserRuntimeLaunchFailed,
         #[cfg(windows)]
         Err(BridgeCliError::LaunchFailed(ShippingCompositionError::LocalOpen(
+            profile_bridge::local_browser_open::LocalOpenError::BrowserExitedBeforeReady,
+        ))) => Cause::RuntimeClosed,
+        #[cfg(windows)]
+        Err(BridgeCliError::LaunchFailed(ShippingCompositionError::LocalOpen(
             profile_bridge::local_browser_open::LocalOpenError::IdentityPreparation,
         ))) => Cause::BrowserIdentityPreparationFailed,
         Err(BridgeCliError::LaunchFailed(ShippingCompositionError::LocalDelete(
@@ -566,6 +570,12 @@ mod tests {
                 ShippingCompositionError::LocalOpen(LocalOpenError::BrowserLaunchFailed),
             ))),
             Cause::BrowserRuntimeLaunchFailed,
+        );
+        assert_eq!(
+            diagnostic_cause(&Err(BridgeCliError::LaunchFailed(
+                ShippingCompositionError::LocalOpen(LocalOpenError::BrowserExitedBeforeReady),
+            ))),
+            Cause::RuntimeClosed,
         );
         assert_eq!(
             diagnostic_cause(&Err(BridgeCliError::LaunchFailed(

@@ -422,6 +422,7 @@ impl UserDiagnostic {
                         Local::OperationInProgress => "BRIDGE_LOCAL_OPERATION_BUSY",
                         Local::IdentityPreparation => "BRIDGE_LOCAL_IDENTITY_NOT_READY",
                         Local::BrowserLaunchFailed => "BRIDGE_RUNTIME_LAUNCH_FAILED",
+                        Local::BrowserExitedBeforeReady => "BRIDGE_RUNTIME_EXITED_BEFORE_READY",
                         Local::BrowserNotClosedCleanly => "BRIDGE_LOCAL_CLOSE_UNVERIFIED",
                         Local::LaunchConfirmation => "BRIDGE_RUNTIME_NOT_READY",
                     }
@@ -890,6 +891,9 @@ impl UserDiagnostic {
                     Local::BrowserLaunchFailed => {
                         "Camoufox exited before the browser became ready. Windows confirmed that no native browser writer owns this profile; the existing local files were kept and Open can be retried."
                     }
+                    Local::BrowserExitedBeforeReady => {
+                        "Camoufox opened but exited before BrowserReady. Windows confirmed its native writer has stopped. Your local browser files and unsynced changes were preserved; no cloud Save was confirmed by this attempt. Reopen the profile and close normally to retry Sync."
+                    }
                     Local::BrowserNotClosedCleanly => {
                         "The native Firefox close could not be confirmed. Local browser data was preserved. Cloud Sync may still be pending; check the latest Save status before reopening."
                     }
@@ -1144,6 +1148,24 @@ const fn operator_code(error: crate::operator_flow::OperatorFlowError) -> &'stat
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(windows)]
+    #[test]
+    fn pre_ready_native_exit_has_distinct_unsynced_user_diagnostic() {
+        use crate::local_browser_open::LocalOpenError;
+
+        let pre_ready = UserDiagnostic::Launch(ShippingCompositionError::LocalOpen(
+            LocalOpenError::BrowserExitedBeforeReady,
+        ));
+        let unconfirmed_close = UserDiagnostic::Launch(ShippingCompositionError::LocalOpen(
+            LocalOpenError::BrowserNotClosedCleanly,
+        ));
+        assert_eq!(pre_ready.code(), "BRIDGE_RUNTIME_EXITED_BEFORE_READY");
+        assert_ne!(pre_ready.code(), unconfirmed_close.code());
+        assert!(pre_ready.message().contains("before BrowserReady"));
+        assert!(pre_ready.message().contains("no cloud Save was confirmed"));
+        assert!(pre_ready.message().contains("unsynced changes were preserved"));
+    }
 
     #[test]
     fn oversized_native_close_reports_safe_rescue_without_claiming_a_saved_profile() {
