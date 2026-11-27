@@ -270,6 +270,57 @@ describe('ClientProfilesPanel relationship and native Open navigation', () => {
     expect(screen.getByText(profileId)).toBeTruthy();
   });
 
+  it('explicitly refreshes a native-saved client profile from DRAFT v1 to READY v3 before the next Open', async () => {
+    const profileId = 'profile_01JCLIENTPROFILES_REFRESH';
+    mockedListClientProfiles
+      .mockResolvedValueOnce({
+        profiles: [{ ...profileItem(profileId, 1), status: 'DRAFT' }],
+        nextCursor: null,
+      })
+      .mockResolvedValue({
+        profiles: [profileItem(profileId, 3)],
+        nextCursor: null,
+      });
+    const user = userEvent.setup();
+    renderPanel();
+
+    expect(await screen.findByText('DRAFT · browser v1 · metadata v1')).toBeTruthy();
+    expect(screen.getByText(/A browser launch alone does not confirm Saved/)).toBeTruthy();
+    await user.click(screen.getByRole('button', { name: 'Refresh profiles' }));
+
+    expect(await screen.findByText('READY · browser v3 · metadata v3')).toBeTruthy();
+    expect(mockedListClientProfiles).toHaveBeenCalledTimes(2);
+    expect(mockedListProfiles).toHaveBeenCalledTimes(2);
+    expect(mockedOpen).not.toHaveBeenCalled();
+    expect(mockedGetProfile).not.toHaveBeenCalled();
+    expect(mockedAssignProfile).not.toHaveBeenCalled();
+    expect(mockedDetachProfile).not.toHaveBeenCalled();
+
+    await user.click(screen.getByRole('button', { name: `Open browser for ${profileId}` }));
+    expect(mockedOpen).toHaveBeenCalledExactlyOnceWith(tenantId, actorId, profileId, 3, 'READY');
+  });
+
+  it('does not fabricate READY or dispatch Open when a manual refresh fails', async () => {
+    const profileId = 'profile_01JCLIENTPROFILES_REFRESHFAIL';
+    mockedListClientProfiles
+      .mockResolvedValueOnce({
+        profiles: [{ ...profileItem(profileId, 1), status: 'DRAFT' }],
+        nextCursor: null,
+      })
+      .mockRejectedValueOnce(new Error('Could not load current profile status'));
+    const user = userEvent.setup();
+    renderPanel();
+
+    expect(await screen.findByText('DRAFT · browser v1 · metadata v1')).toBeTruthy();
+    await user.click(screen.getByRole('button', { name: 'Refresh profiles' }));
+    expect((await screen.findByRole('alert')).textContent).toContain('Could not load current profile status');
+    expect(screen.getByText('DRAFT · browser v1 · metadata v1')).toBeTruthy();
+    expect(screen.queryByText(/READY · browser v3/)).toBeNull();
+    expect(mockedOpen).not.toHaveBeenCalled();
+    expect(mockedAssignProfile).not.toHaveBeenCalled();
+    expect(mockedDetachProfile).not.toHaveBeenCalled();
+  });
+
   it('never treats client assignment as Open authority, and explains unavailable states visibly', async () => {
     const profileId = 'profile_01JCLIENTPROFILES_SUSPENDED';
     mockedListClientProfiles.mockResolvedValue({
