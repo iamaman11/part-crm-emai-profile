@@ -5,8 +5,14 @@ import { ThemeToggle } from './ThemeToggle';
 describe('ThemeToggle', () => {
   const listeners = new Set<() => void>();
   let prefersDark = false;
+  let appearanceCookie = '';
   beforeEach(() => {
-    globalThis.localStorage.clear();
+    appearanceCookie = '';
+    Object.defineProperty(globalThis.document, 'cookie', {
+      configurable: true,
+      get: () => appearanceCookie,
+      set: (value: string) => { appearanceCookie = value.split(';')[0] ?? ''; },
+    });
     globalThis.document.documentElement.removeAttribute('data-theme');
     listeners.clear();
     prefersDark = false;
@@ -16,7 +22,10 @@ describe('ThemeToggle', () => {
       removeEventListener: (_event: string, handler: () => void) => { listeners.delete(handler); },
     }));
   });
-  afterEach(() => { vi.unstubAllGlobals(); });
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    delete (globalThis.document as { cookie?: string }).cookie;
+  });
 
   it('follows OS appearance until manually overridden', () => {
     render(<ThemeToggle />);
@@ -26,17 +35,17 @@ describe('ThemeToggle', () => {
     expect(globalThis.document.documentElement.dataset.theme).toBe('dark');
     fireEvent.change(screen.getByRole('combobox', { name: 'Color theme' }), { target: { value: 'light' } });
     expect(globalThis.document.documentElement.dataset.theme).toBe('light');
-    expect(globalThis.localStorage.getItem('crm-theme-preference')).toBe('light');
+    expect(globalThis.document.cookie).toBe('po-appearance=light');
     expect(listeners.size).toBe(0);
   });
 
   it('restores a saved dark choice and allows returning to system', () => {
-    globalThis.localStorage.setItem('crm-theme-preference', 'dark');
+    globalThis.document.cookie = 'po-appearance=dark';
     render(<ThemeToggle />);
     expect(screen.getByRole('combobox', { name: 'Color theme' })).toHaveProperty('value', 'dark');
     expect(globalThis.document.documentElement.dataset.theme).toBe('dark');
     fireEvent.change(screen.getByRole('combobox', { name: 'Color theme' }), { target: { value: 'system' } });
-    expect(globalThis.localStorage.getItem('crm-theme-preference')).toBe('system');
+    expect(globalThis.document.cookie).toBe('po-appearance=system');
     expect(globalThis.document.documentElement.dataset.theme).toBe('light');
   });
 });

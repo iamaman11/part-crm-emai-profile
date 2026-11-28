@@ -1,11 +1,14 @@
 import { useLayoutEffect, useState } from 'react';
 
 type ThemePreference = 'system' | 'light' | 'dark';
-const storageKey = 'crm-theme-preference';
+const preferenceCookie = 'po-appearance';
 
 function readPreference(): ThemePreference {
   try {
-    const saved = globalThis.localStorage.getItem(storageKey);
+    // Only a non-sensitive display choice lives here; no CRM identity or session data.
+    const saved = globalThis.document.cookie.split(';')
+      .map((entry) => entry.trim())
+      .find((entry) => entry.startsWith(`${preferenceCookie}=`))?.slice(preferenceCookie.length + 1);
     return saved === 'light' || saved === 'dark' ? saved : 'system';
   } catch {
     return 'system';
@@ -24,9 +27,10 @@ export function ThemeToggle() {
     apply();
     if (preference === 'system') media?.addEventListener?.('change', apply);
     try {
-      globalThis.localStorage.setItem(storageKey, preference);
+      const secure = globalThis.location.protocol === 'https:' ? '; Secure' : '';
+      globalThis.document.cookie = `${preferenceCookie}=${preference}; Path=/; SameSite=Lax; Max-Age=31536000${secure}`;
     } catch {
-      // Theme is optional. Browser storage can be disabled without blocking CRM.
+      // Appearance persistence is optional and cannot block CRM.
     }
     return () => {
       media?.removeEventListener?.('change', apply);
