@@ -16,6 +16,7 @@ import hashlib
 import importlib.metadata
 import json
 import os
+import platform
 import re
 import secrets
 import sys
@@ -35,6 +36,7 @@ BROWSER_CLOSE_POLL_SECONDS = 0.05
 SESSION_PATTERN = re.compile(r"[A-Za-z0-9_-]{8,96}\Z")
 CONFIG_NAME = "camoufox-config.json"
 RENDER_POLICY_NAME = "camoufox-render-policy.json"
+SDK_REPLAY_NAME = "camoufox-sdk-replay.json"
 USER_DATA_NAME = "user_data"
 BRIDGE_LOCK_NAME = ".profile-platform.lock"
 RUNTIME_LOCK_NAME = "runtime-lock.json"
@@ -880,6 +882,157 @@ def camoufox_launch_options(
     return options
 
 
+def sdk_replay_binding(runtime_lock_sha256: str) -> str:
+    """Bind derived SDK launch options to one installed runtime on one host."""
+    if os.name == "nt":
+        import winreg
+
+        with winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE, r"SOFTWARE\Microsoft\Cryptography") as key:
+            machine, _ = winreg.QueryValueEx(key, "MachineGuid")
+        if not isinstance(machine, str) or not machine:
+            raise RuntimeContractError("Windows machine identity is unavailable")
+    else:
+        # Only the installed Windows path is a product Open. POSIX is used by
+        # the isolated Python contract tests.
+        machine = platform.node()
+    return sha256_bytes(
+        canonical_json(
+            ["camoufox-sdk-options-v1", runtime_lock_sha256, machine,
+             str(Path(__file__).parent.parent.absolute())]
+        )
+    )
+
+
+def sdk_replay_snapshot(
+    options: dict[str, Any], fingerprint: dict[str, Any],
+    config_sha256: str, runtime_lock_sha256: str,
+) -> str:
+    """Persist only the SDK's fingerprint/prefs, never its copied process env or proxy secrets."""
+    env = options.get("env")
+    prefs = options.get("firefox_user_prefs")
+    if not isinstance(env, dict) or not isinstance(prefs, dict):
+        raise RuntimeContractError("SDK launch options are incomplete")
+    sdk_env = {
+        key: value for key, value in env.items()
+        if isinstance(key, str) and re.fullmatch(r"CAMOU_(?:CONFIG|PREFS)_[1-9][0-9]*", key)
+    }
+    if not sdk_env or not all(isinstance(value, str) for value in sdk_env.values()):
+        raise RuntimeContractError("SDK launch environment is invalid")
+    snapshot = {
+        "schema_version": 1,
+        "binding_sha256": sdk_replay_binding(runtime_lock_sha256),
+        "config_sha256": config_sha256,
+        "fingerprint": fingerprint,
+        "options": {
+            "args": options["args"],
+            "ignore_default_args": options["ignore_default_args"],
+            "firefox_user_prefs": prefs,
+            "headless": options["headless"],
+            "sdk_env": sdk_env,
+        },
+    }
+    raw = canonical_json(snapshot)
+    if len(raw) > 4 * MAX_CONFIG_BYTES:
+        raise RuntimeContractError("SDK replay snapshot exceeds its size bound")
+    return raw.decode("utf-8")
+
+
+def native_sdk_replay_options(
+    lock: dict[str, Any], root: Path, config: dict[str, Any]
+) -> dict[str, Any]:
+    """Rehydrate a same-host SDK output without running launch_options again."""
+    replay_path = root / SDK_REPLAY_NAME
+    if not replay_path.exists() and not replay_path.is_symlink():
+        # Profiles created by earlier test builds keep their original SDK path.
+        return camoufox_launch_options(lock, root, config)
+    replay, _ = load_canonical_json(replay_path, 4 * MAX_CONFIG_BYTES)
+    if set(replay) != {"schema_version", "binding_sha256", "config_sha256", "fingerprint", "options"}:
+        raise RuntimeContractError("SDK replay contract has unexpected fields")
+    if type(replay["schema_version"]) is not int or replay["schema_version"] != 1 \
+            or not isinstance(replay["fingerprint"], dict):
+        raise RuntimeContractError("SDK replay contract is invalid")
+    if replay["config_sha256"] != sha256_bytes(canonical_json(config)):
+        raise RuntimeContractError("SDK replay is not bound to the saved fingerprint")
+    launch = replay["options"]
+    if not isinstance(launch, dict) or set(launch) != {
+        "args", "ignore_default_args", "firefox_user_prefs", "headless", "sdk_env"
+    }:
+        raise RuntimeContractError("SDK replay options contract is invalid")
+    env = launch["sdk_env"]
+    if not isinstance(env, dict) or not all(
+        isinstance(key, str)
+        and re.fullmatch(r"CAMOU_(?:CONFIG|PREFS)_[1-9][0-9]*", key)
+        and isinstance(value, str)
+        for key, value in env.items()
+    ):
+        raise RuntimeContractError("SDK replay has unsafe environment keys")
+    if not isinstance(launch["firefox_user_prefs"], dict) or not isinstance(launch["args"], list):
+        raise RuntimeContractError("SDK replay Firefox options are invalid")
+    if launch["headless"] is not False or launch["args"] != [
+        "-new-tab", MANAGED_BOOTSTRAP_TAB_URL
+    ] or launch["ignore_default_args"] != ["about:blank"]:
+        raise RuntimeContractError("SDK replay cannot alter native Firefox launch")
+    chunks = [(int(k.rsplit("_", 1)[1]), v) for k, v in env.items() if k.startswith("CAMOU_CONFIG_")]
+    try:
+        replay_config = json.loads("".join(v for _, v in sorted(chunks)))
+    except json.JSONDecodeError as error:
+        raise RuntimeContractError("SDK replay configuration is malformed") from error
+    if replay_config != config:
+        raise RuntimeContractError("SDK replay configuration does not match the saved identity")
+    pref_chunks = [(int(k.rsplit("_", 1)[1]), v) for k, v in env.items() if k.startswith("CAMOU_PREFS_")]
+    if not pref_chunks:
+        raise RuntimeContractError("SDK replay startup preferences are missing")
+    try:
+        startup_prefs = json.loads("".join(v for _, v in sorted(pref_chunks)))
+    except json.JSONDecodeError as error:
+        raise RuntimeContractError("SDK replay startup preferences are malformed") from error
+    if startup_prefs != launch["firefox_user_prefs"]:
+        raise RuntimeContractError("SDK replay Firefox preferences are inconsistent")
+    _, runtime_sha256 = load_runtime_lock()
+    if replay["binding_sha256"] != sdk_replay_binding(runtime_sha256):
+        # The cached output is host/runtime-derived, not portable identity.
+        # Let the official SDK apply the portable saved config on a new host.
+        report_runtime_stage("launch", "sdk_replay_binding_changed")
+        return camoufox_launch_options(lock, root, config)
+    proxy = resolve_proxy()
+    if proxy is not None:
+        # SOCKS5 authentication belongs to the SDK. Never persist or manually
+        # reconstruct its credentials inside the replay snapshot.
+        from camoufox.utils import launch_options
+
+        options = launch_options(
+            **camoufox_browser_selector(lock),
+            fingerprint=copy.deepcopy(replay["fingerprint"]),
+            os="windows", headless=False, enable_cache=True,
+            ff_version=locked_firefox_major(lock),
+            i_know_what_im_doing=True,
+            user_data_dir=str(root / USER_DATA_NAME),
+            firefox_user_prefs={"browser.startup.page": 3, **accessibility_preferences(os.name)},
+            proxy=proxy,
+            **({"canvas_noise": True} if saved_canvas_noise_policy(root) else {}),
+        )
+        options["args"] = ["-new-tab", MANAGED_BOOTSTRAP_TAB_URL]
+        options["ignore_default_args"] = ["about:blank"]
+        if extract_camoufox_config(options) != config:
+            raise RuntimeContractError("SDK proxy launch would change the saved fingerprint")
+        return options
+    # The caller only supplies current paths and inherited process variables.
+    # Fingerprint, rendering prefs and Camoufox startup chunks remain exact
+    # bytes produced by the official SDK at initial materialization.
+    current_env = {k: v for k, v in os.environ.items() if not re.fullmatch(
+        r"CAMOU_(?:CONFIG|PREFS)_[1-9][0-9]*", k
+    )}
+    return {
+        "executable_path": str(packaged_windows_browser(lock)),
+        "user_data_dir": str(root / USER_DATA_NAME),
+        "args": launch["args"],
+        "ignore_default_args": launch["ignore_default_args"],
+        "headless": False,
+        "firefox_user_prefs": launch["firefox_user_prefs"],
+        "env": {**current_env, **env},
+    }
+
+
 
 def launch_verified_context(
     lock: dict[str, Any],
@@ -955,8 +1108,8 @@ def close_context(manager: Any, _context: Any) -> None:
         manager.__exit__(None, None, None)
 
 
-def materialize_candidate_identity(root: Path) -> dict[str, Any]:
-    """Generate one Camoufox identity in memory; Rust persists the returned config."""
+def materialize_candidate_identity(root: Path) -> tuple[dict[str, Any], dict[str, Any]]:
+    """Let SDK compose one identity and launch. Rust persists its safe replay projection."""
     from camoufox.fingerprints import generate_fingerprint
     from camoufox.utils import get_screen_cons, launch_options
 
@@ -979,6 +1132,11 @@ def materialize_candidate_identity(root: Path) -> dict[str, Any]:
         "i_know_what_im_doing": True,
         "os": "windows",
         "user_data_dir": str(user_data_dir),
+        "firefox_user_prefs": {
+            "browser.startup.page": 3,
+            **accessibility_preferences(os.name),
+        },
+        "proxy": resolve_proxy(),
     }
     canvas_noise = False
     with contextlib.redirect_stdout(sys.stderr):
@@ -996,6 +1154,8 @@ def materialize_candidate_identity(root: Path) -> dict[str, Any]:
                 fingerprint=copy.deepcopy(fingerprint),
                 canvas_noise=True,
             )
+    options["args"] = ["-new-tab", MANAGED_BOOTSTRAP_TAB_URL]
+    options["ignore_default_args"] = ["about:blank"]
     config = extract_camoufox_config(options)
     generation_webgl2_enabled(config)
     config_bytes = canonical_json(config)
@@ -1006,14 +1166,20 @@ def materialize_candidate_identity(root: Path) -> dict[str, Any]:
     materialization_digest = sha256_bytes(
         b"profile-stability-v2-fpgen-config\0" + config_bytes
     )
-    return {
+    replay_json = sdk_replay_snapshot(
+        options, fingerprint, config_sha256, runtime_lock_sha256
+    )
+    report = {
         "canvas_noise": canvas_noise,
         "camoufox_config_json": config_bytes.decode("utf-8"),
+        "sdk_replay_json": replay_json,
+        "sdk_replay_sha256": sha256_bytes(replay_json.encode("utf-8")),
         "fingerprint_config_sha256": config_sha256,
         "fingerprint_policy_version": str(lock["fingerprint_policy_version"]),
         "fingerprint_materialization_sha256": materialization_digest,
         "runtime_lock_sha256": runtime_lock_sha256,
     }
+    return report, options
 
 
 def valid_frame(raw: str) -> bool:
@@ -1680,6 +1846,7 @@ async def run_local_profile(root: Path, config: dict[str, Any] | None, first_run
     session = None
     context_closed = False
     failure_phase = "launch"
+    first_sdk_options: dict[str, Any] | None = None
     try:
         if config is None:
             if not first_run:
@@ -1689,7 +1856,7 @@ async def run_local_profile(root: Path, config: dict[str, Any] | None, first_run
             failure_phase = "identity"
             report_runtime_stage("launch", "identity_requested")
             with contextlib.redirect_stdout(sys.stderr):
-                generated = materialize_candidate_identity(root)
+                generated, first_sdk_options = materialize_candidate_identity(root)
             print(
                 "camouhost_identity "
                 + json.dumps(generated, separators=(",", ":"), sort_keys=True),
@@ -1711,7 +1878,11 @@ async def run_local_profile(root: Path, config: dict[str, Any] | None, first_run
         lock, _ = load_runtime_lock()
         # Rust owns and holds exclusive local workspace admission. The
         # canonical configuration and first-run decision arrive in memory.
-        options = camoufox_launch_options(lock, root, config, first_run=first_run)
+        options = (
+            first_sdk_options
+            if first_sdk_options is not None
+            else native_sdk_replay_options(lock, root, config)
+        )
         report_runtime_stage("launch", "options_ready")
         report_runtime_stage("launch", "before_browser_enter")
         session = await launch_native_camoufox(

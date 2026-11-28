@@ -21,10 +21,12 @@ const ENTRYPOINT: &str = "camouhost/real.py";
 const LOCK: &str = "camouhost/runtime-lock.json";
 const CONFIG: &str = "camoufox-config.json";
 const RENDER_POLICY: &str = "camoufox-render-policy.json";
+const SDK_REPLAY: &str = "camoufox-sdk-replay.json";
 const NATIVE_RENDER_POLICY: &[u8] = b"{\"canvas_noise\":false,\"schema_version\":1}\n";
 const MASKED_RENDER_POLICY: &[u8] = b"{\"canvas_noise\":true,\"schema_version\":1}\n";
 const USER_DATA: &str = "user_data";
 const MAX_CONFIG_BYTES: u64 = 1024 * 1024;
+const MAX_SDK_REPLAY_BYTES: u64 = MAX_CONFIG_BYTES * 4;
 const LOCAL_UNSYNCED: &str = ".local-unsynced";
 const LOCAL_UNSYNCED_CONTENT: &[u8] = b"local-unsynced-v2";
 const CAMOUHOST_LAUNCH_READY_EVENT: &str = "camouhost_stage phase=launch step=ready";
@@ -385,6 +387,14 @@ fn persist_sdk_identity(folder: &Path, raw: &[u8]) -> Result<(), LocalOpenError>
         .get("fingerprint_config_sha256")
         .and_then(serde_json::Value::as_str)
         .ok_or(LocalOpenError::IdentityPreparation)?;
+    let replay_json = report
+        .get("sdk_replay_json")
+        .and_then(serde_json::Value::as_str)
+        .ok_or(LocalOpenError::IdentityPreparation)?;
+    let expected_replay_digest = report
+        .get("sdk_replay_sha256")
+        .and_then(serde_json::Value::as_str)
+        .ok_or(LocalOpenError::IdentityPreparation)?;
     let config_bytes = config_json.as_bytes();
     if config_bytes.is_empty()
         || config_bytes.len() as u64 > MAX_CONFIG_BYTES
@@ -398,6 +408,46 @@ fn persist_sdk_identity(folder: &Path, raw: &[u8]) -> Result<(), LocalOpenError>
         .collect::<Vec<_>>()
         .join("");
     if actual_digest != expected_digest {
+        return Err(LocalOpenError::IdentityPreparation);
+    }
+    let replay_bytes = replay_json.as_bytes();
+    if replay_bytes.is_empty()
+        || replay_bytes.len() as u64 > MAX_SDK_REPLAY_BYTES
+        || !replay_bytes.ends_with(b"\n")
+        || Sha256::digest(replay_bytes)
+            .iter()
+            .map(|byte| format!("{byte:02x}"))
+            .collect::<String>()
+            != expected_replay_digest
+    {
+        return Err(LocalOpenError::IdentityPreparation);
+    }
+    let replay: serde_json::Value = serde_json::from_slice(replay_bytes)
+        .map_err(|_| LocalOpenError::IdentityPreparation)?;
+    let replay_fields = replay.as_object().ok_or(LocalOpenError::IdentityPreparation)?;
+    if replay_fields.len() != 5
+        || replay["schema_version"] != 1
+        || replay["config_sha256"] != actual_digest
+        || replay["binding_sha256"].as_str().is_none_or(|v| v.len() != 64)
+        || !replay["fingerprint"].is_object()
+    {
+        return Err(LocalOpenError::IdentityPreparation);
+    }
+    let launch = replay["options"].as_object().ok_or(LocalOpenError::IdentityPreparation)?;
+    let sdk_env = launch
+        .get("sdk_env")
+        .and_then(serde_json::Value::as_object)
+        .ok_or(LocalOpenError::IdentityPreparation)?;
+    if launch.len() != 5
+        || !sdk_env.contains_key("CAMOU_CONFIG_1")
+        || !sdk_env.contains_key("CAMOU_PREFS_1")
+        || sdk_env.iter().any(|(key, value)| {
+        let suffix = key
+            .strip_prefix("CAMOU_CONFIG_")
+            .or_else(|| key.strip_prefix("CAMOU_PREFS_"));
+        suffix.is_none_or(|s| s.is_empty() || s.starts_with('0') || !s.bytes().all(|b| b.is_ascii_digit()))
+            || !value.is_string()
+    }) {
         return Err(LocalOpenError::IdentityPreparation);
     }
     let value: serde_json::Value =
@@ -444,6 +494,33 @@ fn persist_sdk_identity(folder: &Path, raw: &[u8]) -> Result<(), LocalOpenError>
             .map_err(|_| LocalOpenError::IdentityPreparation)?;
         temporary
             .persist_noclobber(&rendering_policy)
+            .map_err(|_| LocalOpenError::IdentityPreparation)?;
+    }
+    // Persist the SDK's sanitized, host-bound replay BEFORE CONFIG, which
+    // remains the last-write identity commit marker. No inherited env or
+    // proxy credentials may enter this durable profile snapshot.
+    let replay_destination = folder.join(SDK_REPLAY);
+    let replay_already_persisted = match fs::symlink_metadata(&replay_destination) {
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => false,
+        Ok(metadata) if metadata.is_file() && !metadata.file_type().is_symlink() => {
+            fs::read(&replay_destination)
+                .map_err(|_| LocalOpenError::IdentityPreparation)?
+                == replay_bytes
+        }
+        _ => return Err(LocalOpenError::IdentityPreparation),
+    };
+    if !replay_already_persisted {
+        let mut temporary = tempfile::NamedTempFile::new_in(folder)
+            .map_err(|_| LocalOpenError::IdentityPreparation)?;
+        temporary
+            .write_all(replay_bytes)
+            .map_err(|_| LocalOpenError::IdentityPreparation)?;
+        temporary
+            .as_file()
+            .sync_all()
+            .map_err(|_| LocalOpenError::IdentityPreparation)?;
+        temporary
+            .persist_noclobber(&replay_destination)
             .map_err(|_| LocalOpenError::IdentityPreparation)?;
     }
     let mut temporary =
@@ -1185,6 +1262,42 @@ mod tests {
     use profile_platform_primitives::{ActorId, ProfileId, TenantId};
     use sha2::{Digest, Sha256};
 
+    fn sdk_identity_report(config: &[u8], canvas_noise: bool) -> Vec<u8> {
+        let digest = Sha256::digest(config)
+            .iter()
+            .map(|byte| format!("{byte:02x}"))
+            .collect::<String>();
+        let sdk_config = std::str::from_utf8(config).unwrap().trim_end();
+        let replay = serde_json::json!({
+            "schema_version": 1,
+            "binding_sha256": "a".repeat(64),
+            "config_sha256": digest,
+            "fingerprint": {"screen": {"width": 1280}},
+            "options": {
+                "args": ["-new-tab", "about:blank#camouhost-playwright-bootstrap-v1"],
+                "ignore_default_args": ["about:blank"],
+                "firefox_user_prefs": {"browser.startup.page": 3},
+                "headless": false,
+                "sdk_env": {
+                    "CAMOU_CONFIG_1": sdk_config,
+                    "CAMOU_PREFS_1": "{\"browser.startup.page\":3}"
+                }
+            }
+        });
+        let replay_json = format!("{}\n", serde_json::to_string(&replay).unwrap());
+        let replay_digest = Sha256::digest(replay_json.as_bytes())
+            .iter()
+            .map(|byte| format!("{byte:02x}"))
+            .collect::<String>();
+        serde_json::to_vec(&serde_json::json!({
+            "canvas_noise": canvas_noise,
+            "camoufox_config_json": std::str::from_utf8(config).unwrap(),
+            "fingerprint_config_sha256": digest,
+            "sdk_replay_json": replay_json,
+            "sdk_replay_sha256": replay_digest,
+        })).unwrap()
+    }
+
     fn intent() -> InitialProfileOpen {
         InitialProfileOpen {
             tenant_id: TenantId::parse("tenant_01JLOCAL").unwrap(),
@@ -1199,21 +1312,13 @@ mod tests {
     fn first_sdk_identity_persists_the_official_rendering_choice_without_rewriting_config() {
         let base = tempfile::tempdir().unwrap();
         let config = b"{\"navigator.userAgent\":\"test\"}\n";
-        let digest = Sha256::digest(config)
-            .iter()
-            .map(|byte| format!("{byte:02x}"))
-            .collect::<String>();
         for (canvas_noise, name) in [(false, "native"), (true, "masked")] {
             let folder = base.path().join(name);
             std::fs::create_dir(&folder).unwrap();
-            let report = serde_json::to_vec(&serde_json::json!({
-                "canvas_noise": canvas_noise,
-                "camoufox_config_json": std::str::from_utf8(config).unwrap(),
-                "fingerprint_config_sha256": digest,
-            }))
-            .unwrap();
+            let report = sdk_identity_report(config, canvas_noise);
             super::persist_sdk_identity(&folder, &report).unwrap();
             assert_eq!(std::fs::read(folder.join(super::CONFIG)).unwrap(), config);
+            assert!(folder.join(super::SDK_REPLAY).is_file());
             let policy = folder.join(super::RENDER_POLICY);
             let expected_policy = if canvas_noise {
                 super::MASKED_RENDER_POLICY
@@ -1244,22 +1349,14 @@ mod tests {
         );
         assert!(!base.path().join(super::CONFIG).exists());
         assert!(!base.path().join(super::RENDER_POLICY).exists());
+        assert!(!base.path().join(super::SDK_REPLAY).exists());
     }
 
     #[test]
     fn interrupted_policy_first_write_can_resume_only_with_exact_matching_bytes() {
         let base = tempfile::tempdir().unwrap();
         let config = b"{}\n";
-        let digest = Sha256::digest(config)
-            .iter()
-            .map(|byte| format!("{byte:02x}"))
-            .collect::<String>();
-        let report = serde_json::to_vec(&serde_json::json!({
-            "canvas_noise": false,
-            "camoufox_config_json": std::str::from_utf8(config).unwrap(),
-            "fingerprint_config_sha256": digest,
-        }))
-        .unwrap();
+        let report = sdk_identity_report(config, false);
         let matching = base.path().join("matching");
         std::fs::create_dir(&matching).unwrap();
         std::fs::write(
@@ -1286,6 +1383,62 @@ mod tests {
             std::fs::read(conflicting.join(super::RENDER_POLICY)).unwrap(),
             super::MASKED_RENDER_POLICY
         );
+        assert!(!conflicting.join(super::SDK_REPLAY).exists());
+    }
+
+    #[test]
+    fn sdk_replay_rejects_untrusted_environment_even_with_a_matching_digest() {
+        let base = tempfile::tempdir().unwrap();
+        let report = sdk_identity_report(b"{}\n", false);
+        let mut value: serde_json::Value = serde_json::from_slice(&report).unwrap();
+        let mut replay: serde_json::Value = serde_json::from_str(
+            value["sdk_replay_json"].as_str().unwrap(),
+        ).unwrap();
+        replay["options"]["sdk_env"]["SECRET_TOKEN"] = serde_json::json!("not-a-camoufox-option");
+        let replay_bytes = format!("{}\n", serde_json::to_string(&replay).unwrap());
+        value["sdk_replay_json"] = serde_json::json!(replay_bytes);
+        value["sdk_replay_sha256"] = serde_json::json!(
+            Sha256::digest(replay_bytes.as_bytes())
+                .iter()
+                .map(|byte| format!("{byte:02x}"))
+                .collect::<String>()
+        );
+        let malicious = serde_json::to_vec(&value).unwrap();
+        assert_eq!(
+            super::persist_sdk_identity(base.path(), &malicious),
+            Err(LocalOpenError::IdentityPreparation)
+        );
+        assert!(!base.path().join(super::CONFIG).exists());
+        assert!(!base.path().join(super::SDK_REPLAY).exists());
+        assert!(!base.path().join(super::RENDER_POLICY).exists());
+    }
+
+    #[test]
+    fn sdk_replay_digest_tamper_fails_before_any_profile_identity_write() {
+        let base = tempfile::tempdir().unwrap();
+        let report = sdk_identity_report(b"{}\n", true);
+        let mut value: serde_json::Value = serde_json::from_slice(&report).unwrap();
+        value["sdk_replay_sha256"] = serde_json::json!("0".repeat(64));
+        assert_eq!(
+            super::persist_sdk_identity(base.path(), &serde_json::to_vec(&value).unwrap()),
+            Err(LocalOpenError::IdentityPreparation)
+        );
+        assert!(!base.path().join(super::CONFIG).exists());
+        assert!(!base.path().join(super::SDK_REPLAY).exists());
+        assert!(!base.path().join(super::RENDER_POLICY).exists());
+    }
+
+    #[test]
+    fn sdk_replay_cache_first_crash_retry_requires_exact_bytes() {
+        let base = tempfile::tempdir().unwrap();
+        let report = sdk_identity_report(b"{}\n", false);
+        let value: serde_json::Value = serde_json::from_slice(&report).unwrap();
+        let replay = value["sdk_replay_json"].as_str().unwrap();
+        std::fs::write(base.path().join(super::RENDER_POLICY), super::NATIVE_RENDER_POLICY)
+            .unwrap();
+        std::fs::write(base.path().join(super::SDK_REPLAY), replay).unwrap();
+        super::persist_sdk_identity(base.path(), &report).unwrap();
+        assert_eq!(std::fs::read(base.path().join(super::CONFIG)).unwrap(), b"{}\n");
     }
 
     #[test]
