@@ -1101,10 +1101,12 @@ def materialize_candidate_identity(root: Path) -> tuple[dict[str, Any], dict[str
     user_data_dir = root / USER_DATA_NAME
     browser_selector = camoufox_browser_selector(lock)
     headless_mode = resolve_headless_mode()
+    report_runtime_stage("launch", "identity_fpgen_started")
     fingerprint = generate_fingerprint(
         screen=get_screen_cons(headless_mode or "DISPLAY" in os.environ),
         os="windows",
     )
+    report_runtime_stage("launch", "identity_fpgen_ready")
     sdk_options = {
         **browser_selector,
         "enable_cache": True,
@@ -1121,20 +1123,34 @@ def materialize_candidate_identity(root: Path) -> tuple[dict[str, Any], dict[str
     }
     canvas_noise = False
     with contextlib.redirect_stdout(sys.stderr):
+        report_runtime_stage("launch", "identity_gpu_probe_started")
         try:
             options = launch_options(**sdk_options, fingerprint=copy.deepcopy(fingerprint))
         except TimeoutError:
-            # The pinned SDK's host-GPU WebGL probe is bounded at 30 seconds.
-            # No browser context/identity was admitted or persisted yet. Keep
-            # the SAME fpgen draw and let the official SDK select its supported
-            # masked-canvas rendering policy without another host-GPU probe.
+            # The pinned SDK bounds its host-GPU WebGL probe at 30 seconds.
+            # A cold Firefox/page startup may cross that limit even when the
+            # same host GPU works after warming. Neither an identity nor a
+            # user browser context has been admitted or persisted yet.
             report_runtime_stage("launch", "identity_gpu_probe_timeout")
-            canvas_noise = True
-            options = launch_options(
-                **sdk_options,
-                fingerprint=copy.deepcopy(fingerprint),
-                canvas_noise=True,
-            )
+            report_runtime_stage("launch", "identity_gpu_retry_started")
+            try:
+                # Exactly one more official, unmasked SDK attempt. Never draw
+                # another fpgen identity, bypass the SDK or alter its timeout.
+                options = launch_options(**sdk_options, fingerprint=copy.deepcopy(fingerprint))
+            except TimeoutError:
+                report_runtime_stage("launch", "identity_gpu_retry_timeout")
+                report_runtime_stage("launch", "identity_gpu_fallback_started")
+                canvas_noise = True
+                options = launch_options(
+                    **sdk_options,
+                    fingerprint=copy.deepcopy(fingerprint),
+                    canvas_noise=True,
+                )
+                report_runtime_stage("launch", "identity_gpu_fallback_ready")
+            else:
+                report_runtime_stage("launch", "identity_gpu_retry_native_ready")
+        else:
+            report_runtime_stage("launch", "identity_gpu_probe_native_ready")
     options["args"] = ["-new-tab", MANAGED_BOOTSTRAP_TAB_URL]
     options["ignore_default_args"] = ["about:blank"]
     config = extract_camoufox_config(options)
@@ -1216,7 +1232,16 @@ def report_runtime_stage(phase: str, step: str) -> None:
         ("startup", "begin"),
         ("startup", "ready"),
         ("launch", "identity_requested"),
+        ("launch", "identity_fpgen_started"),
+        ("launch", "identity_fpgen_ready"),
+        ("launch", "identity_gpu_probe_started"),
         ("launch", "identity_gpu_probe_timeout"),
+        ("launch", "identity_gpu_probe_native_ready"),
+        ("launch", "identity_gpu_retry_started"),
+        ("launch", "identity_gpu_retry_timeout"),
+        ("launch", "identity_gpu_retry_native_ready"),
+        ("launch", "identity_gpu_fallback_started"),
+        ("launch", "identity_gpu_fallback_ready"),
         ("launch", "identity_ready"),
         ("launch", "before_browser_enter"),
         ("launch", "options_ready"),

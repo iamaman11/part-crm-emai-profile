@@ -135,7 +135,7 @@ def verify_upstream_camoufox_config_is_final(runtime) -> None:
 
 
 def verify_official_gpu_timeout_policy_is_persistent_and_fail_closed(runtime) -> None:
-    """SDK 159 recovery must keep one draw and one rendering choice on Restore."""
+    """Only two SDK GPU timeouts can select persistent masked rendering."""
     from types import ModuleType
 
     fake_package = ModuleType("camoufox")
@@ -151,7 +151,7 @@ def verify_official_gpu_timeout_policy_is_persistent_and_fail_closed(runtime) ->
 
     def official_options(**kwargs):
         sdk_calls.append(kwargs)
-        if len(sdk_calls) == 1:
+        if len(sdk_calls) <= 2:
             raise TimeoutError("SDK host GPU probe timed out; path deliberately not logged")
         return {
             "env": {
@@ -193,14 +193,25 @@ def verify_official_gpu_timeout_policy_is_persistent_and_fail_closed(runtime) ->
         with contextlib.redirect_stderr(diagnostics):
             report, first_sdk_options = runtime.materialize_candidate_identity(original)
         assert diagnostics.getvalue().splitlines() == [
-            "camouhost_stage phase=launch step=identity_gpu_probe_timeout"
+            "camouhost_stage phase=launch step=identity_fpgen_started",
+            "camouhost_stage phase=launch step=identity_fpgen_ready",
+            "camouhost_stage phase=launch step=identity_gpu_probe_started",
+            "camouhost_stage phase=launch step=identity_gpu_probe_timeout",
+            "camouhost_stage phase=launch step=identity_gpu_retry_started",
+            "camouhost_stage phase=launch step=identity_gpu_retry_timeout",
+            "camouhost_stage phase=launch step=identity_gpu_fallback_started",
+            "camouhost_stage phase=launch step=identity_gpu_fallback_ready",
         ]
         assert report["canvas_noise"] is True
         assert len(fingerprint_draws) == 1
-        assert len(sdk_calls) == 2
+        assert len(sdk_calls) == 3
         assert "canvas_noise" not in sdk_calls[0]
-        assert sdk_calls[1]["canvas_noise"] is True
+        assert "canvas_noise" not in sdk_calls[1]
+        assert sdk_calls[2]["canvas_noise"] is True
         assert sdk_calls[1]["fingerprint"] == sdk_calls[0]["fingerprint"]
+        assert sdk_calls[2]["fingerprint"] == sdk_calls[0]["fingerprint"]
+        assert sdk_calls[1]["fingerprint"] is not sdk_calls[0]["fingerprint"]
+        assert sdk_calls[2]["fingerprint"] is not sdk_calls[0]["fingerprint"]
         assert sdk_calls[1]["executable_path"] == "/fixture/camoufox.exe"
         assert first_sdk_options["env"]["CAMOU_CONFIG_1"] == json.dumps(exact_config)
         assert first_sdk_options["args"] == ["-new-tab", runtime.MANAGED_BOOTSTRAP_TAB_URL]
@@ -272,10 +283,94 @@ def verify_official_gpu_timeout_policy_is_persistent_and_fail_closed(runtime) ->
             else:
                 raise AssertionError("redirected rendering policy must fail closed")
 
+        # A cold timeout followed by a warmed official probe keeps native
+        # canvas rendering, the same fpgen draw, and exact replay on Open.
+        native_after_retry = Path(directory) / "native-after-retry"
+        native_after_retry.mkdir()
+        sdk_calls.clear()
+
+        def one_cold_timeout(**kwargs):
+            sdk_calls.append(kwargs)
+            if len(sdk_calls) == 1:
+                raise TimeoutError("cold first WebGL probe")
+            return official_options_result()
+
+        def official_options_result():
+            return {
+                "env": {
+                    "CAMOU_CONFIG_1": json.dumps(exact_config),
+                    "CAMOU_PREFS_1": json.dumps({"sdk-owned": "untouched"}),
+                },
+                "headless": False,
+                "firefox_user_prefs": {"sdk-owned": "untouched"},
+            }
+
+        fake_utils.launch_options = one_cold_timeout
+        diagnostics = io.StringIO()
+        with contextlib.redirect_stderr(diagnostics):
+            native_report, native_options = runtime.materialize_candidate_identity(native_after_retry)
+        assert diagnostics.getvalue().splitlines() == [
+            "camouhost_stage phase=launch step=identity_fpgen_started",
+            "camouhost_stage phase=launch step=identity_fpgen_ready",
+            "camouhost_stage phase=launch step=identity_gpu_probe_started",
+            "camouhost_stage phase=launch step=identity_gpu_probe_timeout",
+            "camouhost_stage phase=launch step=identity_gpu_retry_started",
+            "camouhost_stage phase=launch step=identity_gpu_retry_native_ready",
+        ]
+        assert native_report["canvas_noise"] is False
+        assert len(fingerprint_draws) == 2
+        assert len(sdk_calls) == 2
+        assert sdk_calls[0]["fingerprint"] == sdk_calls[1]["fingerprint"]
+        assert sdk_calls[0]["fingerprint"] is not sdk_calls[1]["fingerprint"]
+        assert "canvas_noise" not in sdk_calls[0] and "canvas_noise" not in sdk_calls[1]
+        assert json.loads(native_report["sdk_replay_json"])["fingerprint"] == sdk_calls[0]["fingerprint"]
+        assert native_options["env"]["CAMOU_CONFIG_1"] == json.dumps(exact_config)
+        assert not (native_after_retry / runtime.CONFIG_NAME).exists()
+        assert not (native_after_retry / runtime.RENDER_POLICY_NAME).exists()
+
+        # A healthy first probe makes only one SDK call with no fallback.
+        sdk_calls.clear()
+        fake_utils.launch_options = lambda **kwargs: (sdk_calls.append(kwargs), official_options_result())[1]
+        first_ok = Path(directory) / "native-first-attempt"
+        first_ok.mkdir()
+        with contextlib.redirect_stderr(diagnostics := io.StringIO()):
+            first_ok_report, _ = runtime.materialize_candidate_identity(first_ok)
+        assert first_ok_report["canvas_noise"] is False
+        assert len(sdk_calls) == 1
+        assert diagnostics.getvalue().splitlines() == [
+            "camouhost_stage phase=launch step=identity_fpgen_started",
+            "camouhost_stage phase=launch step=identity_fpgen_ready",
+            "camouhost_stage phase=launch step=identity_gpu_probe_started",
+            "camouhost_stage phase=launch step=identity_gpu_probe_native_ready",
+        ]
+
+        # A non-timeout second failure must propagate; never mask it.
+        sdk_calls.clear()
+
+        def unrelated_after_timeout(**kwargs):
+            sdk_calls.append(kwargs)
+            if len(sdk_calls) == 1:
+                raise TimeoutError("cold probe")
+            raise OSError("unrelated SDK failure with secret")
+
+        fake_utils.launch_options = unrelated_after_timeout
+        unrelated = Path(directory) / "unrelated-error"
+        unrelated.mkdir()
+        with contextlib.redirect_stderr(diagnostics := io.StringIO()):
+            try:
+                runtime.materialize_candidate_identity(unrelated)
+            except OSError:
+                pass
+            else:
+                raise AssertionError("unrelated SDK failure must propagate")
+        assert len(sdk_calls) == 2
+        assert "identity_gpu_fallback_started" not in diagnostics.getvalue()
+        assert not (unrelated / runtime.CONFIG_NAME).exists()
+
         # An unrelated SDK failure never turns into masked-canvas recovery.
         sdk_calls.clear()
         fake_utils.launch_options = lambda **_kwargs: (_ for _ in ()).throw(OSError("fixture"))
-        unrelated = Path(directory) / "unrelated-error"
+        unrelated = Path(directory) / "unrelated-first-error"
         unrelated.mkdir()
         try:
             runtime.materialize_candidate_identity(unrelated)
@@ -373,7 +468,12 @@ def main() -> int:
     diagnostic_output = io.StringIO()
     with contextlib.redirect_stderr(diagnostic_output):
         for step in (
-            "identity_requested", "identity_gpu_probe_timeout", "identity_ready",
+            "identity_requested", "identity_fpgen_started", "identity_fpgen_ready",
+            "identity_gpu_probe_started", "identity_gpu_probe_timeout",
+            "identity_gpu_retry_started", "identity_gpu_retry_timeout",
+            "identity_gpu_fallback_started", "identity_gpu_fallback_ready",
+            "identity_gpu_probe_native_ready", "identity_gpu_retry_native_ready",
+            "identity_ready",
             "options_ready", "sdk_enter", "browser_entered",
         ):
             runtime.report_runtime_stage("launch", step)
@@ -383,7 +483,16 @@ def main() -> int:
     safe_lines = diagnostic_output.getvalue().splitlines()
     assert safe_lines == [
         "camouhost_stage phase=launch step=identity_requested",
+        "camouhost_stage phase=launch step=identity_fpgen_started",
+        "camouhost_stage phase=launch step=identity_fpgen_ready",
+        "camouhost_stage phase=launch step=identity_gpu_probe_started",
         "camouhost_stage phase=launch step=identity_gpu_probe_timeout",
+        "camouhost_stage phase=launch step=identity_gpu_retry_started",
+        "camouhost_stage phase=launch step=identity_gpu_retry_timeout",
+        "camouhost_stage phase=launch step=identity_gpu_fallback_started",
+        "camouhost_stage phase=launch step=identity_gpu_fallback_ready",
+        "camouhost_stage phase=launch step=identity_gpu_probe_native_ready",
+        "camouhost_stage phase=launch step=identity_gpu_retry_native_ready",
         "camouhost_stage phase=launch step=identity_ready",
         "camouhost_stage phase=launch step=options_ready",
         "camouhost_stage phase=launch step=sdk_enter",
