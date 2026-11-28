@@ -248,6 +248,8 @@ pub fn stage_verified_delivery<R: DeliveryArchiveReader>(
     reader: &mut R,
 ) -> Result<StagedDelivery, DeliveryStagingError> {
     validate_directory_path(root.path())?;
+    #[cfg(windows)]
+    let plan_started = std::time::Instant::now();
     let manifest = candidate.manifest();
     let bridge_plan = build_component_plan(
         DeliveryComponentKind::ProfileBridge,
@@ -261,6 +263,11 @@ pub fn stage_verified_delivery<R: DeliveryArchiveReader>(
         &manifest.components.runtime_bundle,
         reader,
     )?;
+    #[cfg(windows)]
+    println!(
+        "PROFILE_BRIDGE_INSTALL_TIMING_V1=ARCHIVE_PLAN;elapsed_ms={}",
+        plan_started.elapsed().as_millis()
+    );
     let marker = StageMarker {
         schema_version: STAGE_SCHEMA_VERSION,
         kind: STAGE_KIND.to_owned(),
@@ -304,6 +311,8 @@ pub fn stage_verified_delivery<R: DeliveryArchiveReader>(
 
     fs::create_dir(&pending_path).map_err(|_| DeliveryStagingError::Io)?;
     validate_directory_path(&pending_path)?;
+    #[cfg(windows)]
+    let materialize_started = std::time::Instant::now();
     let materialize_result = materialize_stage(
         &pending_path,
         &marker_bytes,
@@ -316,12 +325,33 @@ pub fn stage_verified_delivery<R: DeliveryArchiveReader>(
         }
         return Err(error);
     }
+    #[cfg(windows)]
+    println!(
+        "PROFILE_BRIDGE_INSTALL_TIMING_V1=MATERIALIZE;elapsed_ms={}",
+        materialize_started.elapsed().as_millis()
+    );
+    // Verify the entire pending tree before publication, then independently
+    // verify the final path after atomic rename. Both gates remain fail-closed.
+    #[cfg(windows)]
+    let pending_verify_started = std::time::Instant::now();
     verify_materialized_stage(&pending_path, &marker_bytes, [&bridge_plan, &runtime_plan])?;
+    #[cfg(windows)]
+    println!(
+        "PROFILE_BRIDGE_INSTALL_TIMING_V1=PENDING_VERIFY;elapsed_ms={}",
+        pending_verify_started.elapsed().as_millis()
+    );
     if safe_directory_exists(&final_path)? {
         return Err(DeliveryStagingError::AmbiguousStage);
     }
     fs::rename(&pending_path, &final_path).map_err(|_| DeliveryStagingError::Io)?;
+    #[cfg(windows)]
+    let verify_started = std::time::Instant::now();
     verify_materialized_stage(&final_path, &marker_bytes, [&bridge_plan, &runtime_plan])?;
+    #[cfg(windows)]
+    println!(
+        "PROFILE_BRIDGE_INSTALL_TIMING_V1=FINAL_VERIFY;elapsed_ms={}",
+        verify_started.elapsed().as_millis()
+    );
     Ok(staged_delivery(candidate, final_path))
 }
 

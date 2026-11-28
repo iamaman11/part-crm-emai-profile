@@ -122,6 +122,8 @@ impl<'a> WindowsDeliveryCoordinator<'a> {
         fetcher: &mut F,
         archive_reader: &mut R,
     ) -> Result<PreparedWindowsDelivery, WindowsDeliveryCoordinatorError> {
+        #[cfg(windows)]
+        let download_started = std::time::Instant::now();
         let artifacts = download_verified_delivery(
             self.download_root,
             &candidate,
@@ -130,7 +132,13 @@ impl<'a> WindowsDeliveryCoordinator<'a> {
         )
         .map_err(WindowsDeliveryCoordinatorError::Download)?;
         #[cfg(windows)]
-        println!("PROFILE_BRIDGE_INSTALL_STAGE_V1=UNPACK_VERIFY");
+        {
+            println!(
+                "PROFILE_BRIDGE_INSTALL_TIMING_V1=DOWNLOAD_VERIFY;elapsed_ms={}",
+                download_started.elapsed().as_millis()
+            );
+            println!("PROFILE_BRIDGE_INSTALL_STAGE_V1=UNPACK_VERIFY");
+        }
         let staged = stage_verified_delivery(
             self.staging_root,
             &candidate,
@@ -142,9 +150,13 @@ impl<'a> WindowsDeliveryCoordinator<'a> {
 
         #[cfg(windows)]
         println!("PROFILE_BRIDGE_INSTALL_STAGE_V1=STAGED");
-        let reopened = reopen_staged_delivery(self.staging_root, staged.identity())
-            .map_err(WindowsDeliveryCoordinatorError::Staging)?;
-        if reopened.identity() != &candidate.identity() || reopened.path() != staged.path() {
+        // stage_verified_delivery already checks every published file after the
+        // final rename. Reopening that same stage here would hash the entire
+        // 2.8 GiB runtime a second time without observing a new authority.
+        // Installation activation retains its independent exact stage readback.
+        if staged.identity() != &candidate.identity()
+            || staged.path().parent() != Some(self.staging_root.path())
+        {
             return Err(WindowsDeliveryCoordinatorError::StageIdentityMismatch);
         }
 

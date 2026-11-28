@@ -106,6 +106,7 @@ mod windows {
         // Protect all SQLite/WAL/unsynced material before ANY delivery-state,
         // connection, staging or activation change. This never claims remote
         // Coordinator or browser-WORKING authority.
+        let rescue_started = std::time::Instant::now();
         let rescue = super::rescue::ensure_rescue(root, &workspace).map_err(|error| {
             // Inno Setup treats ANY stderr as a hard installation failure.
             // Use its existing closed BRIDGE_* stdout code admission instead.
@@ -114,6 +115,10 @@ mod windows {
         })?;
         // Only closed symbolic status values, never paths, cookies or keys.
         println!("PROFILE_BRIDGE_RESCUE_STATUS_V1={rescue}");
+        println!(
+            "PROFILE_BRIDGE_INSTALL_TIMING_V1=RESCUE_VERIFY;elapsed_ms={}",
+            rescue_started.elapsed().as_millis()
+        );
         // The canonical delivery store exists only now. Installation observations
         // may start here; a rejected/corrupt store is never modified for diagnosis.
         crate::user_diagnostics::report::record_at(
