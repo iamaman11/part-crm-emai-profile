@@ -197,11 +197,19 @@ where
 /// Everything else may contain SDK diagnostics, configuration or profile data.
 /// This is a diagnostic projection, never launch/health/recovery authority.
 fn classify_camouhost_diagnostic(line: &str) -> Option<(Stage, Outcome, Cause)> {
+    // These are precise SDK *attempt boundaries*, not a claim that the
+    // adapter observed its private Firefox launch/new-page/WebGL substeps.
+    // Rust records elapsed milliseconds against its existing Open clock.
     if line == "camouhost_stage phase=launch step=identity_gpu_probe_timeout" {
-        // A first-DRAFT SDK probe timed out, but the same official fpgen draw
-        // is still being prepared with the SDK's persisted canvas mask.
         return Some((
-            Stage::CamouhostIdentity,
+            Stage::CamouhostGpuProbe,
+            Outcome::Observed,
+            Cause::RuntimeTimeout,
+        ));
+    }
+    if line == "camouhost_stage phase=launch step=identity_gpu_retry_timeout" {
+        return Some((
+            Stage::CamouhostGpuRetry,
             Outcome::Observed,
             Cause::RuntimeTimeout,
         ));
@@ -215,6 +223,30 @@ fn classify_camouhost_diagnostic(line: &str) -> Option<(Stage, Outcome, Cause)> 
         }
         "camouhost_stage phase=launch step=identity_requested" => {
             Some((Stage::CamouhostIdentity, Outcome::Started))
+        }
+        "camouhost_stage phase=launch step=identity_fpgen_started" => {
+            Some((Stage::CamouhostFpgen, Outcome::Started))
+        }
+        "camouhost_stage phase=launch step=identity_fpgen_ready" => {
+            Some((Stage::CamouhostFpgen, Outcome::Succeeded))
+        }
+        "camouhost_stage phase=launch step=identity_gpu_probe_started" => {
+            Some((Stage::CamouhostGpuProbe, Outcome::Started))
+        }
+        "camouhost_stage phase=launch step=identity_gpu_probe_native_ready" => {
+            Some((Stage::CamouhostGpuProbe, Outcome::Succeeded))
+        }
+        "camouhost_stage phase=launch step=identity_gpu_retry_started" => {
+            Some((Stage::CamouhostGpuRetry, Outcome::Started))
+        }
+        "camouhost_stage phase=launch step=identity_gpu_retry_native_ready" => {
+            Some((Stage::CamouhostGpuRetry, Outcome::Succeeded))
+        }
+        "camouhost_stage phase=launch step=identity_gpu_fallback_started" => {
+            Some((Stage::CamouhostGpuFallback, Outcome::Started))
+        }
+        "camouhost_stage phase=launch step=identity_gpu_fallback_ready" => {
+            Some((Stage::CamouhostGpuFallback, Outcome::Succeeded))
         }
         "camouhost_stage phase=launch step=identity_ready" => {
             Some((Stage::CamouhostIdentity, Outcome::Observed))
@@ -1461,11 +1493,68 @@ mod tests {
                 "camouhost_stage phase=launch step=identity_gpu_probe_timeout"
             ),
             Some((
-                Stage::CamouhostIdentity,
+                Stage::CamouhostGpuProbe,
                 Outcome::Observed,
                 Cause::RuntimeTimeout
             ))
         );
+        assert_eq!(
+            classify_camouhost_diagnostic("camouhost_stage phase=launch step=identity_gpu_retry_timeout"),
+            Some((
+                Stage::CamouhostGpuRetry,
+                Outcome::Observed,
+                Cause::RuntimeTimeout
+            ))
+        );
+        for (step, stage, outcome) in [
+            (
+                "identity_fpgen_started",
+                Stage::CamouhostFpgen,
+                Outcome::Started,
+            ),
+            (
+                "identity_fpgen_ready",
+                Stage::CamouhostFpgen,
+                Outcome::Succeeded,
+            ),
+            (
+                "identity_gpu_probe_started",
+                Stage::CamouhostGpuProbe,
+                Outcome::Started,
+            ),
+            (
+                "identity_gpu_probe_native_ready",
+                Stage::CamouhostGpuProbe,
+                Outcome::Succeeded,
+            ),
+            (
+                "identity_gpu_retry_started",
+                Stage::CamouhostGpuRetry,
+                Outcome::Started,
+            ),
+            (
+                "identity_gpu_retry_native_ready",
+                Stage::CamouhostGpuRetry,
+                Outcome::Succeeded,
+            ),
+            (
+                "identity_gpu_fallback_started",
+                Stage::CamouhostGpuFallback,
+                Outcome::Started,
+            ),
+            (
+                "identity_gpu_fallback_ready",
+                Stage::CamouhostGpuFallback,
+                Outcome::Succeeded,
+            ),
+        ] {
+            assert_eq!(
+                classify_camouhost_diagnostic(&format!(
+                    "camouhost_stage phase=launch step={step}"
+                )),
+                Some((stage, outcome, Cause::None)),
+            );
+        }
         assert_eq!(
             classify_camouhost_diagnostic("camouhost_stage phase=launch step=identity_requested"),
             Some((Stage::CamouhostIdentity, Outcome::Started, Cause::None))

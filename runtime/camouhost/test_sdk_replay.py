@@ -131,6 +131,47 @@ class SdkReplayTests(unittest.TestCase):
         self.assertEqual(json.loads(report["sdk_replay_json"])["fingerprint"], self.fpgen)
         self.assertEqual(json.loads(report["camoufox_config_json"]), self.config)
 
+    def test_cold_gpu_timeout_then_native_retry_preserves_quick_replay_identity(self):
+        fp_module = types.ModuleType("camoufox.fingerprints")
+        fp_module.generate_fingerprint = Mock(return_value=self.fpgen)
+        utils_module = types.ModuleType("camoufox.utils")
+        utils_module.get_screen_cons = Mock(return_value=None)
+        utils_module.launch_options = Mock(side_effect=[
+            TimeoutError("first disposable GPU probe exhausted SDK timeout"),
+            self.options.copy(),
+        ])
+        camoufox_module = types.ModuleType("camoufox")
+        with patch.dict(sys.modules, {
+            "camoufox": camoufox_module,
+            "camoufox.fingerprints": fp_module,
+            "camoufox.utils": utils_module,
+        }), patch.object(real, "verify_python_components"), patch.object(
+            real, "camoufox_browser_selector", return_value={"executable_path": "camoufox.exe"}
+        ), patch.object(real, "locked_firefox_major", return_value=159):
+            report, options = real.materialize_candidate_identity(self.root)
+        self.assertEqual(report["canvas_noise"], False)
+        fp_module.generate_fingerprint.assert_called_once()
+        self.assertEqual(utils_module.launch_options.call_count, 2)
+        first = utils_module.launch_options.call_args_list[0].kwargs
+        second = utils_module.launch_options.call_args_list[1].kwargs
+        self.assertEqual(first["fingerprint"], second["fingerprint"])
+        self.assertIsNot(first["fingerprint"], second["fingerprint"])
+        self.assertNotIn("canvas_noise", first)
+        self.assertNotIn("canvas_noise", second)
+        self.assertEqual(json.loads(report["sdk_replay_json"])["fingerprint"], self.fpgen)
+        self.assertEqual(options["env"]["CAMOU_CONFIG_1"], self.config_blob)
+
+        # Simulate Rust's single exact sidecar write. Three normal Opens must
+        # reuse the same SDK output, without invoking the GPU probe again.
+        (self.root / real.SDK_REPLAY_NAME).write_bytes(report["sdk_replay_json"].encode("utf-8"))
+        replay_digest = report["sdk_replay_sha256"]
+        with patch.object(real, "camoufox_launch_options", side_effect=AssertionError("GPU probe reran")):
+            for _ in range(3):
+                reused = real.native_sdk_replay_options({}, self.root, self.config)
+                self.assertEqual(reused["env"]["CAMOU_CONFIG_1"], self.config_blob)
+                self.assertEqual(reused["firefox_user_prefs"], options["firefox_user_prefs"])
+        self.assertEqual(real.sha256_bytes((self.root / real.SDK_REPLAY_NAME).read_bytes()), replay_digest)
+
 
 if __name__ == "__main__":
     unittest.main()
