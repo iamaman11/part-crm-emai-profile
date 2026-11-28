@@ -207,7 +207,8 @@ spec = importlib.util.spec_from_file_location("camouhost_fixture", camouhost)
 module = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(module)
 with contextlib.redirect_stdout(sys.stderr):
-    report = module.materialize_candidate_identity(root)
+    report, options = module.materialize_candidate_identity(root)
+assert isinstance(options, dict) and isinstance(options.get("env"), dict)
 print(json.dumps(report, separators=(",", ":"), sort_keys=True), flush=True)
 """
     completed = subprocess.run(
@@ -235,8 +236,11 @@ print(json.dumps(report, separators=(",", ":"), sort_keys=True), flush=True)
         "fingerprint_policy_version",
         "fingerprint_materialization_sha256",
         "runtime_lock_sha256",
+        "sdk_replay_json",
+        "sdk_replay_sha256",
     }
-    if (set(report) != required or type(report["canvas_noise"]) is not bool or any(
+    if (not isinstance(report, dict) or set(report) != required
+        or type(report["canvas_noise"]) is not bool or any(
         not isinstance(report[key], str) or not report[key]
         for key in required - {"canvas_noise"}
     )):
@@ -256,6 +260,26 @@ print(json.dumps(report, separators=(",", ":"), sort_keys=True), flush=True)
         raise AssertionError("official SDK config is not canonical")
     if hashlib.sha256(canonical).hexdigest() != report["fingerprint_config_sha256"]:
         raise AssertionError("official SDK config digest does not match returned config")
+    # Mirror the native Rust writer's bounded, canonical, host-bound replay
+    # sidecar. The real browser receives SDK-generated options, not a new
+    # fingerprint derived by the test fixture.
+    replay_bytes = report["sdk_replay_json"].encode("utf-8")
+    if (len(replay_bytes) > 4 * 1024 * 1024
+        or hashlib.sha256(replay_bytes).hexdigest() != report["sdk_replay_sha256"]):
+        raise AssertionError("SDK replay sidecar digest or bound is invalid")
+    try:
+        replay = json.loads(replay_bytes)
+    except json.JSONDecodeError as error:
+        raise AssertionError("SDK replay sidecar is not JSON") from error
+    replay_canonical = (
+        json.dumps(replay, ensure_ascii=True, separators=(",", ":"), sort_keys=True) + "\n"
+    ).encode("utf-8")
+    if (replay_canonical != replay_bytes
+        or set(replay) != {"schema_version", "binding_sha256", "config_sha256", "fingerprint", "options"}
+        or replay["schema_version"] != 1
+        or replay["config_sha256"] != report["fingerprint_config_sha256"]
+        or set(replay["options"]) != {"args", "ignore_default_args", "firefox_user_prefs", "headless", "sdk_env"}):
+        raise AssertionError("SDK replay sidecar is not the expected official launch projection")
     # The production Rust owner persists this exact canonical payload. The
     # test harness mirrors that write; Camouhost itself never writes the file.
     # Every new identity pins SDK-native or masked preferences for future Open.
@@ -264,6 +288,7 @@ print(json.dumps(report, separators=(",", ":"), sort_keys=True), flush=True)
         (b'{"canvas_noise":true,"schema_version":1}\n' if report["canvas_noise"]
          else b'{"canvas_noise":false,"schema_version":1}\n')
     )
+    (root / "camoufox-sdk-replay.json").write_bytes(replay_bytes)
     (root / "camoufox-config.json").write_bytes(canonical)
     expected = hashlib.sha256(b"profile-stability-v2-fpgen-config\0" + canonical).hexdigest()
     if report["fingerprint_materialization_sha256"] != expected:

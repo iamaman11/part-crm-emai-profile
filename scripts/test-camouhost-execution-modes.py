@@ -153,8 +153,14 @@ def verify_official_gpu_timeout_policy_is_persistent_and_fail_closed(runtime) ->
         sdk_calls.append(kwargs)
         if len(sdk_calls) == 1:
             raise TimeoutError("SDK host GPU probe timed out; path deliberately not logged")
-        return {"env": {"CAMOU_CONFIG_1": json.dumps(exact_config)},
-                "firefox_user_prefs": {"sdk-owned": "untouched"}}
+        return {
+            "env": {
+                "CAMOU_CONFIG_1": json.dumps(exact_config),
+                "CAMOU_PREFS_1": json.dumps({"sdk-owned": "untouched"}),
+            },
+            "headless": False,
+            "firefox_user_prefs": {"sdk-owned": "untouched"},
+        }
 
     fake_fingerprints.generate_fingerprint = generate_fingerprint
     fake_utils.get_screen_cons = lambda _headless: None
@@ -185,7 +191,7 @@ def verify_official_gpu_timeout_policy_is_persistent_and_fail_closed(runtime) ->
         original.mkdir()
         diagnostics = io.StringIO()
         with contextlib.redirect_stderr(diagnostics):
-            report = runtime.materialize_candidate_identity(original)
+            report, first_sdk_options = runtime.materialize_candidate_identity(original)
         assert diagnostics.getvalue().splitlines() == [
             "camouhost_stage phase=launch step=identity_gpu_probe_timeout"
         ]
@@ -196,6 +202,10 @@ def verify_official_gpu_timeout_policy_is_persistent_and_fail_closed(runtime) ->
         assert sdk_calls[1]["canvas_noise"] is True
         assert sdk_calls[1]["fingerprint"] == sdk_calls[0]["fingerprint"]
         assert sdk_calls[1]["executable_path"] == "/fixture/camoufox.exe"
+        assert first_sdk_options["env"]["CAMOU_CONFIG_1"] == json.dumps(exact_config)
+        assert first_sdk_options["args"] == ["-new-tab", runtime.MANAGED_BOOTSTRAP_TAB_URL]
+        assert first_sdk_options["ignore_default_args"] == ["about:blank"]
+        assert json.loads(report["sdk_replay_json"])["fingerprint"] == sdk_calls[0]["fingerprint"]
         assert json.loads(report["camoufox_config_json"]) == exact_config
         assert not (original / runtime.CONFIG_NAME).exists()
         assert not (original / runtime.RENDER_POLICY_NAME).exists()

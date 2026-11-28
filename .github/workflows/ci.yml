@@ -261,8 +261,10 @@ jobs:
         if: needs.camoufox-scope.outputs.heavy == 'true'
         shell: pwsh
         run: |
-          python -m py_compile runtime/camouhost/real.py runtime/camouhost/native_process.py scripts/camouhost-runtime-build-windows.py scripts/camouhost-runtime-package.py scripts/test-camouhost-native-process.py scripts/test-camouhost-native-ipc.py scripts/test-camouhost-execution-modes.py scripts/test-camouhost-webgl2-contract.py
+          python -m py_compile runtime/camouhost/real.py runtime/camouhost/native_process.py runtime/camouhost/test_sdk_replay.py scripts/camouhost-runtime-build-windows.py scripts/camouhost-runtime-package.py scripts/test-camouhost-native-process.py scripts/test-camouhost-native-ipc.py scripts/test-camouhost-execution-modes.py scripts/test-camouhost-webgl2-contract.py
           if ($LASTEXITCODE -ne 0) { throw 'runtime Python compile failed' }
+          python -m unittest discover -s runtime/camouhost -p test_sdk_replay.py -v
+          if ($LASTEXITCODE -ne 0) { throw 'SDK-derived native replay regression failed' }
           python scripts/test-camouhost-native-process.py
           if ($LASTEXITCODE -ne 0) { throw 'native Camoufox process boundary regression failed' }
           python scripts/test-camouhost-native-ipc.py

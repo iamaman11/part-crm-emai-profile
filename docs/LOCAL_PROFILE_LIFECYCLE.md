@@ -235,6 +235,19 @@ is an outer adapter concern and may not weaken the materialization identity comp
 
 Exact saved configuration and runtime integrity are distinct from complete observed fingerprint
 equality. Before navigation, the existing typed domain owner rejects a wrong browser/OS identity.
+For a new native Camoufox profile, the official SDK generates the fpgen fingerprint and
+materializes its own startup preferences once. Rust stores the canonical `camoufox-config.json`
+as the identity commit marker and a bounded, host/runtime-bound
+`camoufox-sdk-replay.json` projection of that SDK output. The replay projection contains the
+original fpgen input and Camoufox-only startup chunks/preferences, **not** the inherited process
+environment, proxy credentials, executable path or local profile path. The standard Playwright
+proxy launch option is rehydrated from the current protected proxy config in process memory only.
+A repeat Open on the same host/runtime uses the SDK's public `from_options` entrypoint without
+running the host GPU probe again. A changed machine/runtime uses the official SDK's normal
+saved-config launch path; corrupted or inconsistent replay bytes fail closed. The SDK, not
+ProfileBridge, decides
+whether cross-host canvas masking is necessary. The projection is not a new identity or Sync
+authority, and the normal browser file-lock and Close/Sync boundaries remain unchanged.
 Differences in hardware, display/DPR, WebGL capabilities, fonts, locale or speech voices are diagnostic
 for ordinary profile launch; they neither rewrite saved identity nor certify fingerprint equality.
 An explicitly observed lack of WebGL is permitted; missing or malformed observation is not evidence
