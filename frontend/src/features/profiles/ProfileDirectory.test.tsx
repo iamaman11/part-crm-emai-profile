@@ -235,6 +235,7 @@ describe('ProfileDirectory tenant bootstrap boundary', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Open browser for Ready browser' }));
     expect(mockedOpen).toHaveBeenNthCalledWith(2, 'tenant_01JAUTH', 'actor_01JAUTH', 'profile_ready_click', 7, 'READY');
     expect(screen.getAllByText(/This page cannot confirm BrowserReady or cloud Saved/)).toHaveLength(2);
+    fireEvent.click(screen.getByLabelText('More actions for Draft browser'));
     fireEvent.click(screen.getAllByRole('button', { name: 'Copy diagnostics' })[0]!);
     expect(invokeProfileBridgeDiagnostics).toHaveBeenCalledTimes(1);
     expect(mockedOpen).toHaveBeenCalledTimes(2); // diagnostics never replays Open
@@ -242,6 +243,33 @@ describe('ProfileDirectory tenant bootstrap boundary', () => {
     expect(onSelect).not.toHaveBeenCalled();
     fireEvent.click(screen.getAllByRole('button', { name: 'View details' })[0]!);
     expect(onSelect).toHaveBeenCalledWith('profile_draft_click');
+  });
+
+  it('searches loaded rows and filters status without issuing new tenant requests or Open', async () => {
+    mockedListProfiles.mockResolvedValue({
+      profiles: [
+        { profileId: 'profile_sales', displayName: 'Sales browser', status: 'READY', version: 2,
+          metadataVersion: 2, linkedClientId: 'client_sales', activeGenerationId: null, canOperate: true },
+        { profileId: 'profile_review', displayName: 'Review browser', status: 'DIRTY_LOCAL', version: 5,
+          metadataVersion: 3, linkedClientId: null, activeGenerationId: null, canOperate: true },
+      ],
+      nextCursor: null,
+    });
+    renderDirectory(async () => ({ tenants: [{
+      tenantId: 'tenant_01JAUTH', displayName: 'Organization', actorId: 'actor_01JAUTH', role: 'MEMBER',
+    }] }));
+
+    expect(await screen.findByText('Sales browser')).toBeTruthy();
+    expect(screen.getByText('Review browser')).toBeTruthy();
+    fireEvent.change(screen.getByRole('searchbox', { name: 'Search loaded profiles' }), { target: { value: 'client_sales' } });
+    expect(screen.getByText('Sales browser')).toBeTruthy();
+    expect(screen.queryByText('Review browser')).toBeNull();
+    fireEvent.change(screen.getByRole('searchbox'), { target: { value: '' } });
+    fireEvent.change(screen.getByRole('combobox', { name: 'Filter profiles by status' }), { target: { value: 'attention' } });
+    expect(screen.queryByText('Sales browser')).toBeNull();
+    expect(screen.getByText('Review browser')).toBeTruthy();
+    expect(mockedListProfiles).toHaveBeenCalledTimes(1);
+    expect(mockedOpen).not.toHaveBeenCalled();
   });
 
   it('disables direct Open for viewer grants and non-launchable or deleted lifecycle states', async () => {

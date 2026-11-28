@@ -14,9 +14,35 @@ import { ConfirmAction } from '../../shared/ui/ConfirmAction';
 import { StatusMessage } from '../../shared/ui/StatusMessage';
 import { useLogicalCommandMutation } from '../../shared/ui/useLogicalCommandMutation';
 import { listClientProfiles } from './api';
+import { StatusBadge } from '../../shared/ui/StatusBadge';
 
 function field(data: FormData, name: string): string {
   return String(data.get(name) ?? '').trim();
+}
+
+type AttachedProfile = Awaited<ReturnType<typeof listClientProfiles>>['profiles'][number];
+
+function DetachProfileControl({ profile, disabled, busy, onDetach }: {
+  profile: AttachedProfile;
+  disabled: boolean;
+  busy: boolean;
+  onDetach: (profile: AttachedProfile, reason: string) => Promise<void>;
+}) {
+  const [reason, setReason] = useState('');
+  return (
+    <details className="relationship-tools">
+      <summary className="inline-summary">Manage relationship</summary>
+      <label className="stack-form" htmlFor={`detach-reason-${profile.profileId}`}>Detach reason</label>
+      <input id={`detach-reason-${profile.profileId}`} value={reason} maxLength={500}
+        onChange={(event) => setReason(event.currentTarget.value)} placeholder="Why should this profile be detached?" />
+      <ConfirmAction
+        label="detach profile"
+        consequence="This closes only the active Client/Profile relationship. The Client, Profile and explicit ACL grants remain intact."
+        disabled={disabled || busy || !reason.trim()}
+        onConfirm={() => onDetach(profile, reason.trim())}
+      />
+    </details>
+  );
 }
 
 export function ClientProfilesPanel({
@@ -31,7 +57,6 @@ export function ClientProfilesPanel({
   onMutated: () => Promise<void>;
 }) {
   const queryClient = useQueryClient();
-  const [detachReason, setDetachReason] = useState('');
   const [attachError, setAttachError] = useState<string | null>(null);
   const createForm = useRef<HTMLFormElement>(null);
   const missingActor = !actorId || !tenantId;
@@ -144,16 +169,13 @@ export function ClientProfilesPanel({
     .filter((profile) => profile.linkedClientId !== clientId && profile.status !== 'DELETED' && profile.status !== 'DELETING') ?? [];
   return (
     <section className="panel full-span">
-      <span className="eyebrow">Client card · independent profile ACL</span>
-      <h2>Client browser profiles</h2>
-      <p>
-        All attached profiles visible to your account appear here by name. You can open or manage
-        each one directly. Client visibility alone does not grant access to a browser profile.
-      </p>
-      <p>First time on this Windows computer? <a href={`/devices?tenant=${encodeURIComponent(tenantId)}`}>Install and connect Profile Bridge</a> once, then launch any profile you can operate.</p>
-      <p className="muted">After closing Camoufox, refresh this list to see the latest cloud status. A browser launch alone does not confirm Saved.</p>
+      <span className="eyebrow">Client workspace</span>
+      <h2>Browser profiles</h2>
+      <p>Open a ready profile or create a new one for this client.</p>
+      <p className="muted">New computer? <a href={`/devices?tenant=${encodeURIComponent(tenantId)}`}>Install and connect Profile Bridge</a>. After closing a browser, refresh for the latest cloud status; Open alone does not confirm Saved.</p>
       <button
         type="button"
+        className="secondary"
         disabled={profiles.isFetching || available.isFetching}
         onClick={() => { void Promise.all([profiles.refetch(), available.refetch()]); }}
       >
@@ -181,23 +203,13 @@ export function ClientProfilesPanel({
 
       {visibleProfiles.length > 0 ? (
         <div className="stack-form">
-          <label htmlFor={`client-profile-detach-reason-${clientId}`}>Detach reason</label>
-          <input
-            id={`client-profile-detach-reason-${clientId}`}
-            value={detachReason}
-            maxLength={500}
-            onChange={(event) => setDetachReason(event.currentTarget.value)}
-            placeholder="Required before detaching a profile"
-          />
           <div className="registry-list">
             {visibleProfiles.map((profile) => (
               <article className="registry-row" key={profile.profileId}>
                 <div>
                   <strong>{profile.displayName}</strong>
-                  {profile.displayName !== profile.profileId && <span className="profile-row-id"><code>{profile.profileId}</code></span>}
-                  <div className="muted">
-                    {profile.status} · browser v{profile.version} · metadata v{profile.metadataVersion}
-                  </div>
+                  <div><StatusBadge status={profile.status} /></div>
+                  <details className="profile-row-id"><summary>Technical details</summary>{profile.displayName !== profile.profileId && <><code>{profile.profileId}</code> · </>}browser v{profile.version} · metadata v{profile.metadataVersion}</details>
                 </div>
                 <div className="row-actions">
                   <ProfileOpenAction
@@ -213,16 +225,12 @@ export function ClientProfilesPanel({
                   >
                     View profile
                   </a>
-                  <ConfirmAction
-                    label="detach profile"
-                    consequence="This closes only the active Client/Profile relationship. The Client, Profile and explicit ACL grants remain intact."
-                    disabled={missingActor || detach.isPending || detachReason.trim().length === 0}
-                    onConfirm={() => detach.mutateAsync({
-                      profileId: profile.profileId,
-                      expectedMetadataVersion: profile.metadataVersion,
-                      reason: detachReason.trim(),
-                    }).then(() => undefined)}
-                  />
+                  <DetachProfileControl profile={profile} disabled={missingActor} busy={detach.isPending}
+                    onDetach={(target, reason) => detach.mutateAsync({
+                      profileId: target.profileId,
+                      expectedMetadataVersion: target.metadataVersion,
+                      reason,
+                    }).then(() => undefined)} />
                 </div>
               </article>
             ))}

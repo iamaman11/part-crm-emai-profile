@@ -70,7 +70,7 @@ function renderPanel(onMutated = vi.fn().mockResolvedValue(undefined), selectedA
 
 describe('ClientProfilesPanel relationship and native Open navigation', () => {
   beforeEach(() => {
-    vi.clearAllMocks();
+    vi.resetAllMocks();
     mockedListClientProfiles.mockResolvedValue({ profiles: [], nextCursor: null });
     mockedListProfiles.mockResolvedValue({ profiles: [], nextCursor: null });
     mockedCreateProfile.mockResolvedValue({
@@ -249,6 +249,7 @@ describe('ClientProfilesPanel relationship and native Open navigation', () => {
     fireEvent.click(screen.getByRole('button', { name: `Open browser for ${profileId}` }));
     expect(mockedOpen).toHaveBeenCalledExactlyOnceWith(tenantId, actorId, profileId, 4, 'READY');
     expect(screen.getByText(/This page cannot confirm BrowserReady or cloud Saved/)).toBeTruthy();
+    fireEvent.click(screen.getByLabelText(`More actions for ${profileId}`));
     fireEvent.click(screen.getByRole('button', { name: 'Copy diagnostics' }));
     expect(invokeProfileBridgeDiagnostics).toHaveBeenCalledTimes(1);
     expect(mockedOpen).toHaveBeenCalledTimes(1);
@@ -284,11 +285,13 @@ describe('ClientProfilesPanel relationship and native Open navigation', () => {
     const user = userEvent.setup();
     renderPanel();
 
-    expect(await screen.findByText('DRAFT · browser v1 · metadata v1')).toBeTruthy();
-    expect(screen.getByText(/A browser launch alone does not confirm Saved/)).toBeTruthy();
+    expect(await screen.findByText('Draft')).toBeTruthy();
+    expect(screen.getByText('browser v1 · metadata v1')).toBeTruthy();
+    expect(screen.getByText(/Open alone does not confirm Saved/)).toBeTruthy();
     await user.click(screen.getByRole('button', { name: 'Refresh profiles' }));
 
-    expect(await screen.findByText('READY · browser v3 · metadata v3')).toBeTruthy();
+    expect(await screen.findByText('Ready')).toBeTruthy();
+    expect(screen.getByText('browser v3 · metadata v3')).toBeTruthy();
     expect(mockedListClientProfiles).toHaveBeenCalledTimes(2);
     expect(mockedListProfiles).toHaveBeenCalledTimes(2);
     expect(mockedOpen).not.toHaveBeenCalled();
@@ -311,11 +314,13 @@ describe('ClientProfilesPanel relationship and native Open navigation', () => {
     const user = userEvent.setup();
     renderPanel();
 
-    expect(await screen.findByText('DRAFT · browser v1 · metadata v1')).toBeTruthy();
+    expect(await screen.findByText('Draft')).toBeTruthy();
+    expect(screen.getByText('browser v1 · metadata v1')).toBeTruthy();
     await user.click(screen.getByRole('button', { name: 'Refresh profiles' }));
     expect((await screen.findByRole('alert')).textContent).toContain('Could not load current profile status');
-    expect(screen.getByText('DRAFT · browser v1 · metadata v1')).toBeTruthy();
-    expect(screen.queryByText(/READY · browser v3/)).toBeNull();
+    expect(screen.getByText('Draft')).toBeTruthy();
+    expect(screen.getByText('browser v1 · metadata v1')).toBeTruthy();
+    expect(screen.queryByText('Ready')).toBeNull();
     expect(mockedOpen).not.toHaveBeenCalled();
     expect(mockedAssignProfile).not.toHaveBeenCalled();
     expect(mockedDetachProfile).not.toHaveBeenCalled();
@@ -339,7 +344,7 @@ describe('ClientProfilesPanel relationship and native Open navigation', () => {
     expect(viewer.disabled).toBe(true);
     expect(screen.getByText('Cannot open a SUSPENDED profile.')).toBeTruthy();
     expect(screen.getByText('Operator permission is required.')).toBeTruthy();
-    expect(screen.getAllByRole('button', { name: 'Copy diagnostics' })).toHaveLength(2);
+    expect(screen.getAllByText('More')).toHaveLength(2);
     expect(mockedOpen).not.toHaveBeenCalled();
   });
 
@@ -410,6 +415,7 @@ describe('ClientProfilesPanel relationship and native Open navigation', () => {
     const { onMutated } = renderPanel();
 
     expect(await screen.findByText('profile_01JCLIENTPROFILES_DETACH')).toBeTruthy();
+    await user.click(screen.getByText('Manage relationship'));
     await user.type(screen.getByLabelText('Detach reason'), 'relationship no longer applies');
     await user.click(screen.getByRole('button', { name: 'detach profile' }));
 
