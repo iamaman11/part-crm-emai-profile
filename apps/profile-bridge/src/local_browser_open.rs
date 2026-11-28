@@ -1499,7 +1499,9 @@ mod tests {
             ))
         );
         assert_eq!(
-            classify_camouhost_diagnostic("camouhost_stage phase=launch step=identity_gpu_retry_timeout"),
+            classify_camouhost_diagnostic(
+                "camouhost_stage phase=launch step=identity_gpu_retry_timeout"
+            ),
             Some((
                 Stage::CamouhostGpuRetry,
                 Outcome::Observed,
@@ -1549,9 +1551,7 @@ mod tests {
             ),
         ] {
             assert_eq!(
-                classify_camouhost_diagnostic(&format!(
-                    "camouhost_stage phase=launch step={step}"
-                )),
+                classify_camouhost_diagnostic(&format!("camouhost_stage phase=launch step={step}")),
                 Some((stage, outcome, Cause::None)),
             );
         }
