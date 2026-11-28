@@ -240,10 +240,12 @@ materializes its own startup preferences once. Rust stores the canonical `camouf
 as the identity commit marker and a bounded, host/runtime-bound
 `camoufox-sdk-replay.json` projection of that SDK output. The replay projection contains the
 original fpgen input and Camoufox-only startup chunks/preferences, **not** the inherited process
-environment, proxy credentials, executable path or local profile path. A repeat Open on the
-same host/runtime uses the SDK's public `from_options` entrypoint without running the host GPU
-probe again. A changed machine/runtime uses the official SDK's normal saved-config launch
-path; corrupted or inconsistent replay bytes fail closed. The SDK, not ProfileBridge, decides
+environment, proxy credentials, executable path or local profile path. The standard Playwright
+proxy launch option is rehydrated from the current protected proxy config in process memory only.
+A repeat Open on the same host/runtime uses the SDK's public `from_options` entrypoint without
+running the host GPU probe again. A changed machine/runtime uses the official SDK's normal
+saved-config launch path; corrupted or inconsistent replay bytes fail closed. The SDK, not
+ProfileBridge, decides
 whether cross-host canvas masking is necessary. The projection is not a new identity or Sync
 authority, and the normal browser file-lock and Close/Sync boundaries remain unchanged.
 Differences in hardware, display/DPR, WebGL capabilities, fonts, locale or speech voices are diagnostic

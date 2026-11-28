@@ -994,31 +994,11 @@ def native_sdk_replay_options(
         # Let the official SDK apply the portable saved config on a new host.
         report_runtime_stage("launch", "sdk_replay_binding_changed")
         return camoufox_launch_options(lock, root, config)
-    proxy = resolve_proxy()
-    if proxy is not None:
-        # SOCKS5 authentication belongs to the SDK. Never persist or manually
-        # reconstruct its credentials inside the replay snapshot.
-        from camoufox.utils import launch_options
-
-        options = launch_options(
-            **camoufox_browser_selector(lock),
-            fingerprint=copy.deepcopy(replay["fingerprint"]),
-            os="windows", headless=False, enable_cache=True,
-            ff_version=locked_firefox_major(lock),
-            i_know_what_im_doing=True,
-            user_data_dir=str(root / USER_DATA_NAME),
-            firefox_user_prefs={"browser.startup.page": 3, **accessibility_preferences(os.name)},
-            proxy=proxy,
-            **({"canvas_noise": True} if saved_canvas_noise_policy(root) else {}),
-        )
-        options["args"] = ["-new-tab", MANAGED_BOOTSTRAP_TAB_URL]
-        options["ignore_default_args"] = ["about:blank"]
-        if extract_camoufox_config(options) != config:
-            raise RuntimeContractError("SDK proxy launch would change the saved fingerprint")
-        return options
     # The caller only supplies current paths and inherited process variables.
     # Fingerprint, rendering prefs and Camoufox startup chunks remain exact
-    # bytes produced by the official SDK at initial materialization.
+    # bytes produced by the official SDK at initial materialization. Proxy is
+    # a standard Playwright launch option returned unchanged by the SDK; read
+    # its current credentials only in memory, never into the replay sidecar.
     current_env = {k: v for k, v in os.environ.items() if not re.fullmatch(
         r"CAMOU_(?:CONFIG|PREFS)_[1-9][0-9]*", k
     )}
@@ -1030,6 +1010,7 @@ def native_sdk_replay_options(
         "headless": False,
         "firefox_user_prefs": launch["firefox_user_prefs"],
         "env": {**current_env, **env},
+        "proxy": resolve_proxy(),
     }
 
 

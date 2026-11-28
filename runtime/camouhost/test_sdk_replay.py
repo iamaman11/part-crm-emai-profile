@@ -94,6 +94,22 @@ class SdkReplayTests(unittest.TestCase):
             self.assertEqual(real.native_sdk_replay_options({}, self.root, self.config), {"sdk": "official"})
             launch.assert_called_once_with({}, self.root, self.config)
 
+    def test_warm_proxy_is_only_a_runtime_playwright_option(self):
+        replay = self.saved_cache()
+        proxy = {
+            "server": "socks5://proxy.invalid:1234",
+            "username": "user",
+            "password": "only-runtime-secret",
+        }
+        with patch.object(real, "resolve_proxy", return_value=proxy), patch.object(
+            real, "camoufox_launch_options", side_effect=AssertionError("GPU probe reran")
+        ):
+            options = real.native_sdk_replay_options({}, self.root, self.config)
+        self.assertEqual(options["proxy"], proxy)
+        self.assertNotIn("only-runtime-secret", replay)
+        self.assertNotIn("only-runtime-secret", json.dumps(options["env"]))
+        self.assertEqual(options["env"]["CAMOU_CONFIG_1"], self.config_blob)
+
     def test_first_open_reuses_the_exact_options_that_the_sdk_generated(self):
         fp_module = types.ModuleType("camoufox.fingerprints")
         fp_module.generate_fingerprint = Mock(return_value=self.fpgen)
