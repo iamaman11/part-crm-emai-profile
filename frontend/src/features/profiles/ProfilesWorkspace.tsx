@@ -23,6 +23,7 @@ import { useLogicalCommandMutation } from '../../shared/ui/useLogicalCommandMuta
 import type { CoordinatorResponse, GenerationProjection, ProfileProjection } from './api';
 import { ConfirmAction } from '../../shared/ui/ConfirmAction';
 import { StatusMessage } from '../../shared/ui/StatusMessage';
+import { StatusBadge } from '../../shared/ui/StatusBadge';
 
 function field(data: FormData, name: string): string {
   return String(data.get(name) ?? '').trim();
@@ -541,56 +542,58 @@ export function ProfilesWorkspace({
         {profile && <>
           <div className="action-row">
             <button type="button" disabled={openUnavailableReason !== null} aria-describedby={openUnavailableReason ? 'profile-open-status' : undefined} onClick={openSelectedProfile}>Open browser</button>
-            <button type="button" disabled={lookup.isPending} onClick={() => {
+            <button className="secondary" type="button" disabled={lookup.isPending} onClick={() => {
               void cache.invalidateQueries({ queryKey: ['operator-query', tenantId, 'profiles'] });
               lookup.mutate({ tenantId, profileId });
             }}>Refresh status</button>
-            {owner && ['DRAFT', 'READY', 'SUSPENDED', 'QUARANTINED'].includes(profile.status) && (
-              <ConfirmAction
-                label="Delete profile"
-                consequence={<>Delete this profile and its encrypted cloud snapshots. This cannot be undone. Close any open browser first if you need to save unsynced local changes.</>}
-                disabled={deleteAction.isPending}
-                onConfirm={async () => {
-                  await deleteAction.mutateAsync({
-                    targetTenant: tenantId,
-                    targetProfile: profile.profileId,
-                    expectedVersion: profile.version,
-                  });
-                }}
-              />
-            )}
           </div>
           {openUnavailableReason && <p id="profile-open-status" role="status">{openUnavailableReason}</p>}
           <StatusMessage state={openError} />
           <StatusMessage state={deletionStatus} />
-          {owner && profile.status === 'DELETED' && (
-            <div>
-              <button type="button" onClick={() => requestLocalDeletion(profile)}>
-                Remove local copy
-              </button>
-              <p>Cloud deletion is confirmed. This button asks installed Profile Bridge to
-                verify DELETED and native browser locks before removing local files. The browser does not receive a completion receipt.</p>
+          {owner && (
+            <details className="danger-zone">
+              <summary>Advanced actions · use with care</summary>
+              <p>These actions affect stored data. Opening a browser never requires them.</p>
+              {['DRAFT', 'READY', 'SUSPENDED', 'QUARANTINED'].includes(profile.status) && (
+                <ConfirmAction
+                  label="Delete profile"
+                  consequence={<>Delete this profile and its encrypted cloud snapshots. This cannot be undone. Close any open browser first if you need to save unsynced local changes.</>}
+                  disabled={deleteAction.isPending}
+                  onConfirm={async () => {
+                    await deleteAction.mutateAsync({
+                      targetTenant: tenantId,
+                      targetProfile: profile.profileId,
+                      expectedVersion: profile.version,
+                    });
+                  }}
+                />
+              )}
+              {profile.status === 'DELETED' && (
+                <div>
+                  <button type="button" className="danger" onClick={() => requestLocalDeletion(profile)}>Remove local copy</button>
+                  <p>Cloud deletion is confirmed. The installed Bridge must verify native browser locks before removing local files. No completion receipt is sent to the browser.</p>
+                </div>
+              )}
+              {profile.status === 'READY' && (
+                <div>
+                  <ConfirmAction
+                    key={`${tenantId}:${profileId}`}
+                    label="Remove clean local copy"
+                    consequence={<>This removes browser files on this computer, including local recovery state. Use only after Sync and browser close. The encrypted cloud generation stays READY. Bridge refuses dirty, pending, busy or mismatched copies and cannot return a completion receipt.</>}
+                    disabled={lookup.isPending || generationRefreshUnconfirmed}
+                    onArm={() => armReadyLocalEviction(profile)}
+                    onConfirm={requestReadyLocalEviction}
+                  />
+                  <p>Next Open will Restore the cloud copy; existing open tabs are not touched.</p>
+                </div>
+              )}
               <StatusMessage state={localDeleteError} />
-            </div>
-          )}
-          {owner && profile.status === 'READY' && (
-            <div>
-              <ConfirmAction
-                key={`${tenantId}:${profileId}`}
-                label="Remove clean local copy"
-                consequence={<>This removes the browser files stored on this computer, including its local recovery state. Only use after Sync has completed and the browser is closed. The encrypted cloud generation stays READY. Profile Bridge will refuse dirty, pending, busy or mismatched local copies. The browser cannot receive a completion receipt.</>}
-                disabled={lookup.isPending || generationRefreshUnconfirmed}
-                onArm={() => armReadyLocalEviction(profile)}
-                onConfirm={requestReadyLocalEviction}
-              />
-              <p>After confirmed local removal, Open browser uses the existing cloud Restore path. This action does not touch tabs in an open browser.</p>
-              <StatusMessage state={localDeleteError} />
-            </div>
+            </details>
           )}
         </>}
         {profile && <>
           <dl className="projection">
-            <div><dt>Status</dt><dd>{profile.status}</dd></div>
+            <div><dt>Status</dt><dd><StatusBadge status={profile.status} /></dd></div>
             <div><dt>Client</dt><dd>{profile.linkedClientId ?? 'Not assigned'}</dd></div>
           </dl>
           {owner && ['DRAFT', 'READY', 'SUSPENDED', 'QUARANTINED'].includes(profile.status) && (

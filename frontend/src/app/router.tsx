@@ -10,19 +10,22 @@ import { createProfilesRoutes } from '../features/profiles';
 import { createSessionRoute, SessionPanel } from '../features/session';
 import { createSettingsRoute } from '../features/settings';
 import { NetworkStatusBanner } from '../shared/ui/NetworkStatusBanner';
+import { ThemeToggle } from './ThemeToggle';
 
 function Shell() {
-  const { enabled, profileId } = useCapabilities();
+  const { enabled } = useCapabilities();
   const { state } = useTenant();
   return (
     <div className="app-shell">
       <header className="app-header">
-        <div>
-          <span className="eyebrow">Repository-local control plane</span>
-          <h1>Profile Operations</h1>
-          {profileId ? <span className="eyebrow">Release profile: {profileId}</span> : null}
+        <div className="brand-heading">
+          <span className="brand-mark" aria-hidden="true">P</span>
+          <div>
+            <span className="eyebrow">Profile Operations</span>
+            <h1>Workspace</h1>
+          </div>
         </div>
-        <TenantChooser />
+        <div className="header-controls"><TenantChooser /><ThemeToggle /></div>
       </header>
       <NetworkStatusBanner />
       <nav className="primary-nav" aria-label="Primary navigation">
@@ -41,9 +44,7 @@ function Shell() {
         ) : null}
       </nav>
       <main id="main-content"><Outlet /></main>
-      <footer>
-        Authorization and lifecycle decisions remain server-side. UI state is not production evidence.
-      </footer>
+      <footer><span>Profile Operations · Secure workspace</span><span>Technical details are available in the relevant settings.</span></footer>
     </div>
   );
 }
@@ -55,20 +56,16 @@ function Dashboard() {
   return (
     <div className="page-stack">
       <section className="hero panel">
-        <span className="eyebrow">Operator dashboard</span>
-        <h2>Discoverable standalone workflows, fail-closed by default.</h2>
-        <p>
-          Authorized server projections drive Clients, Profiles, Users and optional Mail capabilities.
-          Resource detail routes remain canonical, and confidential Client Mail data is transient rather
-          than browser-persisted.
-        </p>
+        <span className="eyebrow">Overview</span>
+        <h2>Everything you need to get started.</h2>
+        <p>Choose a client, open a browser profile, or check an active session.</p>
       </section>
       <SessionPanel />
       <section className="workspace-grid">
-        {enabled('clients') ? <article className="panel"><h3>Clients</h3><p>Browse the live grant-filtered Client Registry and canonical client detail workflows.</p><Link to="/clients">Open clients</Link></article> : null}
-        {enabled('browser_profiles') ? <article className="panel"><h3>Profiles</h3><p>Browse visible profiles and operate assignment, grants, generations and coordinator state.</p><Link to="/profiles">Open profiles</Link></article> : null}
-        {enabled('mailbox_admin') ? <article className="panel"><h3>Mailboxes</h3><p>Browse binding metadata and operate only capabilities enabled by the active release profile.</p><Link to="/mailboxes">Open mailboxes</Link></article> : null}
-        {enabled('identity') ? <article className="panel"><h3>Administration</h3><p>Review access, current session, device boundaries, sanitized audit surfaces and safe diagnostics.</p><Link to="/users">Open administration</Link></article> : null}
+        {enabled('clients') ? <article className="panel navigation-card"><h3>Clients</h3><p>People, organizations and their browser profiles.</p><Link to="/clients">View clients →</Link></article> : null}
+        {enabled('browser_profiles') ? <article className="panel navigation-card"><h3>Browser profiles</h3><p>Open, organize and check your profiles.</p><Link to="/profiles">View profiles →</Link></article> : null}
+        {enabled('mailbox_admin') ? <article className="panel navigation-card"><h3>Mailboxes</h3><p>Connected mailboxes and account status.</p><Link to="/mailboxes">View mailboxes →</Link></article> : null}
+        {enabled('identity') ? <article className="panel navigation-card"><h3>Administration</h3><p>Access, devices, security and diagnostics.</p><Link to="/users">View administration →</Link></article> : null}
       </section>
     </div>
   );

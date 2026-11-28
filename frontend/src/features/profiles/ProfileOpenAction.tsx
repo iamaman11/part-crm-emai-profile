@@ -54,14 +54,17 @@ export function ProfileOpenAction({
       >
         Open browser
       </button>
-      <button
-        type="button"
-        className="profile-open-diagnostics"
-        onClick={invokeProfileBridgeDiagnostics}
-        title="Copy the installed Bridge's redacted local observations; nothing is uploaded"
-      >
-        Copy diagnostics
-      </button>
+      <details className="profile-row-tools">
+        <summary className="inline-summary" aria-label={`More actions for ${profile.displayName}`}>More</summary>
+        <button
+          type="button"
+          className="profile-open-diagnostics"
+          onClick={invokeProfileBridgeDiagnostics}
+          title="Copy the installed Bridge's redacted local observations; nothing is uploaded"
+        >
+          Copy diagnostics
+        </button>
+      </details>
       {openRequested && (
         <small className="profile-open-reason" role="status">
           Windows Open requested. This page cannot confirm BrowserReady or cloud Saved; check the Bridge diagnostics if no window appears.
