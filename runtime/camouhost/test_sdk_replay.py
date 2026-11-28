@@ -56,7 +56,9 @@ class SdkReplayTests(unittest.TestCase):
             self.options, self.fpgen,
             real.sha256_bytes(real.canonical_json(self.config)), self.runtime_sha,
         )
-        (self.root / real.SDK_REPLAY_NAME).write_text(replay, encoding="utf-8")
+        # Identity sidecars are Rust-written LF bytes. TextIOWrapper translates
+        # LF to CRLF on Windows and would make a canonical test fixture invalid.
+        (self.root / real.SDK_REPLAY_NAME).write_bytes(replay.encode("utf-8"))
         return replay
 
     def test_sdk_output_replayed_with_exact_fp_and_without_persisting_secrets(self):
