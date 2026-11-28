@@ -422,18 +422,24 @@ fn persist_sdk_identity(folder: &Path, raw: &[u8]) -> Result<(), LocalOpenError>
     {
         return Err(LocalOpenError::IdentityPreparation);
     }
-    let replay: serde_json::Value = serde_json::from_slice(replay_bytes)
-        .map_err(|_| LocalOpenError::IdentityPreparation)?;
-    let replay_fields = replay.as_object().ok_or(LocalOpenError::IdentityPreparation)?;
+    let replay: serde_json::Value =
+        serde_json::from_slice(replay_bytes).map_err(|_| LocalOpenError::IdentityPreparation)?;
+    let replay_fields = replay
+        .as_object()
+        .ok_or(LocalOpenError::IdentityPreparation)?;
     if replay_fields.len() != 5
         || replay["schema_version"] != 1
         || replay["config_sha256"] != actual_digest
-        || replay["binding_sha256"].as_str().is_none_or(|v| v.len() != 64)
+        || replay["binding_sha256"]
+            .as_str()
+            .is_none_or(|v| v.len() != 64)
         || !replay["fingerprint"].is_object()
     {
         return Err(LocalOpenError::IdentityPreparation);
     }
-    let launch = replay["options"].as_object().ok_or(LocalOpenError::IdentityPreparation)?;
+    let launch = replay["options"]
+        .as_object()
+        .ok_or(LocalOpenError::IdentityPreparation)?;
     let sdk_env = launch
         .get("sdk_env")
         .and_then(serde_json::Value::as_object)
@@ -442,12 +448,14 @@ fn persist_sdk_identity(folder: &Path, raw: &[u8]) -> Result<(), LocalOpenError>
         || !sdk_env.contains_key("CAMOU_CONFIG_1")
         || !sdk_env.contains_key("CAMOU_PREFS_1")
         || sdk_env.iter().any(|(key, value)| {
-        let suffix = key
-            .strip_prefix("CAMOU_CONFIG_")
-            .or_else(|| key.strip_prefix("CAMOU_PREFS_"));
-        suffix.is_none_or(|s| s.is_empty() || s.starts_with('0') || !s.bytes().all(|b| b.is_ascii_digit()))
-            || !value.is_string()
-    }) {
+            let suffix = key
+                .strip_prefix("CAMOU_CONFIG_")
+                .or_else(|| key.strip_prefix("CAMOU_PREFS_"));
+            suffix.is_none_or(|s| {
+                s.is_empty() || s.starts_with('0') || !s.bytes().all(|b| b.is_ascii_digit())
+            }) || !value.is_string()
+        })
+    {
         return Err(LocalOpenError::IdentityPreparation);
     }
     let value: serde_json::Value =
@@ -503,8 +511,7 @@ fn persist_sdk_identity(folder: &Path, raw: &[u8]) -> Result<(), LocalOpenError>
     let replay_already_persisted = match fs::symlink_metadata(&replay_destination) {
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => false,
         Ok(metadata) if metadata.is_file() && !metadata.file_type().is_symlink() => {
-            fs::read(&replay_destination)
-                .map_err(|_| LocalOpenError::IdentityPreparation)?
+            fs::read(&replay_destination).map_err(|_| LocalOpenError::IdentityPreparation)?
                 == replay_bytes
         }
         _ => return Err(LocalOpenError::IdentityPreparation),
@@ -1295,7 +1302,8 @@ mod tests {
             "fingerprint_config_sha256": digest,
             "sdk_replay_json": replay_json,
             "sdk_replay_sha256": replay_digest,
-        })).unwrap()
+        }))
+        .unwrap()
     }
 
     fn intent() -> InitialProfileOpen {
@@ -1391,9 +1399,8 @@ mod tests {
         let base = tempfile::tempdir().unwrap();
         let report = sdk_identity_report(b"{}\n", false);
         let mut value: serde_json::Value = serde_json::from_slice(&report).unwrap();
-        let mut replay: serde_json::Value = serde_json::from_str(
-            value["sdk_replay_json"].as_str().unwrap(),
-        ).unwrap();
+        let mut replay: serde_json::Value =
+            serde_json::from_str(value["sdk_replay_json"].as_str().unwrap()).unwrap();
         replay["options"]["sdk_env"]["SECRET_TOKEN"] = serde_json::json!("not-a-camoufox-option");
         let replay_bytes = format!("{}\n", serde_json::to_string(&replay).unwrap());
         value["sdk_replay_json"] = serde_json::json!(replay_bytes);
@@ -1434,11 +1441,17 @@ mod tests {
         let report = sdk_identity_report(b"{}\n", false);
         let value: serde_json::Value = serde_json::from_slice(&report).unwrap();
         let replay = value["sdk_replay_json"].as_str().unwrap();
-        std::fs::write(base.path().join(super::RENDER_POLICY), super::NATIVE_RENDER_POLICY)
-            .unwrap();
+        std::fs::write(
+            base.path().join(super::RENDER_POLICY),
+            super::NATIVE_RENDER_POLICY,
+        )
+        .unwrap();
         std::fs::write(base.path().join(super::SDK_REPLAY), replay).unwrap();
         super::persist_sdk_identity(base.path(), &report).unwrap();
-        assert_eq!(std::fs::read(base.path().join(super::CONFIG)).unwrap(), b"{}\n");
+        assert_eq!(
+            std::fs::read(base.path().join(super::CONFIG)).unwrap(),
+            b"{}\n"
+        );
     }
 
     #[test]
